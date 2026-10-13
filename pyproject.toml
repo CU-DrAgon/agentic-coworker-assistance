@@ -1,0 +1,28 @@
+[project]
+name = "meeting-scribe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "google-adk==2.11.0",
+    "google-cloud-firestore==2.34.1",
+    "google-cloud-pubsub==2.42.0",
+    "google-cloud-storage>=3.17.0",
+    "google-genai>=2.29.0",
+    "httpx>=0.28.1",
+    "pydantic-settings>=2.15.0",
+    "python-multipart>=0.0.32",
+    "uvicorn>=0.54.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.11,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
