@@ -43,10 +43,11 @@ def _client() -> genai.Client:
 
 def _prompt(prior: list[Utterance], participants: list[str] | None, language: str) -> str:
     lines = [
-        f"Transcribe this {language} meeting audio clip with speaker diarization.",
+        f"Transcribe this predominantly {language} meeting audio clip with speaker diarization.",
         "",
         "Rules:",
-        f"- Write each utterance verbatim in {language}, in its original script. Do NOT translate.",
+        f"- Transcribe verbatim in the language and script spoken. Keep {language} speech in "
+        f"{language} and preserve English code-switching in English. Do NOT translate or transliterate.",
         "- One entry per continuous speaker turn. Start a new entry whenever the speaker changes.",
         "- start_s and end_s are seconds from the start of THIS clip (0 = first sample of the clip).",
         "- Label voices consistently within the clip as 'Speaker A', 'Speaker B', 'Speaker C', ... "

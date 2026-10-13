@@ -263,3 +263,67 @@ def test_static_index_ships_in_package():
     from importlib.resources import files
 
     assert (files("meeting_scribe") / "static" / "index.html").is_file()
+
+
+def test_pubsub_oidc_rejects_and_accepts(client, fakes, env):
+    env.setenv("PUBSUB_VERIFY_AUDIENCE", "https://svc.example/pubsub/finalize")
+    env.setenv("PUSHER_SA_EMAIL", "pusher@proj.iam.gserviceaccount.com")
+    claims = {"email": "pusher@proj.iam.gserviceaccount.com", "email_verified": True}
+    seen = []
+
+    def verifier(token, request, audience=None):
+        seen.append((token, audience))
+        if token == "bad":
+            raise ValueError("bad signature")
+        return claims if token == "good" else {"email": "attacker@evil.example"}
+
+    env.setattr("google.oauth2.id_token.verify_oauth2_token", verifier)
+    m = create(client)
+    upload(client, m["id"], 0)
+    body = pubsub_body({"meeting_id": m["id"]})
+
+    assert client.post("/pubsub/finalize", json=body).status_code == 401  # no header
+    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer bad"}).status_code == 401
+    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer other"}).status_code == 403
+    assert fakes["summarized"] == 0
+    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}).status_code == 204
+    assert fakes["summarized"] == 1
+    assert seen[-1] == ("good", "https://svc.example/pubsub/finalize")
+
+
+def test_pubsub_oidc_disabled_when_audience_unset(client, fakes, env):
+    env.delenv("PUBSUB_VERIFY_AUDIENCE", raising=False)
+    m = create(client)
+    upload(client, m["id"], 0)
+    assert client.post("/pubsub/finalize", json=pubsub_body({"meeting_id": m["id"]})).status_code == 204
+
+
+def test_pubsub_oidc_requires_configured_verified_identity(client, fakes, env):
+    env.setenv("PUBSUB_VERIFY_AUDIENCE", "https://svc.example/pubsub/finalize")
+    env.delenv("PUSHER_SA_EMAIL", raising=False)
+    env.setattr(
+        "google.oauth2.id_token.verify_oauth2_token",
+        lambda *args, **kwargs: {"email": "pusher@proj.iam.gserviceaccount.com", "email_verified": True},
+    )
+    body = pubsub_body({"meeting_id": "unknown"})
+    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}).status_code == 503
+
+    env.setenv("PUSHER_SA_EMAIL", "pusher@proj.iam.gserviceaccount.com")
+    env.setattr(
+        "google.oauth2.id_token.verify_oauth2_token",
+        lambda *args, **kwargs: {"email": "pusher@proj.iam.gserviceaccount.com", "email_verified": False},
+    )
+    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}).status_code == 403
+
+
+def test_static_index_has_live_recording_safeguards():
+    from importlib.resources import files
+
+    html = (files("meeting_scribe") / "static" / "index.html").read_text(encoding="utf-8")
+    assert "Use headphones" in html
+    assert 'display.getTracks().forEach((t) => t.addEventListener("ended"' in html
+    assert 'if (st.ctx.state === "suspended") await st.ctx.resume()' in html
+    stop_block = html[html.index("async function stopRecording()") : html.index("async function finishMeeting()")]
+    assert "await Promise.allSettled(st.uploads)" in stop_block
+    assert "if (st.counts.failed)" in stop_block
+    assert stop_block.index("if (st.counts.failed)") < stop_block.index("await finishMeeting()")

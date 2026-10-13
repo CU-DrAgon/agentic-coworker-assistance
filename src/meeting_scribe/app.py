@@ -4,6 +4,7 @@ import base64
 import binascii
 import json
 import logging
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -16,6 +17,7 @@ from meeting_scribe.config import get_settings
 from meeting_scribe.models import ChunkTranscript, Meeting, MeetingStatus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)  # its INFO lines would print the Discord webhook URL
 logger = logging.getLogger(__name__)
 
 INDEX_HTML = Path(__file__).parent / "static" / "index.html"
@@ -27,6 +29,30 @@ app = FastAPI(title="Meeting Scribe")
 class CreateMeeting(BaseModel):
     title: str = Field(default="Untitled meeting", max_length=200)
     participants: list[str] = Field(default_factory=list, max_length=20)
+
+
+def verify_pubsub_token(authorization: str | None) -> None:
+    """Check the Pub/Sub push OIDC token when PUBSUB_VERIFY_AUDIENCE is set (else no-op)."""
+    audience = os.environ.get("PUBSUB_VERIFY_AUDIENCE")
+    if not audience:
+        return
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "Missing bearer token")
+    from google.auth.transport import requests as google_requests
+    from google.oauth2 import id_token
+
+    try:
+        claims = id_token.verify_oauth2_token(authorization[7:], google_requests.Request(), audience=audience)
+    except ValueError as exc:
+        logger.warning("Rejected Pub/Sub token: %s", exc)
+        raise HTTPException(401, "Invalid token") from exc
+    expected = os.environ.get("PUSHER_SA_EMAIL")
+    if not expected:
+        logger.error("PUBSUB_VERIFY_AUDIENCE is set but PUSHER_SA_EMAIL is missing")
+        raise HTTPException(503, "Pub/Sub authentication is not configured")
+    if claims.get("email_verified") is not True or claims.get("email") != expected:
+        logger.warning("Rejected Pub/Sub token from unexpected identity")
+        raise HTTPException(403, "Unexpected token identity")
 
 
 def _get_or_404(meeting_id: str) -> Meeting:
@@ -41,6 +67,7 @@ def index() -> FileResponse:
     return FileResponse(INDEX_HTML, media_type="text/html")
 
 
+@app.get("/health")  # Cloud Run's frontend reserves /healthz, so deployed checks must use /health
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
@@ -106,6 +133,7 @@ async def finish_meeting(meeting_id: str) -> Meeting:
 async def pubsub_finalize(request: Request) -> Response:
     """Pub/Sub push endpoint. Bad payloads are acked (204) so they are not redelivered forever;
     finalize failures bubble up as 5xx so Pub/Sub retries."""
+    await run_in_threadpool(verify_pubsub_token, request.headers.get("authorization"))
     try:
         envelope = await request.json()
         meeting_id = json.loads(base64.b64decode(envelope["message"]["data"]))["meeting_id"]

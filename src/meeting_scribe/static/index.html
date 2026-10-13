@@ -80,6 +80,7 @@
       <p class="hint" style="margin-bottom:0">
         To record: open your Meet in another tab, click <strong>Start recording</strong>, choose that tab and tick
         <strong>Share tab audio</strong>. Works in Chrome or Edge on desktop. Your microphone is mixed in.
+        <strong>Use headphones</strong> so remote voices are not captured again through your microphone.
       </p>
     </form>
   </section>
@@ -126,7 +127,7 @@ const els = {
 const st = {
   meetingId: null, summary: null, speakerNames: {},
   display: null, mic: null, ctx: null, dest: null, recorder: null, segTimer: null,
-  t0: 0, nextIndex: 0, uploads: [], counts: { pending: 0, done: 0, failed: 0 },
+  t0: 0, nextIndex: 0, queue: Promise.resolve(), uploads: [], counts: { pending: 0, done: 0, failed: 0 },
   timerId: null, pollId: null, polling: false, stopping: false, lastSig: "",
 };
 
@@ -267,8 +268,16 @@ function startPolling() {
 function stopPolling() { clearInterval(st.pollId); st.pollId = null; }
 
 // ---------- uploads ----------
-async function uploadChunk(index, offsetS, blob) {
+// One upload in flight at a time, in index order: each chunk's transcription needs the previous
+// chunk's utterances as context, and parallel calls trigger Vertex rate limits.
+function uploadChunk(index, offsetS, blob) {
   st.counts.pending++; updateUploadStatus();
+  const job = st.queue.then(() => sendChunk(index, offsetS, blob));
+  st.queue = job.catch(() => {}); // a failed part must not block later parts
+  return job;
+}
+
+async function sendChunk(index, offsetS, blob) {
   try {
     for (let attempt = 1; ; attempt++) {
       try {
@@ -288,6 +297,7 @@ async function uploadChunk(index, offsetS, blob) {
   } catch (e) {
     st.counts.failed++;
     banner(`Part ${index + 1} of the audio could not be transcribed (${e.message}).`, true);
+    throw e;
   } finally {
     st.counts.pending--; updateUploadStatus();
   }
@@ -330,7 +340,7 @@ async function beginMeeting() {
     body: JSON.stringify({ title: els.title.value.trim() || "Untitled meeting", participants }),
   });
   st.meetingId = meeting.id;
-  st.nextIndex = 0; st.uploads = []; st.counts = { pending: 0, done: 0, failed: 0 };
+  st.nextIndex = 0; st.queue = Promise.resolve(); st.uploads = []; st.counts = { pending: 0, done: 0, failed: 0 };
   st.summary = null; st.speakerNames = {}; st.lastSig = ""; st.stopping = false;
   speakerColor.map = {};
   els.summaryCard.hidden = true;
@@ -380,7 +390,8 @@ async function startRecording() {
   st.dest = st.ctx.createMediaStreamDestination();
   if (hasTabAudio) st.ctx.createMediaStreamSource(new MediaStream(display.getAudioTracks())).connect(st.dest);
   if (mic) st.ctx.createMediaStreamSource(mic).connect(st.dest);
-  display.getVideoTracks().forEach((t) => t.addEventListener("ended", () => stopRecording()));
+  if (st.ctx.state === "suspended") await st.ctx.resume();
+  display.getTracks().forEach((t) => t.addEventListener("ended", () => stopRecording()));
 
   st.t0 = performance.now();
   startSegment();
@@ -408,6 +419,12 @@ async function stopRecording() {
   if (st.ctx) st.ctx.close();
   els.stop.hidden = true;
   await Promise.allSettled(st.uploads);
+  if (st.counts.failed) {
+    stopPolling();
+    setState("Upload failed");
+    banner("Summary was not started because one or more audio parts are missing. Keep this page open and use a local recording as backup.", true);
+    return;
+  }
   await finishMeeting();
 }
 
@@ -455,7 +472,7 @@ async function uploadRecording(file) {
   els.timer.hidden = true;
   setState(`Transcribing ${file.name}…`);
   startPolling();
-  await uploadChunk(0, 0, file);
+  await uploadChunk(0, 0, file).catch(() => {});
   els.timer.hidden = false;
   if (st.counts.failed) { stopPolling(); setState("Failed"); return; }
   await finishMeeting();

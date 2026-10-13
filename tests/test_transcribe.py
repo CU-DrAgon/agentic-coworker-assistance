@@ -59,7 +59,8 @@ def test_prompt_includes_prior_and_participants(monkeypatch: pytest.MonkeyPatch)
     assert "Somchai, Malee" in prompt
     assert "ข้อความ14" in prompt and "ข้อความ3" in prompt  # last 12 of 15
     assert "ข้อความ2\n" not in prompt  # 13th from the end is dropped
-    assert "Thai" in prompt and "Do NOT translate" in prompt
+    assert "Thai" in prompt and "Do NOT translate or transliterate" in prompt
+    assert "preserve English code-switching in English" in prompt
 
 
 def test_first_chunk_prompt_has_no_prior_section(monkeypatch: pytest.MonkeyPatch) -> None:
