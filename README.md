@@ -101,8 +101,9 @@ You can also use **Upload a recording** to process an existing audio file instea
 - Desktop Chrome/Edge only; tab-audio capture is not available on mobile or Firefox/Safari.
 - Audio is uploaded in ~45 s segments, one at a time, so the live transcript lags by roughly a segment
   plus transcription time.
-- Speaker labels ("Speaker A/B/C") come from the model and can drift across segments; real names are
-  only assigned when the transcript clearly identifies them.
+- Speaker labels come from the model and can drift across segments. When the host lists participants,
+  every label is one of those names or "Unknown"; otherwise generic "Speaker A/B/C" labels are used and
+  the summarizer maps each one to a name found in the transcript, or to "Unknown".
 - A single upload is capped at 32 MB (Cloud Run request limit) and finalization at one Pub/Sub
   delivery per 600 s; very long meetings may need a larger limit.
 - No authentication on the web UI or meeting API: anyone with the URL can create meetings. Add IAP or

@@ -93,7 +93,12 @@ def build_embed(meeting: Meeting) -> dict:
         ("Decisions", bullet_list(summary.decisions)),
         (
             "Action items",
-            bullet_list([format_action_item(a.owner, a.task, a.due) for a in summary.action_items]),
+            bullet_list(
+                [
+                    format_action_item(_speaker(a.owner, summary.speaker_names), a.task, a.due)
+                    for a in summary.action_items
+                ]
+            ),
         ),
         ("Open questions", bullet_list(summary.open_questions)),
     ]

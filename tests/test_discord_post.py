@@ -194,3 +194,10 @@ def test_non_2xx_raises_without_leaking_webhook_url():
     assert "400" in str(exc.value)
     assert "SECRET-TOKEN" not in str(exc.value)
     assert len(requests) == 1  # no retry on non-429
+
+
+def test_action_item_owner_uses_speaker_name():
+    m = make_meeting(make_summary(action_items=[ActionItem(owner="Speaker A", task="ส่งงาน")]))
+    embed = build_embed(m)
+    actions = next(f for f in embed["fields"] if f["name"] == "Action items")
+    assert "**สมชาย**" in actions["value"] and "Speaker A" not in actions["value"]

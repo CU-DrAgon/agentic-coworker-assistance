@@ -11,6 +11,7 @@ structured result to its own `output_key`, and the synthesizer reads all three.
 
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any
@@ -27,6 +28,15 @@ logger = logging.getLogger(__name__)
 
 APP_NAME = "meeting_scribe"
 USER_ID = "scribe"
+UNKNOWN = "Unknown"
+GENERIC_LABEL_RE = re.compile(r"^Speaker\s+\S+$", re.IGNORECASE)
+# Tasks aimed at the recording tool rather than at a person (safety net behind the prompt).
+RECORDER_TASK_RE = re.compile(
+    r"^\s*(หยุด(การ)?(บันทึก|อัด)|(stop|end)\s+(the\s+)?recording)"
+    r"\s*($|และ|แล้ว|กับ|and\b|then\b|,)",
+    re.IGNORECASE,
+)
+TRANSCRIPT_PREFIX_RE = re.compile(r"^\[\d+:\d\d\] [^:]*: ", re.MULTILINE)
 
 _settings = get_settings()
 # ADK reads these to route Gemini calls through Vertex AI.
@@ -100,7 +110,12 @@ def _build_agents(language: str) -> SequentialAgent:
         description="Extracts action items with owner and due date.",
         instruction=(
             "You extract ACTION ITEMS from a meeting transcript: concrete tasks someone "
-            "committed to or was asked to do. For each give 'owner' (the person who will "
+            "committed to or was asked to do AFTER the meeting, each with a concrete "
+            "deliverable (a document, code, decision, message, purchase, ...). EXCLUDE: "
+            "instructions aimed at the recorder, transcription tool or AI assistant "
+            "(e.g. 'stop recording', 'summarize the meeting'); meeting logistics such as "
+            "muting, sharing a screen, taking notes or ending the call; and vague intentions "
+            "with no deliverable. For each give 'owner' (the person who will "
             "do it: use the real name if the speakers state or address it, otherwise the "
             "speaker label; 'Unassigned' only if truly nobody is responsible), 'task' "
             "(short imperative sentence) and 'due' (the deadline exactly as spoken, e.g. "
@@ -115,11 +130,15 @@ def _build_agents(language: str) -> SequentialAgent:
         model=s.extract_model,
         description="Maps speaker labels to real names.",
         instruction=(
-            "You resolve SPEAKER NAMES. Map each generic speaker label (for example "
-            "'Speaker A') to the person's real name, but only when the transcript makes it "
-            "clear: the speaker introduces themselves, or is directly addressed by name "
-            "and then replies. Use the name as spoken (first name or nickname is fine). "
-            "Omit labels you cannot resolve with confidence; never guess. "
+            "You resolve SPEAKER NAMES. Labels to resolve: {unresolved_labels}. "
+            "Return an entry for EVERY one of these labels. Map a label to a person's name "
+            "only on explicit evidence: the speaker introduces themselves, or is directly "
+            "addressed by name and then replies. Do not infer a name from topic, style or "
+            "which names happen to be nearby. "
+            "If the host listed participants, the name MUST be one of them, spelled exactly "
+            "as listed; otherwise use the name as spoken in the transcript. "
+            "When the evidence is weak or the label covers more than one person, use the "
+            "name 'Unknown'. Never invent or guess a name. "
             "Participants the host listed: {participants}\n\n" + grounding
         ),
         output_schema=SpeakerNamesOut,
@@ -182,20 +201,87 @@ def _parse(model: type[BaseModel], value: Any) -> Any:
     return model.model_validate(value or {})
 
 
-def build_summary(state: dict[str, Any]) -> Summary:
-    """Assemble the Summary from the agents' session-state outputs."""
+def unresolved_labels(meeting: Meeting) -> list[str]:
+    """Speaker labels that still need a name, in order of first appearance.
+
+    With a participant list, that is every label which is not a listed participant;
+    otherwise only generic 'Speaker X' labels. 'Unknown' is left alone: it may cover
+    several different people, so it must not be mapped to one name.
+    """
+    known = {p.strip().casefold() for p in meeting.participants}
+    out: list[str] = []
+    for u in meeting.utterances():
+        label = u.speaker
+        if label == UNKNOWN or label in out:
+            continue
+        if known and label.casefold() in known:
+            continue
+        if not known and not GENERIC_LABEL_RE.match(label):
+            continue
+        out.append(label)
+    return out
+
+
+def resolve_speaker_names(
+    raw: dict[str, str], labels: list[str], participants: list[str], transcript: str
+) -> dict[str, str]:
+    """Turn the resolver's proposals into a mapping that covers every label in `labels`.
+
+    A proposed name is accepted only if it is a listed participant (returned with the
+    listed spelling) or, when no participants were given, a name that occurs in the
+    transcript text. Anything else becomes 'Unknown' so no name is ever invented.
+    """
+    by_key = {p.strip().casefold(): p.strip() for p in participants if p.strip()}
+    body = TRANSCRIPT_PREFIX_RE.sub("", transcript).casefold()
+    out: dict[str, str] = {}
+    for label in labels:
+        name = raw.get(label, "").strip()
+        if by_key:
+            name = by_key.get(name.casefold(), UNKNOWN)
+        elif len(name) < 2 or name == UNKNOWN or name.casefold() not in body:
+            name = UNKNOWN
+        out[label] = name
+    return out
+
+
+def build_summary(
+    state: dict[str, Any],
+    *,
+    labels: list[str] | None = None,
+    participants: list[str] | None = None,
+) -> Summary:
+    """Assemble the Summary from the agents' session-state outputs.
+
+    With `labels`, the speaker mapping is validated and completed over exactly those
+    labels (see resolve_speaker_names) and applied to action-item owners.
+    """
     synthesis = _parse(SynthesisOut, state.get("synthesis"))
     decisions = _parse(DecisionsOut, state.get("decisions"))
     actions = _parse(ActionItemsOut, state.get("action_items"))
     names = _parse(SpeakerNamesOut, state.get("speaker_names"))
+    raw_names = {n.label: n.name for n in names.speaker_names if n.name.strip()}
+    speaker_names = (
+        resolve_speaker_names(
+            raw_names, labels, participants or [], str(state.get("transcript", ""))
+        )
+        if labels is not None
+        else raw_names
+    )
+    owner_map = {p.strip().casefold(): p.strip() for p in participants or [] if p.strip()}
+    owner_map.update({k.strip().casefold(): v for k, v in speaker_names.items()})
+    action_items = [
+        a.model_copy(update={"owner": owner_map.get(a.owner.strip().casefold(), a.owner)})
+        for a in actions.action_items
+        if not RECORDER_TASK_RE.search(a.task)
+    ]
     return Summary(
         title=synthesis.title,
         overview=synthesis.overview,
         key_points=synthesis.key_points,
         decisions=decisions.decisions,
-        action_items=actions.action_items,
+        action_items=action_items,
         open_questions=synthesis.open_questions,
-        speaker_names={n.label: n.name for n in names.speaker_names if n.name.strip()},
+        speaker_names=speaker_names,
     )
 
 
@@ -208,6 +294,7 @@ async def summarize_meeting(meeting: Meeting, runner: InMemoryRunner | None = No
             overview="No speech was captured in this recording.",
         )
 
+    labels = unresolved_labels(meeting)
     runner = runner or InMemoryRunner(agent=root_agent, app_name=APP_NAME)
     session_id = uuid.uuid4().hex
     await runner.session_service.create_session(
@@ -217,6 +304,7 @@ async def summarize_meeting(meeting: Meeting, runner: InMemoryRunner | None = No
         state={
             "transcript": transcript,
             "participants": ", ".join(meeting.participants) or "(none given)",
+            "unresolved_labels": ", ".join(labels) or "(none)",
         },
     )
     message = types.Content(role="user", parts=[types.Part(text="Summarize this meeting.")])
@@ -227,7 +315,9 @@ async def summarize_meeting(meeting: Meeting, runner: InMemoryRunner | None = No
     session = await runner.session_service.get_session(
         app_name=runner.app_name, user_id=USER_ID, session_id=session_id
     )
-    summary = build_summary(session.state if session else {})
+    summary = build_summary(
+        session.state if session else {}, labels=labels, participants=meeting.participants
+    )
     logger.info(
         "Summarized meeting %s: %d utterances in %.1fs",
         meeting.id,
