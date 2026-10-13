@@ -17,6 +17,7 @@ import uuid
 from typing import Any
 
 from google.adk.agents import LlmAgent, ParallelAgent, SequentialAgent
+from google.adk.models import Gemini
 from google.adk.runners import InMemoryRunner
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -43,6 +44,16 @@ _settings = get_settings()
 os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
 os.environ.setdefault("GOOGLE_CLOUD_PROJECT", _settings.gcp_project)
 os.environ.setdefault("GOOGLE_CLOUD_LOCATION", _settings.gemini_location)
+
+
+# Vertex 429s (shared quota) and 5xx are retried with backoff by the genai HTTP client.
+RETRY_OPTIONS = types.HttpRetryOptions(
+    attempts=5, initial_delay=5.0, max_delay=60.0, http_status_codes=[429, 500, 502, 503, 504]
+)
+
+
+def _model(name: str, location: str) -> Gemini:
+    return Gemini(model=name, client_kwargs={"location": location}, retry_options=RETRY_OPTIONS)
 
 
 # --- structured outputs -------------------------------------------------------------
@@ -92,7 +103,7 @@ def _build_agents(language: str) -> SequentialAgent:
 
     decisions = LlmAgent(
         name="decisions_extractor",
-        model=s.extract_model,
+        model=_model(s.extract_model, s.flash_location),
         description="Extracts decisions made in the meeting.",
         instruction=(
             "You extract DECISIONS from a meeting transcript. A decision is something the "
@@ -106,7 +117,7 @@ def _build_agents(language: str) -> SequentialAgent:
     )
     actions = LlmAgent(
         name="action_item_extractor",
-        model=s.extract_model,
+        model=_model(s.extract_model, s.flash_location),
         description="Extracts action items with owner and due date.",
         instruction=(
             "You extract ACTION ITEMS from a meeting transcript: concrete tasks someone "
@@ -127,7 +138,7 @@ def _build_agents(language: str) -> SequentialAgent:
     )
     speakers = LlmAgent(
         name="speaker_name_resolver",
-        model=s.extract_model,
+        model=_model(s.extract_model, s.flash_location),
         description="Maps speaker labels to real names.",
         instruction=(
             "You resolve SPEAKER NAMES. Labels to resolve: {unresolved_labels}. "
@@ -151,7 +162,7 @@ def _build_agents(language: str) -> SequentialAgent:
     )
     synthesizer = LlmAgent(
         name="synthesizer",
-        model=s.summary_model,
+        model=_model(s.summary_model, s.gemini_location),
         description="Writes the title, overview, key points and open questions.",
         instruction=(
             "You write the final meeting summary. Produce: 'title' (short, specific), "
