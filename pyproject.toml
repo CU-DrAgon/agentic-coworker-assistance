@@ -1,7 +1,7 @@
 [project]
 name = "meeting-scribe"
 version = "0.1.0"
-description = "Add your description here"
+description = "Record a Google Meet, get a live Thai transcript with speaker labels, and post an AI meeting summary to Discord."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -29,3 +29,16 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+# Long prompt strings are clearer unwrapped; the formatter handles code width.
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI dependency markers are meant to be called in defaults.
+extend-immutable-calls = ["fastapi.File", "fastapi.Form", "fastapi.Depends"]

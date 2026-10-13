@@ -62,7 +62,12 @@ def process_chunk(meeting_id: str, index: int, offset_s: float, data: bytes) -> 
         raise AudioDecodeError(str(exc)) from exc
 
     gcs_uri = upload_chunk(meeting_id, index, flac)
-    prior = [u for c in sorted(meeting.chunks, key=lambda c: c.index) if c.index < index for u in c.utterances]
+    prior = [
+        u
+        for c in sorted(meeting.chunks, key=lambda c: c.index)
+        if c.index < index
+        for u in c.utterances
+    ]
     chunk = transcribe_chunk(
         gcs_uri,
         index,

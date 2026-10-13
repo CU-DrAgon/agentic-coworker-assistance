@@ -111,7 +111,12 @@ def build_embed(meeting: Meeting) -> dict:
         fields.append({"name": name, "value": value, "inline": False})
         budget -= len(name) + len(value)
 
-    embed: dict = {"title": title, "color": EMBED_COLOR, "fields": fields, "footer": {"text": footer}}
+    embed: dict = {
+        "title": title,
+        "color": EMBED_COLOR,
+        "fields": fields,
+        "footer": {"text": footer},
+    }
     if description:
         embed["description"] = description
     return embed
@@ -128,9 +133,7 @@ def _retry_after(response: httpx.Response) -> float:
     return min(max(wait, 0.0), MAX_RETRY_WAIT_S)
 
 
-def post_summary(
-    meeting: Meeting, webhook_url: str, *, client: httpx.Client | None = None
-) -> None:
+def post_summary(meeting: Meeting, webhook_url: str, *, client: httpx.Client | None = None) -> None:
     """Post one embed plus `transcript-{id}.txt`. Retries once on HTTP 429."""
     filename = f"transcript-{meeting.id}.txt"
     transcript = format_transcript(meeting).encode("utf-8")
@@ -160,5 +163,7 @@ def post_summary(
 
     if not response.is_success:
         # Do not use raise_for_status(): its message contains the webhook URL.
-        raise DiscordError(f"Discord webhook returned {response.status_code}: {response.text[:200]}")
+        raise DiscordError(
+            f"Discord webhook returned {response.status_code}: {response.text[:200]}"
+        )
     logger.info("Posted summary of meeting %s to Discord", meeting.id)

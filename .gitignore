@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 samples/
 .pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+.DS_Store

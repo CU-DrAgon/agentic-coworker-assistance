@@ -1,6 +1,7 @@
 """Store tests: InMemoryMeetingStore and MeetingStore against a tiny fake Firestore."""
 
 from datetime import timedelta
+
 import pytest
 
 from meeting_scribe.models import (
@@ -12,7 +13,6 @@ from meeting_scribe.models import (
     utcnow,
 )
 from meeting_scribe.store import InMemoryMeetingStore, MeetingStore
-
 
 # --- tiny fake of the Firestore surface MeetingStore uses ---------------------------
 
@@ -44,7 +44,7 @@ class FakeQuery:
 class FakeDoc:
     def __init__(self) -> None:
         self.data: dict | None = None
-        self.subs: dict[str, "FakeCollection"] = {}
+        self.subs: dict[str, FakeCollection] = {}
 
     def set(self, data: dict) -> None:
         self.data = dict(data)
@@ -94,7 +94,11 @@ def make_chunk(index: int) -> ChunkTranscript:
         index=index,
         gcs_uri=f"gs://b/meetings/m/chunk-{index:04d}.flac",
         offset_s=index * 45.0,
-        utterances=[Utterance(speaker="Speaker A", start_s=index * 45.0, end_s=index * 45.0 + 4, text="สวัสดีครับ")],
+        utterances=[
+            Utterance(
+                speaker="Speaker A", start_s=index * 45.0, end_s=index * 45.0 + 4, text="สวัสดีครับ"
+            )
+        ],
     )
 
 
@@ -191,7 +195,9 @@ def _set_created_at(store, meeting_id, when) -> None:
     if isinstance(store, InMemoryMeetingStore):
         store._meetings[meeting_id].created_at = when
     else:
-        store.client.collection("meetings").document(meeting_id).update({"created_at": when.isoformat()})
+        store.client.collection("meetings").document(meeting_id).update(
+            {"created_at": when.isoformat()}
+        )
 
 
 def test_create_defaults_title(store):

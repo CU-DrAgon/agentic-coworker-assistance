@@ -51,7 +51,10 @@ def test_offsets_and_cleaning(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_prompt_includes_prior_and_participants(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _fake_client(monkeypatch, _resp())
-    prior = [Utterance(speaker=f"Speaker {c}", start_s=i, end_s=i + 1, text=f"ข้อความ{i}") for i, c in enumerate("ABCABCABCABCABC")]
+    prior = [
+        Utterance(speaker=f"Speaker {c}", start_s=i, end_s=i + 1, text=f"ข้อความ{i}")
+        for i, c in enumerate("ABCABCABCABCABC")
+    ]
     chunk = t.transcribe_chunk("gs://b/c.flac", 1, 45.0, prior, participants=["Somchai", "Malee"])
     assert chunk.utterances == []
     contents = client.models.generate_content.call_args.kwargs["contents"]

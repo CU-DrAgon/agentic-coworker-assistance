@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pydantic
 import pytest
 from google.adk.agents import LlmAgent, ParallelAgent, SequentialAgent
 
@@ -144,7 +145,7 @@ async def test_missing_synthesis_raises() -> None:
     """If the synthesizer produced nothing, fail loudly so the pipeline marks FAILED."""
     runner = FakeRunner({})
     us = [Utterance(speaker="Speaker A", start_s=0, end_s=1, text="hello")]
-    with pytest.raises(Exception):
+    with pytest.raises(pydantic.ValidationError):
         await agents.summarize_meeting(_meeting(us), runner=runner)
 
 

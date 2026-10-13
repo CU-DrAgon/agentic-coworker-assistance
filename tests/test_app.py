@@ -37,11 +37,20 @@ def fakes(env):
 
     env.setattr("meeting_scribe.storage.upload_chunk", upload_chunk)
 
-    def transcribe_chunk(gcs_uri, index, offset_s, prior, participants=None, mime_type="audio/flac"):
+    def transcribe_chunk(
+        gcs_uri, index, offset_s, prior, participants=None, mime_type="audio/flac"
+    ):
         calls["transcribe"].append(
-            {"index": index, "offset_s": offset_s, "prior": list(prior), "participants": participants}
+            {
+                "index": index,
+                "offset_s": offset_s,
+                "prior": list(prior),
+                "participants": participants,
+            }
         )
-        utt = Utterance(speaker="Speaker A", start_s=offset_s, end_s=offset_s + 2, text=f"chunk {index}")
+        utt = Utterance(
+            speaker="Speaker A", start_s=offset_s, end_s=offset_s + 2, text=f"chunk {index}"
+        )
         return ChunkTranscript(index=index, gcs_uri=gcs_uri, offset_s=offset_s, utterances=[utt])
 
     env.setattr("meeting_scribe.transcribe.transcribe_chunk", transcribe_chunk)
@@ -72,7 +81,9 @@ def client(env):
 
 
 def create(client, **body) -> dict:
-    r = client.post("/api/meetings", json=body or {"title": "Sync", "participants": ["Somchai", " "]})
+    r = client.post(
+        "/api/meetings", json=body or {"title": "Sync", "participants": ["Somchai", " "]}
+    )
     assert r.status_code == 200
     return r.json()
 
@@ -132,7 +143,9 @@ def test_prior_context_is_capped(client, fakes):
     m = create(client)
     store = pipeline.get_store()
     utts = [Utterance(speaker="Speaker A", start_s=i, end_s=i + 1, text=str(i)) for i in range(30)]
-    store.add_chunk(m["id"], ChunkTranscript(index=0, gcs_uri="gs://x", offset_s=0, utterances=utts))
+    store.add_chunk(
+        m["id"], ChunkTranscript(index=0, gcs_uri="gs://x", offset_s=0, utterances=utts)
+    )
     assert upload(client, m["id"], 1, 45).status_code == 200
     assert [u.text for u in fakes["transcribe"][0]["prior"]] == [str(i) for i in range(18, 30)]
 
@@ -231,7 +244,10 @@ def test_pubsub_malformed_payload_is_acked(client, fakes, payload):
 
 
 def test_pubsub_unknown_meeting_is_acked(client, fakes):
-    assert client.post("/pubsub/finalize", json=pubsub_body({"meeting_id": "ghost"})).status_code == 204
+    assert (
+        client.post("/pubsub/finalize", json=pubsub_body({"meeting_id": "ghost"})).status_code
+        == 204
+    )
 
 
 def test_pubsub_failure_returns_5xx_then_retry_succeeds(fakes, env):
@@ -283,10 +299,25 @@ def test_pubsub_oidc_rejects_and_accepts(client, fakes, env):
     body = pubsub_body({"meeting_id": m["id"]})
 
     assert client.post("/pubsub/finalize", json=body).status_code == 401  # no header
-    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer bad"}).status_code == 401
-    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer other"}).status_code == 403
+    assert (
+        client.post(
+            "/pubsub/finalize", json=body, headers={"Authorization": "Bearer bad"}
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/pubsub/finalize", json=body, headers={"Authorization": "Bearer other"}
+        ).status_code
+        == 403
+    )
     assert fakes["summarized"] == 0
-    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}).status_code == 204
+    assert (
+        client.post(
+            "/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}
+        ).status_code
+        == 204
+    )
     assert fakes["summarized"] == 1
     assert seen[-1] == ("good", "https://svc.example/pubsub/finalize")
 
@@ -295,7 +326,10 @@ def test_pubsub_oidc_disabled_when_audience_unset(client, fakes, env):
     env.delenv("PUBSUB_VERIFY_AUDIENCE", raising=False)
     m = create(client)
     upload(client, m["id"], 0)
-    assert client.post("/pubsub/finalize", json=pubsub_body({"meeting_id": m["id"]})).status_code == 204
+    assert (
+        client.post("/pubsub/finalize", json=pubsub_body({"meeting_id": m["id"]})).status_code
+        == 204
+    )
 
 
 def test_pubsub_oidc_requires_configured_verified_identity(client, fakes, env):
@@ -303,17 +337,33 @@ def test_pubsub_oidc_requires_configured_verified_identity(client, fakes, env):
     env.delenv("PUSHER_SA_EMAIL", raising=False)
     env.setattr(
         "google.oauth2.id_token.verify_oauth2_token",
-        lambda *args, **kwargs: {"email": "pusher@proj.iam.gserviceaccount.com", "email_verified": True},
+        lambda *args, **kwargs: {
+            "email": "pusher@proj.iam.gserviceaccount.com",
+            "email_verified": True,
+        },
     )
     body = pubsub_body({"meeting_id": "unknown"})
-    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}).status_code == 503
+    assert (
+        client.post(
+            "/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}
+        ).status_code
+        == 503
+    )
 
     env.setenv("PUSHER_SA_EMAIL", "pusher@proj.iam.gserviceaccount.com")
     env.setattr(
         "google.oauth2.id_token.verify_oauth2_token",
-        lambda *args, **kwargs: {"email": "pusher@proj.iam.gserviceaccount.com", "email_verified": False},
+        lambda *args, **kwargs: {
+            "email": "pusher@proj.iam.gserviceaccount.com",
+            "email_verified": False,
+        },
     )
-    assert client.post("/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}).status_code == 403
+    assert (
+        client.post(
+            "/pubsub/finalize", json=body, headers={"Authorization": "Bearer good"}
+        ).status_code
+        == 403
+    )
 
 
 def test_static_index_has_live_recording_safeguards():
@@ -323,7 +373,9 @@ def test_static_index_has_live_recording_safeguards():
     assert "Use headphones" in html
     assert 'display.getTracks().forEach((t) => t.addEventListener("ended"' in html
     assert 'if (st.ctx.state === "suspended") await st.ctx.resume()' in html
-    stop_block = html[html.index("async function stopRecording()") : html.index("async function finishMeeting()")]
+    stop_block = html[
+        html.index("async function stopRecording()") : html.index("async function finishMeeting()")
+    ]
     assert "await Promise.allSettled(st.uploads)" in stop_block
     assert "if (st.counts.failed)" in stop_block
     assert stop_block.index("if (st.counts.failed)") < stop_block.index("await finishMeeting()")

@@ -17,7 +17,9 @@ from meeting_scribe.config import get_settings
 from meeting_scribe.models import ChunkTranscript, Meeting, MeetingStatus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logging.getLogger("httpx").setLevel(logging.WARNING)  # its INFO lines would print the Discord webhook URL
+logging.getLogger("httpx").setLevel(
+    logging.WARNING
+)  # its INFO lines would print the Discord webhook URL
 logger = logging.getLogger(__name__)
 
 INDEX_HTML = Path(__file__).parent / "static" / "index.html"
@@ -42,7 +44,9 @@ def verify_pubsub_token(authorization: str | None) -> None:
     from google.oauth2 import id_token
 
     try:
-        claims = id_token.verify_oauth2_token(authorization[7:], google_requests.Request(), audience=audience)
+        claims = id_token.verify_oauth2_token(
+            authorization[7:], google_requests.Request(), audience=audience
+        )
     except ValueError as exc:
         logger.warning("Rejected Pub/Sub token: %s", exc)
         raise HTTPException(401, "Invalid token") from exc
@@ -99,7 +103,9 @@ async def upload_chunk(
 ) -> ChunkTranscript:
     meeting = await run_in_threadpool(_get_or_404, meeting_id)
     if meeting.status != MeetingStatus.RECORDING:
-        raise HTTPException(409, f"Meeting is {meeting.status.value}; chunks are no longer accepted")
+        raise HTTPException(
+            409, f"Meeting is {meeting.status.value}; chunks are no longer accepted"
+        )
     data = await file.read(MAX_CHUNK_BYTES + 1)
     if not data:
         raise HTTPException(400, "Empty audio chunk")

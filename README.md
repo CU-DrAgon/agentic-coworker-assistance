@@ -51,9 +51,10 @@ Credentials for the project (`gcloud auth application-default login`).
 ```bash
 uv sync
 uv run pytest -q                      # offline tests, everything external is mocked
+uvx ruff check . && uvx ruff format --check .   # lint + format
 
 # Run against real GCP (Firestore, GCS, Vertex AI); /finish summarizes in-process.
-echo 'DISCORD_WEBHOOK_URL=...' > .env   # optional; without it the Discord post is skipped
+cp .env.example .env                  # then set DISCORD_WEBHOOK_URL; without it the Discord post is skipped
 uv run uvicorn meeting_scribe.app:app --port 8080
 # Fully in memory (still calls Vertex AI and GCS): STORE=memory uv run uvicorn ...
 ```

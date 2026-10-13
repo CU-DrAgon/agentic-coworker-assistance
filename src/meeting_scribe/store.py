@@ -66,7 +66,9 @@ class MeetingStore:
         snap = doc.get()
         if not snap.exists:
             return None
-        chunks = [ChunkTranscript.model_validate(s.to_dict()) for s in doc.collection("chunks").stream()]
+        chunks = [
+            ChunkTranscript.model_validate(s.to_dict()) for s in doc.collection("chunks").stream()
+        ]
         chunks.sort(key=lambda c: c.index)
         return self._to_meeting(snap.to_dict(), chunks)
 
@@ -75,9 +77,7 @@ class MeetingStore:
             chunk.model_dump(mode="json")
         )
 
-    def set_status(
-        self, meeting_id: str, status: MeetingStatus, error: str | None = None
-    ) -> None:
+    def set_status(self, meeting_id: str, status: MeetingStatus, error: str | None = None) -> None:
         self._doc(meeting_id).update({"status": status.value, "error": error})
 
     def set_summary(self, meeting_id: str, summary: Summary) -> None:
@@ -116,9 +116,7 @@ class InMemoryMeetingStore:
         meeting.chunks = [c for c in meeting.chunks if c.index != chunk.index]
         meeting.chunks.append(chunk.model_copy(deep=True))
 
-    def set_status(
-        self, meeting_id: str, status: MeetingStatus, error: str | None = None
-    ) -> None:
+    def set_status(self, meeting_id: str, status: MeetingStatus, error: str | None = None) -> None:
         meeting = self._meetings[meeting_id]
         meeting.status = status
         meeting.error = error

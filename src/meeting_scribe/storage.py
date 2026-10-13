@@ -19,9 +19,7 @@ def chunk_object_name(meeting_id: str, index: int) -> str:
     return f"meetings/{meeting_id}/chunk-{index:04d}.flac"
 
 
-def upload_chunk(
-    meeting_id: str, index: int, data: bytes, content_type: str = "audio/flac"
-) -> str:
+def upload_chunk(meeting_id: str, index: int, data: bytes, content_type: str = "audio/flac") -> str:
     """Upload one audio chunk and return its `gs://` URI."""
     bucket_name = get_settings().audio_bucket
     name = chunk_object_name(meeting_id, index)

@@ -39,9 +39,9 @@ def cut(src: Path, dst: Path, start: float | None, end: float | None) -> None:
 
 def upload(path: Path, name: str) -> str:
     bucket = get_settings().audio_bucket
-    storage.Client(project=get_settings().gcp_project).bucket(bucket).blob(name).upload_from_filename(
-        str(path), content_type="audio/flac"
-    )
+    storage.Client(project=get_settings().gcp_project).bucket(bucket).blob(
+        name
+    ).upload_from_filename(str(path), content_type="audio/flac")
     return f"gs://{bucket}/{name}"
 
 
@@ -62,15 +62,24 @@ def score(truth: list[Utterance], hyp: list[Utterance]) -> None:
     right = sum(confusion[t][h] for t, h in mapping.items())
     one_to_one = len(set(mapping.values())) == len(mapping)
     print(f"  speaker map (truth->hyp): {mapping}  one-to-one={one_to_one}")
-    print(f"  diarization accuracy (time-weighted): {right / total:.1%}" if total else "  no overlap")
+    print(
+        f"  diarization accuracy (time-weighted): {right / total:.1%}" if total else "  no overlap"
+    )
+
     # timestamps are coarse, so also score per-turn: match each truth turn to its most similar
     # hyp utterance by text, then check that utterance carries the mapped speaker label
     def sim(a: str, b: str) -> float:
-        return difflib.SequenceMatcher(None, "".join(a.split()), "".join(b.split()), autojunk=False).ratio()
+        return difflib.SequenceMatcher(
+            None, "".join(a.split()), "".join(b.split()), autojunk=False
+        ).ratio()
 
-    good = sum(
-        mapping[t.speaker] == max(hyp, key=lambda h: sim(t.text, h.text)).speaker for t in truth
-    ) if hyp else 0
+    good = (
+        sum(
+            mapping[t.speaker] == max(hyp, key=lambda h: sim(t.text, h.text)).speaker for t in truth
+        )
+        if hyp
+        else 0
+    )
     print(f"  per-turn speaker accuracy (text-matched): {good}/{len(truth)}")
     # text similarity on whitespace-free strings
     norm = lambda us: "".join("".join(u.text.split()) for u in us)  # noqa: E731
@@ -103,7 +112,9 @@ def run(model: str, uris: dict[str, str], truth: list[Utterance]) -> None:
     print(f"-- 2 chunks split at {SPLIT_S}s (latency {l0:.1f}s + {l1:.1f}s)")
     show(c0.utterances + c1.utterances)
     score(truth, c0.utterances + c1.utterances)
-    print(f"  labels chunk0={sorted({u.speaker for u in c0.utterances})} chunk1={sorted({u.speaker for u in c1.utterances})}")
+    print(
+        f"  labels chunk0={sorted({u.speaker for u in c0.utterances})} chunk1={sorted({u.speaker for u in c1.utterances})}"
+    )
 
 
 def main() -> None:

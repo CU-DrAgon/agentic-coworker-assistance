@@ -180,7 +180,9 @@ def test_429_twice_raises(monkeypatch):
 def test_retry_after_is_capped(monkeypatch):
     sleeps: list[float] = []
     monkeypatch.setattr(discord_post.time, "sleep", sleeps.append)
-    client, _ = capture_client([httpx.Response(429, json={"retry_after": 999}), httpx.Response(204)])
+    client, _ = capture_client(
+        [httpx.Response(429, json={"retry_after": 999}), httpx.Response(204)]
+    )
     post_summary(make_meeting(make_summary()), URL, client=client)
     assert sleeps == [discord_post.MAX_RETRY_WAIT_S]
 

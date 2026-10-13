@@ -219,13 +219,9 @@ async def summarize_meeting(meeting: Meeting, runner: InMemoryRunner | None = No
             "participants": ", ".join(meeting.participants) or "(none given)",
         },
     )
-    message = types.Content(
-        role="user", parts=[types.Part(text="Summarize this meeting.")]
-    )
+    message = types.Content(role="user", parts=[types.Part(text="Summarize this meeting.")])
     started = time.monotonic()
-    async for _ in runner.run_async(
-        user_id=USER_ID, session_id=session_id, new_message=message
-    ):
+    async for _ in runner.run_async(user_id=USER_ID, session_id=session_id, new_message=message):
         pass
 
     session = await runner.session_service.get_session(
