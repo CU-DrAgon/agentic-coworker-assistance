@@ -8,6 +8,9 @@ The code, UI and docs are English; the meeting audio and the transcript/summary 
 
 ## Architecture
 
+Diagrams (open in a browser): [architecture map](docs/diagrams/architecture.html) (source:
+`docs/diagrams/architecture.archify.json`) and [meeting sequence](docs/diagrams/meeting-sequence.html).
+
 ```
  Browser (Chrome)                       Cloud Run: meeting-scribe (FastAPI)
  ┌──────────────────────┐   chunk/45s   ┌──────────────────────────────────────────┐
