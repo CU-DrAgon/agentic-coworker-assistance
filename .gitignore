@@ -8,3 +8,5 @@ samples/
 dist/
 *.egg-info/
 .DS_Store
+graphify-out/
+docs/diagrams/*.visual-check.*

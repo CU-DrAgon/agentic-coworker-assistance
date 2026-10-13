@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Meeting Scribe on Google Cloud",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1220,
+      700
+    ]
+  },
+  "components": [
+    {
+      "id": "browser",
+      "type": "frontend",
+      "label": "Host browser",
+      "sublabel": "Meet tab + mic, 45 s segments",
+      "pos": [
+        30,
+        310
+      ],
+      "size": [
+        170,
+        70
+      ]
+    },
+    {
+      "id": "secret",
+      "type": "security",
+      "label": "Secret Manager",
+      "sublabel": "Discord webhook URL",
+      "pos": [
+        780,
+        500
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "cloudrun",
+      "type": "backend",
+      "label": "Cloud Run API",
+      "sublabel": "FastAPI, asia-southeast1",
+      "brand": "google-cloud",
+      "pos": [
+        280,
+        285
+      ],
+      "size": [
+        160,
+        120
+      ]
+    },
+    {
+      "id": "gcs",
+      "type": "database",
+      "label": "Cloud Storage",
+      "sublabel": "FLAC audio bucket",
+      "pos": [
+        280,
+        120
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "firestore",
+      "type": "database",
+      "label": "Firestore",
+      "sublabel": "Meetings, transcripts, summary",
+      "pos": [
+        530,
+        120
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "flash",
+      "type": "cloud",
+      "label": "Gemini 3.5 Flash",
+      "sublabel": "Vertex AI, asia-southeast1",
+      "brand": "google-gemini",
+      "pos": [
+        530,
+        310
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "pubsub",
+      "type": "messagebus",
+      "label": "Pub/Sub",
+      "sublabel": "topic meeting-finalize",
+      "pos": [
+        280,
+        500
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "pro",
+      "type": "cloud",
+      "label": "Gemini 3.1 Pro",
+      "sublabel": "Vertex AI, global",
+      "brand": "google-gemini",
+      "pos": [
+        780,
+        120
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "adk",
+      "type": "backend",
+      "label": "ADK summarizer",
+      "sublabel": "3 extractors, then synthesizer",
+      "pos": [
+        780,
+        310
+      ],
+      "size": [
+        160,
+        70
+      ]
+    },
+    {
+      "id": "discord",
+      "type": "external",
+      "label": "Discord channel",
+      "sublabel": "Embed + transcript file",
+      "brand": "discord",
+      "pos": [
+        1030,
+        310
+      ],
+      "size": [
+        160,
+        70
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Google Cloud",
+      "wraps": [
+        "secret",
+        "cloudrun",
+        "gcs",
+        "firestore",
+        "flash",
+        "pubsub",
+        "pro",
+        "adk"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "browser-cloudrun",
+      "from": "browser",
+      "to": "cloudrun",
+      "label": "chunks",
+      "variant": "emphasis"
+    },
+    {
+      "id": "secret-adk",
+      "from": "secret",
+      "to": "adk",
+      "label": "webhook URL",
+      "variant": "security",
+      "labelAt": [
+        860,
+        420
+      ]
+    },
+    {
+      "id": "cloudrun-flash",
+      "from": "cloudrun",
+      "to": "flash",
+      "label": "transcribe",
+      "variant": "emphasis",
+      "labelDy": 26
+    },
+    {
+      "id": "cloudrun-gcs",
+      "from": "cloudrun",
+      "to": "gcs",
+      "label": "FLAC",
+      "labelAt": [
+        360,
+        222
+      ]
+    },
+    {
+      "id": "cloudrun-firestore",
+      "from": "cloudrun",
+      "to": "firestore",
+      "label": "transcript",
+      "labelAt": [
+        485,
+        250
+      ],
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "cloudrun-pubsub",
+      "from": "cloudrun",
+      "to": "pubsub",
+      "label": "on Stop",
+      "labelAt": [
+        360,
+        450
+      ]
+    },
+    {
+      "id": "pubsub-adk",
+      "from": "pubsub",
+      "to": "adk",
+      "label": "OIDC push",
+      "variant": "emphasis"
+    },
+    {
+      "id": "adk-flash",
+      "from": "adk",
+      "to": "flash",
+      "label": "extract"
+    },
+    {
+      "id": "adk-pro",
+      "from": "adk",
+      "to": "pro",
+      "label": "synthesize",
+      "labelAt": [
+        860,
+        222
+      ]
+    },
+    {
+      "id": "adk-firestore",
+      "from": "adk",
+      "to": "firestore",
+      "label": "summary",
+      "labelAt": [
+        735,
+        250
+      ],
+      "fromSide": "top",
+      "toSide": "right"
+    },
+    {
+      "id": "adk-discord",
+      "from": "adk",
+      "to": "discord",
+      "label": "webhook",
+      "variant": "emphasis"
+    }
+  ]
+}
