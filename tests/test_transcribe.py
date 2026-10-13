@@ -92,12 +92,24 @@ def test_retries_on_unparseable_output(monkeypatch: pytest.MonkeyPatch) -> None:
     assert client.models.generate_content.call_count == 2
 
 
-def test_gives_up_after_one_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_rides_out_repeated_rate_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Vertex 429s often repeat; a single retry lost chunk 0 in the post-merge smoke test."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(t.time, "sleep", sleeps.append)
+    quota = errors.ClientError(429, {"error": {"message": "resource exhausted"}})
+    client = _fake_client(monkeypatch, quota, quota, _resp(("Speaker A", 0.0, 1.0, "ครับ")))
+    assert len(t.transcribe_chunk("gs://b/c.flac", 0, 0.0, []).utterances) == 1
+    assert client.models.generate_content.call_count == 3
+    assert sleeps == list(t.RETRY_DELAYS_S[:2])
+
+
+def test_gives_up_after_all_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     err = errors.ServerError(503, {"error": {"message": "unavailable"}})
-    client = _fake_client(monkeypatch, err, err, err)
+    attempts = len(t.RETRY_DELAYS_S) + 1
+    client = _fake_client(monkeypatch, *[err] * (attempts + 1))
     with pytest.raises(RuntimeError, match="chunk 3"):
         t.transcribe_chunk("gs://b/c.flac", 3, 0.0, [])
-    assert client.models.generate_content.call_count == 2
+    assert client.models.generate_content.call_count == attempts
 
 
 def test_non_transient_error_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:

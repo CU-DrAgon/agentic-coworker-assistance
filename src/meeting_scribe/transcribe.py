@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 PRIOR_LIMIT = 12
 TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
-RETRY_DELAY_S = 5.0
+# Backoff between attempts; Vertex 429s (shared quota) can last tens of seconds.
+RETRY_DELAYS_S = (5.0, 15.0, 30.0)
 NOISE_RE = re.compile(r"^[\s\W_]*$")  # empty or punctuation only
 UNKNOWN = "Unknown"  # label for a voice that cannot be matched to a known participant
 
@@ -152,15 +153,15 @@ def transcribe_chunk(
     prompt = _prompt(prior, participants, settings.meeting_language)
 
     started = time.monotonic()
-    try:
-        result = _call(model, gcs_uri, mime_type, prompt)
-    except _TransientError as e:
-        logger.warning("chunk %d: transient failure (%s), retrying once", index, e)
-        time.sleep(RETRY_DELAY_S)
+    for attempt, delay in enumerate((*RETRY_DELAYS_S, None), start=1):
         try:
             result = _call(model, gcs_uri, mime_type, prompt)
-        except _TransientError as e2:
-            raise RuntimeError(f"transcription failed for chunk {index}: {e2}") from e2
+            break
+        except _TransientError as e:
+            if delay is None:
+                raise RuntimeError(f"transcription failed for chunk {index}: {e}") from e
+            logger.warning("chunk %d: transient failure (%s), retry %d", index, e, attempt)
+            time.sleep(delay)
 
     utterances = _clean(result.utterances, offset_s, participants)
     logger.info(
