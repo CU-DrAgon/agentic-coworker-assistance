@@ -1,0 +1,108 @@
+# Meeting Scribe — project context for people and AI agents
+
+Read this first, then `README.md` (product, architecture, how to use it with Google Meet).
+
+## What this is
+
+A Google AI Builder Cup prototype (theme: Future of Work & Enterprise Productivity).
+A host opens the web app next to a Google Meet, clicks Record and shares the Meet tab with
+"Share tab audio". The browser mixes tab audio + mic and uploads ~45 s audio segments.
+The server transcribes each segment in Thai with speaker labels (Gemini on Vertex AI), and on
+Stop an ADK multi-agent summarizer produces decisions, action items and speaker names, saves
+them to Firestore and posts a Discord embed with the transcript attached.
+
+- Code, comments, docs and UI are **English**. Meeting audio, transcripts and summaries are **Thai**.
+- Submission deadline: **18 Oct 2026**.
+- Judging: Gen AI technical merit 40%, problem fit 25%, innovation 25%, UX 10%.
+- Repo: https://github.com/CU-DrAgon/agentic-coworker-assistance
+
+## Pipeline in one line
+
+Browser chunk → `POST /api/meetings/{id}/chunks` → ffmpeg → 16 kHz FLAC → Cloud Storage →
+Gemini (`gemini-3.5-flash`, transcribe + diarize) → Firestore. On Stop: `/finish` → Pub/Sub →
+`/pubsub/finalize` (OIDC-verified) → ADK `[decisions ‖ action items ‖ speaker names]` on
+`gemini-3.5-flash` → synthesizer on `gemini-3.1-pro-preview` → Firestore → Discord webhook.
+
+## Code map (`src/meeting_scribe/`)
+
+| File | Role |
+| --- | --- |
+| `config.py` | `Settings` from env / `.env` (unknown keys ignored) |
+| `models.py` | Shared contract: `Utterance`, `ChunkTranscript`, `Meeting`, `Summary`, `ActionItem`. **Do not break it.** |
+| `audio.py` | `to_flac` (ffmpeg) |
+| `transcribe.py` | `transcribe_chunk`: prompt, label rules, retry. With a participant list every label is a listed name or `Unknown`; otherwise `Speaker A/B/C`. |
+| `agents.py` | ADK pipeline `summarize_meeting`, `root_agent`; `unresolved_labels`, `resolve_speaker_names` (never invents names), `build_summary` (applies names to action-item owners, drops recorder instructions) |
+| `storage.py` / `store.py` | GCS upload; Firestore `MeetingStore` and `InMemoryMeetingStore` |
+| `discord_post.py` | Embed + transcript attachment; never logs the webhook URL |
+| `pipeline.py` | `process_chunk`, `finalize` (idempotent, per-process lock) |
+| `app.py` | FastAPI routes; health check is `/health` (Cloud Run reserves `/healthz`) |
+| `static/index.html` | Recorder UI, live transcript, summary |
+| `scripts/deploy.sh` | Idempotent Cloud Run deploy + IAM + Secret Manager + Pub/Sub push subscription |
+| `scripts/resummarize_dry_run.py` | Re-run the summarizer on a stored meeting and print before/after. Read-only, but calls Vertex AI. |
+
+Tests in `tests/` are fully offline (every external service is mocked). Fixture:
+`tests/fixtures/thai_meeting.json`.
+
+## Infrastructure that already exists — never recreate
+
+- GCP project `meeting-scribe-hackathon`, region `asia-southeast1`, Vertex Gemini location `global`
+- Bucket `gs://meeting-scribe-hackathon-audio`, Firestore `(default)` native DB
+- Pub/Sub topic `meeting-finalize` + push subscription `meeting-finalize-push`
+- Cloud Run service `meeting-scribe` (**max-instances=1 on purpose**: the finalize lock is per-process)
+- Service accounts `meeting-scribe-run` (runtime) and `meeting-scribe-pusher` (Pub/Sub push)
+- Secret Manager secret `discord-webhook-url`
+- Deployed URL: `gcloud run services describe meeting-scribe --region asia-southeast1 --format='value(status.url)'`
+  (keep it private: there is no auth on the app)
+
+## Credentials and safety rules
+
+- `.env` holds `DISCORD_WEBHOOK_URL`, a GitHub token (`GH_TOKEN`) and GCP settings. **Never** print,
+  log, echo, paste into chat, commit, or put any of these values on a command line. Refer to them by
+  key name only.
+- Before any commit: `git status` and `git diff --cached`. `.env`, `samples/` and `*.json` key files
+  must never be staged.
+- Do not create service-account key files. Use `gcloud auth login` + `gcloud auth application-default login`.
+- `gcloud run deploy --source .` uploads the directory. There is no `.gcloudignore`, so `.gitignore`
+  applies and excludes `.env`. Confirm before deploying.
+- `scripts/deploy.sh` pushes the webhook from `.env` into Secret Manager as a **new version**. Run it
+  only intentionally.
+- **Never set `USE_PUBSUB=true` locally**: it routes finalize to the production push endpoint.
+  Local runs use `STORE=memory` and the default `USE_PUBSUB=false`.
+- Re-transcribing chunks costs Vertex quota. 3–4 chunks is fine; ask before a whole meeting.
+- Ask a human before anything destructive, costly or production-affecting: deploys, new secret
+  versions, deleting data, posting to Discord, changing Firestore records.
+
+## Local development
+
+```bash
+uv sync
+uv run pytest -q                                  # offline, all mocked
+uvx ruff check . && uvx ruff format --check .     # lint + format (line length 100)
+STORE=memory uv run uvicorn meeting_scribe.app:app --port 8080
+curl -s localhost:8080/health
+```
+
+Requires Python 3.12 (uv installs it), ffmpeg, and ADC for anything that touches GCP.
+
+## Known limitations — do not "fix" without asking
+
+- No auth on the web app or API; keep the URL private.
+- About 0.1 s of audio is lost at each 45 s segment boundary.
+- No retention policy on audio or Firestore (deleting data needs approval).
+- Old Cloud Run logs may contain the webhook URL; rotate it after the hackathon.
+- Desktop Chrome/Edge only (tab-audio capture).
+
+## Reference data
+
+Firestore meeting `e6379be86dfd` ("Meet1", 25 min, 34 chunks, 309 utterances, participants
+Peat / Toey / Jems) is the first real recording. It showed the two bugs fixed on 13 Oct 2026:
+speaker labels drifting between real names and `Speaker B/C/D`, and a spoken instruction to the
+recorder ("หยุดบันทึกและสรุปข้อมูลการประชุม") extracted as an action item. Use
+`uv run python scripts/resummarize_dry_run.py e6379be86dfd` to check regressions without writing
+anything.
+
+## How to work here
+
+Small surgical changes. Write a failing offline test first, keep the suite green, match the existing
+style. State what you verified and what you could not. Work on a feature branch and open a PR;
+redeploy with `scripts/deploy.sh` only after a human approves, then smoke `/health`.

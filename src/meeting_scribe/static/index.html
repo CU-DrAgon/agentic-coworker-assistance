@@ -234,9 +234,10 @@ function renderSummary(s) {
   add("p", s.overview);
   list("Key points", s.key_points, (li, t) => (li.textContent = t));
   list("Decisions", s.decisions, (li, t) => (li.textContent = t));
+  const names = s.speaker_names || {};
   list("Action items", s.action_items, (li, a) => {
     const b = document.createElement("strong");
-    b.textContent = a.owner;
+    b.textContent = names[a.owner] || a.owner;
     li.append(b, " — " + a.task);
     if (a.due) {
       const d = document.createElement("span");

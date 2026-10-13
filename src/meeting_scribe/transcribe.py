@@ -18,6 +18,7 @@ PRIOR_LIMIT = 12
 TRANSIENT_CODES = {408, 429, 500, 502, 503, 504}
 RETRY_DELAY_S = 5.0
 NOISE_RE = re.compile(r"^[\s\W_]*$")  # empty or punctuation only
+UNKNOWN = "Unknown"  # label for a voice that cannot be matched to a known participant
 
 
 class _Turn(BaseModel):
@@ -50,16 +51,23 @@ def _prompt(prior: list[Utterance], participants: list[str] | None, language: st
         f"{language} and preserve English code-switching in English. Do NOT translate or transliterate.",
         "- One entry per continuous speaker turn. Start a new entry whenever the speaker changes.",
         "- start_s and end_s are seconds from the start of THIS clip (0 = first sample of the clip).",
-        "- Label voices consistently within the clip as 'Speaker A', 'Speaker B', 'Speaker C', ... "
-        "in order of first appearance. Distinguish speakers by voice, not by what they talk about.",
         "- Skip silence, background noise, music and filler sounds. Never invent speech. "
         "If there is no speech, return an empty list.",
+        "- Distinguish speakers by voice, not by what they talk about.",
     ]
     if participants:
         lines.append(
-            f"- Known participants: {', '.join(participants)}. Use a participant's real name as the "
-            "label ONLY when the speaker clearly introduces themselves or is directly addressed by "
-            "name in this clip; otherwise keep the 'Speaker X' label."
+            f"- Known participants: {', '.join(participants)}. Every speaker label MUST be one of "
+            "these names, spelled exactly as listed. Match each voice to a participant using "
+            "introductions, how people address each other, and the previous utterances below "
+            f"(the same voice keeps the same name). Only if a voice cannot be matched to any "
+            f"participant, label it '{UNKNOWN}' (at most one such voice per clip). "
+            "Never use 'Speaker A'-style labels or names that are not in the list."
+        )
+    else:
+        lines.append(
+            "- Label voices consistently within the clip as 'Speaker A', 'Speaker B', 'Speaker C', "
+            "... in order of first appearance."
         )
     if prior:
         context = "\n".join(f"{u.speaker}: {u.text}" for u in prior[-PRIOR_LIMIT:])
@@ -70,7 +78,7 @@ def _prompt(prior: list[Utterance], participants: list[str] | None, language: st
             context,
             "",
             "Reuse exactly the same speaker labels as above for the same voices. "
-            "Use a new letter only for a voice that clearly has not spoken yet.",
+            "Use a label not seen above only for a voice that clearly has not spoken yet.",
         ]
     return "\n".join(lines)
 
@@ -99,7 +107,18 @@ def _call(model: str, gcs_uri: str, mime_type: str, prompt: str) -> _Response:
         raise _TransientError("unparseable model output") from e
 
 
-def _clean(turns: list[_Turn], offset_s: float) -> list[Utterance]:
+def _canonical_label(label: str, participants: list[str] | None) -> str:
+    """With a participant list, labels are participant names (as listed) or UNKNOWN."""
+    label = label.strip() or "Speaker A"
+    if not participants:
+        return label
+    by_key = {p.strip().casefold(): p.strip() for p in participants if p.strip()}
+    return by_key.get(label.casefold(), UNKNOWN)
+
+
+def _clean(
+    turns: list[_Turn], offset_s: float, participants: list[str] | None = None
+) -> list[Utterance]:
     out: list[Utterance] = []
     for t in turns:
         text = t.text.strip()
@@ -109,7 +128,7 @@ def _clean(turns: list[_Turn], offset_s: float) -> list[Utterance]:
         end = max(t.end_s, start)
         out.append(
             Utterance(
-                speaker=t.speaker.strip() or "Speaker A",
+                speaker=_canonical_label(t.speaker, participants),
                 start_s=round(offset_s + start, 2),
                 end_s=round(offset_s + end, 2),
                 text=text,
@@ -143,7 +162,7 @@ def transcribe_chunk(
         except _TransientError as e2:
             raise RuntimeError(f"transcription failed for chunk {index}: {e2}") from e2
 
-    utterances = _clean(result.utterances, offset_s)
+    utterances = _clean(result.utterances, offset_s, participants)
     logger.info(
         "chunk %d transcribed with %s: %d utterances in %.1fs",
         index, model, len(utterances), time.monotonic() - started,
