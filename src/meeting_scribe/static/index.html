@@ -1,0 +1,483 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meeting Scribe</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1c2330; --muted: #566074; --line: #d9dee7;
+    --accent: #1a56db; --accent-ink: #fff; --danger: #b42318; --ok: #05603a;
+    --warn-bg: #fff4d6; --warn-ink: #6b4a00;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink); line-height: 1.5;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans Thai", "Sarabun", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  h2 { margin: 0 0 12px; font-size: 1.1rem; }
+  .tagline { margin: 0 0 24px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; margin-bottom: 4px; }
+  .hint { font-weight: 400; color: var(--muted); font-size: .875rem; }
+  input[type=text] { width: 100%; padding: 10px 12px; font: inherit; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  button, .btn {
+    font: inherit; font-weight: 600; padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent);
+    background: var(--accent); color: var(--accent-ink); cursor: pointer;
+  }
+  button.secondary, .btn.secondary { background: var(--card); color: var(--accent); }
+  button.danger { background: var(--danger); border-color: var(--danger); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  :focus-visible { outline: 3px solid #f59e0b; outline-offset: 2px; }
+  input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  input[type=file]:focus-visible + .btn { outline: 3px solid #f59e0b; outline-offset: 2px; }
+  .banner { padding: 10px 14px; border-radius: 8px; margin: 0 0 12px; background: var(--warn-bg); color: var(--warn-ink); }
+  .banner.error { background: #fde8e6; color: var(--danger); }
+  .banner[hidden] { display: none; }
+  .status-bar { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; margin-bottom: 12px; }
+  .timer { font-variant-numeric: tabular-nums; font-size: 1.5rem; font-weight: 700; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: #eef1f6; font-size: .875rem; font-weight: 600; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+  .recording .dot { background: var(--danger); animation: pulse 1.4s infinite; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  @media (prefers-reduced-motion: reduce) { .recording .dot { animation: none; } }
+  #transcript { max-height: 420px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+  #transcript li { display: grid; grid-template-columns: 52px 1fr; gap: 8px; padding: 6px 0 6px 10px; border-left: 4px solid var(--c, var(--line)); margin-bottom: 6px; }
+  .ts { color: var(--muted); font-variant-numeric: tabular-nums; font-size: .85rem; padding-top: 2px; }
+  .who { font-weight: 700; color: var(--c, var(--ink)); margin-right: 6px; }
+  .empty { color: var(--muted); }
+  #summary h3 { margin: 18px 0 6px; font-size: 1rem; }
+  #summary ul { margin: 0; padding-left: 20px; }
+  #summary li { margin-bottom: 4px; }
+  .due { color: var(--muted); }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Meeting Scribe</h1>
+  <p class="tagline">Record a Google Meet, get a live Thai transcript, and a summary posted to Discord.</p>
+
+  <section class="card" id="setup" aria-labelledby="setup-h">
+    <h2 id="setup-h">New meeting</h2>
+    <form id="setup-form">
+      <label for="title">Title</label>
+      <input type="text" id="title" name="title" placeholder="Weekly sync" autocomplete="off">
+      <label for="participants">Participants <span class="hint">(optional, comma-separated — helps name speakers)</span></label>
+      <input type="text" id="participants" name="participants" placeholder="Somchai, Malee, Anan" autocomplete="off">
+      <div class="row">
+        <button type="submit" id="start-btn">Start recording</button>
+        <span style="position:relative">
+          <input type="file" id="file-input" accept="audio/*,video/*">
+          <label for="file-input" class="btn secondary" style="margin:0">Upload a recording</label>
+        </span>
+      </div>
+      <p class="hint" style="margin-bottom:0">
+        To record: open your Meet in another tab, click <strong>Start recording</strong>, choose that tab and tick
+        <strong>Share tab audio</strong>. Works in Chrome or Edge on desktop. Your microphone is mixed in.
+      </p>
+    </form>
+  </section>
+
+  <div id="banner" class="banner" role="alert" hidden></div>
+
+  <section class="card" id="live" aria-labelledby="live-h" hidden>
+    <h2 id="live-h">Live transcript</h2>
+    <div class="status-bar" id="status-bar">
+      <span class="pill"><span class="dot" aria-hidden="true"></span><span id="state">Idle</span></span>
+      <span class="timer" id="timer" role="timer" aria-label="Elapsed time">00:00</span>
+      <span id="upload-status" aria-live="polite"></span>
+      <button type="button" id="stop-btn" class="danger" hidden>Stop &amp; summarize</button>
+    </div>
+    <ol id="transcript" role="log" aria-live="polite" aria-label="Transcript" tabindex="0">
+      <li class="empty">Waiting for speech…</li>
+    </ol>
+  </section>
+
+  <section class="card" id="summary-card" aria-labelledby="summary-h" hidden>
+    <h2 id="summary-h">Summary</h2>
+    <div id="summary" aria-live="polite"></div>
+    <div class="row" style="margin-top:16px">
+      <button type="button" id="new-btn" class="secondary">Start a new meeting</button>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const SEGMENT_MS = 45000;
+const POLL_MS = 5000;
+const UPLOAD_TRIES = 3;
+const COLORS = ["#1a56db", "#b42318", "#05603a", "#7a3e9d", "#a15c00", "#0b6e7f"];
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  form: $("setup-form"), title: $("title"), participants: $("participants"), start: $("start-btn"),
+  file: $("file-input"), banner: $("banner"), live: $("live"), state: $("state"), timer: $("timer"),
+  upStatus: $("upload-status"), stop: $("stop-btn"), transcript: $("transcript"), statusBar: $("status-bar"),
+  summaryCard: $("summary-card"), summary: $("summary"), newBtn: $("new-btn"), setup: $("setup"),
+};
+
+const st = {
+  meetingId: null, summary: null, speakerNames: {},
+  display: null, mic: null, ctx: null, dest: null, recorder: null, segTimer: null,
+  t0: 0, nextIndex: 0, uploads: [], counts: { pending: 0, done: 0, failed: 0 },
+  timerId: null, pollId: null, polling: false, stopping: false, lastSig: "",
+};
+
+// ---------- helpers ----------
+function banner(msg, isError = false) {
+  els.banner.textContent = msg || "";
+  els.banner.className = "banner" + (isError ? " error" : "");
+  els.banner.hidden = !msg;
+}
+function setState(text, recording = false) {
+  els.state.textContent = text;
+  els.statusBar.classList.toggle("recording", recording);
+}
+function fmt(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const mm = String(m).padStart(2, "0"), ss = String(r).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { detail = (await res.json()).detail || detail; } catch (_) { /* not JSON */ }
+    const err = new Error(`${res.status}: ${detail}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.status === 204 ? null : res.json();
+}
+function updateUploadStatus() {
+  const { pending, done, failed } = st.counts;
+  const parts = [];
+  if (pending) parts.push(`${pending} uploading`);
+  if (done) parts.push(`${done} transcribed`);
+  if (failed) parts.push(`${failed} failed`);
+  els.upStatus.textContent = parts.join(" · ");
+}
+function speakerColor(label) {
+  if (!(label in speakerColor.map)) speakerColor.map[label] = COLORS[Object.keys(speakerColor.map).length % COLORS.length];
+  return speakerColor.map[label];
+}
+speakerColor.map = {};
+
+// ---------- transcript rendering (ordered by meeting time) ----------
+function renderTranscript(meeting) {
+  const utts = (meeting.chunks || [])
+    .slice().sort((a, b) => a.index - b.index)
+    .flatMap((c) => c.utterances);
+  const names = st.speakerNames;
+  const sig = utts.length + "|" + Object.keys(names).length;
+  if (sig === st.lastSig) return;
+  st.lastSig = sig;
+  const nearBottom = els.transcript.scrollHeight - els.transcript.scrollTop - els.transcript.clientHeight < 60;
+  els.transcript.replaceChildren();
+  if (!utts.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "Waiting for speech…";
+    els.transcript.append(li);
+    return;
+  }
+  for (const u of utts) {
+    const li = document.createElement("li");
+    li.style.setProperty("--c", speakerColor(u.speaker));
+    const ts = document.createElement("span");
+    ts.className = "ts";
+    ts.textContent = fmt(u.start_s);
+    const body = document.createElement("span");
+    const who = document.createElement("span");
+    who.className = "who";
+    who.textContent = (names[u.speaker] || u.speaker) + ":";
+    const text = document.createElement("span");
+    text.lang = "th";
+    text.textContent = u.text;
+    body.append(who, text);
+    li.append(ts, body);
+    els.transcript.append(li);
+  }
+  if (nearBottom) els.transcript.scrollTop = els.transcript.scrollHeight;
+}
+
+function renderSummary(s) {
+  const root = els.summary;
+  root.replaceChildren();
+  const add = (tag, text, parent = root) => {
+    const e = document.createElement(tag);
+    e.textContent = text;
+    parent.append(e);
+    return e;
+  };
+  const list = (heading, items, render) => {
+    if (!items || !items.length) return;
+    add("h3", heading);
+    const ul = document.createElement("ul");
+    for (const it of items) {
+      const li = document.createElement("li");
+      render(li, it);
+      ul.append(li);
+    }
+    root.append(ul);
+  };
+  add("h3", s.title).style.marginTop = "0";
+  add("p", s.overview);
+  list("Key points", s.key_points, (li, t) => (li.textContent = t));
+  list("Decisions", s.decisions, (li, t) => (li.textContent = t));
+  list("Action items", s.action_items, (li, a) => {
+    const b = document.createElement("strong");
+    b.textContent = a.owner;
+    li.append(b, " — " + a.task);
+    if (a.due) {
+      const d = document.createElement("span");
+      d.className = "due";
+      d.textContent = ` (${a.due})`;
+      li.append(d);
+    }
+  });
+  list("Open questions", s.open_questions, (li, t) => (li.textContent = t));
+  els.summaryCard.hidden = false;
+}
+
+// ---------- polling ----------
+async function pollOnce() {
+  if (!st.meetingId) return null;
+  const meeting = await api(`/api/meetings/${st.meetingId}`);
+  if (meeting.summary) st.speakerNames = meeting.summary.speaker_names || {};
+  renderTranscript(meeting);
+  return meeting;
+}
+function startPolling() {
+  stopPolling();
+  st.pollId = setInterval(async () => {
+    if (st.polling) return;
+    st.polling = true;
+    try { await pollOnce(); } catch (e) { console.warn("poll failed", e); } finally { st.polling = false; }
+  }, POLL_MS);
+}
+function stopPolling() { clearInterval(st.pollId); st.pollId = null; }
+
+// ---------- uploads ----------
+async function uploadChunk(index, offsetS, blob) {
+  st.counts.pending++; updateUploadStatus();
+  try {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const fd = new FormData();
+        fd.append("index", String(index));
+        fd.append("offset_s", String(offsetS));
+        fd.append("file", blob, `chunk-${index}`);
+        await api(`/api/meetings/${st.meetingId}/chunks`, { method: "POST", body: fd });
+        st.counts.done++;
+        return;
+      } catch (e) {
+        const retryable = !e.status || e.status >= 500;
+        if (!retryable || attempt >= UPLOAD_TRIES) throw e;
+        await new Promise((r) => setTimeout(r, 1000 * 2 ** (attempt - 1)));
+      }
+    }
+  } catch (e) {
+    st.counts.failed++;
+    banner(`Part ${index + 1} of the audio could not be transcribed (${e.message}).`, true);
+  } finally {
+    st.counts.pending--; updateUploadStatus();
+  }
+}
+
+// ---------- recording ----------
+function pickMime() {
+  const opts = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  return opts.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || "";
+}
+
+function startSegment() {
+  const mime = pickMime();
+  const rec = new MediaRecorder(st.dest.stream, mime ? { mimeType: mime } : undefined);
+  const parts = [];
+  const offsetS = (performance.now() - st.t0) / 1000;
+  rec.ondataavailable = (e) => { if (e.data.size) parts.push(e.data); };
+  rec.onstop = () => {
+    const blob = new Blob(parts, { type: rec.mimeType || mime });
+    if (blob.size < 1500) return; // empty tail from an immediate stop
+    const index = st.nextIndex++; // recorders stop in order, so indexes follow time order
+    st.uploads.push(uploadChunk(index, offsetS, blob));
+  };
+  rec.start();
+  st.recorder = rec;
+  return rec;
+}
+
+function rotateSegment() {
+  const old = st.recorder;
+  startSegment(); // start the next one first so no audio falls between segments
+  if (old && old.state !== "inactive") old.stop();
+}
+
+async function beginMeeting() {
+  const participants = els.participants.value.split(",").map((s) => s.trim()).filter(Boolean);
+  const meeting = await api("/api/meetings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: els.title.value.trim() || "Untitled meeting", participants }),
+  });
+  st.meetingId = meeting.id;
+  st.nextIndex = 0; st.uploads = []; st.counts = { pending: 0, done: 0, failed: 0 };
+  st.summary = null; st.speakerNames = {}; st.lastSig = ""; st.stopping = false;
+  speakerColor.map = {};
+  els.summaryCard.hidden = true;
+  els.transcript.replaceChildren();
+  renderTranscript({ chunks: [] });
+  els.upStatus.textContent = "";
+  els.live.hidden = false;
+  els.setup.hidden = true;
+}
+
+async function startRecording() {
+  banner("");
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || !window.MediaRecorder) {
+    banner("This browser cannot capture tab audio. Use Chrome or Edge on desktop, or upload a recording.", true);
+    return;
+  }
+  let display;
+  try {
+    display = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+  } catch (e) {
+    banner("Screen share was cancelled. Pick the Meet tab to record it.", true);
+    return;
+  }
+  let mic = null;
+  try {
+    mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    banner("Microphone unavailable, so only the shared tab audio will be recorded.");
+  }
+  const hasTabAudio = display.getAudioTracks().length > 0;
+  if (!hasTabAudio) {
+    banner("No tab audio was shared. Stop, then start again and tick 'Share tab audio'.");
+    if (!mic) { display.getTracks().forEach((t) => t.stop()); banner("Nothing to record: no tab audio and no microphone.", true); return; }
+  }
+
+  try {
+    await beginMeeting();
+  } catch (e) {
+    display.getTracks().forEach((t) => t.stop());
+    if (mic) mic.getTracks().forEach((t) => t.stop());
+    banner(`Could not create the meeting: ${e.message}`, true);
+    return;
+  }
+
+  st.display = display; st.mic = mic;
+  st.ctx = new AudioContext();
+  st.dest = st.ctx.createMediaStreamDestination();
+  if (hasTabAudio) st.ctx.createMediaStreamSource(new MediaStream(display.getAudioTracks())).connect(st.dest);
+  if (mic) st.ctx.createMediaStreamSource(mic).connect(st.dest);
+  display.getVideoTracks().forEach((t) => t.addEventListener("ended", () => stopRecording()));
+
+  st.t0 = performance.now();
+  startSegment();
+  st.segTimer = setInterval(rotateSegment, SEGMENT_MS);
+  els.timer.textContent = "00:00";
+  st.timerId = setInterval(() => { els.timer.textContent = fmt((performance.now() - st.t0) / 1000); }, 500);
+  els.stop.hidden = false;
+  els.stop.disabled = false;
+  setState("Recording", true);
+  startPolling();
+}
+
+async function stopRecording() {
+  if (st.stopping) return;
+  st.stopping = true;
+  els.stop.disabled = true;
+  clearInterval(st.segTimer); clearInterval(st.timerId);
+  setState("Finishing uploads…");
+  const last = st.recorder;
+  if (last && last.state !== "inactive") {
+    // onstop (which queues the final upload) fires asynchronously, so wait for it.
+    await new Promise((resolve) => { last.addEventListener("stop", resolve, { once: true }); last.stop(); });
+  }
+  [st.display, st.mic].forEach((s) => s && s.getTracks().forEach((t) => t.stop()));
+  if (st.ctx) st.ctx.close();
+  els.stop.hidden = true;
+  await Promise.allSettled(st.uploads);
+  await finishMeeting();
+}
+
+async function finishMeeting() {
+  setState("Summarizing…");
+  const finish = api(`/api/meetings/${st.meetingId}/finish`, { method: "POST" });
+  try {
+    await finish;
+  } catch (e) {
+    banner(`Could not start summarizing: ${e.message}`, true);
+    setState("Failed");
+    return;
+  }
+  // With Pub/Sub the summary arrives asynchronously; with in-process finalize it is already done.
+  for (;;) {
+    let meeting;
+    try { meeting = await pollOnce(); } catch (e) { console.warn("poll failed", e); }
+    if (meeting && meeting.status === "done") {
+      stopPolling();
+      renderSummary(meeting.summary);
+      setState("Done");
+      banner("");
+      els.summaryCard.scrollIntoView({ behavior: "smooth" });
+      return;
+    }
+    if (meeting && meeting.status === "failed") {
+      stopPolling();
+      setState("Failed");
+      banner(`Summary failed: ${meeting.error || "unknown error"}`, true);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+}
+
+// ---------- upload a recording ----------
+async function uploadRecording(file) {
+  banner("");
+  try {
+    await beginMeeting();
+  } catch (e) {
+    banner(`Could not create the meeting: ${e.message}`, true);
+    return;
+  }
+  els.timer.hidden = true;
+  setState(`Transcribing ${file.name}…`);
+  startPolling();
+  await uploadChunk(0, 0, file);
+  els.timer.hidden = false;
+  if (st.counts.failed) { stopPolling(); setState("Failed"); return; }
+  await finishMeeting();
+}
+
+// ---------- wiring ----------
+els.form.addEventListener("submit", (e) => { e.preventDefault(); startRecording(); });
+els.stop.addEventListener("click", stopRecording);
+els.file.addEventListener("change", () => {
+  const f = els.file.files[0];
+  els.file.value = "";
+  if (f) uploadRecording(f);
+});
+els.newBtn.addEventListener("click", () => {
+  stopPolling();
+  st.meetingId = null;
+  els.live.hidden = true; els.summaryCard.hidden = true; els.setup.hidden = false;
+  els.timer.textContent = "00:00"; banner("");
+});
+window.addEventListener("beforeunload", (e) => {
+  if (st.recorder && st.recorder.state === "recording") { e.preventDefault(); e.returnValue = ""; }
+});
+</script>
+</body>
+</html>
