@@ -40,7 +40,7 @@ class _TransientError(Exception):
 @lru_cache
 def _client() -> genai.Client:
     s = get_settings()
-    return genai.Client(vertexai=True, project=s.gcp_project, location=s.gemini_location)
+    return genai.Client(vertexai=True, project=s.gcp_project, location=s.flash_location)
 
 
 def _prompt(prior: list[Utterance], participants: list[str] | None, language: str) -> str:

@@ -10,7 +10,10 @@ class Settings(BaseSettings):
 
     gcp_project: str = "meeting-scribe-hackathon"
     gcp_region: str = "asia-southeast1"  # Cloud Run, GCS, Firestore
-    gemini_location: str = "global"  # Vertex AI Gemini endpoint location
+    gemini_location: str = "global"  # Vertex AI endpoint for summary_model (Pro is global-only)
+    # Regional endpoint for the flash models: own quota pool (the global flash quota was
+    # exhausted on 13 Oct) and the same region as Cloud Run.
+    flash_location: str = "asia-southeast1"
 
     audio_bucket: str = "meeting-scribe-hackathon-audio"
     firestore_collection: str = "meetings"

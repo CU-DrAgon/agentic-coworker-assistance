@@ -76,9 +76,12 @@ def test_root_agent_structure() -> None:
     ]
     assert all(isinstance(a, LlmAgent) for a in extractors.sub_agents)
     s = get_settings()
-    assert {a.model for a in extractors.sub_agents} == {s.extract_model}
+    assert {a.model.model for a in extractors.sub_agents} == {s.extract_model}
+    assert {a.model.client_kwargs["location"] for a in extractors.sub_agents} == {s.flash_location}
+    assert all(a.model.retry_options.attempts > 1 for a in extractors.sub_agents)
     assert isinstance(synthesizer, LlmAgent)
-    assert synthesizer.model == s.summary_model
+    assert synthesizer.model.model == s.summary_model
+    assert synthesizer.model.client_kwargs["location"] == s.gemini_location
     assert synthesizer.output_key == "synthesis"
     # Every {placeholder} the instructions read must be provided via session state.
     for a in (*extractors.sub_agents, synthesizer):
