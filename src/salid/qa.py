@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
+import uuid
 from dataclasses import dataclass
 
+from google.adk.agents import LlmAgent
+from google.adk.agents.run_config import RunConfig
+from google.adk.models import Gemini
+from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from .config import Settings
-from .llm import generate
-from .models import CATEGORIES
-from .store import GROUPS, Store
+from .store import Store
 
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 4
+APP_NAME = "salid"
+# Vertex 429s (shared quota) and 5xx are retried with backoff by the genai HTTP client
+# (same policy as meeting_scribe.agents).
+RETRY_OPTIONS = types.HttpRetryOptions(
+    attempts=5, initial_delay=2.0, max_delay=30.0, http_status_codes=[429, 500, 502, 503, 504]
+)
 THAI_DAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
 
 
@@ -133,63 +144,6 @@ class LedgerTools:
             return {"error": str(e)}
 
 
-def _s(desc="", enum=None):
-    return types.Schema(type="STRING", description=desc, enum=enum)
-
-
-_DATE = "ISO date YYYY-MM-DD, inclusive"
-_GROUP = _s("grouping", list(GROUPS))
-TOOL_DECLS = types.Tool(
-    function_declarations=[
-        types.FunctionDeclaration(
-            name="spending_summary",
-            description="Total spending and receipt count for a date range, optionally grouped.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={"start_date": _s(_DATE), "end_date": _s(_DATE), "group_by": _GROUP},
-                required=["start_date", "end_date"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="list_receipts",
-            description="List individual receipts in a date range with optional filters.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "start_date": _s(_DATE),
-                    "end_date": _s(_DATE),
-                    "category": _s("expense category", CATEGORIES),
-                    "vendor_contains": _s("substring of vendor name"),
-                    "submitter": _s("substring of submitter display name"),
-                    "limit": types.Schema(type="INTEGER", description="max rows, default 20"),
-                },
-                required=["start_date", "end_date"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="compare_periods",
-            description="Compare spending of period A vs period B (diff = A - B, with percent change), optionally per group.",
-            parameters=types.Schema(
-                type="OBJECT",
-                properties={
-                    "a_start": _s(_DATE),
-                    "a_end": _s(_DATE),
-                    "b_start": _s(_DATE),
-                    "b_end": _s(_DATE),
-                    "group_by": _GROUP,
-                },
-                required=["a_start", "a_end", "b_start", "b_end"],
-            ),
-        ),
-        types.FunctionDeclaration(
-            name="flagged_receipts",
-            description="Receipts needing attention: low confidence, missing total, or possible duplicates.",
-            parameters=types.Schema(type="OBJECT", properties={}),
-        ),
-    ]
-)
-
-
 def system_prompt(settings: Settings, scoped: bool, now=None) -> str:
     now = now or settings.now()
     p = (
@@ -213,8 +167,135 @@ class Answer:
     tool_calls: list[tuple[str, dict]]
 
 
-def ask(
-    client,
+def build_tools(ledger: LedgerTools, calls: list[tuple[str, dict]] | None = None) -> list:
+    """The four ledger tools as plain functions bound to `ledger` (ADK wraps them as FunctionTools).
+
+    Permission scoping lives in `ledger.forced`: none of these signatures has a submitter
+    parameter, so the model cannot pass one (ADK also drops undeclared arguments). Errors are
+    returned to the model as data instead of raised, so a bad date never kills the turn.
+    """
+    log = calls if calls is not None else []
+
+    def safe(name: str, args: dict, fn):
+        log.append((name, {k: v for k, v in args.items() if v is not None}))
+        try:
+            return fn()
+        except (TypeError, ValueError) as e:
+            return {"error": str(e)}
+
+    def spending_summary(start_date: str, end_date: str, group_by: str = "none") -> dict:
+        """Total spending and receipt count for a date range, optionally grouped.
+
+        Args:
+            start_date: ISO date YYYY-MM-DD, inclusive.
+            end_date: ISO date YYYY-MM-DD, inclusive.
+            group_by: one of category, vendor, submitter, day, none.
+        """
+        a = dict(start_date=start_date, end_date=end_date, group_by=group_by)
+        return safe("spending_summary", a, lambda: ledger.spending_summary(**a))
+
+    def list_receipts(
+        start_date: str,
+        end_date: str,
+        category: str | None = None,
+        vendor_contains: str | None = None,
+        submitter: str | None = None,
+        limit: int = 20,
+    ) -> dict:
+        """List individual receipts in a date range with optional filters.
+
+        Args:
+            start_date: ISO date YYYY-MM-DD, inclusive.
+            end_date: ISO date YYYY-MM-DD, inclusive.
+            category: expense category, one of the Thai categories (e.g. วัตถุดิบ).
+            vendor_contains: substring of the vendor name.
+            submitter: substring of the submitter display name.
+            limit: max rows, default 20.
+        """
+        a = dict(
+            start_date=start_date,
+            end_date=end_date,
+            category=category,
+            vendor_contains=vendor_contains,
+            submitter=submitter,
+            limit=limit,
+        )
+        return safe("list_receipts", a, lambda: ledger.list_receipts(**a))
+
+    def compare_periods(
+        a_start: str, a_end: str, b_start: str, b_end: str, group_by: str = "none"
+    ) -> dict:
+        """Compare spending of period A vs period B (diff = A - B, with percent change).
+
+        Args:
+            a_start: period A start, ISO date YYYY-MM-DD, inclusive.
+            a_end: period A end, ISO date YYYY-MM-DD, inclusive.
+            b_start: period B start, ISO date YYYY-MM-DD, inclusive.
+            b_end: period B end, ISO date YYYY-MM-DD, inclusive.
+            group_by: one of category, vendor, submitter, day, none.
+        """
+        a = dict(a_start=a_start, a_end=a_end, b_start=b_start, b_end=b_end, group_by=group_by)
+        return safe("compare_periods", a, lambda: ledger.compare_periods(**a))
+
+    def flagged_receipts() -> dict:
+        """Receipts needing attention: low confidence, missing total, or possible duplicates."""
+        return safe("flagged_receipts", {}, ledger.flagged_receipts)
+
+    return [spending_summary, list_receipts, compare_periods, flagged_receipts]
+
+
+def _ensure_vertex_env(settings: Settings) -> None:
+    # ADK reads these to route Gemini calls through Vertex AI (meeting_scribe sets them too).
+    os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
+    os.environ.setdefault("GOOGLE_CLOUD_PROJECT", settings.gcp_project)
+    os.environ.setdefault("GOOGLE_CLOUD_LOCATION", settings.gemini_location)
+
+
+def build_agent(
+    settings: Settings,
+    tools: list,
+    *,
+    scoped: bool,
+    now=None,
+    model=None,
+    on_model_call=None,
+) -> LlmAgent:
+    """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
+    _ensure_vertex_env(settings)
+    prompt = system_prompt(settings, scoped=scoped, now=now)
+    model_calls = 0
+
+    def before_model(callback_context, llm_request):
+        # Hard cap: after MAX_ROUNDS tool rounds the next call has no tools, so it must answer.
+        nonlocal model_calls
+        model_calls += 1
+        if on_model_call:
+            on_model_call(model_calls)
+        if model_calls > MAX_ROUNDS:
+            llm_request.config.tools = None
+            llm_request.tools_dict.clear()
+        return None
+
+    return LlmAgent(
+        name="salid_qa",
+        model=model
+        or Gemini(
+            model=settings.gemini_model,
+            client_kwargs={"location": settings.gemini_location},
+            retry_options=RETRY_OPTIONS,
+        ),
+        description="Answers expense questions from the receipt ledger using tools.",
+        # A callable skips ADK's {placeholder} templating of the instruction string.
+        instruction=lambda _ctx: prompt,
+        tools=tools,
+        generate_content_config=types.GenerateContentConfig(
+            temperature=0.0, thinking_config=types.ThinkingConfig(thinking_level="LOW")
+        ),
+        before_model_callback=before_model,
+    )
+
+
+async def ask_async(
     settings: Settings,
     store: Store,
     question: str,
@@ -222,43 +303,53 @@ def ask(
     is_exec: bool,
     user_id: int,
     now=None,
+    model=None,
 ) -> Answer:
-    """Answer a question with Gemini function calling. Scope is decided here in code, before any data reaches the model."""
+    """Answer a question with an ADK agent. Scope is decided here in code, before any data
+    reaches the model: tools are built per request around a LedgerTools whose
+    `forced_submitter_id` is the asker for non-executives."""
     started = time.monotonic()
-    tools = LedgerTools(store, forced_submitter_id=None if is_exec else user_id)
-    cfg = types.GenerateContentConfig(
-        system_instruction=system_prompt(settings, scoped=not is_exec, now=now),
-        tools=[TOOL_DECLS],
-        temperature=0.0,
-        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-        thinking_config=types.ThinkingConfig(thinking_level="LOW"),
-    )
-    final_cfg = cfg.model_copy(update={"tools": None})
-    contents = [types.Content(role="user", parts=[types.Part(text=question)])]
     calls: list[tuple[str, dict]] = []
-    rounds = 0
-    while True:
-        last = rounds >= MAX_ROUNDS
-        resp = generate(client, settings.gemini_model, contents, final_cfg if last else cfg)
-        cand = resp.candidates[0].content if resp.candidates else None
-        fcs = [p.function_call for p in (cand.parts or []) if p.function_call] if cand else []
-        if not fcs or last:
-            text = (resp.text or "").strip() if not (last and fcs) else ""
-            return Answer(
-                text or "ขออภัย ตอบไม่ได้ในตอนนี้ ลองถามใหม่อีกครั้งนะครับ",
-                rounds,
-                time.monotonic() - started,
-                calls,
-            )
-        rounds += 1
-        contents.append(cand)  # keep model turn verbatim (thought signatures)
-        results = []
-        for fc in fcs:
-            args = dict(fc.args or {})
-            calls.append((fc.name, args))
-            results.append(
-                types.Part.from_function_response(
-                    name=fc.name, response={"result": tools.call(fc.name, args)}
-                )
-            )
-        contents.append(types.Content(role="user", parts=results))
+    ledger = LedgerTools(store, forced_submitter_id=None if is_exec else user_id)
+    agent = build_agent(
+        settings, build_tools(ledger, calls), scoped=not is_exec, now=now, model=model
+    )
+    runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
+    adk_user, session_id = str(user_id), uuid.uuid4().hex
+    await runner.session_service.create_session(
+        app_name=APP_NAME, user_id=adk_user, session_id=session_id
+    )
+    message = types.Content(role="user", parts=[types.Part(text=question)])
+    rounds, text = 0, ""
+    async for event in runner.run_async(
+        user_id=adk_user,
+        session_id=session_id,
+        new_message=message,
+        run_config=RunConfig(max_llm_calls=MAX_ROUNDS + 2),
+    ):
+        if event.get_function_calls():
+            rounds += 1
+        elif event.is_final_response() and event.content and event.content.parts:
+            text = "".join(p.text or "" for p in event.content.parts if not p.thought).strip()
+    return Answer(
+        text or "ขออภัย ตอบไม่ได้ในตอนนี้ ลองถามใหม่อีกครั้งนะครับ",
+        rounds,
+        time.monotonic() - started,
+        calls,
+    )
+
+
+def ask(
+    settings: Settings,
+    store: Store,
+    question: str,
+    *,
+    is_exec: bool,
+    user_id: int,
+    now=None,
+    model=None,
+) -> Answer:
+    """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
+    return asyncio.run(
+        ask_async(settings, store, question, is_exec=is_exec, user_id=user_id, now=now, model=model)
+    )

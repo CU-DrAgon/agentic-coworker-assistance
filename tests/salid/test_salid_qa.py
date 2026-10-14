@@ -1,6 +1,6 @@
 import json
 
-from conftest import ALICE, BOB, EXEC_ID, FakeClient, fc_resp, text_resp
+from conftest import ALICE, BOB, EXEC_ID, fc_resp, scripted, text_resp
 
 from salid.digest import build_daily_digest
 from salid.qa import MAX_ROUNDS, LedgerTools, ask
@@ -74,61 +74,88 @@ def test_model_cannot_override_scope(seeded):
     assert "error" in t.call("drop_table", {})
 
 
-def test_end_to_end_scope_no_leak_to_model(seeded, settings):
-    """Whatever the (fake) model asks for, data returned to it contains only the asker's receipts."""
-    seen = []
+def _tool_results(llm):
+    """Every function_response the model was shown, across all requests, as one string."""
+    out = []
+    for req in llm.requests:
+        for c in req.contents:
+            out += [str(p.function_response) for p in c.parts or [] if p.function_response]
+    return json.dumps(out, ensure_ascii=False)
 
-    def model_turn(contents, config):
-        seen.append(contents)
-        return fc_resp(
+
+EVERYTHING = {"start_date": "2026-01-01", "end_date": "2026-12-31"}
+
+
+def test_non_exec_cannot_see_others_even_if_model_asks_for_everything(seeded, settings):
+    """A hostile/confused model asks for all data, other users, and a forged submitter scope."""
+    llm = scripted(
+        fc_resp(
+            ("spending_summary", {**EVERYTHING, "group_by": "submitter", "submitter_id": BOB}),
+            ("list_receipts", {**EVERYTHING, "submitter": "Bob", "limit": 100}),
             (
-                "spending_summary",
+                "list_receipts",
+                {**EVERYTHING, "vendor_contains": "Makro", "forced_submitter_id": BOB},
+            ),
+            (
+                "compare_periods",
                 {
-                    "start_date": "2026-01-01",
-                    "end_date": "2026-12-31",
-                    "group_by": "submitter",
-                    "submitter_id": BOB,
+                    "a_start": "2026-10-01",
+                    "a_end": "2026-10-31",
+                    "b_start": "2026-09-01",
+                    "b_end": "2026-09-30",
+                    "submitter_id": 0,
                 },
-            )
-        )
-
-    client = FakeClient([model_turn, lambda c, cfg: (seen.append(c), text_resp("ok"))[1]])
-    ask(client, settings, seeded, "ใครเบิกเยอะสุด", is_exec=False, user_id=ALICE)
-    blob = json.dumps(
-        [
-            str(p.function_response)
-            for c in seen[-1]
-            for p in (c.parts or [])
-            if p.function_response
-        ],
-        ensure_ascii=False,
+            ),
+            ("flagged_receipts", {"submitter_id": BOB}),
+        ),
+        text_resp("ok"),
     )
-    assert "Alice" in blob and "Bob" not in blob and "9000" not in blob and "13370" not in blob
-    prompt = client.models.calls[0][2].system_instruction
+    a = ask(settings, seeded, "ใครเบิกเยอะสุด", is_exec=False, user_id=ALICE, model=llm)
+    blob = _tool_results(llm)
+    assert a.text == "ok" and len(a.tool_calls) == 5
+    assert "Alice" in blob and "1250.5" in blob
+    for secret in ("Bob", "9000", "3000", "13370", "Ice Co", "PEA"):
+        assert secret not in blob, secret
+    prompt = llm.requests[0].config.system_instruction
     assert "ไม่ใช่ผู้บริหาร" in prompt and "2026-10-14" in prompt and "Asia/Bangkok" in prompt
+    # no tool schema offers a submitter scope parameter
+    for t in llm.requests[0].config.tools:
+        for d in t.function_declarations:
+            schema = d.parameters_json_schema or (d.parameters and d.parameters.model_dump()) or {}
+            props = set(schema.get("properties") or {})
+            assert d.name != "spending_summary" or "group_by" in props  # schema is really read
+            assert not {"submitter_id", "forced_submitter_id", "user_id"} & props
 
 
 def test_exec_sees_everything(seeded, settings):
-    client = FakeClient(
-        [
-            fc_resp(("spending_summary", {"start_date": "2026-01-01", "end_date": "2026-12-31"})),
-            text_resp("รวม ฿13,370.50"),
-        ]
-    )
-    a = ask(client, settings, seeded, "ทั้งหมดเท่าไร", is_exec=True, user_id=EXEC_ID)
+    llm = scripted(fc_resp(("spending_summary", EVERYTHING)), text_resp("รวม ฿13,370.50"))
+    a = ask(settings, seeded, "ทั้งหมดเท่าไร", is_exec=True, user_id=EXEC_ID, model=llm)
     assert a.text == "รวม ฿13,370.50" and a.rounds == 1 and a.tool_calls[0][0] == "spending_summary"
-    fr = client.models.calls[1][1][-1].parts[0].function_response.response["result"]
-    assert fr["total"] == 13370.5
+    assert "13370.5" in _tool_results(llm)
+    assert "ไม่ใช่ผู้บริหาร" not in llm.requests[0].config.system_instruction
+
+
+def test_tools_are_the_four_ledger_tools(seeded, settings):
+    llm = scripted(text_resp("ok"))
+    ask(settings, seeded, "x", is_exec=True, user_id=EXEC_ID, model=llm)
+    names = {d.name for t in llm.requests[0].config.tools for d in t.function_declarations}
+    assert names == {"spending_summary", "list_receipts", "compare_periods", "flagged_receipts"}
+
+
+def test_bad_tool_args_return_error_to_model(seeded, settings):
+    llm = scripted(
+        fc_resp(("spending_summary", {**EVERYTHING, "group_by": "nonsense"})), text_resp("ขออภัย")
+    )
+    a = ask(settings, seeded, "x", is_exec=True, user_id=EXEC_ID, model=llm)
+    assert a.text == "ขออภัย" and "bad group_by" in _tool_results(llm)
 
 
 def test_round_cap(seeded, settings):
-    def loop(c, cfg):
-        return fc_resp(("flagged_receipts", {}))
-
-    client = FakeClient([loop] * MAX_ROUNDS + [text_resp("สรุป")])
-    a = ask(client, settings, seeded, "x", is_exec=True, user_id=EXEC_ID)
+    llm = scripted(*[fc_resp(("flagged_receipts", {}))] * MAX_ROUNDS, text_resp("สรุป"))
+    a = ask(settings, seeded, "x", is_exec=True, user_id=EXEC_ID, model=llm)
     assert a.rounds == MAX_ROUNDS and a.text == "สรุป"
-    assert client.models.calls[-1][2].tools is None  # final call has no tools
+    assert len(llm.requests) == MAX_ROUNDS + 1
+    assert not llm.requests[-1].config.tools  # the final call has no tools
 
 
 def test_digest(seeded):

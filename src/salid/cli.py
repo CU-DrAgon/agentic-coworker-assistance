@@ -39,14 +39,7 @@ def main(argv=None) -> None:
             )
         )
     elif args.cmd == "ask":
-        ans = ask(
-            make_client(s),
-            s,
-            make_store(s),
-            args.question,
-            is_exec=args.as_exec,
-            user_id=args.as_user or 0,
-        )
+        ans = ask(s, make_store(s), args.question, is_exec=args.as_exec, user_id=args.as_user or 0)
         print(ans.text)
         print(f"\n[{ans.seconds:.1f}s, {ans.rounds} tool rounds, calls={ans.tool_calls}]")
     elif args.cmd == "digest":

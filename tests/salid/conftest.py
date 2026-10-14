@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+from google.adk.models import BaseLlm, LlmResponse
 from google.genai import types
 
 from salid.config import Settings
@@ -11,6 +12,13 @@ from salid.models import Receipt
 from salid.store import SQLiteStore
 
 EXEC_ID, ALICE, BOB = 1, 100, 200
+
+
+class FakeClient:
+    """Fake google-genai client for extraction/correction tests (generate_content only)."""
+
+    def __init__(self, script):
+        self.models = FakeModels(script)
 
 
 class FakeModels:
@@ -23,9 +31,26 @@ class FakeModels:
         return item(contents, config) if callable(item) else item
 
 
-class FakeClient:
-    def __init__(self, script):
-        self.models = FakeModels(script)
+class ScriptedLlm(BaseLlm):
+    """Offline stand-in for ADK's Gemini model: replays a script of turns.
+
+    Each script item is a text-response / fc_resp result, or a callable(llm_request) returning
+    one. `requests` records every LlmRequest so tests can inspect tools, prompt and history.
+    """
+
+    model: str = "scripted"
+    script: list = []
+    requests: list = []
+
+    async def generate_content_async(self, llm_request, stream=False):
+        self.requests.append(llm_request)
+        item = self.script.pop(0)
+        item = item(llm_request) if callable(item) else item
+        yield LlmResponse(content=item.candidates[0].content)
+
+
+def scripted(*script) -> ScriptedLlm:
+    return ScriptedLlm(script=list(script), requests=[])
 
 
 def text_resp(text):

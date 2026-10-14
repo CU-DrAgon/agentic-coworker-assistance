@@ -125,7 +125,7 @@ class SecretaryBot(discord.Client):
         is_exec = self.is_exec(message)
         async with message.channel.typing():
             ans = await asyncio.to_thread(
-                ask, self.llm, self.s, self.store, q, is_exec=is_exec, user_id=message.author.id
+                ask, self.s, self.store, q, is_exec=is_exec, user_id=message.author.id
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         for i, part in enumerate(chunks(ans.text)):
