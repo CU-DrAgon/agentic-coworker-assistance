@@ -40,6 +40,28 @@ Gemini (`gemini-3.5-flash`, transcribe + diarize) → Firestore. On Stop: `/fini
 | `scripts/deploy.sh` | Idempotent Cloud Run deploy + IAM + Secret Manager + Pub/Sub push subscription |
 | `scripts/resummarize_dry_run.py` | Re-run the summarizer on a stored meeting and print before/after. Read-only, but calls Vertex AI. |
 
+## Salid (`src/salid/`) — second package
+
+Discord bot "สลิด": receipt photos to an expense ledger, Thai executive Q&A. Env vars are all
+`SALID_*` (see `.env.example`). Currently stores data in local SQLite; Firestore + a Cloud Run worker
+pool are planned, not built, and Salid is **not deployed**. Bot-facing replies and prompts are Thai.
+
+| File | Role |
+| --- | --- |
+| `config.py` | `Settings` (pydantic-settings, `SALID_` prefix, `.env`) |
+| `models.py` | `Receipt`, `ReceiptExtraction`, categories |
+| `store.py` | `Store` protocol, `SQLiteStore` |
+| `llm.py` | Vertex Gemini client + retry on transient errors |
+| `extract.py` | Receipt extraction, dedupe, ingest, corrections |
+| `qa.py` | Tool-calling expense Q&A, role scoping |
+| `digest.py` | Daily digest text |
+| `bot.py` / `__main__.py` | Discord client / `python -m salid` |
+| `cli.py` | `python -m salid.cli extract|ask|digest` for offline testing |
+| `scripts/salid_seed_demo.py` | Seed a demo SQLite ledger |
+
+Salid tests live in `tests/salid/` (own fake-Gemini fixtures); `tests/salid/test_salid_live.py` is
+marked `live` and hits real Vertex.
+
 Tests in `tests/` are fully offline (every external service is mocked). Fixture:
 `tests/fixtures/thai_meeting.json`.
 
@@ -76,7 +98,7 @@ Tests in `tests/` are fully offline (every external service is mocked). Fixture:
 
 ```bash
 uv sync
-uv run pytest -q                                  # offline, all mocked
+uv run pytest -q                                  # offline, all mocked (live tests are skipped; `-m live` runs them)
 uvx ruff check . && uvx ruff format --check .     # lint + format (line length 100)
 STORE=memory uv run uvicorn meeting_scribe.app:app --port 8080
 curl -s localhost:8080/health

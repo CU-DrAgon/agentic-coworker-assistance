@@ -99,6 +99,37 @@ Note: Cloud Run's frontend reserves `/healthz`, so use `/health` for deployed he
 
 You can also use **Upload a recording** to process an existing audio file instead.
 
+## สลิด / Salid — receipts & expense Q&A bot
+
+A second package, `src/salid/`, is a Discord bot. Staff post receipt photos or PDFs in a receipt
+channel; Gemini (Vertex AI) extracts vendor, date, totals and a category into a ledger, flags
+low-confidence or duplicate receipts, and replies in Thai. Executives ask questions in Thai
+("how much did we spend on ingredients this week?") and get answers from ledger tool calls, plus an
+optional daily digest. Non-executives only see their own receipts. Data is kept in local SQLite for now;
+Firestore and a Cloud Run worker pool are planned, not built, and the bot is not deployed.
+
+Discord setup:
+
+1. Create an application and bot at the Discord Developer Portal; copy the bot token.
+2. Enable the **Message Content** privileged intent, then invite the bot with permissions to read and
+   send messages, add reactions and attach files.
+3. Put `SALID_DISCORD_TOKEN` in `.env`, plus `SALID_RECEIPT_CHANNEL_IDS`, `SALID_ASK_CHANNEL_IDS`
+   and (optionally) `SALID_DIGEST_CHANNEL_ID` (comma-separated channel ids).
+4. Mark executives with `SALID_EXEC_USER_IDS` or a Discord role named in `SALID_EXEC_ROLE_NAMES`
+   (default `ผู้บริหาร,Executive`).
+
+Other keys: `SALID_DIGEST_TIME`, `SALID_DB_PATH`, `SALID_GCP_PROJECT`, `SALID_GEMINI_LOCATION`,
+`SALID_GEMINI_MODEL`, `SALID_TZ` (see `.env.example`). All Salid variables carry the `SALID_` prefix so they
+never collide with Meeting Scribe's.
+
+```bash
+uv run python -m salid                                   # run the bot (needs ADC for Vertex AI)
+uv run python scripts/salid_seed_demo.py ./data/demo.db  # seed a demo ledger
+SALID_DB_PATH=./data/demo.db uv run python -m salid.cli ask "สรุปค่าใช้จ่ายสัปดาห์นี้" --as-exec
+uv run python -m salid.cli extract receipt.png           # run extraction on a local file
+uv run pytest -m live -q                                 # one real Vertex call (skipped by default)
+```
+
 ## Limitations
 
 - Desktop Chrome/Edge only; tab-audio capture is not available on mobile or Firefox/Safari.
