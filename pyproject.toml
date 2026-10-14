@@ -1,6 +1,6 @@
 [project]
 name = "meeting-scribe"
-version = "0.1.0"
+version = "0.2.0"
 description = "Record a Google Meet, get a live Thai transcript with speaker labels, and post an AI meeting summary to Discord."
 readme = "README.md"
 requires-python = ">=3.12"
