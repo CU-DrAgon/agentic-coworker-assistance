@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 import discord
 
+from .archive import make_archive
 from .config import Settings
 from .digest import build_daily_digest
 from .extract import apply_correction, ingest_attachment
@@ -30,6 +31,7 @@ class SecretaryBot(discord.Client):
         )
         super().__init__(intents=intents)
         self.s, self.store, self.llm = settings, store, llm
+        self.archive = make_archive(settings)
         self._digest_task: asyncio.Task | None = None
 
     async def setup_hook(self):
@@ -105,6 +107,7 @@ class SecretaryBot(discord.Client):
                     channel_id=message.channel.id,
                     message_id=message.id,
                     note=note,
+                    archive=self.archive,
                 )
             if res.status == "ignored":
                 continue

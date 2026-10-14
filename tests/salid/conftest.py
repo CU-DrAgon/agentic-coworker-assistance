@@ -83,9 +83,14 @@ def settings():
     return FixedClockSettings(exec_user_ids={EXEC_ID})
 
 
-@pytest.fixture
-def store(tmp_path):
-    return SQLiteStore(str(tmp_path / "t.db"))
+@pytest.fixture(params=["sqlite", "firestore"])
+def store(request, tmp_path):
+    """Every store-level test runs against SQLite and the (fake-backed) Firestore store."""
+    if request.param == "sqlite":
+        return SQLiteStore(str(tmp_path / "t.db"))
+    from fake_firestore import OfflineFirestoreStore
+
+    return OfflineFirestoreStore()
 
 
 def mk(store, n, uid, name, vendor, day, total, cat="วัตถุดิบ", conf=0.9, sha=None, dup=None):

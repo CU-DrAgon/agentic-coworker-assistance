@@ -56,3 +56,4 @@ class Receipt(BaseModel):
     context: str | None = None
     possible_duplicate_of: int | None = None
     created_at: str = ""
+    original_uri: str | None = None  # gs:// URI of the archived original (optional)

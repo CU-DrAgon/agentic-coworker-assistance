@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -12,6 +13,8 @@ from .config import Settings
 from .llm import generate
 from .models import CATEGORIES, Receipt, ReceiptExtraction
 from .store import LOW_CONF, Store
+
+logger = logging.getLogger(__name__)
 
 MIME_BY_EXT = {
     "png": "image/png",
@@ -125,6 +128,7 @@ def ingest_attachment(
     channel_id: int,
     message_id: int,
     note: str = "",
+    archive=None,
 ) -> IngestResult:
     mime = guess_mime(filename, content_type)
     if not mime:
@@ -163,6 +167,11 @@ def ingest_attachment(
         context=note or None,
         created_at=now.isoformat(timespec="seconds"),
     )
+    if archive is not None:  # best effort: a storage outage must not lose the receipt
+        try:
+            r.original_uri = archive.save(sha, data, mime)
+        except Exception:
+            logger.exception("receipt archive upload failed (receipt still saved)")
     dup = store.find_possible_duplicate(r)
     if dup:
         r.possible_duplicate_of = dup.id

@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS receipts (
   sha256 TEXT NOT NULL UNIQUE,
   vendor TEXT, receipt_date TEXT, effective_date TEXT NOT NULL, currency TEXT DEFAULT 'THB',
   subtotal REAL, vat REAL, total REAL, category TEXT, items TEXT, payment_method TEXT,
-  confidence REAL, notes TEXT, context TEXT, possible_duplicate_of INTEGER, created_at TEXT
+  confidence REAL, notes TEXT, context TEXT, possible_duplicate_of INTEGER, created_at TEXT, original_uri TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_date ON receipts(effective_date);
 CREATE INDEX IF NOT EXISTS ix_sub ON receipts(submitter_id);
@@ -78,6 +78,9 @@ class SQLiteStore:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
+            cols = {row["name"] for row in c.execute("PRAGMA table_info(receipts)")}
+            if "original_uri" not in cols:  # ledgers created before receipt archiving
+                c.execute("ALTER TABLE receipts ADD COLUMN original_uri TEXT")
 
     @contextmanager
     def _conn(self):
@@ -230,5 +233,11 @@ class SQLiteStore:
 
 def make_store(settings) -> Store:
     if settings.store == "firestore":
-        raise NotImplementedError("Firestore store not implemented in MVP; use STORE=sqlite")
+        from .firestore_store import FirestoreStore
+
+        return FirestoreStore(
+            collection=settings.firestore_collection, project=settings.gcp_project
+        )
+    if settings.store != "sqlite":
+        raise ValueError(f"SALID_STORE must be sqlite or firestore, got {settings.store!r}")
     return SQLiteStore(settings.db_path)

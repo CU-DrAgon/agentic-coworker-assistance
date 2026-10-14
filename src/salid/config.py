@@ -23,7 +23,11 @@ class Settings(BaseSettings):
     exec_user_ids: Annotated[set[int], NoDecode] = set()
     digest_time: str = "18:00"  # HH:MM in `tz`
     digest_channel_id: int | None = None
-    store: str = "sqlite"  # Firestore is planned, not built
+    store: str = "sqlite"  # sqlite | firestore
+    firestore_collection: str = "salid_receipts"
+    # Optional original-receipt archive: bucket name (empty = disabled), object prefix.
+    receipt_bucket: str = ""
+    receipt_prefix: str = "salid-receipts/"
     db_path: str = "./data/ledger.db"
     gcp_project: str = "meeting-scribe-hackathon"
     gemini_location: str = "global"
