@@ -30,6 +30,10 @@ class Settings(BaseSettings):
 
     discord_webhook_url: str = ""
 
+    # Public Discord application id of the Salid bot. Not a secret; it only builds the
+    # "Add Salid to Discord" link on the home page. Empty hides the link.
+    salid_discord_client_id: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

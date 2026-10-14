@@ -104,6 +104,25 @@ def test_index_and_healthz(client):
     assert client.get("/healthz").json() == {"status": "ok"}
     r = client.get("/")
     assert r.status_code == 200 and "Meeting Scribe" in r.text
+    assert 'id="salid-add" href=""' in r.text  # no client id configured: link hidden by the page
+
+
+def test_index_renders_salid_invite_link(env, client):
+    env.setenv("SALID_DISCORD_CLIENT_ID", "123456789012345678")
+    get_settings.cache_clear()
+    r = client.get("/")
+    assert (
+        "https://discord.com/oauth2/authorize?client_id=123456789012345678"
+        "&scope=bot+applications.commands&permissions=117824"
+    ) in r.text
+    assert "__SALID_INVITE_URL__" not in r.text
+
+
+def test_salid_invite_url_rejects_non_numeric_ids():
+    from meeting_scribe.app import salid_invite_url
+
+    assert salid_invite_url("") == ""
+    assert salid_invite_url('1"><script>') == ""
 
 
 def test_create_and_get(client):
