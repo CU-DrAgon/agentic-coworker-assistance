@@ -43,24 +43,41 @@ Gemini (`gemini-3.5-flash`, transcribe + diarize) → Firestore. On Stop: `/fini
 ## Salid (`src/salid/`) — second package
 
 Discord bot "สลิด": receipt photos to an expense ledger, Thai executive Q&A. Env vars are all
-`SALID_*` (see `.env.example`). Currently stores data in local SQLite; Firestore + a Cloud Run worker
-pool are planned, not built, and Salid is **not deployed**. Bot-facing replies and prompts are Thai.
+`SALID_*` (see `.env.example`). `SALID_STORE=sqlite` (default) or `firestore`. The Cloud Run worker pool
+is still **not built** and Salid is **not deployed**. Bot-facing replies and prompts are Thai.
 
 | File | Role |
 | --- | --- |
 | `config.py` | `Settings` (pydantic-settings, `SALID_` prefix, `.env`) |
 | `models.py` | `Receipt`, `ReceiptExtraction`, categories |
-| `store.py` | `Store` protocol, `SQLiteStore` |
+| `store.py` | `Store` protocol, `SQLiteStore`, `make_store` (`SALID_STORE`) |
+| `firestore_store.py` | `FirestoreStore`: doc id = sha256, transactional int id counter in `<collection>_meta`, ISO `effective_date` range query server-side, everything else in Python (no composite index; shop scale only) |
+| `archive.py` | Optional GCS archive of original receipts (`SALID_RECEIPT_BUCKET`, prefix `salid-receipts/`), best effort |
 | `llm.py` | Vertex Gemini client + retry on transient errors |
 | `extract.py` | Receipt extraction, dedupe, ingest, corrections |
-| `qa.py` | Tool-calling expense Q&A, role scoping |
+| `qa.py` | Expense Q&A as a Google ADK `LlmAgent` + `InMemoryRunner`; `build_tools(LedgerTools)` makes per-request FunctionTools bound to the caller (`forced_submitter_id`), `ask`/`ask_async` return `Answer`; max 4 tool rounds |
+| `deep_task.py` | Executive "งานใหญ่:" / `/deep` tasks: caller-scoped CSV export + TASK.md in a temp dir, Gemini CLI headless with isolated HOME and a pinned model, collects `report.md`, always deletes the temp dir |
 | `digest.py` | Daily digest text |
 | `bot.py` / `__main__.py` | Discord client / `python -m salid` |
-| `cli.py` | `python -m salid.cli extract|ask|digest` for offline testing |
+| `cli.py` | `python -m salid.cli extract|ask|deep|digest` for offline testing |
 | `scripts/salid_seed_demo.py` | Seed a demo SQLite ledger |
 
-Salid tests live in `tests/salid/` (own fake-Gemini fixtures); `tests/salid/test_salid_live.py` is
-marked `live` and hits real Vertex.
+Salid tests live in `tests/salid/` (a scripted ADK `BaseLlm` and a fake Firestore; the `store` fixture runs
+every store test on SQLite and Firestore); `tests/salid/test_salid_live.py` is marked `live` and hits real
+Vertex, real Firestore (throwaway `salid_receipts_test_<random>` collection, deleted afterwards) and GCS
+(`salid-receipts/test-<random>/`).
+
+Salid env vars beyond the basics: `SALID_STORE`, `SALID_FIRESTORE_COLLECTION`, `SALID_RECEIPT_BUCKET`
+(empty = no archive), `SALID_GEMINI_CLI_PATH` (empty = deep tasks disabled), `SALID_DEEP_TASK_TIMEOUT`
+(600), `SALID_DEEP_TASK_MODEL` (`gemini-3-flash-preview`).
+
+**Gemini CLI is an external Node binary, not installed by uv** (tested 0.64.0). Never run it in a directory
+with untrusted `.gemini/` or `.env`; `deep_task.py` uses an empty temp workspace and an isolated
+`HOME`/`GEMINI_CLI_HOME`. Pinning findings: `-m gemini-3.5-flash` is silently rewritten to
+`gemini-3.8-flash` on Vertex (hard-coded, not configurable), so we pin `gemini-3-flash-preview` and also
+set `experimental.dynamicModelConfiguration` + `modelConfigs.modelIdResolutions` for every alias,
+`disableLoopDetection`, `topicUpdateNarration=false` and `tools.core` (file tools only). `DeepResult.pinned_ok`
+reports whether only the pinned model ran.
 
 Tests in `tests/` are fully offline (every external service is mocked). Fixture:
 `tests/fixtures/thai_meeting.json`.

@@ -105,8 +105,24 @@ A second package, `src/salid/`, is a Discord bot. Staff post receipt photos or P
 channel; Gemini (Vertex AI) extracts vendor, date, totals and a category into a ledger, flags
 low-confidence or duplicate receipts, and replies in Thai. Executives ask questions in Thai
 ("how much did we spend on ingredients this week?") and get answers from ledger tool calls, plus an
-optional daily digest. Non-executives only see their own receipts. Data is kept in local SQLite for now;
-Firestore and a Cloud Run worker pool are planned, not built, and the bot is not deployed.
+optional daily digest. Non-executives only see their own receipts.
+
+- **Q&A runs on Google ADK**: an `LlmAgent` (Gemini on Vertex) with four ledger `FunctionTool`s that
+  are built per request around the asker's scope, so the model cannot widen it. At most 4 tool rounds.
+- **Storage**: `SALID_STORE=sqlite` (default, local dev) or `firestore` (collection
+  `SALID_FIRESTORE_COLLECTION`, default `salid_receipts`; no composite index needed; aggregation is done
+  in Python over the date-filtered query, which is fine at shop scale). Optionally archive the original
+  receipt files to Cloud Storage with `SALID_RECEIPT_BUCKET` (object prefix `salid-receipts/`, the
+  `gs://` URI is saved on the record).
+- **Deep tasks (executives only)**: send `งานใหญ่: <task>` or `/deep <task>`. Salid acknowledges at
+  once, exports the receipts the caller may see into a throwaway workspace and runs **Gemini CLI** headless
+  there (isolated HOME, minimal environment, file-only tools, timeout `SALID_DEEP_TASK_TIMEOUT`), then posts
+  the Thai report (attached as `report.md` when long) with seconds, tokens and the models actually used.
+  Gemini CLI is an external Node binary that `uv` does not install: set `SALID_GEMINI_CLI_PATH`, otherwise
+  deep tasks are disabled. Model pinning caveat: with Vertex, the CLI rewrites `gemini-3.5-flash` to
+  `gemini-3.8-flash`, so the default is `SALID_DEEP_TASK_MODEL=gemini-3-flash-preview`.
+
+The Cloud Run worker pool is planned, not built, and the bot is not deployed.
 
 Discord setup:
 
@@ -118,8 +134,9 @@ Discord setup:
 4. Mark executives with `SALID_EXEC_USER_IDS` or a Discord role named in `SALID_EXEC_ROLE_NAMES`
    (default `ผู้บริหาร,Executive`).
 
-Other keys: `SALID_DIGEST_TIME`, `SALID_DB_PATH`, `SALID_GCP_PROJECT`, `SALID_GEMINI_LOCATION`,
-`SALID_GEMINI_MODEL`, `SALID_TZ` (see `.env.example`). All Salid variables carry the `SALID_` prefix so they
+Other keys: `SALID_DIGEST_TIME`, `SALID_STORE`, `SALID_DB_PATH`, `SALID_FIRESTORE_COLLECTION`,
+`SALID_RECEIPT_BUCKET`, `SALID_GEMINI_CLI_PATH`, `SALID_DEEP_TASK_TIMEOUT`, `SALID_DEEP_TASK_MODEL`,
+`SALID_GCP_PROJECT`, `SALID_GEMINI_LOCATION`, `SALID_GEMINI_MODEL`, `SALID_TZ` (see `.env.example`). All Salid variables carry the `SALID_` prefix so they
 never collide with Meeting Scribe's.
 
 ```bash
@@ -127,6 +144,8 @@ uv run python -m salid                                   # run the bot (needs AD
 uv run python scripts/salid_seed_demo.py ./data/demo.db  # seed a demo ledger
 SALID_DB_PATH=./data/demo.db uv run python -m salid.cli ask "สรุปค่าใช้จ่ายสัปดาห์นี้" --as-exec
 uv run python -m salid.cli extract receipt.png           # run extraction on a local file
+SALID_GEMINI_CLI_PATH=/path/to/gemini SALID_DB_PATH=./data/demo.db \
+  uv run python -m salid.cli deep "วิเคราะห์ค่าใช้จ่ายเดือนนี้ แล้วเขียนรายงาน" --as-exec
 uv run pytest -m live -q                                 # one real Vertex call (skipped by default)
 ```
 
