@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import io
 import logging
 from datetime import datetime, timedelta
 
@@ -9,6 +10,18 @@ import discord
 
 from .archive import make_archive
 from .config import Settings
+from .deep_task import (
+    ACK_MESSAGE,
+    BUSY_MESSAGE,
+    DISABLED_MESSAGE,
+    NOT_EXEC_MESSAGE,
+    REPORT_NAME,
+    USAGE_MESSAGE,
+    DeepTaskError,
+    parse_deep_trigger,
+    reply_parts,
+    run_deep_task,
+)
 from .digest import build_daily_digest
 from .extract import apply_correction, ingest_attachment
 from .qa import ask
@@ -33,6 +46,7 @@ class SecretaryBot(discord.Client):
         self.s, self.store, self.llm = settings, store, llm
         self.archive = make_archive(settings)
         self._digest_task: asyncio.Task | None = None
+        self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
 
     async def setup_hook(self):
         self._digest_task = asyncio.create_task(self._digest_loop())
@@ -126,6 +140,10 @@ class SecretaryBot(discord.Client):
         if not q:
             return
         is_exec = self.is_exec(message)
+        task = parse_deep_trigger(q)
+        if task is not None:
+            await self._deep(message, task, is_exec)
+            return
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask, self.s, self.store, q, is_exec=is_exec, user_id=message.author.id
@@ -135,6 +153,42 @@ class SecretaryBot(discord.Client):
             await (
                 message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
             )
+
+    async def _deep(self, message: discord.Message, task: str, is_exec: bool):
+        """Executives only. Acknowledge at once, run Gemini CLI in the background, post the result."""
+        if not is_exec:
+            await message.reply(NOT_EXEC_MESSAGE, mention_author=False)
+        elif not self.s.gemini_cli_path:
+            await message.reply(DISABLED_MESSAGE, mention_author=False)
+        elif not task:
+            await message.reply(USAGE_MESSAGE, mention_author=False)
+        elif any(not t.done() for t in self._deep_tasks):
+            await message.reply(BUSY_MESSAGE, mention_author=False)
+        else:
+            await message.reply(ACK_MESSAGE, mention_author=False)
+            t = asyncio.create_task(self._run_deep(message, task))
+            self._deep_tasks.add(t)
+            t.add_done_callback(self._deep_tasks.discard)
+
+    async def _run_deep(self, message: discord.Message, task: str):
+        try:
+            res = await asyncio.to_thread(run_deep_task, self.s, self.store, task)
+        except DeepTaskError as e:
+            await message.channel.send(f"❌ {e}")
+            return
+        except Exception:
+            logger.exception("deep task crashed")
+            await message.channel.send("❌ งานใหญ่ล้มเหลว ลองใหม่อีกครั้งภายหลังครับ")
+            return
+        logger.info(
+            "deep task done in %.0fs, %d tokens, models=%s",
+            res.seconds,
+            res.tokens,
+            list(res.models),
+        )
+        text, attachment = reply_parts(res)
+        file = discord.File(io.BytesIO(attachment), filename=REPORT_NAME) if attachment else None
+        await message.reply(text, file=file, mention_author=False)
 
     # ------------------------------------------------------------- digest
     def next_digest_at(self, now: datetime) -> datetime:

@@ -217,3 +217,10 @@ class FirestoreStore:
         ]
         rows.sort(key=lambda r: r.effective_date, reverse=True)
         return rows[:50]
+
+    def all_receipts(
+        self, start: str, end: str, submitter_id: int | None = None, limit: int = 5000
+    ) -> list[Receipt]:
+        rows = self._in_range(start, end, submitter_id)
+        rows.sort(key=lambda r: (r.effective_date, r.id or 0))
+        return rows[:limit]

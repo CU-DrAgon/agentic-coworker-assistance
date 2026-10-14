@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     gemini_location: str = "global"
     gemini_model: str = "gemini-3.5-flash"
     tz: str = "Asia/Bangkok"
+    # Deep tasks (Gemini CLI, an external Node binary). Empty path = feature disabled.
+    gemini_cli_path: str = ""
+    deep_task_timeout: int = 600  # seconds
+    deep_task_model: str = "gemini-3-flash-preview"  # see deep_task.build_cli_settings
     low_confidence: float = 0.7
 
     @field_validator("receipt_channel_ids", "ask_channel_ids", "exec_user_ids", mode="before")

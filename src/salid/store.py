@@ -54,6 +54,9 @@ class Store(Protocol):
     def flagged(
         self, start: str | None = None, end: str | None = None, submitter_id: int | None = None
     ) -> list[Receipt]: ...
+    def all_receipts(
+        self, start: str, end: str, submitter_id: int | None = None, limit: int = 5000
+    ) -> list[Receipt]: ...
 
 
 SCHEMA = """
@@ -227,6 +230,19 @@ class SQLiteStore:
             rows = c.execute(
                 f"SELECT * FROM receipts WHERE {' AND '.join(where)} ORDER BY effective_date DESC LIMIT 50",
                 p,
+            ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def all_receipts(self, start, end, submitter_id=None, limit=5000):
+        """Unpaged export in date order (used by deep tasks); `limit` is a safety cap."""
+        where, p = ["effective_date BETWEEN ? AND ?"], [start, end]
+        if submitter_id is not None:
+            where.append("submitter_id=?")
+            p.append(submitter_id)
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT * FROM receipts WHERE {' AND '.join(where)} ORDER BY effective_date, id LIMIT ?",
+                [*p, limit],
             ).fetchall()
         return [self._row(r) for r in rows]
 
