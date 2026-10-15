@@ -400,3 +400,43 @@ async def test_digest_sends_that_guilds_numbers_once_per_day(bot, world, seeded)
     assert len(a.sent) == 1 and len(b.sent) == 1
     assert "Makro" in a.sent[0] and "Zeta" not in a.sent[0]
     assert "Zeta Corp" in b.sent[0] and "Makro" not in b.sent[0]
+
+
+async def test_bare_mention_uses_previous_message_or_greets(bot, world, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from salid.bot import GREETING_MESSAGE
+
+    seen = []
+    monkeypatch.setattr(
+        "salid.bot.ask",
+        lambda s, store, q, **kw: seen.append(q) or SimpleNamespace(text="ok", seconds=0, rounds=0),
+    )
+    del bot._answer  # use the real one
+    now = datetime(2026, 10, 15, 10, 0, tzinfo=UTC)
+    author = member(world.a, STAFF)
+
+    class Chan(FakeChannel):
+        def __init__(self, prev):
+            super().__init__(10, "ทั่วไป")
+            self.prev = prev
+
+        async def history(self, limit, before):
+            for p in self.prev:
+                yield p
+
+    def msg(chan, content, at):
+        m = Msg(world.a, chan, author, content)
+        m.created_at = at
+        return m
+
+    hi = msg(None, "สวัสดีครับ", now - timedelta(seconds=5))
+    chan = Chan([hi])
+    bare = msg(chan, "<@999>", now)
+    await bot._answer(bare, world.a, author)
+    assert seen == ["สวัสดีครับ"]
+
+    stale = Chan([msg(None, "เก่ามาก", now - timedelta(minutes=10))])
+    lonely = msg(stale, "<@999>", now)
+    await bot._answer(lonely, world.a, author)
+    assert lonely.replies == [GREETING_MESSAGE]

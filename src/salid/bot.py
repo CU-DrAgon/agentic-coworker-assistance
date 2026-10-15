@@ -48,6 +48,11 @@ WELCOME_MESSAGE = (
     "• ผู้บริหารถามเรื่องค่าใช้จ่ายได้โดยแท็ก {mention} แล้วพิมพ์คำถาม\n"
     "• ผู้ดูแลพิมพ์ /ตั้งค่า เพื่อเชื่อมกับศูนย์บัญชาการ (หน้าเว็บสำหรับตั้งค่า)"
 )
+GREETING_MESSAGE = (
+    'สวัสดีครับ สลิดเองครับ 🐱 ส่งรูปใบเสร็จมาได้เลย หรือแท็กสลิดพร้อมคำถาม เช่น "เดือนนี้จ่ายค่าวัตถุดิบไปเท่าไร" ครับ'
+)
+# A bare @mention right after the same person's message is treated as a question about it.
+FOLLOWUP_WINDOW_SECONDS = 120
 SETUP_DENIED_MESSAGE = "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ครับ"
 SETUP_MESSAGE = (
     "ลิงก์เชื่อม {name} กับศูนย์บัญชาการของสลิด 🔗\n{url}\n"
@@ -293,12 +298,38 @@ class SecretaryBot(discord.Client):
             if res.status == "created":
                 self.store.set_reply_message(res.receipt.id, sent.id)
 
-    async def _answer(self, message: discord.Message, guild: discord.Guild, member):
-        q = message.content
+    def _strip_mentions(self, text: str, message: discord.Message) -> str:
         if self.user:
-            q = q.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "")
-        q = q.strip()
+            text = text.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "")
+        for role in getattr(message, "role_mentions", ()):
+            text = text.replace(f"<@&{role.id}>", "")
+        return text.strip()
+
+    async def _previous_text(self, message: discord.Message) -> str:
+        """The author's own message just before a bare @mention ("Hi" then "@Salid")."""
+        history = getattr(message.channel, "history", None)
+        if history is None:
+            return ""
+        try:
+            async for prev in history(limit=5, before=message):
+                if prev.author.id != message.author.id:
+                    continue
+                age = (message.created_at - prev.created_at).total_seconds()
+                if age > FOLLOWUP_WINDOW_SECONDS:
+                    return ""
+                text = self._strip_mentions(prev.content, prev)
+                if text:
+                    return text
+        except discord.HTTPException:
+            logger.warning("could not read channel history", exc_info=True)
+        return ""
+
+    async def _answer(self, message: discord.Message, guild: discord.Guild, member):
+        q = self._strip_mentions(message.content, message)
         if not q:
+            q = await self._previous_text(message)
+        if not q:
+            await message.reply(GREETING_MESSAGE, mention_author=False)
             return
         gid = guild.id
         is_exec = self.is_exec_member(member)
