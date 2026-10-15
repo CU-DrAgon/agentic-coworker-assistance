@@ -31,6 +31,7 @@ from .email_out import (
 )
 from .i18n import t
 from .pdf_report import custom_pdf, expense_pdf, find_fonts, minutes_pdf, totals_by_currency
+from .permissions import guild_missing, permission_message
 from .scheduling import (
     CalendarError,
     MeetingService,
@@ -105,6 +106,7 @@ class SecretaryContext:
     store: SecretaryStore
     state: SecretaryState
     run: Callable[[Any], Any]  # run a coroutine on the bot's loop and return its result
+    app_id: Any = None  # the bot's application id (builds the re-authorize link)
     ledger: Any = None  # qa.LedgerTools (scoping of receipts); set by qa.ask_async
     service: MeetingService | None = None
     sender: EmailSender | None = None
@@ -128,7 +130,12 @@ class SecretaryTools:
         return self.c.lang if self.c.lang in ("th", "en") else "th"
 
     def _perm_help(self) -> dict:
-        return {"error": "missing_permission", "how_to_grant": t("sched_perm_help", self._lang())}
+        try:
+            missing = guild_missing(self._guild(), ("manage_events",))
+        except Exception:
+            missing = []
+        text = permission_message(missing or ["manage_events"], self._lang(), self.c.app_id)
+        return {"error": "missing_permission", "how_to_grant": text}
 
     # ------------------------------------------------------------ scheduling
     async def _prepare(self, attendees: list[str], voice_channel: str | None, link: str):

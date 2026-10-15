@@ -4,16 +4,16 @@ Salid has no Manage Messages by design, so the user's original message stays; th
 re-uploaded from the bytes already read for intake, a header with a jump link and the usual
 summary) becomes the receipt's reply message, so corrections / voiding by reply work there.
 
-Home channel: `receipt_home_channel_id` from the guild settings; when unset, the first receipt
-channel Salid can send in, else the first text channel (by position) whose name matches the
-receipt hints, else None.
+Home channel: `receipt_home_channel_id` from the guild settings; when unset, the first
+configured receipt channel Salid can send in, else the channel with the most receipts recorded in
+the last 30 days (learned from the ledger, never from channel names), else None.
 """
 
 from __future__ import annotations
 
 import io
 import logging
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable, Mapping
 
 import discord
 
@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 MAX_FILES = 4
 MAX_FILE_BYTES = 8 * 1024 * 1024
 MAX_TEXT = 1900
+LEARN_MIN_RECEIPTS = 3  # receipts in the last 30 days that make a channel a "receipt channel"
+LEARN_DAYS = 30
+
+
+def learned_channels(counts: Mapping[int, int]) -> set[int]:
+    """Channels that took at least LEARN_MIN_RECEIPTS receipts in the last LEARN_DAYS days."""
+    return {int(c) for c, n in counts.items() if n >= LEARN_MIN_RECEIPTS}
 
 
 def can_post(channel, me) -> bool:
@@ -37,7 +44,7 @@ def home_channel(
     guild,
     settings,
     env_receipt_ids: Iterable[int],
-    name_matches: Callable[[str | None], bool],
+    counts: Mapping[int, int],
 ):
     """The channel receipts are copied to, or None when there is no usable one."""
     me = guild.me
@@ -49,11 +56,13 @@ def home_channel(
         ch = guild.get_channel(cid)
         if can_post(ch, me):
             return ch
-    named = sorted(
-        (c for c in guild.text_channels if name_matches(getattr(c, "name", ""))),
-        key=lambda c: getattr(c, "position", 0),
-    )
-    return next((c for c in named if can_post(c, me)), None)
+    for cid, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
+        if n < 1:
+            break
+        ch = guild.get_channel(int(cid))
+        if can_post(ch, me):
+            return ch
+    return None
 
 
 async def forward_receipt(
@@ -61,7 +70,7 @@ async def forward_receipt(
     guild,
     settings,
     env_receipt_ids: set[int],
-    name_matches: Callable[[str | None], bool],
+    counts: Mapping[int, int],
     source,
     author,
     jump_url: str | None,
@@ -77,10 +86,10 @@ async def forward_receipt(
     if source is not None and (
         source.id in env_receipt_ids
         or str(source.id) in settings.receipt_channel_ids
-        or name_matches(getattr(source, "name", ""))
+        or source.id in learned_channels(counts)
     ):
         return None
-    home = home_channel(guild, settings, env_receipt_ids, name_matches)
+    home = home_channel(guild, settings, env_receipt_ids, counts)
     if home is None or (source is not None and home.id == source.id):
         return None
     if source is None:  # a DM: no channel or link to show

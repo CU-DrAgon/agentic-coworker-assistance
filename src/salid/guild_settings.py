@@ -2,7 +2,7 @@
 
 One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
 
-    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web, documents, scheduling, email, media_memory, doc_memory}: bool, all default true
+    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web, documents, scheduling, email, media_memory, doc_memory, read_receipts}: bool, all default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -64,6 +64,7 @@ FEATURES = (
     "image_memory",
     "media_memory",
     "doc_memory",
+    "read_receipts",
     "web",
     "documents",
     "scheduling",
@@ -112,6 +113,7 @@ class Features(BaseModel):
     image_memory: bool = True  # describe images into the memory log (needs `memory`)
     media_memory: bool = True  # transcribe audio/video into the memory log (needs `memory`)
     doc_memory: bool = True  # read PDFs / documents into the memory log (needs `memory`)
+    read_receipts: bool = True  # 👀 on files Salid read quietly (not addressed to it)
     web: bool = True  # read links and search the internet (read_web tool)
     documents: bool = True  # make_report_pdf: accounting documents as PDF
     scheduling: bool = True  # schedule_meeting & co: Discord Scheduled Events + reminders

@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 import discord
 
+from .dm import send_dm
 from .i18n import resolve_lang, t
 from .secretary_store import SecretaryStore, new_id
 
@@ -328,18 +329,7 @@ class MeetingService:
         return resolve_lang(setting, "")  # auto has no text to follow: Thai
 
     async def dm(self, guild, user_id: int, text: str) -> bool:
-        member = guild.get_member(user_id)
-        try:
-            if member is None:
-                return False
-            await member.send(text)
-            return True
-        except discord.HTTPException:
-            logger.info("DM to %s failed (closed DMs)", user_id)
-            return False
-        except Exception:
-            logger.warning("DM to %s failed", user_id, exc_info=True)
-            return False
+        return (await send_dm(guild.get_member(user_id), text)).ok
 
     async def post(self, guild, channel_id: int | None, text: str) -> None:
         ch = guild.get_channel(channel_id) if channel_id else None

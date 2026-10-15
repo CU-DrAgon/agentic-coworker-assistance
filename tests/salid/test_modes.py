@@ -36,8 +36,9 @@ def test_mode_resolution_order():
     assert resolve_mode(1, "general", **kw) == "call"  # guild default
     assert resolve_mode(1, "general", **kw, default_mode="join") == "join"
     assert resolve_mode(1, "general", channel_modes={}, ask_channel_ids={1}) == "chat"
-    assert resolve_mode(1, f"x-{CHAT_CHANNEL_NAME}", **kw) == "chat"
-    assert resolve_mode(1, CHAT_CHANNEL_NAME, **kw, default_mode="off") == "chat"
+    # names decide nothing: even the Salid chat channel name falls back to the guild default
+    assert resolve_mode(1, f"x-{CHAT_CHANNEL_NAME}", **kw) == "call"
+    assert resolve_mode(1, CHAT_CHANNEL_NAME, **kw, default_mode="off") == "off"
     # an explicit channel setting beats ask ids, the chat name and the default
     explicit = dict(channel_modes={"1": "listen"}, ask_channel_ids={1})
     assert resolve_mode(1, CHAT_CHANNEL_NAME, **explicit, default_mode="join") == "listen"
@@ -110,8 +111,19 @@ class Clock:
 
 
 class Sent:
-    def __init__(self):
-        self.reactions = []
+    id = 5000
+
+    def __init__(self, owner=None, index=None):
+        self.reactions, self.owner, self.index = [], owner, index
+
+    async def edit(self, content=None, **kw):  # an acknowledgement edited into the answer
+        if self.owner is not None:
+            self.owner.replies[self.index] = content
+        return self
+
+    async def delete(self):
+        if self.owner is not None:
+            self.owner.replies[self.index] = None
 
     async def add_reaction(self, e):
         self.reactions.append(e)
@@ -127,7 +139,7 @@ class TMsg(Msg):
 
     async def reply(self, text, **kw):
         self.replies.append(text)
-        sent = Sent()
+        sent = Sent(self, len(self.replies) - 1)
         self.sent.append(sent)
         return sent
 
@@ -159,17 +171,18 @@ def world(monkeypatch):
 def bot(world, monkeypatch, tmp_path):
     clock = Clock()
     b = SecretaryBot(
-        FixedClockSettings(exec_user_ids={EXEC}),
+        FixedClockSettings(exec_user_ids={EXEC}, ask_channel_ids={world.chat.id}),
         SQLiteStore(str(tmp_path / "t.db")),
         None,
         guilds=MemoryGuildStore(),
         clock=clock,
     )
+    b._choose = lambda xs: xs[0]  # deterministic variants (greeting, acknowledgement)
     b.clock, b.calls = clock, []
     b.answer_kw, b.hints_seen = [], []
     b.gate = SimpleNamespace(window=False, pick="first", window_calls=0, pick_calls=0, silent=False)
 
-    async def intake(m, quiet=False):
+    async def intake(m, quiet=False, pdf_only=False):
         b.calls.append(("intake-quiet" if quiet else "intake", m.content))
 
     async def answer(m, guild, who, **kw):  # like the real one: reply, then note the answer
@@ -613,8 +626,8 @@ async def test_join_saves_chat_mode_for_a_reused_channel(bot, world):
     reused.guild, reused.mention = world.g, "<#50>"
     await bot.on_guild_join(world.g)
     assert bot.guilds_store.get(GUILD).channel_modes == {"50": "chat"}
-    set_mode(bot, 50, None)  # even if the setting went missing, the name still means chat
-    assert bot._mode(reused, GUILD) == "chat"
+    set_mode(bot, 50, None)  # the setting is what counts: without it the name decides nothing
+    assert bot._mode(reused, GUILD) == "call"
     assert reused.sent  # welcomed there
 
 
@@ -702,7 +715,7 @@ async def test_greeting_and_signoff_follow_the_channel_language(bot, world, monk
     del bot._answer  # the real one: a bare mention greets
     set_lang(bot, 10, "en")
     m = await send(bot, world, world.gen, "<@999>", mention=True)
-    assert m.replies == [t("greeting", "en")] and "Salid here" in m.replies[0]
+    assert m.replies == [t("greeting", "en")] and "what can I do" in m.replies[0]
     monkeypatch.setattr(
         "salid.bot.ask", lambda *a, **kw: SimpleNamespace(text="ok", seconds=0, rounds=0)
     )
@@ -900,15 +913,14 @@ async def test_mode_help_and_confirmation_in_english(bot, world):
     assert it.sent == [("This channel is now set to 💬 Chat.", False)]
 
 
-def test_welcome_message_mentions_both_languages():
+def test_welcome_message_is_short_human_and_has_no_command_list():
     th = t("welcome", "th", mention="@S", chat="#c", days=90)
     en = t("welcome", "en", mention="@S", chat="#c", days=90)
-    forms = ("/โหมด", "/mode", "/ภาษา", "/language", "/เข้าประชุม", "/join-meeting", "/ออกประชุม",
-             "/leave-meeting", "/ตั้งค่า", "/setup", "speak English")  # fmt: skip
     for text in (th, en):
-        assert all(f in text for f in forms), text
-    assert "พูดภาษาอังกฤษ" in th and "พูดภาษาไทย" in en
-    assert "สวัสดีครับ" in th and "Hi, I'm" in en
+        assert len(text.splitlines()) <= 4 and "/" not in text.replace("</", "")
+        assert "90" in text
+    assert "สวัสดีครับ" in th and "ส่งไฟล์" in th and "ปิด" in th
+    assert "Hi, I'm Salid" in en and "just tell me" in en
 
 
 async def test_welcome_is_sent_in_the_guild_default_language(bot, world):
@@ -922,25 +934,30 @@ async def test_welcome_is_sent_in_the_guild_default_language(bot, world):
     assert world.gen.sent and world.gen.sent[0].startswith("Hi, I'm")
 
 
-# ------------------------------------------------------------------ receipt channel names
-@pytest.mark.parametrize(
-    "name",
-    ["tax-invoice", "Tax-Invoice", "ใบกำกับภาษี", "สลิปโอน", "slips", "บิลร้าน", "bills",
-     "expenses", "ค่าใช้จ่าย", "เบิกเงิน", "ใบเสร็จ-ร้าน", "Receipts"],
-)  # fmt: skip
-def test_receipt_channel_name_hints(name):
-    assert botmod.is_receipt_channel_name(name)
-
-
-@pytest.mark.parametrize("name", ["ทั่วไป", "general", "", None])
-def test_non_receipt_channel_names(name):
-    assert not botmod.is_receipt_channel_name(name)
-
-
-async def test_tax_invoice_channel_takes_receipts(bot, world):
+# ------------------------------------------------------------------ no names
+async def test_tax_invoice_channel_name_decides_nothing(bot, world):
     world.gen.name = "tax-invoice"
     await send(bot, world, world.gen, "", attachments=[photo()])
+    assert bot.calls == []  # no direct intake by name: the describer path judges the content
+
+
+async def test_configured_receipt_channel_is_a_fast_path(bot, world):
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(receipt_channel_ids=["10"]), "x")
+    bot.team._cache.clear()
+    await send(bot, world, world.gen, "", attachments=[photo()])
     assert bot.calls == [("intake", "")]
+
+
+async def test_learned_receipt_channel_is_a_fast_path(bot, world):
+    async def counts(gid):
+        return {10: 3, 12: 2}
+
+    bot._counts = counts
+    await send(bot, world, world.gen, "", attachments=[photo()])
+    assert bot.calls == [("intake", "")]
+    bot.calls.clear()
+    await send(bot, world, world.named, "", attachments=[photo()])  # only 2: not learned yet
+    assert bot.calls == []
 
 
 def test_every_slash_command_is_bilingual(bot):

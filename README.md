@@ -101,6 +101,18 @@ You can also use **Upload a recording** to process an existing audio file instea
 
 ## สลิด / Salid — receipts & expense Q&A bot
 
+### How to use Salid
+
+Talk to Salid like a colleague: no commands to learn. Type, or send a file, a photo, a voice
+message or a link, and say what you need.
+
+- "ฝากบอกพี่มิวด้วยว่าลูกค้าโทรมา" or "tell Mew the customer called": Salid tags them (or sends a DM if you say so).
+- "เดือนนี้จ่ายค่าวัตถุดิบไปเท่าไร": answers from the ledger. Send a receipt photo or PDF and it is recorded.
+- Drop a PDF, a clip or a link: Salid says it needs a moment, reads it, and answers in the same message.
+- "เมื่อวานในห้องบัญชีคุยอะไรกัน", "นัดประชุมกับคุณเอพรุ่งนี้บ่ายสอง", "ส่งรายงานเดือนนี้เป็น PDF เข้า DM ผม".
+- Settings are just sentences: "ห้องนี้ไม่ต้องตอบนะ", "ช่วยพูดอังกฤษในห้องนี้", "จำแค่ 30 วันพอ"
+  (admins and executives). The slash commands (`/โหมด`, `/ภาษา`, `/ความจำ`, ...) stay as optional shortcuts.
+
 A second package, `src/salid/`, is a Discord bot. Staff post receipt photos or PDFs in a receipt
 channel; Gemini (Vertex AI) extracts vendor, date, totals and a category into a ledger, flags
 low-confidence or duplicate receipts, and replies in Thai. Executives ask questions in Thai
@@ -120,8 +132,10 @@ isolated ledger and settings with no technical setup. The tenant key is the guil
 dedupe check, Q&A tool, digest, deep-task export and hub view is scoped to one guild.
 
 Customer flow: (1) open the invite link (the hub's "เพิ่ม Salid เข้า Discord" button) and add Salid to the
-server; Salid posts a short Thai welcome. (2) Post receipt photos in a channel whose name contains
-`ใบเสร็จ` or `receipt`, or @mention Salid with an image/PDF in any channel: it works immediately.
+server; Salid posts a short Thai welcome. (2) Post receipt photos or PDFs in any channel: Salid recognises receipts by their content (never by the
+channel name), or @mention Salid with an image/PDF: it works immediately. A channel that took 3 or more
+receipts in the last 30 days (or one set in the hub) is read directly, and receipts posted elsewhere are
+copied to the busiest receipt channel.
 (3) Optional: a server owner / Administrator / Manage Server member types `/ตั้งค่า` (or `/setup`) and
 opens the private one-time link (valid 15 minutes) to manage the server in the hub after signing in with
 Google. Executives are the owner, members with Administrator or Manage Server, members with a role in the

@@ -239,7 +239,8 @@ async def test_join_requires_being_in_a_voice_channel(env):
 async def test_join_needs_connect_permission(env):
     env.chan._connect = False
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert await env.mgr.join(m) == t("meet_no_permission", "th")
+    reply = await env.mgr.join(m)
+    assert "Connect" in reply and "Manage" not in reply and "ตอนนี้สลิดยังขาดสิทธิ์" in reply
 
 
 async def test_join_respects_the_feature_toggle(env):

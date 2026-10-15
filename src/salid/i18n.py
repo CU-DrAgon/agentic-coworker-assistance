@@ -107,43 +107,76 @@ CATALOG: dict[str, dict[str, str]] = {
         "the server you mean.",
     },
     "welcome": {
-        "th": "สวัสดีครับ ผม “สลิด” เลขาและเพื่อนร่วมทีม 🐱\n"
-        "• คุยกับผมได้ทุกเรื่องในห้อง {chat} พิมพ์ได้เลยไม่ต้องแท็ก "
-        "ห้องอื่นแท็ก {mention} หรือเรียกชื่อ “สลิด” ได้เลยครับ "
-        "(พิมพ์ /โหมด หรือ /mode เพื่อดูหรือปรับว่าผมจะคุยในแต่ละห้องแค่ไหน)\n"
-        "• ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า “ใบเสร็จ” “invoice” “สลิป” “บิล” “เบิก” หรือ “receipt” "
-        "หรือแท็ก {mention} พร้อมรูป ผมจะอ่านยอดและบันทึกให้เอง\n"
-        "• คุยได้ทั้งไทยและอังกฤษ พิมพ์ /ภาษา หรือ /language เพื่อเลือกภาษาที่ผมตอบ "
-        "(หรือแท็กแล้วพิมพ์ “พูดภาษาอังกฤษ” / “speak English”)\n"
-        "• สั่งเข้าห้องประชุมเสียงด้วย /เข้าประชุม หรือ /join-meeting และให้ออกด้วย /ออกประชุม หรือ /leave-meeting "
-        "(หรือแท็กแล้วพิมพ์ “เข้าประชุม” / “join”)\n"
-        "• ผมจำข้อความในห้องที่เปิดโหมดไว้ {days} วัน เพื่อตอบว่าเมื่อวานคุยอะไร งานถึงไหน "
-        "และเปิดเผยเฉพาะกับคนที่เห็นห้องนั้น (ไม่อยากให้จำ ตั้งห้องเป็น 🔇 ปิด ด้วย /โหมด)\n"
-        "• ผู้ดูแลพิมพ์ /ตั้งค่า หรือ /setup เพื่อเชื่อมกับศูนย์บัญชาการ (หน้าเว็บสำหรับตั้งค่า)",
-        "en": "Hi, I'm “Salid”, your team's secretary and teammate 🐱\n"
-        "• Chat with me about anything in {chat}, no tag needed. In other channels tag {mention} "
-        "or call my name “Salid” (type /mode or /โหมด to see or change how much I join in, "
-        "channel by channel).\n"
-        "• Post a receipt photo in a channel whose name has “receipt”, “invoice”, “slip”, “bill”, “expense” or “ใบเสร็จ”, or tag "
-        "{mention} with the photo, and I will read the total and record it.\n"
-        "• I speak Thai and English. Type /language or /ภาษา to choose my reply language "
-        "(or tag me and say “speak English” / “พูดภาษาไทย”).\n"
-        "• Ask me to join a voice meeting with /join-meeting or /เข้าประชุม and to leave with /leave-meeting or "
-        "/ออกประชุม (or tag me and say “join” / “leave”).\n"
-        "• I remember messages in channels that are not switched off for {days} days, to answer "
-        "things like “what did we discuss yesterday?”, and only share them with people who can "
-        "see the channel (set a channel to 🔇 Off with /mode to stop it).\n"
-        "• Admins: type /setup or /ตั้งค่า to link the server to the command center (the web "
-        "page for settings).",
+        "th": "สวัสดีครับ ผมสลิด เลขาประจำทีมครับ 🐱 ทักผมได้เลย พิมพ์หรือส่งไฟล์ รูป เสียงมาได้หมด "
+        "ห้องนี้คุยกับผมได้เลยไม่ต้องแท็ก ห้องอื่นแท็ก {mention} หรือเรียกชื่อผมก็พอ ({chat})\n"
+        "ผมจำแค่ห้องที่ผมเห็นได้ ({days} วัน) ไม่อยากให้จำห้องไหน บอกผมได้เลยว่า “ห้องนี้ปิดไว้นะ”",
+        "en": "Hi, I'm Salid, your team's secretary 🐱 Just talk to me: type, or send files, photos "
+        "or voice, anything goes. In {chat} you can chat with me without tagging; elsewhere tag "
+        "{mention} or call my name.\n"
+        "I only remember channels I'm allowed to see ({days} days). If you'd rather I skip one, "
+        "just tell me “switch this channel off”.",
     },
     "chat_topic": {
         "th": "คุยกับน้องสลิดได้ทุกเรื่อง พิมพ์ได้เลยไม่ต้องแท็ก",
         "en": "Chat with Salid about anything, no tag needed",
     },
     "greeting": {
-        "th": 'สวัสดีครับ สลิดเองครับ 🐱 ส่งรูปใบเสร็จมาได้เลย หรือแท็กสลิดพร้อมคำถาม เช่น "เดือนนี้จ่ายค่าวัตถุดิบไปเท่าไร" ครับ',
-        "en": 'Hi, Salid here 🐱 Send me a receipt photo, or tag Salid with a question, e.g. "how '
-        'much did we spend on ingredients this month?"',
+        "th": "ว่าไงครับ มีอะไรให้ช่วยไหม 🙂",
+        "en": "Hey, what can I do for you? 🙂",
+    },
+    "greeting_2": {
+        "th": "ครับผม ว่าเลยครับ",
+        "en": "Yes? I'm all ears.",
+    },
+    "greeting_3": {
+        "th": "สลิดอยู่ครับ มีอะไรให้ช่วยบอกได้เลย",
+        "en": "Salid here, tell me what you need.",
+    },
+    "ack_doc_1": {
+        "th": "ขอเวลาแป๊บนึงนะครับ ขออ่านเอกสารให้เข้าใจก่อน 📄",
+        "en": "Give me a moment, I want to read the document properly first 📄",
+    },
+    "ack_doc_2": {
+        "th": "ขออ่านเอกสารก่อนนะครับ เดี๋ยวมาตอบ 📄",
+        "en": "Let me read through this first, back in a moment 📄",
+    },
+    "ack_image_1": {
+        "th": "ขอดูรูปแป๊บนึงนะครับ 🖼️",
+        "en": "Let me take a look at the picture 🖼️",
+    },
+    "ack_image_2": {
+        "th": "แป๊บนึงนะครับ ขอดูรูปให้ชัดก่อน",
+        "en": "One sec, looking at it closely",
+    },
+    "ack_audio_1": {"th": "ขอฟังคลิปก่อนนะครับ 🎧", "en": "Let me listen to the clip first 🎧"},
+    "ack_audio_2": {
+        "th": "ขอเวลาฟังแป๊บนึงนะครับ 🎧",
+        "en": "Give me a minute to listen to it 🎧",
+    },
+    "ack_link_1": {"th": "ขอเปิดลิงก์ดูแป๊บนึงครับ 🔗", "en": "Let me open that link real quick 🔗"},
+    "ack_link_2": {
+        "th": "เดี๋ยวขออ่านลิงก์ก่อนนะครับ 🔗",
+        "en": "I'll read the link first and get back to you 🔗",
+    },
+    "ack_deep_1": {"th": "เดี๋ยวสลิดไล่ดูให้นะครับ", "en": "I'll go through it for you"},
+    "ack_deep_2": {
+        "th": "รับทราบครับ ขอเวลาไล่ดูข้อมูลก่อนนะ",
+        "en": "On it, give me a bit to go through the data",
+    },
+    "ack_slow_1": {"th": "แป๊บนึงนะครับ กำลังดูให้อยู่", "en": "One moment, I'm on it"},
+    "ack_slow_2": {
+        "th": "ขอเวลาเช็กให้แป๊บนึงนะครับ",
+        "en": "Give me a second to check that",
+    },
+    "relay_dm": {
+        "th": "ข้อความจากคุณ {sender} ({server}) ผ่านสลิดครับ: {text}",
+        "en": "A message from {sender} ({server}), passed on by Salid: {text}",
+    },
+    "dm_closed": {
+        "th": "ส่ง DM หา {name} ไม่ได้ครับ น่าจะปิดรับข้อความส่วนตัวจากสมาชิกในเซิร์ฟเวอร์ไว้ "
+        "ให้เปิดที่ ชื่อเซิร์ฟเวอร์ ({server}) > ความเป็นส่วนตัว (Privacy Settings) > อนุญาตข้อความส่วนตัว (Direct Messages) แล้วบอกผมอีกที",
+        "en": "I couldn't DM {name}; they probably have server DMs turned off. They can switch them "
+        "on under {server} > Privacy Settings > Direct Messages, then ask me again.",
     },
     "signoff": {
         "th": "ถ้ามีอะไรก็ทักน้องสลิดมาได้เลยนะครับ 👋",
@@ -440,10 +473,6 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ตอนนี้ปิดฟังการประชุมอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
         "en": "Meeting listening is switched off right now. You can turn it on in Salid's command center.",
     },
-    "meet_no_permission": {
-        "th": "สลิดไม่มีสิทธิ์เชื่อมต่อ (Connect) ห้องเสียงนี้ครับ รบกวนผู้ดูแลเปิดสิทธิ์ให้ก่อน",
-        "en": "Salid does not have permission to Connect to this voice channel. Please ask an admin to allow it.",
-    },
     "meet_connect_failed": {
         "th": "เข้าห้องเสียงไม่สำเร็จครับ ลองใหม่อีกครั้งภายหลังนะครับ",
         "en": "Could not join the voice channel. Please try again later.",
@@ -620,10 +649,9 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "This task returned no result.",
     },
     "deep_ack": {
-        "th": "รับงานแล้วครับ 📋 งานนี้ใหญ่กว่าคำถามทั่วไป สลิดจะวิเคราะห์ข้อมูลทั้งหมดแล้วเขียนรายงาน "
-        "อาจใช้เวลาประมาณ 1-5 นาที เสร็จแล้วจะส่งผลในห้องนี้ครับ",
-        "en": "Got it 📋 This is bigger than a normal question. Salid will analyze all the data and "
-        "write a report. It may take about 1-5 minutes, and I will post the result in this channel.",
+        "th": "เดี๋ยวสลิดไล่ดูให้นะครับ งานนี้ใหญ่หน่อย อาจใช้เวลา 1-5 นาที เสร็จแล้วส่งผลในห้องนี้ครับ",
+        "en": "I'll go through it for you. This one's a big job, so it may take 1-5 minutes; I'll "
+        "post the result right here.",
     },
     "deep_busy": {
         "th": "ตอนนี้สลิดกำลังทำงานใหญ่อีกงานอยู่ครับ รอให้เสร็จก่อนแล้วสั่งใหม่อีกครั้งนะครับ",
@@ -818,9 +846,14 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "รับทราบครับ แจ้งผู้จัดการประชุม “{title}” แล้ว",
         "en": "Got it, I let the organiser of “{title}” know.",
     },
-    "sched_perm_help": {
-        "th": "สลิดยังไม่มีสิทธิ์สร้างกิจกรรม ให้แอดมินเปิดสิทธิ์ Manage Events และ Create Events ให้บอต: ตั้งค่าเซิร์ฟเวอร์ > บทบาท > บทบาทของสลิด > เปิด “จัดการกิจกรรม” และ “สร้างกิจกรรม” (หรือเชิญบอตใหม่ด้วยลิงก์ล่าสุด)",
-        "en": "Salid is missing the permission to create events. An admin should grant the bot Manage Events and Create Events: Server Settings > Roles > Salid's role > enable “Manage Events” and “Create Events” (or re-invite the bot with the latest invite link).",
+    "perm_missing": {
+        "th": "ตอนนี้สลิดยังขาดสิทธิ์ {what} อยู่ครับ ให้แอดมินเปิดลิงก์นี้ครั้งเดียวแล้วเลือกเซิร์ฟเวอร์นี้ก็เรียบร้อย {url}",
+        "en": "I'm missing the {what} permission here. An admin just needs to open this link once "
+        "and pick this server: {url}",
+    },
+    "perm_missing_nolink": {
+        "th": "ตอนนี้สลิดยังขาดสิทธิ์ {what} อยู่ครับ ให้แอดมินเปิดสิทธิ์นี้ให้บทบาทของสลิดหน่อยนะครับ",
+        "en": "I'm missing the {what} permission here. An admin needs to allow it for my role.",
     },
     "email_not_configured": {
         "th": "ยังไม่ได้ตั้งค่าการส่งอีเมล (บันทึกร่างไว้แล้ว แต่ยังไม่ได้ส่งจริง)",

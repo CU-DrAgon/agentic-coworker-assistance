@@ -139,7 +139,7 @@ class MediaMixin:
         return VOICE_PREFIX + text, []
 
     # ------------------------------------------------------------- memory: audio / video
-    def _media_soon(self, message, logged: bool) -> None:
+    def _media_soon(self, message, logged: bool, react: bool = False) -> None:
         cands = media.media_candidates(message)[:MAX_MEDIA_PER_MESSAGE]
         gid = message.guild.id
         if not (cands and logged and self._media_enabled(gid)):
@@ -148,7 +148,7 @@ class MediaMixin:
         if not self.media_budget.available(gid, self._day()) and not cached:
             self.media_stats["skipped"] += 1
             return
-        self._spawn(self._media_message(message, cands))
+        self._spawn(self._media_message(message, cands, react=react))
 
     async def _media_note(self, message, idx: int, att) -> str | None:
         kind = media.media_kind(att) or "audio"
@@ -159,7 +159,7 @@ class MediaMixin:
         summary = await asyncio.to_thread(media.summarize_note, self.llm, self.s.gate_model, tr)
         return media.memory_note(kind, tr, summary)
 
-    async def _media_message(self, message, cands) -> dict[int, str]:
+    async def _media_message(self, message, cands, react: bool = False) -> dict[int, str]:
         notes: dict[int, str] = {}
         for i, att in cands:
             if i not in self._media_cache.get(message.id, {}) and not self.media_budget.available(
@@ -172,6 +172,8 @@ class MediaMixin:
                 notes[i] = note
         if notes:
             self._apply_notes(message, notes)
+            if react:
+                await self._read_react(message)
         return notes
 
     # ------------------------------------------------------------- memory: documents
@@ -183,11 +185,11 @@ class MediaMixin:
         ]
         return found[:MAX_DOCS_PER_MESSAGE]
 
-    def _doc_soon(self, message, logged: bool) -> None:
+    def _doc_soon(self, message, logged: bool, react: bool = False) -> None:
         cands = self._doc_cands(message)
         gid = message.guild.id
         if cands and logged and self._docs_enabled(gid):
-            self._spawn(self._doc_message(message, cands))
+            self._spawn(self._doc_message(message, cands, react=react))
 
     def _receipt_line(self, message, idx: int, order: int) -> str | None:
         """The receipt pipeline's note for this attachment, if it already read it."""
@@ -236,7 +238,7 @@ class MediaMixin:
         finally:
             del data
 
-    async def _doc_message(self, message, cands) -> dict[int, str]:
+    async def _doc_message(self, message, cands, react: bool = False) -> dict[int, str]:
         notes: dict[int, str] = {}
         for order, (i, att) in enumerate(cands):
             note = await self._doc_note(message, i, att, order, gid=message.guild.id)
@@ -244,6 +246,8 @@ class MediaMixin:
                 notes[i] = note
         if notes:
             self._apply_notes(message, notes)
+            if react:
+                await self._read_react(message)
         return notes
 
     # ------------------------------------------------------------- history backlog

@@ -949,6 +949,18 @@
   "th": "ห้องที่ไม่ใช่โหมดปิด",
   "en": "Channels not set to Off"
  },
+ "f_read_receipts_n": {
+  "th": "ติด 👀 เมื่ออ่านไฟล์แล้ว",
+  "en": "React 👀 once a file is read"
+ },
+ "f_read_receipts_d": {
+  "th": "เมื่อสลิดอ่านรูป เอกสาร หรือเสียงที่ไม่ได้ส่งถึงสลิดเสร็จเรียบร้อยแล้ว (เก็บลงความจำเงียบๆ) จะกดอีโมจิ 👀 ที่ข้อความนั้นหนึ่งครั้ง เพื่อให้ทุกคนรู้ว่าสลิดอ่านแล้ว โดยไม่พิมพ์ข้อความ ไม่ทำกับข้อความเก่าที่อ่านย้อนหลัง",
+  "en": "When Salid has quietly read an image, document or audio that was not addressed to it, it adds one 👀 reaction to that message so people know it was read, without posting text. Not done for old messages read from history."
+ },
+ "f_read_receipts_w": {
+  "th": "ห้องที่ไม่ใช่โหมดปิด",
+  "en": "Channels not set to Off"
+ },
  "f_doc_memory_n": {
   "th": "จำเนื้อหาเอกสาร (PDF ฯลฯ)",
   "en": "Remember document content (PDF etc.)"
@@ -1102,13 +1114,14 @@ const FEATURES = [
   { id: "image_memory" },
   { id: "media_memory" },
   { id: "doc_memory" },
+  { id: "read_receipts" },
   { id: "web" },
   { id: "documents" },
   { id: "scheduling" },
   { id: "email" },
   { id: "followup", soon: true },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1420,7 +1433,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

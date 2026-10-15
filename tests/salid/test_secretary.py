@@ -332,7 +332,7 @@ def test_missing_manage_events_permission_explains_how_to_grant(w):
     w.guild.me.guild_permissions.manage_events = False
     _, r = propose_then_confirm(w, lambda tl: tl.schedule_meeting(**ARGS))
     assert r["error"] == "missing_permission"
-    assert "Manage Events" in r["how_to_grant"] or "จัดการกิจกรรม" in r["how_to_grant"]
+    assert "Manage Events" in r["how_to_grant"] and "Create Events" not in r["how_to_grant"]
     assert w.guild.created == [] and w.store.list_meetings(GUILD) == []
 
 

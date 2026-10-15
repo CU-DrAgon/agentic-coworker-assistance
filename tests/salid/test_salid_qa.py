@@ -210,9 +210,9 @@ def test_system_prompt_language_instruction(settings):
 
     th = system_prompt(settings, scoped=False)
     assert th == system_prompt(settings, scoped=False, language="th")
-    assert "พูดภาษาไทยเป็นธรรมชาติ" in th and "\nLanguage:" not in th
+    assert "พูดเหมือนคนจริงๆ" in th and "\nLanguage:" not in th
     en = system_prompt(settings, scoped=False, language="en")
-    assert "ALWAYS reply in English" in en and "พูดภาษาไทยเป็นธรรมชาติ" not in en
+    assert "ALWAYS reply in English" in en and "พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: สั้น" not in en
     auto = system_prompt(settings, scoped=True, language="auto")
     assert "same language as the user's latest message" in auto and "ไม่ใช่ผู้บริหาร" in auto
 

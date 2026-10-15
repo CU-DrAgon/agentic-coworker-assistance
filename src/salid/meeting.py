@@ -38,6 +38,7 @@ from meeting_scribe.audio import to_flac
 from .i18n import resolve_lang, t
 from .llm import generate
 from .naming import _WAKE_RE
+from .permissions import channel_missing, permission_message
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -510,8 +511,9 @@ class MeetingManager:
         channel = getattr(voice, "channel", None)
         if channel is None:
             return t("meet_not_in_voice", lang)
-        if not channel.permissions_for(guild.me).connect:
-            return t("meet_no_permission", lang)
+        lacking = channel_missing(channel, guild, ("connect",))
+        if lacking:
+            return permission_message(lacking, lang, getattr(self.bot, "application_id", None))
         # Reserve the guild slot before the first await so two commands cannot both join.
         self._joining.add(guild.id)
         try:

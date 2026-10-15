@@ -267,6 +267,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         image_memory=True,
         media_memory=True,
         doc_memory=True,
+        read_receipts=True,
         web=True,
         documents=True,
         scheduling=True,

@@ -6,10 +6,10 @@ import pytest
 from conftest import GUILD, FixedClockSettings
 
 from salid import bot as botmod
-from salid.bot import SecretaryBot, is_receipt_channel_name
+from salid.bot import SecretaryBot
 from salid.extract import IngestResult
 from salid.guild_settings import GuildSettings, GuildSettingsUpdate, MemoryGuildStore
-from salid.receipt_forward import MAX_FILES, forward_receipt, home_channel
+from salid.receipt_forward import MAX_FILES, forward_receipt, home_channel, learned_channels
 
 ME = SimpleNamespace(id=999, mention="<@999>")
 STAFF = 4
@@ -71,7 +71,14 @@ class Msg:
 
     async def reply(self, text, **kw):
         self.replies.append(text)
-        return SimpleNamespace(id=6000 + len(self.replies))
+        index = len(self.replies) - 1
+
+        async def edit(content=None, **kw):  # an acknowledgement edited into the answer
+            self.replies[index] = content
+            return sent
+
+        sent = SimpleNamespace(id=6000 + len(self.replies), edit=edit)
+        return sent
 
     async def add_reaction(self, e):
         self.reactions.append(e)
@@ -86,24 +93,28 @@ def names(ch):
 
 
 # ------------------------------------------------------------------ home channel pick
-def test_home_prefers_configured_then_receipt_channels_then_named():
+def test_home_prefers_configured_then_the_busiest_learned_channel():
     a, b, c = Chan(1, "general"), Chan(2, "misc", 5), Chan(3, "ใบเสร็จ", 2)
     g = Guild([a, b, c])
-    pick = lambda s, env=(): home_channel(g, s, env, is_receipt_channel_name)  # noqa: E731
+    pick = lambda s, env=(), counts=None: home_channel(g, s, env, counts or {})  # noqa: E731
     assert pick(settings(receipt_home_channel_id="1")) is a
     assert pick(settings(receipt_channel_ids=["2", "1"])) is b  # first listed
     assert pick(settings(), {1}) is a  # env ids count too
-    assert pick(settings()) is c  # by name: "misc" has no hint, "ใบเสร็จ" does
+    assert pick(settings()) is None  # a name never makes a home: "ใบเสร็จ" is just a name
+    assert pick(settings(), counts={2: 4, 1: 9, 3: 1}) is a  # most receipts in 30 days wins
+    assert pick(settings(), counts={2: 4, 3: 4}) is b  # tie: lowest id
+    assert pick(settings(receipt_channel_ids=["2"]), counts={1: 9}) is b  # hub config first
+    a.can_send = False
+    assert pick(settings(), counts={1: 9, 3: 2}) is c  # skips one it cannot send in
     c.can_send = False
-    assert pick(settings(receipt_channel_ids=["3", "1"])) is a  # skips one it cannot send in
-    assert pick(settings()) is None
+    assert pick(settings(), counts={1: 9, 3: 2}) is None
     assert pick(settings(receipt_home_channel_id="3")) is None  # explicit but unusable
     assert pick(settings(receipt_home_channel_id="99")) is None  # gone
 
 
-def test_named_pick_goes_by_position():
-    a, b = Chan(1, "expense", 7), Chan(2, "receipt", 3)
-    assert home_channel(Guild([a, b]), settings(), set(), is_receipt_channel_name) is b
+def test_learned_channels_need_three_receipts():
+    assert learned_channels({1: 3, 2: 2, 3: 10}) == {1, 3}
+    assert learned_channels({}) == set()
 
 
 # ------------------------------------------------------------------ bot wiring
@@ -126,7 +137,17 @@ def world(monkeypatch, seeded):
     async def read():
         return b"bytes"
 
-    return SimpleNamespace(bot=bot, g=g, gen=gen, home=home, store=seeded, state=state, read=read)
+    w = SimpleNamespace(
+        bot=bot, g=g, gen=gen, home=home, store=seeded, state=state, read=read, counts={11: 5}
+    )
+
+    async def counts(
+        gid,
+    ):  # receipts per channel, last 30 days (the "home" learned from the ledger)
+        return w.counts
+
+    bot._counts = counts
+    return w
 
 
 def conf(w, **kw):
@@ -172,7 +193,7 @@ async def test_ignored_is_not_forwarded(world):
 
 async def test_no_forward_from_a_receipt_channel_or_when_off_or_no_home(world):
     w = world
-    await w.bot._intake(msg(w, w.home))  # named like a receipt channel
+    await w.bot._intake(msg(w, w.home))  # a learned receipt channel (5 receipts): already home
     assert w.home.sent == []
     conf(w, receipt_channel_ids=["10"], receipt_home_channel_id="11")
     await w.bot._intake(msg(w, w.gen))  # configured receipt channel
@@ -180,7 +201,7 @@ async def test_no_forward_from_a_receipt_channel_or_when_off_or_no_home(world):
     conf(w, receipt_home_channel_id="11", receipt_forward=False)
     await w.bot._intake(msg(w, w.gen))
     assert w.home.sent == []
-    w.home.name = "random"  # no receipt channel any more: nowhere to go
+    w.counts.clear()  # no receipts anywhere yet: nowhere to go
     conf(w)
     await w.bot._intake(msg(w, w.gen))
     assert w.home.sent == []
@@ -221,13 +242,13 @@ async def test_files_are_capped(world):
     files = [(f"f{i}.jpg", b"x") for i in range(6)] + [("big.jpg", b"x" * (8 * 1024 * 1024 + 1))]
     w = world
     sent = await forward_receipt(
-        guild=w.g, settings=settings(), env_receipt_ids=set(), name_matches=is_receipt_channel_name,
+        guild=w.g, settings=settings(), env_receipt_ids=set(), counts=w.counts,
         source=w.gen, author=SimpleNamespace(mention="@u"), jump_url="u", files=files,
         text="t", lang="en",
     )  # fmt: skip
     assert [f.filename for f in sent.files] == [f"f{i}.jpg" for i in range(MAX_FILES)]
     sent = await forward_receipt(
-        guild=w.g, settings=settings(), env_receipt_ids=set(), name_matches=is_receipt_channel_name,
+        guild=w.g, settings=settings(), env_receipt_ids=set(), counts=w.counts,
         source=w.gen, author=SimpleNamespace(mention="@u"), jump_url="u", files=files[-1:],
         text="t", lang="en",
     )  # fmt: skip

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import io
 import logging
+import random
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -15,8 +16,10 @@ import discord
 from discord import app_commands
 
 from . import gate
+from .ack import Ack, ack_flavor, ack_text
 from .archive import make_archive
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
+from .chat_tools import ChatActions
 from .config import Settings
 from .deep_task import (
     REPORT_NAME,
@@ -28,6 +31,7 @@ from .deep_task import (
     run_deep_task,
 )
 from .digest import build_daily_digest
+from .dm import closed_dm_message, send_dm
 from .docs import doc_kind
 from .email_out import make_sender
 from .extract import (
@@ -71,6 +75,13 @@ from .memory_access import ChannelAccess, allowed_channel_ids
 from .memory_import import MemoryImporter, Target, import_progress
 from .memory_store import MemoryStore, SQLiteMemoryStore, make_memory_store
 from .memory_summary import render_summary
+from .mentions import (
+    allowed_mentions_for,
+    match_members,
+    resolve_mentions,
+    tag_candidates,
+    wants_everyone,
+)
 from .message_control import AnswerLog, parse_cancel_task, parse_delete_message
 from .modes import (
     CHAT_CHANNEL_NAME,
@@ -82,8 +93,13 @@ from .modes import (
     parse_snooze_command,
 )
 from .naming import command_text, mentions_name
+from .permissions import (
+    channel_missing,
+    guild_missing,
+    permission_message,
+)
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
-from .receipt_forward import forward_receipt
+from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .scheduling import DiscordCalendar, MeetingService
 from .secretary import SecretaryContext, SecretaryState
 from .secretary_store import SecretaryStore, make_secretary_store
@@ -99,11 +115,12 @@ logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
 SYNC_MIN_INTERVAL_S = 30.0  # channel-list writes per guild are batched to one per interval
 MAX_SYNCED_CHANNELS = 500
-RECEIPT_CHANNEL_HINTS = (
-    "ใบเสร็จ", "receipt", "invoice", "ใบกำกับ", "สลิป", "slip", "บิล", "bill", "expense",
-    "ค่าใช้จ่าย", "เบิก",
-)  # fmt: skip  # a channel whose name has one of these takes receipts (case-insensitive)
-# CHAT_CHANNEL_NAME (salid.modes) is created on join (needs Manage Channels): mode "chat".
+READ_REACTION = "👀"
+GREETING_KEYS = ("greeting", "greeting_2", "greeting_3")
+DM_PER_GUILD_PER_HOUR = 20  # private messages the DM tool may send per guild per hour
+RECEIPT_COUNTS_TTL_S = 600.0  # cache of "receipts per channel, last 30 days" (learned channels)
+# CHAT_CHANNEL_NAME (salid.modes) is created on join (needs Manage Channels); its mode "chat" is
+# saved by channel id. Channel names never decide behaviour.
 # A bare @mention right after the same person's message is treated as a question about it.
 FOLLOWUP_WINDOW_SECONDS = 120
 # After Salid answers in a channel, messages there need no @mention for this long (a gate decides
@@ -154,11 +171,6 @@ def chunks(text: str, n: int = 1900):
 def own_receipt(is_receipt_post, receipts_on: bool) -> bool:
     """True when the receipt pipeline will read this post's images (no second reading)."""
     return bool(is_receipt_post) and receipts_on
-
-
-def is_receipt_channel_name(name: str | None) -> bool:
-    low = (name or "").casefold()
-    return any(h in low for h in RECEIPT_CHANNEL_HINTS)
 
 
 def has_receipt_file(message) -> bool:
@@ -265,6 +277,18 @@ class SecretaryBot(MediaMixin, discord.Client):
         self._digest_task: asyncio.Task | None = None
         self._digest_sent: dict[int, date] = {}
         self._agent_msgs: set[int] = set()  # messages whose files went to the agent
+        self._chat_perm_missing: set[int] = (
+            set()
+        )  # guilds where the chat channel needs a permission
+        self._perm_noted: dict[tuple[int, str], float] = {}  # (guild, what) -> last notice time
+        self._choose = random.choice  # variants of fixed lines (greeting, acknowledgement)
+        self._sleep = asyncio.sleep  # injectable: the "still working" timer needs no real wait
+        self._recent_authors: dict[int, list[str]] = {}  # message id -> people in recent chat
+        self._dm_sent: dict[int, list[float]] = {}  # guild id -> times of DM-tool messages
+        self._reacted: dict[int, None] = {}  # messages that already got the read reaction
+        self._intaken: dict[int, None] = {}  # recent message ids the receipt pipeline has read
+        # guild -> (cached at, {channel id: receipts in the last 30 days}); see receipt_forward
+        self._receipt_counts: dict[int, tuple[float, dict[int, int]]] = {}
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
         self._deep_jobs: dict[int, _DeepJob] = {}  # guild -> the running deep task
         self._answers = AnswerLog(clock)  # chunk ids of Salid's answers, ~24 h
@@ -435,15 +459,20 @@ class SecretaryBot(MediaMixin, discord.Client):
                         days=self.team.memory_retention_days(guild.id),
                     )
                 )
+                if guild.id in self._chat_perm_missing:  # say exactly what is missing, once
+                    self._chat_perm_missing.discard(guild.id)
+                    await target.send(
+                        permission_message(["manage_channels"], lang, self.application_id)
+                    )
 
     async def _ensure_chat_channel(self, guild: discord.Guild, lang: str = "th"):
         """The guild's Salid chat channel: an existing one with its name, else a new one."""
         existing = next((c for c in guild.text_channels if is_chat_channel_name(c.name)), None)
         if existing is not None:
             return existing
-        perms = getattr(guild.me, "guild_permissions", None)
-        if not getattr(perms, "manage_channels", False):
+        if guild_missing(guild, ("manage_channels",)):
             logger.info("no Manage Channels in guild %s: chat channel not created", guild.id)
+            self._chat_perm_missing.add(guild.id)
             return None
         try:
             return await guild.create_text_channel(
@@ -451,6 +480,8 @@ class SecretaryBot(MediaMixin, discord.Client):
             )
         except discord.HTTPException:
             logger.warning("could not create chat channel in guild %s", guild.id, exc_info=True)
+            if guild_missing(guild, ("manage_channels",)):
+                self._chat_perm_missing.add(guild.id)
             return None
 
     async def on_guild_remove(self, guild: discord.Guild):
@@ -521,12 +552,18 @@ class SecretaryBot(MediaMixin, discord.Client):
             mentioned = mentions_bot(message, self.user)
             receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
             qa_on = self.team.enabled(gid, "qa")
-            # Receipt channels read receipts directly (reliable, quiet in listen mode). Elsewhere a
-            # message to Salid with files goes to the agent, which decides what to do; only with
-            # Q&A off does "@Salid + receipt file" still mean direct intake.
+            # Receipts are recognised by content, never by channel name. A configured or learned
+            # receipt channel (hub setting, or 3+ receipts in the last 30 days) is a fast path:
+            # direct intake, quiet in listen mode. Elsewhere images go through the describer
+            # (receipt-like -> intake), PDFs through intake, and a message to Salid with files goes
+            # to the agent; only with Q&A off does "@Salid + receipt file" mean direct intake.
             is_receipt_post = message.attachments and (
                 message.channel.id in receipt_ids
-                or is_receipt_channel_name(getattr(message.channel, "name", ""))
+                or (
+                    receipts_on
+                    and has_receipt_file(message)
+                    and message.channel.id in learned_channels(await self._counts(gid))
+                )
                 or (mentioned and has_receipt_file(message) and not qa_on)
             )
             describe = not own_receipt(is_receipt_post, receipts_on)
@@ -537,18 +574,26 @@ class SecretaryBot(MediaMixin, discord.Client):
             finally:
                 # images -> text for memory (and receipts anywhere nobody is talking to Salid),
                 # in the background. A message the agent read is not run through receipt intake.
-                self._media_soon(message, logged)
-                self._doc_soon(message, logged)
+                to_agent = message.id in self._agent_msgs
+                # a quiet read (nobody addressed Salid, no receipt pipeline reaction): 👀 when done
+                react = (
+                    not to_agent and not is_receipt_post and self.team.enabled(gid, "read_receipts")
+                )
+                self._media_soon(message, logged, react=react)
+                self._doc_soon(message, logged, react=react)
                 if describe:
-                    to_agent = message.id in self._agent_msgs
                     self._agent_msgs.discard(message.id)
-                    self._describe_soon(
-                        message,
-                        logged,
-                        intake_mode=mode
-                        if receipts_on and not is_receipt_post and not to_agent
-                        else None,
+                    content_path = (
+                        receipts_on
+                        and not is_receipt_post
+                        and not to_agent
+                        and message.id not in self._intaken
                     )
+                    self._describe_soon(
+                        message, logged, intake_mode=mode if content_path else None, react=react
+                    )
+                    if content_path and self._pdf_attachments(message):
+                        self._spawn(self._intake(message, quiet=mode == "listen", pdf_only=True))
         except Exception:
             logger.exception("handler failed")
 
@@ -909,12 +954,13 @@ class SecretaryBot(MediaMixin, discord.Client):
         posted elsewhere (see salid.receipt_forward). The sent copy, or None."""
         if res.status not in ("created", "duplicate") or guild is None:
             return None
+        await self._note_home_permissions(message, guild, lang)
         try:
             return await forward_receipt(
                 guild=guild,
                 settings=self.team.current(guild.id),
                 env_receipt_ids=self.s.receipt_channel_ids,
-                name_matches=is_receipt_channel_name,
+                counts=await self._counts(guild.id),
                 source=message.channel if message.guild is not None else None,
                 author=message.author,
                 jump_url=getattr(message, "jump_url", None),
@@ -926,12 +972,67 @@ class SecretaryBot(MediaMixin, discord.Client):
             logger.exception("receipt forward failed")
             return None
 
-    async def _intake(self, message: discord.Message, quiet: bool = False) -> bool:
-        """Read every attachment as a receipt. True when at least one was a receipt (saved or a
-        duplicate); images that are not receipts are described for memory instead."""
+    @staticmethod
+    def _pdf_attachments(message) -> list:
+        return [
+            a
+            for a in message.attachments
+            if guess_mime(a.filename, getattr(a, "content_type", None)) == "application/pdf"
+        ]
+
+    async def _counts(self, guild_id: int) -> dict[int, int]:
+        """Receipts recorded per channel in the last 30 days (cached ~10 min, fail quiet): which
+        channels have learned to be receipt channels, and where receipts are copied to."""
+        now = self._clock()
+        hit = self._receipt_counts.get(guild_id)
+        if hit is not None and now - hit[0] < RECEIPT_COUNTS_TTL_S:
+            return hit[1]
+        since = (self.s.now().date() - timedelta(days=LEARN_DAYS)).isoformat()
+        try:
+            counts = await asyncio.to_thread(self.store.receipt_channel_counts, guild_id, since)
+        except Exception:
+            logger.warning("could not count receipts per channel", exc_info=True)
+            counts = hit[1] if hit else {}
+        self._receipt_counts[guild_id] = (now, counts)
+        return counts
+
+    async def _note_home_permissions(self, message, guild, lang: str) -> None:
+        """The hub-chosen receipt home exists but Salid cannot post files there: say what is
+        missing (at most once every 10 minutes per guild) instead of failing silently."""
+        settings = self.team.current(guild.id)
+        home_id = settings.receipt_home_channel_id
+        if not settings.receipt_forward or not home_id:
+            return
+        home = guild.get_channel(int(home_id))
+        lacking = (
+            channel_missing(home, guild, ("view_channel", "send_messages", "attach_files"))
+            if home is not None
+            else []
+        )
+        now = self._clock()
+        key = (guild.id, "home")
+        if not lacking or now - self._perm_noted.get(key, float("-inf")) < 600:
+            return
+        self._perm_noted[key] = now
+        with contextlib.suppress(discord.HTTPException):
+            await message.reply(
+                permission_message(lacking, lang, self.application_id), mention_author=False
+            )
+
+    async def _intake(
+        self, message: discord.Message, quiet: bool = False, pdf_only: bool = False
+    ) -> bool:
+        """Read every attachment as a receipt (`pdf_only`: just the PDFs). True when at least one
+        was a receipt (saved or a duplicate); images that are not receipts are described for
+        memory instead."""
         found = False
+        self._intaken[message.id] = None
+        while len(self._intaken) > IMAGE_NOTES_KEPT:
+            self._intaken.pop(next(iter(self._intaken)))
         for idx, att in enumerate(message.attachments):
             if att.size > ATTACH_LIMIT:
+                continue
+            if pdf_only and att not in self._pdf_attachments(message):
                 continue
             data = await att.read()
             res = await self._ingest_one(message, att, data, quiet)
@@ -976,6 +1077,7 @@ class SecretaryBot(MediaMixin, discord.Client):
             return ""
         zone = self.s.zone
         lines: list[str] = []
+        authors: list[str] = []
         try:
             async for prev in history(limit=HISTORY_MESSAGES + 10, before=message):
                 if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
@@ -987,12 +1089,17 @@ class SecretaryBot(MediaMixin, discord.Client):
                     text = " ".join(f"[{a.filename}]" for a in prev.attachments)
                 if text:
                     who = "สลิด" if prev.author == self.user else prev.author.display_name
+                    if who not in authors:
+                        authors.append(who)
                     at = prev.created_at.astimezone(zone).strftime("%H:%M")
                     lines.append(f"[{at}] {who}: {text[:HISTORY_LINE_CHARS]}")
                 if len(lines) >= HISTORY_MESSAGES:
                     break
         except discord.HTTPException:
             logger.warning("could not read channel history", exc_info=True)
+        self._recent_authors[message.id] = authors
+        while len(self._recent_authors) > 50:
+            self._recent_authors.pop(next(iter(self._recent_authors)))
         lines.reverse()
         while lines and sum(len(x) + 1 for x in lines) > HISTORY_CHARS:
             lines.pop(0)
@@ -1136,7 +1243,9 @@ class SecretaryBot(MediaMixin, discord.Client):
         if not q and not with_files:
             q = await self._previous_text(message)
         if not q and not with_files:
-            sent = await message.reply(t("greeting", self._lang(message, "")), mention_author=False)
+            sent = await message.reply(
+                t(self._choose(GREETING_KEYS), self._lang(message, "")), mention_author=False
+            )
             self._note_answer(message, sent)
             return True
         gid = guild.id
@@ -1178,43 +1287,45 @@ class SecretaryBot(MediaMixin, discord.Client):
         secretary = (
             None if interjection else self._secretary(message, guild, member, is_exec, setting)
         )
-        async with message.channel.typing():
-            ans = await asyncio.to_thread(
-                ask,
-                self.s,
-                self.store,
-                q,
-                guild_id=gid,
-                is_exec=is_exec,
-                user_id=message.author.id,
-                history=history,
-                language=setting,
-                memory=memory,
-                interjection=interjection,
-                **({"files": files, "actions": actions} if files else {}),
-                **self._web_kw(gid),
-                **({"secretary": secretary} if secretary is not None else {}),
-            )
+        loop = asyncio.get_running_loop()
+        chat_actions = self._chat_actions(message, guild, member, is_exec, setting, loop, secretary)
+        people = tag_candidates(message.channel, self._recent_authors.pop(message.id, ()))
+        ack = None if interjection else await self._start_ack(message, q, lang)
+        try:
+            async with message.channel.typing():
+                ans = await asyncio.to_thread(
+                    ask,
+                    self.s,
+                    self.store,
+                    q,
+                    guild_id=gid,
+                    is_exec=is_exec,
+                    user_id=message.author.id,
+                    history=history,
+                    language=setting,
+                    memory=memory,
+                    interjection=interjection,
+                    chat_actions=chat_actions,
+                    people=people,
+                    **({"files": files, "actions": actions} if files else {}),
+                    **self._web_kw(gid),
+                    **({"secretary": secretary} if secretary is not None else {}),
+                )
+        except BaseException:
+            await self._ack_failed(ack, lang)
+            raise
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         if interjection and is_no_reply(ans.text):
             logger.info("interjection suppressed (nothing useful to add)")
             return False
-        sent = first = None
-        sent_ids: list[int] = []
         uploads = [
             discord.File(io.BytesIO(data), filename=name)
             for name, data in list(getattr(ans, "attachments", ()))[:10]
         ]
-        for i, part in enumerate(chunks(ans.text)):
-            extra = {"files": uploads} if i == 0 and uploads else {}
-            sent = await (
-                message.reply(part, mention_author=False, **extra)
-                if i == 0
-                else message.channel.send(part)
-            )
-            first = first or sent
-            if getattr(sent, "id", None) is not None:
-                sent_ids.append(sent.id)
+        everyone = wants_everyone(q, self._may_configure(member))
+        sent, first, sent_ids = await self._deliver(
+            message, guild, ack, ans.text, uploads, everyone
+        )
         if sent_ids:
             self._answers.add(message.channel.id, message.author.id, sent_ids)
         lines = [
@@ -1244,6 +1355,260 @@ class SecretaryBot(MediaMixin, discord.Client):
         self._note_answer(message, sent)
         return True
 
+    async def _start_ack(self, message, text: str, lang: str, *, target=None):
+        """Acknowledge slow work at once (files, links, audio: `target` is the message that has
+        them, the replied-to one for "summarise"), or after SLOW_AFTER_S seconds without an
+        answer. The Ack is stopped by `_deliver` / `_ack_failed`."""
+        flavor = ack_flavor(target or message, text)
+        ack = Ack(
+            message,
+            ack_text(flavor or "slow", lang, self._choose),
+            sleep=self._sleep,
+        )
+        if flavor:
+            await ack.now()
+        else:
+            ack.after()
+        return ack
+
+    async def _ack_failed(self, ack: Ack | None, lang: str) -> None:
+        """The answer blew up: do not leave "one moment..." hanging."""
+        if ack is None:
+            return
+        await ack.finish()
+        if ack.sent is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await ack.sent.edit(content=t("qa_failed", lang))
+
+    async def _deliver(self, message, guild, ack, text: str, uploads=(), everyone: bool = False):
+        """Post an answer: mentions resolved (`@[name]` -> real tags, see salid.mentions), the
+        first chunk replaces the acknowledgement message (edited in place; when that fails the
+        answer is sent normally and the ack deleted), the rest follow as messages. Returns
+        (last sent, first sent, ids of every answer message)."""
+        if ack is not None:
+            await ack.finish()
+        text = resolve_mentions(text, guild, allow_everyone=everyone)
+        allowed = allowed_mentions_for(text, allow_everyone=everyone)
+        acked = ack.sent if ack is not None else None
+        sent = first = None
+        sent_ids: list[int] = []
+        for i, part in enumerate(chunks(text)):
+            extra = {"files": list(uploads)} if i == 0 and uploads else {}
+            if i == 0 and acked is not None:
+                try:
+                    sent = await acked.edit(
+                        content=part,
+                        allowed_mentions=allowed,
+                        **({"attachments": list(uploads)} if uploads else {}),
+                    )
+                except discord.HTTPException:
+                    sent = await message.reply(
+                        part, mention_author=False, allowed_mentions=allowed, **extra
+                    )
+                    with contextlib.suppress(discord.HTTPException):
+                        await acked.delete()
+                else:
+                    sent = sent or acked
+                    if guild is not None:  # the memory log still holds the ack text
+                        self._memory_enqueue(
+                            partial(self.memory.edit, guild.id, sent.id, part, datetime.now(UTC))
+                        )
+            elif i == 0:
+                sent = await message.reply(
+                    part, mention_author=False, allowed_mentions=allowed, **extra
+                )
+            else:
+                sent = await message.channel.send(part, allowed_mentions=allowed)
+            first = first or sent
+            if getattr(sent, "id", None) is not None:
+                sent_ids.append(sent.id)
+        if first is None and acked is not None:  # nothing to say after all
+            with contextlib.suppress(discord.HTTPException):
+                await acked.delete()
+        return sent, first, sent_ids
+
+    def _chat_actions(
+        self, message, guild, member, is_exec: bool, setting: str, loop, secretary=None
+    ):
+        """The settings tools for this message: guild, channel and author are bound here, never
+        model input. Same permission rules as the slash commands (managers / executives)."""
+        gid, channel = guild.id, message.channel
+        lang = self._lang(message)
+
+        def run(coro):
+            return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
+
+        def allowed() -> bool:
+            return self._may_configure(member)
+
+        def pick(ref: str | None):
+            return self._find_text_channel(guild, ref, channel)
+
+        def set_mode(mode: str, ref: str | None = None) -> dict:
+            if mode not in MODES:
+                return {"error": "unknown mode", "modes": list(MODES)}
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            target = pick(ref)
+            if target is None:
+                return {"error": "channel_not_found"}
+            run(self._apply_mode(guild, target, mode))
+            return {"status": "ok", "channel": target.name, "mode": mode}
+
+        def set_language(language: str, ref: str | None = None) -> dict:
+            if language not in LANGS:
+                return {"error": "unknown language", "languages": list(LANGS)}
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            target = pick(ref)
+            if target is None:
+                return {"error": "channel_not_found"}
+            self.team.set_channel_language(gid, target.id, language)
+            return {"status": "ok", "channel": target.name, "language": language}
+
+        def set_days(days: int) -> dict:
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            if valid_retention_days(days) is None:
+                return {
+                    "error": "bad_days",
+                    "min": MIN_RETENTION_DAYS,
+                    "max": MAX_RETENTION_DAYS,
+                }
+            self.team.set_memory_retention_days(gid, days)
+            return {"status": "ok", "days": days}
+
+        def show() -> dict:
+            mode = self._mode(channel, gid)
+            return {
+                "channel": getattr(channel, "name", ""),
+                "mode": mode,
+                "mode_meaning": mode_help(mode, "en", self.team.memory_retention_days(gid)),
+                "snoozed": self._is_snoozed(channel.id),
+                "reply_language": self.team.channel_language(gid, channel.id),
+                "memory_on": self.team.enabled(gid, "memory"),
+                "memory_days": self.team.memory_retention_days(gid),
+            }
+
+        def hidden() -> dict:
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            rows = hidden_channels(guild, guild.me)
+            return {
+                "count": len(rows),
+                "channels": [
+                    {"mention": f"<#{r['id']}>", "name": r["name"], "problem": r["missing"]}
+                    for r in rows[:25]
+                ],
+                "how_to_add": t("hidden_steps", lang),
+            }
+
+        def cancel() -> dict:
+            return {"result": run(self._cancel_deep(gid, member, lang))}
+
+        def dm(text: str, to: str = "me", attach: str | None = None) -> dict:
+            return run(self._send_dm_tool(guild, member, text, to, attach, lang, secretary))
+
+        return ChatActions(
+            set_channel_mode=set_mode,
+            set_channel_language=set_language,
+            set_memory_days=set_days,
+            show_settings=show,
+            hidden_channels=hidden,
+            cancel_deep_task=cancel,
+            send_dm=dm,
+        )
+
+    @staticmethod
+    def _find_text_channel(guild, ref: str | None, current):
+        """`ref` (mention, id or name; None = the current channel) as one of the guild's text
+        channels: exact name first, then a unique partial match."""
+        if not ref:
+            return current
+        digits = "".join(ch for ch in str(ref) if ch.isdigit())
+        chans = list(guild.text_channels)
+        if digits:
+            hit = next((c for c in chans if str(c.id) == digits), None)
+            if hit is not None:
+                return hit
+        want = str(ref).strip().lstrip("#").casefold()
+        exact = [c for c in chans if c.name.casefold() == want]
+        if len(exact) == 1:
+            return exact[0]
+        part = [c for c in chans if want and want in c.name.casefold()]
+        return part[0] if len(part) == 1 else None
+
+    async def _apply_mode(self, guild, channel, mode: str) -> str:
+        """Save a channel's mode and reset what depended on the old one. Returns the previous
+        mode (an off -> on switch starts the memory notice and import)."""
+        previous = self.team.channel_mode(
+            guild.id, channel.id, getattr(channel, "name", None), self.s.ask_channel_ids
+        )
+        await asyncio.to_thread(self.team.set_channel_mode, guild.id, channel.id, mode)
+        self._snoozed.pop(channel.id, None)
+        self._convos.pop(channel.id, None)
+        self._pending.pop(channel.id, None)
+        self._seen_mode[channel.id] = mode
+        if previous == "off" and mode != "off":
+            await self._memory_notice(channel, guild.id)
+            self._start_import()
+        return previous
+
+    async def _send_dm_tool(
+        self, guild, member, text: str, to: str, attach: str | None, lang: str, secretary=None
+    ) -> dict:
+        """The send_dm tool. "me" DMs the requester; someone else gets a relay that says who it
+        is from. A PDF goes only to the requester, or to a recipient who can see at least as much
+        (executive / manager). At most DM_PER_GUILD_PER_HOUR per guild per hour."""
+        now = self._clock()
+        sent = [x for x in self._dm_sent.get(guild.id, []) if now - x < 3600]
+        if len(sent) >= DM_PER_GUILD_PER_HOUR:
+            return {"error": "rate_limited", "per_hour": DM_PER_GUILD_PER_HOUR}
+        me_words = {"", "me", "myself", "ฉัน", "ผม", "เรา", "ตัวเอง", "ผู้ถาม"}
+        mine = to.strip().casefold() in me_words
+        if mine:
+            target = member
+        else:
+            found = match_members(guild, to)
+            if not found:
+                return {"error": "person_not_found", "person": to}
+            if len(found) > 1:
+                return {
+                    "error": "ambiguous",
+                    "candidates": [m.display_name for m in found[:10]],
+                }
+            target = found[0]
+            if target.id == member.id:
+                mine = True
+        files = []
+        if attach:
+            data = self.secretary_state.recall_pdf(guild.id, member.id, attach)
+            if data is None:
+                return {"error": "attachment_not_found", "attach": attach}
+            if not mine and not self._may_configure(target):
+                return {"error": "attachment_only_for_requester_or_executives"}
+            files = [discord.File(io.BytesIO(data), filename=attach)]
+        body = (
+            text[:1900]
+            if mine
+            else t(
+                "relay_dm", lang, sender=member.display_name, server=guild.name, text=text[:1500]
+            )
+        )
+        res = await send_dm(target, body, files)
+        if not res.ok:
+            if res.reason == "closed":
+                return {
+                    "error": "dms_closed",
+                    "person": target.display_name,
+                    "guidance": closed_dm_message(target.display_name, guild.name, lang),
+                }
+            return {"error": "could_not_dm", "person": target.display_name}
+        self._dm_sent[guild.id] = [*sent, now]
+        if attach and secretary is not None:  # delivered privately: not also posted in the channel
+            secretary.attachments[:] = [a for a in secretary.attachments if a[0] != attach]
+        return {"status": "sent", "to": "requester" if mine else target.display_name}
+
     def _secretary(self, message, guild, member, is_exec: bool, setting: str):
         """The secretary tools' bindings for this message (guild, author and channel are fixed
         here, never model input). Discord work is marshalled onto this loop."""
@@ -1264,6 +1629,7 @@ class SecretaryBot(MediaMixin, discord.Client):
             is_exec=is_exec,
             can_email=can_email,
             lang=lang,
+            app_id=self.application_id,
             text_channel_id=message.channel.id if message.guild is not None else None,
             store=self.secretary_store,
             state=self.secretary_state,
@@ -1317,15 +1683,22 @@ class SecretaryBot(MediaMixin, discord.Client):
         return ans.text
 
     async def _reply_summary(self, message, guild, member, target, setting: str) -> bool:
-        async with message.channel.typing():
-            text = await self._summarize_message(target, guild, member, setting)
+        lang = resolve_lang(setting, message.content)
+        # the files / links that make this slow are in the message being summarised
+        ack = await self._start_ack(
+            message, getattr(target, "content", "") or "", lang, target=target
+        )
+        try:
+            async with message.channel.typing():
+                text = await self._summarize_message(target, guild, member, setting)
+        except BaseException:
+            await self._ack_failed(ack, lang)
+            raise
         if text is None:
-            text = t("summary_nothing", resolve_lang(setting, message.content))
-        sent = None
-        for i, part in enumerate(chunks(text)):
-            sent = await (
-                message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
-            )
+            text = t("summary_nothing", lang)
+        sent, _first, ids = await self._deliver(message, guild, ack, text)
+        if ids:
+            self._answers.add(message.channel.id, message.author.id, ids)
         self._note_answer(message, sent)
         return True
 
@@ -2287,14 +2660,19 @@ class SecretaryBot(MediaMixin, discord.Client):
     def _images_enabled(self, guild_id: int) -> bool:
         return self.team.enabled(guild_id, "memory") and self.team.enabled(guild_id, "image_memory")
 
-    def _describe_soon(self, message, logged: bool = True, intake_mode: str | None = None) -> None:
+    def _describe_soon(
+        self, message, logged: bool = True, intake_mode: str | None = None, react: bool = False
+    ) -> None:
         """Describe the message's images in the background (never delays a reply). With
         `intake_mode` set, images the describer takes for receipts also go through receipt
         intake (quietly in listen mode)."""
         cands = self._image_candidates(message)
-        if cands and self._images_enabled(message.guild.id) and (logged or intake_mode):
+        notes_on = self._images_enabled(message.guild.id)
+        if cands and (intake_mode or (notes_on and logged)):  # receipts need no image memory
             self._spawn(
-                self._describe_message(message, cands, intake_mode=intake_mode, apply=logged)
+                self._describe_message(
+                    message, cands, intake_mode=intake_mode, apply=logged and notes_on, react=react
+                )
             )
 
     async def _read_describe(self, att) -> tuple[bytes | None, ImageNote | None]:
@@ -2320,8 +2698,23 @@ class SecretaryBot(MediaMixin, discord.Client):
         _data, note = await self._read_describe(att)
         return format_note(note) if note is not None else None
 
+    async def _read_react(self, message) -> None:
+        """👀 on a message whose files Salid has just read quietly (once per message)."""
+        if message.id in self._reacted:
+            return
+        self._reacted[message.id] = None
+        while len(self._reacted) > IMAGE_NOTES_KEPT:
+            self._reacted.pop(next(iter(self._reacted)))
+        with contextlib.suppress(discord.HTTPException):
+            await message.add_reaction(READ_REACTION)
+
     async def _describe_message(
-        self, message, cands, intake_mode: str | None = None, apply: bool = True
+        self,
+        message,
+        cands,
+        intake_mode: str | None = None,
+        apply: bool = True,
+        react: bool = False,
     ) -> tuple[bool, dict[int, str]]:
         """Describe images; receipt-like ones also run receipt intake when `intake_mode` is set.
         Returns (a receipt was handled, notes by attachment index)."""
@@ -2348,6 +2741,8 @@ class SecretaryBot(MediaMixin, discord.Client):
         )  # fmt: skip
         if notes and apply:
             self._apply_notes(message, notes)
+        if react and notes and not handled:  # a recorded receipt already got its own reaction
+            await self._read_react(message)
         return handled, notes
 
     def _apply_notes(self, message, notes: dict[int, str]) -> None:

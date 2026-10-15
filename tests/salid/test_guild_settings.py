@@ -40,6 +40,7 @@ def test_missing_document_means_defaults(gstore):
         image_memory=True,
         media_memory=True,
         doc_memory=True,
+        read_receipts=True,
         web=True,
         documents=True,
         scheduling=True,

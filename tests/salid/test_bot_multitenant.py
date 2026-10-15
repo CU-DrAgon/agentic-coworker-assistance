@@ -107,8 +107,9 @@ def bot(world, seeded):
         FixedClockSettings(exec_user_ids={BOSS}), seeded, None, guilds=MemoryGuildStore()
     )
     b.calls = []
+    b._choose = lambda xs: xs[0]
 
-    async def intake(m, quiet=False):
+    async def intake(m, quiet=False, pdf_only=False):
         b.calls.append(("intake-quiet" if quiet else "intake", m.guild.id))
 
     async def answer(m, guild, who):
@@ -119,11 +120,15 @@ def bot(world, seeded):
 
 
 # ------------------------------------------------------------------ receipt intake without setup
-async def test_receipt_named_channels_work_without_any_config(bot, world):
+async def test_configured_receipt_channels_are_a_fast_path(bot, world):
     u = member(world.a, STAFF)
+    for g, ch in ((world.a, world.a.text_channels[1]), (world.b, world.b.text_channels[0])):
+        bot.guilds_store.save_settings(
+            g.id, GuildSettingsUpdate(receipt_channel_ids=[str(ch.id)]), "x"
+        )
     await bot.on_message(Msg(world.a, world.a.text_channels[1], u, attachments=[photo()]))
     await bot.on_message(Msg(world.b, world.b.text_channels[0], u, attachments=[photo()]))
-    assert bot.calls == [("intake", GUILD), ("intake", OTHER_GUILD)]  # ใบเสร็จ / Receipts (any case)
+    assert bot.calls == [("intake", GUILD), ("intake", OTHER_GUILD)]
 
 
 async def test_other_channels_need_a_mention_with_a_file(bot, world):
@@ -157,6 +162,13 @@ async def test_toggles_are_per_guild(bot, world):
     bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features={"receipts": False}), "x")
     for g in (world.a, world.b):
         ch = g.text_channels[1] if g is world.a else g.text_channels[0]
+        bot.guilds_store.save_settings(
+            g.id,
+            GuildSettingsUpdate(
+                receipt_channel_ids=[str(ch.id)], features={"receipts": g is not world.a}
+            ),
+            "x",
+        )
         await bot.on_message(Msg(g, ch, member(g, STAFF), attachments=[photo()]))
     assert bot.calls == [("intake", OTHER_GUILD)]
 
@@ -202,6 +214,8 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
         False,
         False,
     )
+    assert seen[0].pop("chat_actions").show_settings is not None  # bound settings tools
+    assert seen[0].pop("people") == []  # nobody else can see that channel in the fakes
     assert seen == [
         {
             "guild_id": OTHER_GUILD,
@@ -298,8 +312,8 @@ async def test_join_registers_guild_and_welcomes(bot, world):
     assert g.guild_name == "A" and g.icon_url.endswith("icon.png") and g.active and g.installed_at
     assert [c.name for c in g.channels] == ["ทั่วไป", "ใบเสร็จ-ร้าน"]
     welcome = sys_ch.sent[0]
-    assert "สลิด" in welcome and "ใบเสร็จ" in welcome and "receipt" in welcome
-    assert "<@999>" in welcome and "/ตั้งค่า" in welcome
+    assert "สลิด" in welcome and "<@999>" in welcome and "ส่งไฟล์" in welcome
+    assert "/ตั้งค่า" not in welcome  # no command list
 
 
 async def test_welcome_falls_back_to_first_sendable_channel(bot, world):

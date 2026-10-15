@@ -286,3 +286,12 @@ class FirestoreStore:
             rows = [r for r in rows if is_active(r)]
         rows.sort(key=lambda r: r.id or 0, reverse=True)
         return rows[: max(1, min(int(limit), 100))]
+
+    def receipt_channel_counts(self, guild_id: int, since: str) -> dict[int, int]:
+        """Active receipts per channel id since a date (reads the guild's ledger, see above)."""
+        counts: dict[int, int] = {}
+        for snap in self._guild(guild_id).stream():
+            r = Receipt(**snap.to_dict())
+            if is_active(r) and r.channel_id and r.effective_date >= since:
+                counts[r.channel_id] = counts.get(r.channel_id, 0) + 1
+        return counts
