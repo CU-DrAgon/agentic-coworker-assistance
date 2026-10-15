@@ -470,6 +470,27 @@ def test_chat_days_returns_summaries_and_todays_raw_tail(mstore, settings):
     )
 
 
+def test_firestore_messages_after_filters_the_channel_server_side(settings):
+    st = offline_memory_store()
+    st.add_message(mk(settings, 1, bkk(14, 9).astimezone(UTC), cid=10))
+    st.add_message(mk(settings, 2, bkk(14, 9).astimezone(UTC), cid=11))
+    st.client.streams.clear()
+    assert [m.message_id for m in st.messages_after(GUILD, 10, "2026-10-14")] == [1]
+    assert ("channel_id", "==", 10) in st.client.streams[-1][1]
+
+
+def test_chat_days_reads_each_tail_day_once(settings):
+    st = offline_memory_store()
+    for i, cid in enumerate((10, 11, 12) * 2):
+        day = 13 + i // 3
+        st.add_message(mk(settings, i + 1, bkk(day, 9, i).astimezone(UTC), "x", cid=cid))
+    tools = MemoryTools(st, GUILD, {10: "a", 11: "b", 12: "c"}, settings)
+    st.client.streams.clear()
+    r = tools.chat_days("2026-10-13", "2026-10-14")
+    msg_reads = [f for name, f in st.client.streams if name == "salid_messages"]
+    assert len(msg_reads) == 2 and len(r["newer_than_summary"]) == 6
+
+
 def test_chat_days_output_is_capped_newest_days_first(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "general"}, settings)
     for d in range(1, 15):

@@ -17,7 +17,7 @@ from google.genai import types
 
 from .config import Settings
 from .i18n import resolve_lang, t
-from .memory_store import MemoryMessage, MemoryStore
+from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
 from .memory_summary import render_summary
 from .store import Store
 
@@ -235,7 +235,8 @@ class MemoryTools:
             for x in self.store.summaries(self.guild_id, self.allowed, start, end)
             if x.message_count > 0
         ]
-        # Messages newer than the (living) summary, so nothing between updates is missed.
+        # Messages newer than the (living) summary, so nothing between updates is missed. One
+        # read per day, split by channel here.
         today = self.s.now().date()
         tail: list[dict] = []
         covered = {(x.channel_id, x.local_date): x for x in sums}
@@ -243,16 +244,19 @@ class MemoryTools:
             d = day.isoformat()
             if not start <= d <= end:
                 continue
-            for cid in self.store.day_channels(self.guild_id, d):
-                if cid not in self.allowed:
-                    continue
+            by_channel: dict[int, list[MemoryMessage]] = {}
+            for m in self.store.messages(
+                self.guild_id, self.allowed, d, d, limit=MAX_ROWS, newest_first=False
+            ):
+                by_channel.setdefault(m.channel_id, []).append(m)
+            for cid in sorted(by_channel):
                 x = covered.get((cid, d))
                 if x is not None and x.final:
                     continue
-                rows = self.store.messages_after(
-                    self.guild_id, cid, d, x.cursor if x else None, TAIL_PER_CHANNEL
-                )
-                tail += [self._msg(m) for m in rows]
+                rows = [
+                    m for m in by_channel[cid] if x is None or x.cursor is None or m.key > x.cursor
+                ]
+                tail += [self._msg(m) for m in rows[:TAIL_PER_CHANNEL]]
         tail = tail[-TAIL_TOTAL:]
         # Newest days first; the output is capped, so old days drop out first.
         all_days = [
