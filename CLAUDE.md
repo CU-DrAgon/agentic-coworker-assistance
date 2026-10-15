@@ -37,6 +37,7 @@ Gemini (`gemini-3.5-flash`, transcribe + diarize) → Firestore. On Stop: `/fini
 | `pipeline.py` | `process_chunk`, `finalize` (idempotent, per-process lock) |
 | `app.py` | FastAPI routes; health check is `/health` (Cloud Run reserves `/healthz`) |
 | `static/index.html` | Recorder UI, live transcript, summary |
+| `hub.py` / `static/hub.html` | Salid command center: `/hub` (Thai) + `/api/hub/{me,settings,activity,ask}`. Google ID token as Bearer, verified against `HUB_GOOGLE_CLIENT_ID`, email must be in `HUB_ADMIN_EMAILS`; empty config = 503. No server secret. |
 | `scripts/deploy.sh` | Idempotent Cloud Run deploy + IAM + Secret Manager + Pub/Sub push subscription |
 | `scripts/resummarize_dry_run.py` | Re-run the summarizer on a stored meeting and print before/after. Read-only, but calls Vertex AI. |
 
@@ -58,6 +59,7 @@ is still **not built** and Salid is **not deployed**. Bot-facing replies and pro
 | `qa.py` | Expense Q&A as a Google ADK `LlmAgent` + `InMemoryRunner`; `build_tools(LedgerTools)` makes per-request FunctionTools bound to the caller (`forced_submitter_id`), `ask`/`ask_async` return `Answer`; max 4 tool rounds |
 | `deep_task.py` | Executive "งานใหญ่:" / `/deep` tasks: caller-scoped CSV export + TASK.md in a temp dir, Gemini CLI headless with isolated HOME and a pinned model, collects `report.md`, always deletes the temp dir |
 | `digest.py` | Daily digest text |
+| `team_settings.py` | Hub-managed Firestore doc `salid_teams/default` (feature toggles, channel ids, digest time); the bot reads it cached 60 s, fail-open, only with `SALID_STORE=firestore` |
 | `bot.py` / `__main__.py` | Discord client / `python -m salid` |
 | `cli.py` | `python -m salid.cli extract|ask|deep|digest` for offline testing |
 | `scripts/salid_seed_demo.py` | Seed a demo SQLite ledger |
@@ -69,7 +71,9 @@ Vertex, real Firestore (throwaway `salid_receipts_test_<random>` collection, del
 
 Salid env vars beyond the basics: `SALID_STORE`, `SALID_FIRESTORE_COLLECTION`, `SALID_RECEIPT_BUCKET`
 (empty = no archive), `SALID_GEMINI_CLI_PATH` (empty = deep tasks disabled), `SALID_DEEP_TASK_TIMEOUT`
-(600), `SALID_DEEP_TASK_MODEL` (`gemini-3-flash-preview`).
+(600), `SALID_DEEP_TASK_MODEL` (`gemini-3-flash-preview`), `SALID_TEAM_COLLECTION` (`salid_teams`),
+`SALID_TEAM_ID` (`default`). Hub (web service) env: `HUB_GOOGLE_CLIENT_ID`, `HUB_ADMIN_EMAILS`,
+`SALID_DISCORD_CLIENT_ID`; setup in README "Salid command center".
 
 **Gemini CLI is an external Node binary, not installed by uv** (tested 0.64.0). Never run it in a directory
 with untrusted `.gemini/` or `.env`; `deep_task.py` uses an empty temp workspace and an isolated
