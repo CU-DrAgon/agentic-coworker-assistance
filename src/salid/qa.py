@@ -495,32 +495,36 @@ def is_no_reply(text: str | None) -> bool:
     return len(s) <= 20 and NO_REPLY.casefold() in s.casefold().replace(" ", "_")
 
 
-def system_prompt(
-    settings: Settings,
-    scoped: bool,
-    now=None,
-    language: str = "th",
-    memory: bool = False,
-    interjection: bool = False,
-) -> str:
-    """`language`: th / en answer in that language; auto = the language of the user's message."""
-    now = now or settings.now()
+def stable_prompt(language: str, memory: bool) -> str:
+    """The part of the system prompt that is identical for every request in one language (persona,
+    rules, capabilities, memory guidance). It comes first so Gemini's implicit prefix cache can
+    reuse it across requests and tool rounds."""
     p = (
         PERSONA[language if language in PERSONA else "th"]
         + "คุยได้ทุกเรื่องเหมือนผู้ช่วย AI ทั่วไป: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
         "ช่วยคิดไอเดีย ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
         "ถ้าเป็นข่าวหรือข้อมูลล่าสุดที่อาจไม่รู้ ให้บอกตรงๆ ว่าอาจไม่อัปเดต\n"
-        f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
-        f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD\n"
         "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
         "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วย ฿. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
         "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
-    if scoped:
-        p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
     if memory:
         p += MEMORY_PROMPT
+    return p
+
+
+def volatile_prompt(
+    settings: Settings, now, *, scoped: bool, interjection: bool, language: str
+) -> str:
+    """The per-request tail of the system prompt: date and time, the asker's scope, the
+    interjection rule and the language line."""
+    p = (
+        f"\nวันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
+        f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD"
+    )
+    if scoped:
+        p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
     if interjection:
         p += INTERJECTION_PROMPT
     if language == "en":
@@ -530,6 +534,22 @@ def system_prompt(
             "\nLanguage: reply in the same language as the user's latest message (Thai or English)."
         )
     return p
+
+
+def system_prompt(
+    settings: Settings,
+    scoped: bool,
+    now=None,
+    language: str = "th",
+    memory: bool = False,
+    interjection: bool = False,
+) -> str:
+    """`language`: th / en answer in that language; auto = the language of the user's message.
+    Stable part first, per-request part last (see `stable_prompt`)."""
+    now = now or settings.now()
+    return stable_prompt(language, memory) + volatile_prompt(
+        settings, now, scoped=scoped, interjection=interjection, language=language
+    )
 
 
 @dataclass
