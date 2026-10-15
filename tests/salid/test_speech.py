@@ -147,3 +147,88 @@ def test_pcm_source_pipes_24k_mono_into_ffmpeg(monkeypatch):
 
 def test_pcm_duration():
     assert speech.pcm_duration_s(bytes(48000)) == 1.0
+
+
+# ------------------------------------------------------------------ Cloud TTS backend + pitch
+def _wav(pcm: bytes, rate: int = 24000) -> bytes:
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+def _fake_cloud(monkeypatch, status=200, audio=None):
+    import base64
+
+    import google.auth
+    import httpx
+
+    creds = SimpleNamespace(token="tok", refresh=lambda req: None)
+    monkeypatch.setattr(google.auth, "default", lambda scopes=None: (creds, "p"))
+    sent = {}
+
+    def post(url, json=None, headers=None, timeout=None):
+        sent.update(url=url, json=json, headers=headers)
+        body = {"audioContent": base64.b64encode(audio).decode()} if audio is not None else {}
+        return SimpleNamespace(status_code=status, json=lambda: body)
+
+    monkeypatch.setattr(httpx, "post", post)
+    return sent
+
+
+def test_cloud_tts_returns_raw_pcm_and_uses_the_chirp_voice(monkeypatch):
+    import salid.speech as sp
+
+    sent = _fake_cloud(monkeypatch, audio=_wav(PCM))
+    assert sp.synthesize_cloud("proj", "Leda", "สวัสดี", "th", 1.1) == PCM
+    assert sent["json"]["voice"] == {"languageCode": "th-TH", "name": "th-TH-Chirp3-HD-Leda"}
+    assert sent["json"]["audioConfig"]["sampleRateHertz"] == 24000
+    assert sent["headers"]["x-goog-user-project"] == "proj"
+    sent_en = _fake_cloud(monkeypatch, audio=_wav(PCM))
+    sp.synthesize_cloud("proj", "Leda", "hi", "en")
+    assert sent_en["json"]["voice"] == {"languageCode": "en-US", "name": "en-US-Chirp3-HD-Leda"}
+
+
+def test_cloud_tts_errors_raise(monkeypatch):
+    import salid.speech as sp
+
+    _fake_cloud(monkeypatch, status=403, audio=b"")
+    with pytest.raises(RuntimeError, match="403"):
+        sp.synthesize_cloud("p", "Leda", "x")
+    _fake_cloud(monkeypatch, audio=_wav(PCM, rate=16000))
+    with pytest.raises(RuntimeError, match="format"):
+        sp.synthesize_cloud("p", "Leda", "x")
+
+
+def test_say_falls_back_to_gemini_tts(monkeypatch):
+    import salid.speech as sp
+
+    def boom(*a, **k):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(sp, "synthesize_cloud", boom)
+    monkeypatch.setattr(sp, "synthesize", lambda c, m, v, t: b"gemini")
+    st = SimpleNamespace(
+        tts_backend="cloud", gcp_project="p", cloud_tts_voice="Leda", tts_speaking_rate=1.0,
+        tts_model="gemini-2.5-flash-tts", tts_voice="Leda",
+    )  # fmt: skip
+    assert sp.say(st, None, "x") == b"gemini"
+    st.tts_backend = "gemini"
+    assert sp.say(st, None, "x") == b"gemini"
+
+
+def test_pcm_source_pitch_filter(monkeypatch):
+    import salid.speech as sp
+
+    seen = []
+    monkeypatch.setattr(sp.discord, "FFmpegPCMAudio", lambda src, **kw: seen.append(kw) or "src")
+    sp.pcm_source(PCM)
+    sp.pcm_source(PCM, pitch=1.06)
+    assert seen[0]["options"] is None
+    assert "asetrate=25440" in seen[1]["options"] and "atempo=0.9434" in seen[1]["options"]

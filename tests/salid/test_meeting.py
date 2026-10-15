@@ -500,8 +500,10 @@ def voice(env, monkeypatch):
     monkeypatch.setattr(
         mt, "spoken_text", lambda c, m, q, a: calls.append(("spoken", m, q, a)) or "พูดสั้น ๆ"
     )
-    monkeypatch.setattr(mt, "synthesize", lambda c, m, v, t: calls.append(("tts", m, v, t)) or PCM)
-    monkeypatch.setattr(mt, "pcm_source", lambda pcm: ("source", len(pcm)))
+    monkeypatch.setattr(
+        mt, "say", lambda st, c, t, lang="th": calls.append(("tts", lang, t)) or PCM
+    )
+    monkeypatch.setattr(mt, "pcm_source", lambda pcm, pitch=1.0: ("source", len(pcm)))
     env.calls = calls
     return env
 
@@ -521,7 +523,7 @@ async def test_speak_plays_and_clears_speaking_after_the_callback(voice):
             break
     assert voice.vc.played == [("source", len(PCM))] and s.speaking is True
     assert voice.calls[0] == ("spoken", "gemini-3.5-flash-lite", "คำถาม", "คำตอบเต็ม")
-    assert voice.calls[1] == ("tts", "gemini-2.5-flash-tts", "Puck", "พูดสั้น ๆ")
+    assert voice.calls[1] == ("tts", "th", "พูดสั้น ๆ")
     voice.vc.playing = False
     voice.vc.after(None)  # the player thread says it is done
     await task
@@ -529,13 +531,15 @@ async def test_speak_plays_and_clears_speaking_after_the_callback(voice):
     await voice.mgr.end(1000)
 
 
-async def test_speak_skips_when_not_connected_or_already_playing(voice):
+async def test_speak_skips_when_not_connected_or_already_playing(voice, monkeypatch):
     s = await start(voice)
     voice.vc.connected = False
     await voice.mgr.speak(s, "x")
+    assert voice.calls == []
+    # Something else still playing (not ours): the reply is dropped, never overlapped.
     voice.vc.connected, voice.vc.playing = True, True
     await voice.mgr.speak(s, "x")
-    assert voice.calls == [] and voice.vc.played == []
+    assert voice.vc.played == []
     voice.vc.playing = False
     await voice.mgr.end(1000)
 
@@ -555,7 +559,7 @@ async def test_speak_swallows_tts_errors(voice, monkeypatch):
     def boom(*a):
         raise RuntimeError("TTS returned no audio")
 
-    monkeypatch.setattr(mt, "synthesize", boom)
+    monkeypatch.setattr(mt, "say", boom)
     await voice.mgr.speak(s, "x")  # must not raise
     assert voice.vc.played == [] and s.speaking is False
     await voice.mgr.end(1000)
@@ -581,9 +585,36 @@ async def test_answer_posts_text_then_speaks(voice, monkeypatch):
         await asyncio.sleep(0.01)
         if voice.vc.played:
             break
-    assert voice.calls[0][2:] == ("เมื่อกี้ตกลงอะไรกัน", "ตกลงเลื่อนเป็นวันศุกร์ครับ")
+    # First the instant acknowledgment, then the shortened answer.
+    assert voice.calls[0] == ("tts", "th", mt.ACK_TEXT["th"])
+    assert voice.vc.played == [("source", len(PCM))]
+    voice.vc.playing = False
+    voice.vc.after(None)  # acknowledgment finished
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if len(voice.vc.played) == 2:
+            break
+    spoken = [c for c in voice.calls if c[0] == "spoken"]
+    assert spoken[0][2:] == ("เมื่อกี้ตกลงอะไรกัน", "ตกลงเลื่อนเป็นวันศุกร์ครับ")
+    assert len(voice.vc.played) == 2
     voice.vc.playing = False
     voice.vc.after(None)
+    await voice.mgr.end(1000)
+
+
+async def test_acknowledgment_audio_is_synthesized_once_per_language(voice):
+    s = await start(voice)
+    for _ in range(2):
+        task = asyncio.create_task(voice.mgr.acknowledge(s))
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if s.speaking:
+                break
+        voice.vc.playing = False
+        voice.vc.after(None)
+        await task
+    assert [c for c in voice.calls if c[0] == "tts"] == [("tts", "th", mt.ACK_TEXT["th"])]
+    assert len(voice.vc.played) == 2
     await voice.mgr.end(1000)
 
 
@@ -606,7 +637,7 @@ async def test_answer_text_still_posts_when_speech_fails(voice, monkeypatch):
     def boom(*a):
         raise RuntimeError("tts down")
 
-    monkeypatch.setattr(mt, "synthesize", boom)
+    monkeypatch.setattr(mt, "say", boom)
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปให้หน่อย")
     await voice.mgr.handle_segment(s, segment(11))
     await asyncio.sleep(0.05)
@@ -710,7 +741,7 @@ async def test_speak_cleans_ffmpeg_source_when_play_rejects_it(voice, monkeypatc
             self.cleaned = True
 
     source = Source()
-    monkeypatch.setattr(mt, "pcm_source", lambda pcm: source)
+    monkeypatch.setattr(mt, "pcm_source", lambda pcm, pitch=1.0: source)
 
     def reject(source, after=None):
         raise RuntimeError("player refused source")

@@ -43,8 +43,14 @@ class Settings(BaseSettings):
     # Spoken replies in voice meetings (see salid.speech). The TTS call reuses the bot's Vertex
     # client, so it runs in `gemini_location` (global; the Gemini TTS models work there).
     voice_reply: bool = True
+    # "cloud": Cloud Text-to-Speech Chirp 3 HD (~1.5 s). "gemini": Gemini TTS (~6 s, also the
+    # fallback when Cloud TTS fails).
+    tts_backend: str = "cloud"
+    cloud_tts_voice: str = "Leda"  # brightest Thai Chirp 3 HD voice, for the cute-cat persona
+    tts_speaking_rate: float = 1.08
+    tts_pitch: float = 1.06  # ffmpeg pitch-up factor at playback (1.0 = unchanged)
     tts_model: str = "gemini-2.5-flash-tts"
-    tts_voice: str = "Puck"  # male voice, matches the persona (ends with ครับ)
+    tts_voice: str = "Leda"
     # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
     # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
     transcribe_location: str = "asia-southeast1"

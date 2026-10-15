@@ -38,7 +38,7 @@ from meeting_scribe.audio import to_flac
 from .i18n import resolve_lang, t
 from .llm import generate
 from .naming import _WAKE_RE
-from .speech import pcm_duration_s, pcm_source, spoken_text, synthesize
+from .speech import pcm_duration_s, pcm_source, say, spoken_text
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -69,6 +69,8 @@ QUEUE_MAX = 60
 TICK_S = 0.5
 SPEAK_COOLDOWN_S = 1.5  # after Salid speaks, ignore wake words this long (room echo)
 SPEAK_TIMEOUT_PAD_S = 10.0
+# Said right after the wake question is heard, so the room knows Salid is on it (pre-synthesized).
+ACK_TEXT = {"th": "เมี้ยว~ แป๊บนึงน้า", "en": "Meow~ one sec!"}
 
 END_REASONS = ("command", "empty", "timeout", "disconnected", "shutdown")
 
@@ -439,6 +441,10 @@ class MeetingSession:
     dropped: int = 0
     speech_pending: bool = False  # one shorten/TTS/playback pipeline at a time
     speaking: bool = False  # Salid is playing a spoken reply
+    speech_ready: bool = (
+        False  # the answer's audio is synthesized: a late acknowledgment is pointless
+    )
+    play_lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # one clip at a time, in order
     speaking_since: float = 0.0
     speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
     language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
@@ -476,6 +482,7 @@ class MeetingManager:
         self.sessions: dict[int, MeetingSession] = {}
         self._joining: set[int] = set()  # guilds with a join in flight
         self._stt_client: Any = None
+        self._ack_pcm: dict[str, bytes] = {}
 
     @property
     def stt_client(self) -> Any:
@@ -637,6 +644,9 @@ class MeetingManager:
                 await self._post(s, f"{member.mention} {t('meet_wake_empty', s.lang)}")
             return
         s.pending_wake.pop(seg.user_id, None)
+        if self.bot.s.voice_reply and member is not None:
+            s.tasks = [t for t in s.tasks if not t.done()]
+            s.tasks.append(asyncio.create_task(self.acknowledge(s)))
         await self.answer(s, member, name, question)
 
     @staticmethod
@@ -676,34 +686,56 @@ class MeetingManager:
             s.tasks = [t for t in s.tasks if not t.done()]
             s.tasks.append(asyncio.create_task(self.speak(s, ans.text, question)))
 
+    async def acknowledge(self, s: MeetingSession) -> None:
+        """Play a short cached "one sec" right away, while the answer is being worked out."""
+        if not self.bot.s.voice_reply or s.ending or s.speaking:
+            return
+        lang = s.lang if s.lang in ACK_TEXT else "th"
+        try:
+            pcm = self._ack_pcm.get(lang)
+            if pcm is None:
+                pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, ACK_TEXT[lang], lang)
+                self._ack_pcm[lang] = pcm
+            if not s.speech_ready:
+                await self._play(s, pcm)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("acknowledgment failed", exc_info=True)
+
     async def speak(self, s: MeetingSession, text: str, question: str = "") -> None:
         """Say a short spoken version of `text` in the voice channel. The written answer is
         already posted, so any failure here is logged and swallowed."""
         bot = self.bot
-        vc = s.vc
-        if (
-            not bot.s.voice_reply
-            or s.ending
-            or s.speech_pending
-            or s.speaking
-            or not _connected(vc)
-            or vc.is_playing()
-        ):
+        if not bot.s.voice_reply or s.ending or s.speech_pending or not _connected(s.vc):
             return
         # Claim the pipeline before its first await. Two transcription workers can answer at once;
         # only one should pay for shortening and TTS when Discord can play only one source.
         s.speech_pending = True
-        source: discord.AudioSource | None = None
-        source_owned_by_player = False
         try:
             # The cheap model: ~1-2 s versus ~8 s for the thinking model, and it is plenty here.
             spoken = await asyncio.to_thread(spoken_text, bot.llm, bot.s.gate_model, question, text)
             if not spoken:
                 return
-            pcm = await asyncio.to_thread(
-                synthesize, bot.llm, bot.s.tts_model, bot.s.tts_voice, spoken
-            )
-            if not bot.s.voice_reply or s.ending or not _connected(vc) or vc.is_playing():
+            pcm = await asyncio.to_thread(say, bot.s, bot.llm, spoken, s.lang)
+            s.speech_ready = True
+            if not bot.s.voice_reply or s.ending:
+                return
+            await self._play(s, pcm)  # waits for a playing acknowledgment instead of cutting it off
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("spoken reply failed", exc_info=True)
+        finally:
+            s.speech_pending = False
+            s.speech_ready = False
+
+    async def _play(self, s: MeetingSession, pcm: bytes) -> None:
+        """Play PCM (24 kHz mono) and wait until it ends; clips queue on `play_lock` so they never
+        overlap or reorder. Sets the echo-guard flags."""
+        async with s.play_lock:
+            vc = s.vc
+            if s.ending or not self.bot.s.voice_reply or not _connected(vc) or vc.is_playing():
                 return
             loop = asyncio.get_running_loop()
             done: asyncio.Future = loop.create_future()
@@ -716,27 +748,24 @@ class MeetingManager:
                 with contextlib.suppress(RuntimeError):  # loop already closed
                     loop.call_soon_threadsafe(resolve)
 
-            source = pcm_source(pcm)
+            source: discord.AudioSource = pcm_source(pcm, getattr(self.bot.s, "tts_pitch", 1.0))
+            owned = False
             s.speaking, s.speaking_since = True, time.monotonic()
             try:
                 vc.play(source, after=finished)
-                source_owned_by_player = True
+                owned = True
                 err = await asyncio.wait_for(done, pcm_duration_s(pcm) + SPEAK_TIMEOUT_PAD_S)
                 if err:
                     logger.warning("spoken reply playback error: %s", err)
+            except TimeoutError:
+                logger.warning("spoken reply playback timed out")
             finally:
                 s.speaking = False
                 s.speaking_until = time.monotonic() + SPEAK_COOLDOWN_S
                 _stop_playback(vc)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.warning("spoken reply failed", exc_info=True)
-        finally:
-            s.speech_pending = False
-            if source is not None and not source_owned_by_player:
-                with contextlib.suppress(Exception):
-                    source.cleanup()
+                if not owned:
+                    with contextlib.suppress(Exception):
+                        source.cleanup()
 
     # ---- ending
     async def end(self, guild_id: int, reason: str = "command") -> None:
