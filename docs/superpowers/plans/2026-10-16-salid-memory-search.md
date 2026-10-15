@@ -72,8 +72,10 @@ In `conftest.py`, `ScriptedLlm.generate_content_async` yields `LlmResponse(conte
 ```python
 def usage(resp, prompt=0, cached=0, out=0, thought=0):
     resp.usage_metadata = types.GenerateContentResponseUsageMetadata(
-        prompt_token_count=prompt, cached_content_token_count=cached,
-        candidates_token_count=out, thoughts_token_count=thought,
+        prompt_token_count=prompt,
+        cached_content_token_count=cached,
+        candidates_token_count=out,
+        thoughts_token_count=thought,
     )
     return resp
 ```
@@ -85,17 +87,38 @@ def usage(resp, prompt=0, cached=0, out=0, thought=0):
 ```python
 def test_answer_reports_tokens_and_tool_time(settings, seeded):
     llm = scripted(
-        usage(fc_resp(("spending_summary", {"start_date": "2026-10-01", "end_date": "2026-10-14"})),
-              prompt=100, cached=40, out=10, thought=5),
+        usage(
+            fc_resp(("spending_summary", {"start_date": "2026-10-01", "end_date": "2026-10-14"})),
+            prompt=100,
+            cached=40,
+            out=10,
+            thought=5,
+        ),
         usage(text_resp("ยอด ฿10,370.50"), prompt=120, cached=60, out=20),
     )
-    a = ask(settings, seeded, "เดือนนี้เท่าไร", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
-    assert (a.model_calls, a.tokens_in, a.tokens_cached, a.tokens_out, a.tokens_thought) == (2, 220, 100, 30, 5)
+    a = ask(
+        settings, seeded, "เดือนนี้เท่าไร", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm
+    )
+    assert (a.model_calls, a.tokens_in, a.tokens_cached, a.tokens_out, a.tokens_thought) == (
+        2,
+        220,
+        100,
+        30,
+        5,
+    )
     assert set(a.tool_ms) == {"spending_summary"} and a.tool_ms["spending_summary"] >= 0
 
 
 def test_answer_without_usage_metadata_reports_zero_tokens(settings, seeded):
-    a = ask(settings, seeded, "hi", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=scripted(text_resp("hi")))
+    a = ask(
+        settings,
+        seeded,
+        "hi",
+        guild_id=GUILD,
+        is_exec=True,
+        user_id=EXEC_ID,
+        model=scripted(text_resp("hi")),
+    )
     assert (a.model_calls, a.tokens_in, a.tool_ms) == (1, 0, {})
 ```
 
@@ -108,7 +131,15 @@ async def test_answer_logs_one_metrics_line_without_content(bot, world, monkeypa
     with caplog.at_level("INFO", logger="salid.bot"):
         await bot._answer(m, world.g, m.author)
     line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("answer "))
-    for key in ("guild=", "channel=", "ms_total=", "ms_context=", "ms_agent=", "tok_in=0", "tok_cached=0"):
+    for key in (
+        "guild=",
+        "channel=",
+        "ms_total=",
+        "ms_context=",
+        "ms_agent=",
+        "tok_in=0",
+        "tok_cached=0",
+    ):
         assert key in line
     assert "ลับมาก" not in line and "ยอด" not in line
 ```
@@ -162,7 +193,7 @@ def test_prompt_prefix_is_identical_across_times_and_askers(settings, lang):
     assert a.startswith(stable) and b.startswith(stable)
     assert stable.endswith(MEMORY_PROMPT) and CAPABILITIES_PROMPT in stable
     assert "2026-10-14" not in stable and a.index("2026-10-14") > len(stable)
-    assert "ผู้ถามไม่ใช่ผู้บริหาร" in b[len(stable):] and NO_REPLY in b[len(stable):]
+    assert "ผู้ถามไม่ใช่ผู้บริหาร" in b[len(stable) :] and NO_REPLY in b[len(stable) :]
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -209,7 +240,10 @@ async def test_wake_word_answers_get_memory_scoped_to_the_voice_channel(env, mon
 
     monkeypatch.setattr(env.bot, "_memory_tools_for", tools_for)
     import salid.qa
-    monkeypatch.setattr(salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok"))
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด เมื่อวานตกลงงบไว้เท่าไร")
     await env.mgr.handle_segment(s, segment(11))
     assert scoped == [(1000, 11, env.chan.id)] and asked["memory"] == "MEMORY"
@@ -221,7 +255,10 @@ async def test_wake_word_without_the_memory_feature_passes_no_memory(env, monkey
     s = await start(env)
     asked = {}
     import salid.qa
-    monkeypatch.setattr(salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok"))
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปเมื่อวานหน่อย")
     await env.mgr.handle_segment(s, segment(11))
     assert asked["memory"] is None
@@ -452,18 +489,32 @@ class FakeEmbedder:
         if self.fail:
             raise RuntimeError("embedding down")
         low = [t.casefold() for t in texts]
-        return [normalize([float(any(w in t for w in ws)) for ws in CONCEPTS.values()] + [0.3])
-                for t in low]
+        return [
+            normalize([float(any(w in t for w in ws)) for ws in CONCEPTS.values()] + [0.3])
+            for t in low
+        ]
 ```
 
 - [ ] **Step 2: Write the failing tests** (`tests/salid/test_memory.py`, new section "vectors")
 
 ```python
 def test_summary_items_lists_every_part():
-    s = {"overview": "o", "topics": [{"title": "t", "details": "d", "people": ["แอน"]}],
-         "decisions": ["x"], "action_items": [{"who": "บอย", "what": "w", "due": ""}],
-         "numbers": ["5"], "open_questions": ["q"]}
-    assert summary_items(s) == ["o", "Topic: t d แอน", "Decision: x", "Action: บอย w", "Number: 5", "Open: q"]
+    s = {
+        "overview": "o",
+        "topics": [{"title": "t", "details": "d", "people": ["แอน"]}],
+        "decisions": ["x"],
+        "action_items": [{"who": "บอย", "what": "w", "due": ""}],
+        "numbers": ["5"],
+        "open_questions": ["q"],
+    }
+    assert summary_items(s) == [
+        "o",
+        "Topic: t d แอน",
+        "Decision: x",
+        "Action: บอย w",
+        "Number: 5",
+        "Open: q",
+    ]
 
 
 def test_update_writes_vectors_and_reuses_unchanged_items(mstore, settings):
@@ -496,8 +547,16 @@ def test_summary_is_saved_when_embedding_fails(mstore, settings):
 
 def test_backfill_vectorises_old_summaries_newest_first_with_a_cap(mstore, settings):
     for d in range(1, 13):
-        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
-                                      final=True, message_count=3, summary={"overview": f"day {d}"}))
+        mstore.put_summary(
+            DaySummary(
+                guild_id=GUILD,
+                channel_id=10,
+                local_date=f"2026-10-{d:02d}",
+                final=True,
+                message_count=3,
+                summary={"overview": f"day {d}"},
+            )
+        )
     emb = FakeEmbedder()
     s = sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb)
     s.tick([GUILD])
@@ -511,9 +570,18 @@ def test_backfill_vectorises_old_summaries_newest_first_with_a_cap(mstore, setti
 
 def test_backfill_redoes_vectors_of_another_model(mstore, settings):
     old = vectorize({"overview": "งบโฆษณา"}, None, FakeEmbedder())
-    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01", final=True,
-                                  summary={"overview": "งบโฆษณา"}, vec_model="other@8",
-                                  vec_hashes=old.hashes, vecs=old.data))
+    mstore.put_summary(
+        DaySummary(
+            guild_id=GUILD,
+            channel_id=10,
+            local_date="2026-10-01",
+            final=True,
+            summary={"overview": "งบโฆษณา"},
+            vec_model="other@8",
+            vec_hashes=old.hashes,
+            vecs=old.data,
+        )
+    )
     emb = FakeEmbedder()
     sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb).tick([GUILD])
     assert mstore.get_summary(GUILD, 10, "2026-10-01").vec_model == "fake@4"
@@ -525,22 +593,39 @@ def test_empty_summary_counts_as_vectorised():
 
 
 def test_put_summary_vectors_and_all_summaries_parity(mstore):
-    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01", summary={"overview": "a"}, message_count=4))
-    mstore.put_summary(DaySummary(guild_id=GUILD + 1, channel_id=10, local_date="2026-10-01", summary={}))
+    mstore.put_summary(
+        DaySummary(
+            guild_id=GUILD,
+            channel_id=10,
+            local_date="2026-10-01",
+            summary={"overview": "a"},
+            message_count=4,
+        )
+    )
+    mstore.put_summary(
+        DaySummary(guild_id=GUILD + 1, channel_id=10, local_date="2026-10-01", summary={})
+    )
     assert mstore.put_summary_vectors(GUILD, 10, "2026-10-01", "fake@4", ["h"], b"\0" * 16)
     assert not mstore.put_summary_vectors(GUILD, 99, "2026-10-01", "fake@4", ["h"], b"")
     got = mstore.all_summaries(GUILD)
-    assert [(x.channel_id, x.vec_model, x.vecs, x.message_count) for x in got] == [(10, "fake@4", b"\0" * 16, 4)]
+    assert [(x.channel_id, x.vec_model, x.vecs, x.message_count) for x in got] == [
+        (10, "fake@4", b"\0" * 16, 4)
+    ]
 
 
 def test_old_sqlite_summary_table_gets_vector_columns(tmp_path):
     import sqlite3
+
     path = str(tmp_path / "old.db")
     with sqlite3.connect(path) as c:
-        c.execute("CREATE TABLE salid_day_summaries (guild_id INTEGER, channel_id INTEGER, local_date TEXT, "
-                  "summary TEXT, last_message_at TEXT, last_message_id INTEGER DEFAULT 0, message_count INTEGER DEFAULT 0, "
-                  "updated_at TEXT, final INTEGER DEFAULT 0, dirty INTEGER DEFAULT 0, PRIMARY KEY (guild_id, channel_id, local_date))")
-        c.execute("INSERT INTO salid_day_summaries (guild_id, channel_id, local_date, summary) VALUES (1000, 10, '2026-10-01', '{}')")
+        c.execute(
+            "CREATE TABLE salid_day_summaries (guild_id INTEGER, channel_id INTEGER, local_date TEXT, "
+            "summary TEXT, last_message_at TEXT, last_message_id INTEGER DEFAULT 0, message_count INTEGER DEFAULT 0, "
+            "updated_at TEXT, final INTEGER DEFAULT 0, dirty INTEGER DEFAULT 0, PRIMARY KEY (guild_id, channel_id, local_date))"
+        )
+        c.execute(
+            "INSERT INTO salid_day_summaries (guild_id, channel_id, local_date, summary) VALUES (1000, 10, '2026-10-01', '{}')"
+        )
     st = SQLiteMemoryStore(path)
     assert st.get_summary(GUILD, 10, "2026-10-01").vec_model == ""
     assert st.put_summary_vectors(GUILD, 10, "2026-10-01", "fake@4", ["h"], b"\1" * 16)
@@ -595,8 +680,14 @@ git commit -m "Salid: embed day-summary items at write time, reuse unchanged vec
 
 ```python
 def summ(day, cid=10, gid=GUILD, text="งบโฆษณา"):
-    return DaySummary(guild_id=gid, channel_id=cid, local_date=day, message_count=3, final=True,
-                      summary={"overview": text})
+    return DaySummary(
+        guild_id=gid,
+        channel_id=cid,
+        local_date=day,
+        message_count=3,
+        final=True,
+        summary={"overview": text},
+    )
 
 
 def wrapped(max_bytes=INDEX_MAX_BYTES):
@@ -658,7 +749,11 @@ def test_summaries_match_the_base_store():
     base, st = wrapped()
     for d, cid in (("2026-10-01", 10), ("2026-10-02", 11), ("2026-10-03", 10)):
         base.put_summary(summ(d, cid))
-    for allowed, a, b in (({10}, "2026-10-01", "2026-10-03"), ({10, 11}, "2026-10-02", "2026-10-02"), (set(), "2026-10-01", "2026-10-03")):
+    for allowed, a, b in (
+        ({10}, "2026-10-01", "2026-10-03"),
+        ({10, 11}, "2026-10-02", "2026-10-02"),
+        (set(), "2026-10-01", "2026-10-03"),
+    ):
         assert st.summaries(GUILD, allowed, a, b) == base.summaries(GUILD, allowed, a, b)
 
 
@@ -689,14 +784,31 @@ def topic_day(st, day, cid, title, details=""):
     """A final day summary with one topic, vectorised with the fake embedder."""
     summary = {"overview": "", "topics": [{"title": title, "details": details, "people": []}]}
     v = vectorize(summary, None, FakeEmbedder())
-    st.put_summary(DaySummary(guild_id=GUILD, channel_id=cid, local_date=day, message_count=3, final=True,
-                              summary=summary, vec_model=v.model_id, vec_hashes=v.hashes, vecs=v.data))
+    st.put_summary(
+        DaySummary(
+            guild_id=GUILD,
+            channel_id=cid,
+            local_date=day,
+            message_count=3,
+            final=True,
+            summary=summary,
+            vec_model=v.model_id,
+            vec_hashes=v.hashes,
+            vecs=v.data,
+        )
+    )
 
 
 def hybrid_tools(mstore, settings, allowed=None, emb=None):
     st = IndexedMemoryStore(mstore, emb or FakeEmbedder())
-    return st, MemoryTools(st, GUILD, allowed or {10: "general", 12: "ads"}, settings,
-                           retention_days=30, embedder=emb or FakeEmbedder())
+    return st, MemoryTools(
+        st,
+        GUILD,
+        allowed or {10: "general", 12: "ads"},
+        settings,
+        retention_days=30,
+        embedder=emb or FakeEmbedder(),
+    )
 
 
 def test_english_query_finds_a_thai_only_day(mstore, settings):
@@ -704,7 +816,9 @@ def test_english_query_finds_a_thai_only_day(mstore, settings):
     topic_day(st, "2026-10-05", 12, "งบโฆษณา", "ค่าโฆษณาเฟซบุ๊ก 20,000")
     topic_day(st, "2026-10-06", 10, "ซื้อน้ำแข็ง")
     r = tools.chat_search(["marketing budget"], query="what is our marketing budget?")
-    assert [(h["date"], h["channel"], h["match"]) for h in r["hits"]] == [("2026-10-05", "ads", "meaning")]
+    assert [(h["date"], h["channel"], h["match"]) for h in r["hits"]] == [
+        ("2026-10-05", "ads", "meaning")
+    ]
     assert "งบโฆษณา" in r["hits"][0]["summary_hits"][0]
 
 
@@ -717,10 +831,13 @@ def test_thai_query_finds_an_english_only_day(mstore, settings):
 def test_keyword_and_meaning_together_rank_first(mstore, settings):
     st, tools = hybrid_tools(mstore, settings)
     topic_day(st, "2026-10-03", 10, "Q4 ads plan")  # keyword "ads" and meaning
-    topic_day(st, "2026-10-04", 10, "โฆษณา")        # meaning only (newer, so it wins the meaning tie)
+    topic_day(st, "2026-10-04", 10, "โฆษณา")  # meaning only (newer, so it wins the meaning tie)
     r = tools.chat_search(["ads"], query="ads")
     # RRF: 10-03 = 1/61 + 1/62 beats 10-04 = 1/61
-    assert [(h["date"], h["match"]) for h in r["hits"]] == [("2026-10-03", "both"), ("2026-10-04", "meaning")]
+    assert [(h["date"], h["match"]) for h in r["hits"]] == [
+        ("2026-10-03", "both"),
+        ("2026-10-04", "meaning"),
+    ]
 
 
 def test_embedding_failure_falls_back_to_keywords(mstore, settings):
@@ -765,11 +882,21 @@ def test_chat_search_query_budget_on_firestore(settings):
     for n in range(90):
         day = (start - timedelta(days=n)).isoformat()
         for cid in (10, 11):
-            base.put_summary(DaySummary(guild_id=GUILD, channel_id=cid, local_date=day, message_count=2,
-                                        final=n > 1, summary={"overview": "ads" if n % 7 == 0 else "x"}))
+            base.put_summary(
+                DaySummary(
+                    guild_id=GUILD,
+                    channel_id=cid,
+                    local_date=day,
+                    message_count=2,
+                    final=n > 1,
+                    summary={"overview": "ads" if n % 7 == 0 else "x"},
+                )
+            )
             at = datetime.fromisoformat(day).replace(hour=3, tzinfo=UTC)
             for i in range(2):
-                base.add_message(mk(settings, n * 100 + cid * 2 + i, at + timedelta(minutes=i), "ads", cid=cid))
+                base.add_message(
+                    mk(settings, n * 100 + cid * 2 + i, at + timedelta(minutes=i), "ads", cid=cid)
+                )
     base.client.streams.clear()
     assert tools.chat_search(["ads"], query="ads")["hits"]
     assert len(base.client.streams) <= 10
@@ -835,9 +962,15 @@ git commit -m "Salid: hybrid keyword + meaning memory search with a bounded per-
 
 ```python
 def msg(mid, cid=10, text="t", at=None, author="a"):
-    return SimpleNamespace(id=mid, channel=SimpleNamespace(id=cid), author=author, content=text,
-                           created_at=at or datetime(2026, 10, 14, 5, 0, tzinfo=UTC),
-                           attachments=[], role_mentions=[])
+    return SimpleNamespace(
+        id=mid,
+        channel=SimpleNamespace(id=cid),
+        author=author,
+        content=text,
+        created_at=at or datetime(2026, 10, 14, 5, 0, tzinfo=UTC),
+        attachments=[],
+        role_mentions=[],
+    )
 
 
 def test_unprimed_channels_return_none_then_buffer_after_prime():

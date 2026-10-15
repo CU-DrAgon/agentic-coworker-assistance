@@ -56,13 +56,21 @@ Discord bot "สลิด" (display name Salid), **multi-tenant**: tenant key = 
 | `archive.py` | Optional GCS archive of original receipts (`SALID_RECEIPT_BUCKET`, objects `salid-receipts/{guild_id}/{sha256}.ext`), best effort |
 | `llm.py` | Vertex Gemini client + retry on transient errors |
 | `extract.py` | Receipt extraction, dedupe, ingest, corrections |
-| `qa.py` | Expense Q&A as a Google ADK `LlmAgent` + `InMemoryRunner`; `build_tools(LedgerTools)` makes per-request FunctionTools bound to the guild (`guild_id`) and the caller (`forced_submitter_id`), neither is in a tool schema, `ask`/`ask_async` return `Answer`; max 4 tool rounds |
+| `qa.py` | Expense Q&A as a Google ADK `LlmAgent` + `InMemoryRunner`; `build_tools(LedgerTools)` makes per-request FunctionTools bound to the guild (`guild_id`) and the caller (`forced_submitter_id`), neither is in a tool schema, `ask`/`ask_async` return `Answer` (with token counts and per-tool ms); max 4 tool rounds. `MemoryTools`: `chat_days`, `chat_messages`, hybrid `chat_search` (keyword + meaning, RRF). System prompt = `stable_prompt` (cacheable) + `volatile_prompt` |
 | `deep_task.py` | Executive "งานใหญ่:" / `/deep` tasks: guild- and caller-scoped CSV export + TASK.md in a temp dir, Gemini CLI headless with isolated HOME and a pinned model, collects `report.md`, always deletes the temp dir |
 | `digest.py` | Daily digest text (`lang`) |
 | `i18n.py` | Reply language: `resolve_lang` (auto = Thai chars -> th, else en), `resolve_language` (channel override -> guild default), `parse_language_command`, the `CATALOG` of fixed strings and `t()` |
 | `guild_settings.py` | Firestore `salid_guilds/{guild_id}` (features, receipt/ask/digest channels, `channel_modes`, `default_mode`, `channel_languages`, `default_language`, digest time, `exec_role_names`, `admin_emails`, bot-synced name/icon/`channels`/`installed_at`/`active`) and one-time `salid_link_codes/{code}`; `GuildStore`, in-memory `MemoryGuildStore` (local dev, tests), `BotGuildSettings` (60 s cache per guild, fail-open) |
 | `bot.py` / `__main__.py` | Discord client / `python -m salid`. Join/remove/channel events sync the guild doc; intake = receipt channels, channels named `ใบเสร็จ`/`receipt`, or @mention + file; per-channel modes (`modes.py`: off/listen/call/join/chat, `/โหมด`, hub; `naming.py` name detection; `gate.py` cheap Gemini yes/no gates, fail quiet; snooze `@Salid เงียบก่อน`); executives = owner, Administrator/Manage Server, exec role names, `SALID_EXEC_USER_IDS`; per-guild digest; global slash commands `/ตั้งค่า` + `/setup` (ephemeral hub link) |
 | `meeting.py` | Voice meetings: `/เข้าประชุม` `/ออกประชุม` (+ "@Salid เข้าประชุม"). `MeetingManager` (one meeting per guild), `MeetingSink` (voice-recv sink: removes DAVE layer with `dave_session.decrypt`, decodes Opus per user), `Segmenter` (silence 1.2 s / max 20 s / min 0.6 s), Gemini transcription per segment, `Transcript` (memory only, 3 h), wake word `parse_wake` -> `qa.ask` with transcript history, summary on leave. Audio/transcript never persisted. Feature flag `voice_meetings`; invite permissions 1166416 (adds Manage Channels + Connect). |
+| `memory.py` | Team memory layers 1-2: `MemoryService` (record / edit / delete), `MemoryScheduler` (batched day-summary updates, daily purge by each guild's retention, vector backfill), `vectorize` / `vectors_usable` (embeddings of summary items, unchanged items reuse their vector) |
+| `memory_store.py` / `firestore_memory.py` | `MemoryStore` protocol (every read takes `guild_id` + allowed channels), SQLite and Firestore stores for the raw log, `DaySummary` (with optional `vec_model` / `vec_hashes` / `vecs`) and import state; Firestore uses equality filters only (no composite index), per-day reads in parallel |
+| `memory_summary.py` | Cheap-model day summary (`update_summary`), `summary_items` (the searchable lines), `render_summary` |
+| `memory_access.py` | Who may read which channel's memory: asker can read it, and so can everyone reading the answer's channel |
+| `memory_import.py` / `image_memory.py` | History import (resumable, capped) and image descriptions into the log |
+| `embed.py` | `VertexEmbedder` (`SALID_EMBED_*`, retry), `NullEmbedder` (kill switch), packed float32 vectors, cosine via `math.sumprod` |
+| `memory_index.py` | `IndexedMemoryStore`: per-guild cache of summaries + vectors (64 MB LRU, one load query); every memory write goes through it, so it assumes **one bot process** |
+| `recent.py` | `RecentMessages`: last messages per channel from gateway events (short-term context), primed by one Discord read, reset on reconnect; also assumes one bot process |
 | `cli.py` | `python -m salid.cli extract|ask|deep|digest` for offline testing |
 | `scripts/salid_seed_demo.py` | Seed a demo SQLite ledger |
 
@@ -71,7 +79,9 @@ every store test on SQLite and Firestore); `tests/salid/test_salid_live.py` is m
 Vertex, real Firestore (throwaway `salid_receipts_test_<random>` collection, deleted afterwards) and GCS
 (`salid-receipts/test-<random>/`).
 
-Salid env vars beyond the basics: `SALID_STORE`, `SALID_FIRESTORE_COLLECTION`, `SALID_RECEIPT_BUCKET`
+Salid env vars beyond the basics: `SALID_EMBED_MODEL` (`gemini-embedding-001`; empty = keyword-only memory
+search), `SALID_EMBED_DIM` (256), `SALID_EMBED_LOCATION` (empty = `SALID_GEMINI_LOCATION`), `SALID_MEMORY_*`,
+`SALID_STORE`, `SALID_FIRESTORE_COLLECTION`, `SALID_RECEIPT_BUCKET`
 (empty = no archive), `SALID_GEMINI_CLI_PATH` (empty = deep tasks disabled), `SALID_DEEP_TASK_TIMEOUT`
 (600), `SALID_DEEP_TASK_MODEL` (`gemini-3-flash-preview`), `SALID_GUILD_COLLECTION` (`salid_guilds`),
 `SALID_HUB_URL` (Cloud Run URL; target of `/ตั้งค่า` links). Hub (web service) env: `HUB_GOOGLE_CLIENT_ID`
