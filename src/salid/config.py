@@ -40,6 +40,27 @@ class Settings(BaseSettings):
     # Cheap model for the "is this addressed to Salid?" yes/no gates (see salid.gate).
     gate_model: str = "gemini-3.5-flash-lite"
     low_confidence: float = 0.7
+    # Spoken replies in voice meetings (see salid.speech). The TTS call reuses the bot's Vertex
+    # client, so it runs in `gemini_location` (global; the Gemini TTS models work there).
+    voice_reply: bool = True
+    # "cloud": Cloud Text-to-Speech Chirp 3 HD (~1.5 s). "gemini": Gemini TTS (~6 s, also the
+    # fallback when Cloud TTS fails).
+    tts_backend: str = "cloud"
+    cloud_tts_voice: str = "Leda"  # brightest Thai Chirp 3 HD voice, for the cute-cat persona
+    tts_speaking_rate: float = 1.08
+    tts_pitch: float = 1.06  # ffmpeg pitch-up factor at playback (1.0 = unchanged)
+    tts_model: str = "gemini-2.5-flash-tts"
+    tts_voice: str = "Leda"
+    # How Salid talks in a voice meeting (needs voice_reply). "live": a Gemini Live native-audio
+    # session hears the room and answers ~1.5 s after someone stops talking (see salid.live_voice).
+    # "classic": wake word -> transcription -> text answer -> spoken rewrite -> TTS (~11 s).
+    voice_mode: str = "live"  # live | classic
+    live_model: str = "gemini-live-2.5-flash-native-audio"
+    live_location: str = "us-central1"
+    live_voice: str = "Leda"
+    # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
+    # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
+    transcribe_location: str = "asia-southeast1"
     # Organisational memory (salid.memory): raw chat log + per-channel day summaries.
     memory_retention_days: int = 90
     memory_update_every: int = 30  # new messages in a channel that trigger a summary update

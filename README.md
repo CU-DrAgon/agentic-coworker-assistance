@@ -272,6 +272,26 @@ draft, and the action runs only when the same call arrives again in a *later* me
   `SALID_GMAIL_CLIENT_ID`, `SALID_GMAIL_CLIENT_SECRET` and `SALID_GMAIL_SENDER` (the account's address). All four must
   be set, otherwise sending stays in log-only mode.
 
+**Spoken replies.** When called by name in a voice meeting, Salid also says a 1-2 sentence version of
+the answer out loud (Gemini TTS `SALID_TTS_MODEL`, default `gemini-2.5-flash-tts`, voice `SALID_TTS_VOICE`,
+default `Puck`); the full answer still goes to the chat. While Salid is speaking and for 1.5 s after,
+wake words are ignored so its own voice coming back through someone's speakers cannot re-trigger it.
+Turn it off with `SALID_VOICE_REPLY=false`.
+
+**Live voice mode (`SALID_VOICE_MODE=live`, the default).** Instead of the wake-word pipeline, a Gemini Live
+native-audio session (`SALID_LIVE_MODEL`, `SALID_LIVE_LOCATION=us-central1`, voice `SALID_LIVE_VOICE`) hears the
+whole voice channel and answers about 1.5 s after someone stops talking, like a voice assistant. Everyone's audio is
+mixed into one 16 kHz stream (`src/salid/live_voice.py`); with proactive audio on, Salid stays silent unless it is
+addressed by name or clearly asked something, and anyone can talk over it (barge-in stops it at once). The session is
+opened when Salid joins, resumes after the server's periodic disconnects, and what Salid says is also posted to the
+channel's text chat as `🔊 ...`. Money questions use the same ledger tools as the text Q&A, but because the mixed
+stream does not say who is speaking they only work when **everyone in the voice channel is an executive**; otherwise
+Salid says to ask in the text chat. The per-speaker transcription keeps running for the transcript and summary but no
+longer answers wake words in this mode. If the Live session cannot connect (4 tries), that meeting falls back to the
+classic wake-word mode. `SALID_VOICE_MODE=classic` restores the old behaviour; `SALID_VOICE_REPLY=false` turns off
+speech in both modes. Audio is streamed to Vertex AI for the duration of the meeting (never stored by Salid), and a Live
+session is billed by audio time while people are talking.
+
 **Team memory (องค์ความรู้).** Salid remembers what is said in the channels whose mode is not `off`, so it can
 answer "what did we discuss yesterday?", "where is customer X's job?" or "who owns the ad budget?" without
 spending many tokens and without leaking channels. Three layers (code in `src/salid/memory*.py`):

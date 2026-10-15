@@ -26,6 +26,7 @@ from array import array
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import discord
@@ -39,6 +40,7 @@ from .i18n import resolve_lang, t
 from .llm import generate
 from .naming import _WAKE_RE
 from .permissions import channel_missing, permission_message
+from .speech import pcm_duration_s, pcm_source, say, spoken_text
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -67,6 +69,10 @@ PENDING_WAKE_S = 15.0
 TRANSCRIBE_WORKERS = 2
 QUEUE_MAX = 60
 TICK_S = 0.5
+SPEAK_COOLDOWN_S = 1.5  # after Salid speaks, ignore wake words this long (room echo)
+SPEAK_TIMEOUT_PAD_S = 10.0
+# Said right after the wake question is heard, so the room knows Salid is on it (pre-synthesized).
+ACK_TEXT = {"th": "ได้เลย แป๊บนึงนะ", "en": "Sure, one sec!"}
 
 END_REASONS = ("command", "empty", "timeout", "disconnected", "shutdown")
 
@@ -349,6 +355,19 @@ def summarize_transcript(client: Any, model: str, transcript: str, language: str
     return (getattr(resp, "text", None) or "").strip()
 
 
+def _connected(vc: Any) -> bool:
+    try:
+        return bool(vc.is_connected())
+    except Exception:
+        return False
+
+
+def _stop_playback(vc: Any) -> None:
+    with contextlib.suppress(Exception):
+        if vc.is_playing():
+            vc.stop()
+
+
 # ------------------------------------------------------------------ voice receive sink
 class MeetingSink(voice_recv.AudioSink):
     """Runs in the extension's router thread. Asks for raw Opus (the extension then never decodes),
@@ -400,7 +419,10 @@ class MeetingSink(voice_recv.AudioSink):
         except Exception:
             logger.debug("opus decode failed for %s", user.id, exc_info=True)
             return
-        self.session.push_threadsafe(user.id, pcm)
+        if getattr(user, "bot", False):
+            self.session.push_threadsafe(user.id, pcm, is_bot=True)
+        else:
+            self.session.push_threadsafe(user.id, pcm)
 
 
 # ------------------------------------------------------------------ meeting session
@@ -422,6 +444,14 @@ class MeetingSession:
     empty_since: float | None = None
     ending: bool = False
     dropped: int = 0
+    speech_pending: bool = False  # one shorten/TTS/playback pipeline at a time
+    speaking: bool = False  # Salid is playing a spoken reply
+    speech_ready: bool = (
+        False  # the answer's audio is synthesized: a late acknowledgment is pointless
+    )
+    play_lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # one clip at a time, in order
+    speaking_since: float = 0.0
+    speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
     language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
     fallback_lang: str = "th"  # th / en: what fixed messages use when `language` is auto
     empty_grace: float = EMPTY_GRACE_S  # nobody else in the channel: end after this long
@@ -429,19 +459,25 @@ class MeetingSession:
     meeting_id: str | None = None  # the scheduled meeting this session takes notes for
     summary_text: str = ""
     summary_url: str = ""  # jump link of the first summary message
+    # "live": a Gemini Live session (live_voice.LiveVoice) talks; wake words are not answered by
+    # the transcription pipeline. Falls back to "classic" when the Live session cannot connect.
+    voice_mode: str = "classic"
+    live: Any = None
 
     @property
     def lang(self) -> str:
         """Language of fixed messages (auto has no text to follow, so the starter's language)."""
         return self.language if self.language in ("th", "en") else self.fallback_lang
 
-    def push_threadsafe(self, user_id: int, pcm: bytes) -> None:
+    def push_threadsafe(self, user_id: int, pcm: bytes, *, is_bot: bool = False) -> None:
         with contextlib.suppress(RuntimeError):  # loop already closed on shutdown
-            self.loop.call_soon_threadsafe(self.on_pcm, user_id, pcm, time.monotonic())
+            self.loop.call_soon_threadsafe(self.on_pcm, user_id, pcm, time.monotonic(), is_bot)
 
-    def on_pcm(self, user_id: int, pcm: bytes, now: float) -> None:
+    def on_pcm(self, user_id: int, pcm: bytes, now: float, is_bot: bool = False) -> None:
         if not self.ending:
             self.enqueue(self.segmenter.feed(user_id, pcm, now))
+            if not is_bot and self.live is not None and self.voice_mode == "live":
+                self.live.feed(user_id, pcm)
 
     def enqueue(self, segments: list[Segment]) -> None:
         for seg in segments:
@@ -461,6 +497,20 @@ class MeetingManager:
         self.bot = bot
         self.sessions: dict[int, MeetingSession] = {}
         self._joining: set[int] = set()  # guilds with a join in flight
+        self._stt_client: Any = None
+        self._ack_pcm: dict[str, bytes] = {}
+
+    @property
+    def stt_client(self) -> Any:
+        """Vertex client for segment transcription (regional when `transcribe_location` is set)."""
+        loc = getattr(self.bot.s, "transcribe_location", "")
+        if not loc or loc == getattr(self.bot.s, "gemini_location", loc):
+            return self.bot.llm
+        if self._stt_client is None:
+            from .llm import make_client
+
+            self._stt_client = make_client(self.bot.s.model_copy(update={"gemini_location": loc}))
+        return self._stt_client
 
     # ---- helpers
     def session_for_channel(self, channel_id: int | None) -> MeetingSession | None:
@@ -543,9 +593,33 @@ class MeetingManager:
             asyncio.create_task(self._worker(session)) for _ in range(TRANSCRIBE_WORKERS)
         ]
         session.tasks.append(asyncio.create_task(self._ticker(session)))
+        self._start_live(session)
         await self._post(session, t(announce, session.lang))
         logger.info("meeting started in guild %s channel %s", guild.id, channel.id)
         return t("meet_joined", lang, channel=channel.name)
+
+    def _start_live(self, session: MeetingSession) -> None:
+        """Live voice mode: connect a Gemini Live session now (it takes ~2 s) so the first question
+        is answered fast. If it cannot connect the meeting falls back to classic wake words."""
+        s = self.bot.s
+        if not s.voice_reply or getattr(s, "voice_mode", "classic") != "live":
+            return
+        from .live_voice import LiveVoice
+
+        session.voice_mode = "live"
+        session.live = LiveVoice(
+            self.bot,
+            session,
+            post=lambda text: self._post(session, text),
+            on_failed=lambda: self._live_failed(session),
+        )
+        session.live.start()
+
+    def _live_failed(self, session: MeetingSession) -> None:
+        logger.error("live voice unavailable in guild %s: back to wake words", session.guild_id)
+        session.voice_mode = "classic"
+        if session.live is not None:
+            session.live.stop_playback()
 
     async def leave(self, member, lang: str = "th") -> str:
         session = self.sessions.get(member.guild.id)
@@ -602,13 +676,17 @@ class MeetingManager:
             member.display_name if member else t("meet_participant", s.lang, n=seg.user_id % 1000)
         )
         text = await asyncio.to_thread(
-            transcribe_pcm, self.bot.llm, self.bot.s.gemini_model, seg.pcm
+            transcribe_pcm, self.stt_client, self.bot.s.gemini_model, seg.pcm
         )
         if not text:
             return
         s.transcript.add(self.bot.s.now(), name, text)
         await self.bot.record_voice(s.voice_channel, seg.user_id, name, text, self.bot.s.now())
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
+        if s.voice_mode == "live":
+            return  # the Live session hears the room itself and answers; this is only the record
+        if self._is_echo(s, seg):
+            return  # probably Salid's own voice coming back through someone's mic
         question = parse_wake(text)
         now = time.monotonic()
         if question is None:
@@ -622,7 +700,20 @@ class MeetingManager:
                 await self._post(s, f"{member.mention} {t('meet_wake_empty', s.lang)}")
             return
         s.pending_wake.pop(seg.user_id, None)
+        if self.bot.s.voice_reply and member is not None:
+            s.tasks = [t for t in s.tasks if not t.done()]
+            s.tasks.append(asyncio.create_task(self.acknowledge(s)))
         await self.answer(s, member, name, question)
+
+    @staticmethod
+    def _is_echo(s: MeetingSession, seg: Segment) -> bool:
+        """True when the segment was (partly) spoken while Salid was talking, or just after.
+        Transcription lags the audio, so the audio's own timestamps are compared as well."""
+        if s.speaking or time.monotonic() < s.speaking_until:
+            return True
+        return bool(s.speaking_until) and (
+            seg.started + seg.duration_s >= s.speaking_since and seg.started <= s.speaking_until
+        )
 
     async def answer(self, s: MeetingSession, member, name: str, question: str) -> None:
         from .bot import chunks
@@ -633,6 +724,11 @@ class MeetingManager:
             return
         async with s.answer_lock:
             history = s.transcript.history(bot.s.now())
+            memory = None
+            guild = getattr(member, "guild", None)
+            if guild is not None:  # the asker's readable channels, as for a text question
+                where = SimpleNamespace(guild=guild, channel=s.text_channel)
+                memory = await bot._memory_tools(where, guild, member)
             ans = await asyncio.to_thread(
                 ask,
                 bot.s,
@@ -643,9 +739,96 @@ class MeetingManager:
                 user_id=member.id,
                 history=history,
                 language=s.language,
+                memory=memory,
+                **bot._web_kw(s.guild_id),
             )
             for i, part in enumerate(chunks(ans.text, 1800)):
                 await self._post(s, f"{member.mention} {part}" if i == 0 else part)
+        if bot.s.voice_reply and not s.ending and _connected(s.vc):
+            # In the background: playback takes seconds and must not hold a transcription worker.
+            s.tasks = [t for t in s.tasks if not t.done()]
+            s.tasks.append(asyncio.create_task(self.speak(s, ans.text, question)))
+
+    async def acknowledge(self, s: MeetingSession) -> None:
+        """Play a short cached "one sec" right away, while the answer is being worked out."""
+        if not self.bot.s.voice_reply or s.ending or s.speaking:
+            return
+        lang = s.lang if s.lang in ACK_TEXT else "th"
+        try:
+            pcm = self._ack_pcm.get(lang)
+            if pcm is None:
+                pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, ACK_TEXT[lang], lang)
+                self._ack_pcm[lang] = pcm
+            if not s.speech_ready:
+                await self._play(s, pcm)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("acknowledgment failed", exc_info=True)
+
+    async def speak(self, s: MeetingSession, text: str, question: str = "") -> None:
+        """Say a short spoken version of `text` in the voice channel. The written answer is
+        already posted, so any failure here is logged and swallowed."""
+        bot = self.bot
+        if not bot.s.voice_reply or s.ending or s.speech_pending or not _connected(s.vc):
+            return
+        # Claim the pipeline before its first await. Two transcription workers can answer at once;
+        # only one should pay for shortening and TTS when Discord can play only one source.
+        s.speech_pending = True
+        try:
+            # The cheap model: ~1-2 s versus ~8 s for the thinking model, and it is plenty here.
+            spoken = await asyncio.to_thread(spoken_text, bot.llm, bot.s.gate_model, question, text)
+            if not spoken:
+                return
+            pcm = await asyncio.to_thread(say, bot.s, bot.llm, spoken, s.lang)
+            s.speech_ready = True
+            if not bot.s.voice_reply or s.ending:
+                return
+            await self._play(s, pcm)  # waits for a playing acknowledgment instead of cutting it off
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("spoken reply failed", exc_info=True)
+        finally:
+            s.speech_pending = False
+            s.speech_ready = False
+
+    async def _play(self, s: MeetingSession, pcm: bytes) -> None:
+        """Play PCM (24 kHz mono) and wait until it ends; clips queue on `play_lock` so they never
+        overlap or reorder. Sets the echo-guard flags."""
+        async with s.play_lock:
+            vc = s.vc
+            if s.ending or not self.bot.s.voice_reply or not _connected(vc) or vc.is_playing():
+                return
+            loop = asyncio.get_running_loop()
+            done: asyncio.Future = loop.create_future()
+
+            def finished(err: Exception | None) -> None:  # runs on the player thread
+                def resolve() -> None:
+                    if not done.done():
+                        done.set_result(err)
+
+                with contextlib.suppress(RuntimeError):  # loop already closed
+                    loop.call_soon_threadsafe(resolve)
+
+            source: discord.AudioSource = pcm_source(pcm, getattr(self.bot.s, "tts_pitch", 1.0))
+            owned = False
+            s.speaking, s.speaking_since = True, time.monotonic()
+            try:
+                vc.play(source, after=finished)
+                owned = True
+                err = await asyncio.wait_for(done, pcm_duration_s(pcm) + SPEAK_TIMEOUT_PAD_S)
+                if err:
+                    logger.warning("spoken reply playback error: %s", err)
+            except TimeoutError:
+                logger.warning("spoken reply playback timed out")
+            finally:
+                s.speaking = False
+                s.speaking_until = time.monotonic() + SPEAK_COOLDOWN_S
+                _stop_playback(vc)
+                if not owned:
+                    with contextlib.suppress(Exception):
+                        source.cleanup()
 
     # ---- ending
     async def end(self, guild_id: int, reason: str = "command") -> None:
@@ -655,6 +838,10 @@ class MeetingManager:
         s.ending = True
         self.sessions.pop(guild_id, None)
         logger.info("meeting ending in guild %s (%s)", guild_id, reason)
+        if s.live is not None:
+            with contextlib.suppress(Exception):
+                await s.live.close()
+        _stop_playback(s.vc)
         with contextlib.suppress(Exception):
             s.vc.stop_listening()
         with contextlib.suppress(Exception):

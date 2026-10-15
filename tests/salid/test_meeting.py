@@ -2,6 +2,7 @@
 wake-word answers and the summary on leave. No Discord connection, no Vertex."""
 
 import asyncio
+import time
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -182,6 +183,20 @@ class FakeVC:
     def __init__(self):
         self.listening, self.disconnected = None, False
         self._connection = None
+        self.connected, self.playing, self.played, self.after = True, False, [], None
+
+    def is_connected(self):
+        return self.connected
+
+    def is_playing(self):
+        return self.playing
+
+    def play(self, source, after=None):
+        self.played.append(source)
+        self.playing, self.after = True, after
+
+    def stop(self):
+        self.playing = False
 
     def listen(self, sink):
         self.listening = sink
@@ -217,7 +232,12 @@ def env(monkeypatch):
     chan = FakeVoiceChannel()
     chan.guild = guild
     llm = FakeClient([])
-    bot = SecretaryBot(FixedClockSettings(exec_user_ids={5}), None, llm, guilds=MemoryGuildStore())
+    bot = SecretaryBot(
+        FixedClockSettings(exec_user_ids={5}, voice_reply=False, voice_mode="classic"),
+        None,
+        llm,
+        guilds=MemoryGuildStore(),
+    )
     monkeypatch.setattr(SecretaryBot, "user", property(lambda s: ME))
     mgr = bot.meetings
     vc = FakeVC()
@@ -469,6 +489,271 @@ def test_sink_survives_undecodable_audio():
     assert s.got == [] or len(s.got) == 1  # either dropped or decoded; never raises
 
 
+# ------------------------------------------------------------------ spoken replies
+PCM = bytes(24000 * 2)  # 1 s of 24 kHz mono silence
+
+
+@pytest.fixture
+def voice(env, monkeypatch):
+    """voice_reply on, with speech.py's Vertex/ffmpeg parts faked."""
+    env.bot.s.voice_reply = True
+    calls = []
+    monkeypatch.setattr(
+        mt, "spoken_text", lambda c, m, q, a: calls.append(("spoken", m, q, a)) or "พูดสั้น ๆ"
+    )
+    monkeypatch.setattr(
+        mt, "say", lambda st, c, t, lang="th": calls.append(("tts", lang, t)) or PCM
+    )
+    monkeypatch.setattr(mt, "pcm_source", lambda pcm, pitch=1.0: ("source", len(pcm)))
+    env.calls = calls
+    return env
+
+
+def fake_ask(monkeypatch, text="ตกลงเลื่อนเป็นวันศุกร์ครับ"):
+    import salid.qa
+
+    monkeypatch.setattr(salid.qa, "ask", lambda *a, **kw: SimpleNamespace(text=text))
+
+
+async def test_speak_plays_and_clears_speaking_after_the_callback(voice):
+    s = await start(voice)
+    task = asyncio.create_task(voice.mgr.speak(s, "คำตอบเต็ม", "คำถาม"))
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if voice.vc.played:
+            break
+    assert voice.vc.played == [("source", len(PCM))] and s.speaking is True
+    assert voice.calls[0] == ("spoken", "gemini-3.5-flash-lite", "คำถาม", "คำตอบเต็ม")
+    assert voice.calls[1] == ("tts", "th", "พูดสั้น ๆ")
+    voice.vc.playing = False
+    voice.vc.after(None)  # the player thread says it is done
+    await task
+    assert s.speaking is False and s.speaking_until > 0
+    await voice.mgr.end(1000)
+
+
+async def test_speak_skips_when_not_connected_or_already_playing(voice, monkeypatch):
+    s = await start(voice)
+    voice.vc.connected = False
+    await voice.mgr.speak(s, "x")
+    assert voice.calls == []
+    # Something else still playing (not ours): the reply is dropped, never overlapped.
+    voice.vc.connected, voice.vc.playing = True, True
+    await voice.mgr.speak(s, "x")
+    assert voice.vc.played == []
+    voice.vc.playing = False
+    await voice.mgr.end(1000)
+
+
+async def test_speak_skips_when_the_meeting_is_ending(voice):
+    s = await start(voice)
+    s.ending = True
+    await voice.mgr.speak(s, "x")
+    assert voice.calls == [] and voice.vc.played == []
+    s.ending = False
+    await voice.mgr.end(1000)
+
+
+async def test_speak_swallows_tts_errors(voice, monkeypatch):
+    s = await start(voice)
+
+    def boom(*a):
+        raise RuntimeError("TTS returned no audio")
+
+    monkeypatch.setattr(mt, "say", boom)
+    await voice.mgr.speak(s, "x")  # must not raise
+    assert voice.vc.played == [] and s.speaking is False
+    await voice.mgr.end(1000)
+
+
+async def test_speak_times_out_stops_playback_and_clears_speaking(voice, monkeypatch):
+    s = await start(voice)
+    monkeypatch.setattr(mt, "pcm_duration_s", lambda pcm: 0.05)
+    monkeypatch.setattr(mt, "SPEAK_TIMEOUT_PAD_S", 0.0)
+    await voice.mgr.speak(s, "x")  # the after-callback never fires
+    assert voice.vc.played and voice.vc.playing is False  # stopped
+    assert s.speaking is False and s.speaking_until > 0
+    await voice.mgr.end(1000)
+
+
+async def test_answer_posts_text_then_speaks(voice, monkeypatch):
+    s = await start(voice)
+    fake_ask(monkeypatch)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด เมื่อกี้ตกลงอะไรกัน")
+    await voice.mgr.handle_segment(s, segment(11))
+    assert voice.chan.sent[-1] == "<@11> ตกลงเลื่อนเป็นวันศุกร์ครับ"
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if voice.vc.played:
+            break
+    # First the instant acknowledgment, then the shortened answer.
+    assert voice.calls[0] == ("tts", "th", mt.ACK_TEXT["th"])
+    assert voice.vc.played == [("source", len(PCM))]
+    voice.vc.playing = False
+    voice.vc.after(None)  # acknowledgment finished
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if len(voice.vc.played) == 2:
+            break
+    spoken = [c for c in voice.calls if c[0] == "spoken"]
+    assert spoken[0][2:] == ("เมื่อกี้ตกลงอะไรกัน", "ตกลงเลื่อนเป็นวันศุกร์ครับ")
+    assert len(voice.vc.played) == 2
+    voice.vc.playing = False
+    voice.vc.after(None)
+    await voice.mgr.end(1000)
+
+
+async def test_acknowledgment_audio_is_synthesized_once_per_language(voice):
+    s = await start(voice)
+    for _ in range(2):
+        task = asyncio.create_task(voice.mgr.acknowledge(s))
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if s.speaking:
+                break
+        voice.vc.playing = False
+        voice.vc.after(None)
+        await task
+    assert [c for c in voice.calls if c[0] == "tts"] == [("tts", "th", mt.ACK_TEXT["th"])]
+    assert len(voice.vc.played) == 2
+    await voice.mgr.end(1000)
+
+
+async def test_answer_does_not_speak_when_voice_reply_is_off(voice, monkeypatch):
+    voice.bot.s.voice_reply = False
+    s = await start(voice)
+    fake_ask(monkeypatch)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปให้หน่อย")
+    await voice.mgr.handle_segment(s, segment(11))
+    await asyncio.sleep(0.05)
+    assert voice.calls == [] and voice.vc.played == []
+    assert voice.chan.sent[-1].endswith("ตกลงเลื่อนเป็นวันศุกร์ครับ")
+    await voice.mgr.end(1000)
+
+
+async def test_answer_text_still_posts_when_speech_fails(voice, monkeypatch):
+    s = await start(voice)
+    fake_ask(monkeypatch)
+
+    def boom(*a):
+        raise RuntimeError("tts down")
+
+    monkeypatch.setattr(mt, "say", boom)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปให้หน่อย")
+    await voice.mgr.handle_segment(s, segment(11))
+    await asyncio.sleep(0.05)
+    assert voice.chan.sent[-1] == "<@11> ตกลงเลื่อนเป็นวันศุกร์ครับ"
+    assert voice.vc.played == [] and s.speaking is False
+    await voice.mgr.end(1000)
+
+
+async def test_echo_guard_ignores_wake_words_while_speaking_but_keeps_the_line(voice, monkeypatch):
+    s = await start(voice)
+    asked = []
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.append(a[2]) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปให้หน่อย")
+    s.speaking = True
+    await voice.mgr.handle_segment(s, segment(11))
+    assert asked == [] and [ln.text for ln in s.transcript.lines] == ["สลิด สรุปให้หน่อย"]
+    s.speaking, s.speaking_until = False, time.monotonic() + 5  # inside the cooldown
+    await voice.mgr.handle_segment(s, segment(11))
+    assert asked == [] and len(s.transcript) == 2
+    await voice.mgr.end(1000)
+
+
+async def test_echo_guard_uses_the_audio_timestamps_when_transcription_lags(voice, monkeypatch):
+    s = await start(voice)
+    asked = []
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.append(a[2]) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปให้หน่อย")
+    now = time.monotonic()
+    # Salid spoke from now-20 to now-6 (cooldown over); the segment was heard at now-15.
+    s.speaking_since, s.speaking_until = now - 20, now - 6
+    echo = mt.Segment(11, FRAME * 100, now - 15, 2.0)
+    await voice.mgr.handle_segment(s, echo)
+    assert asked == []
+    later = mt.Segment(11, FRAME * 100, now - 4, 2.0)  # after the cooldown: a real question
+    await voice.mgr.handle_segment(s, later)
+    assert asked == ["สรุปให้หน่อย"]
+    await voice.mgr.end(1000)
+
+
+async def test_end_stops_playback_before_disconnecting(voice):
+    await start(voice)
+    voice.vc.playing = True
+    await voice.mgr.end(1000)
+    assert voice.vc.playing is False and voice.vc.disconnected
+
+
+async def test_speak_skips_when_voice_reply_is_disabled(voice):
+    s = await start(voice)
+    voice.bot.s.voice_reply = False
+    await voice.mgr.speak(s, "x")
+    assert voice.calls == [] and voice.vc.played == []
+    await voice.mgr.end(1000)
+
+
+async def test_concurrent_speak_calls_only_generate_one_reply(voice, monkeypatch):
+    import threading
+
+    s = await start(voice)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+
+    def slow_spoken(*args):
+        calls.append(args)
+        entered.set()
+        release.wait(timeout=1)
+        return "พูดสั้น ๆ"
+
+    monkeypatch.setattr(mt, "spoken_text", slow_spoken)
+    first = asyncio.create_task(voice.mgr.speak(s, "คำตอบแรก"))
+    assert await asyncio.to_thread(entered.wait, 1)
+    second = asyncio.create_task(voice.mgr.speak(s, "คำตอบที่สอง"))
+    await asyncio.sleep(0.05)
+    release.set()
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if voice.vc.played:
+            break
+    voice.vc.playing = False
+    voice.vc.after(None)
+    await asyncio.gather(first, second)
+    assert len(calls) == 1
+    assert len([call for call in voice.calls if call[0] == "tts"]) == 1
+    await voice.mgr.end(1000)
+
+
+async def test_speak_cleans_ffmpeg_source_when_play_rejects_it(voice, monkeypatch):
+    s = await start(voice)
+
+    class Source:
+        cleaned = False
+
+        def cleanup(self):
+            self.cleaned = True
+
+    source = Source()
+    monkeypatch.setattr(mt, "pcm_source", lambda pcm, pitch=1.0: source)
+
+    def reject(source, after=None):
+        raise RuntimeError("player refused source")
+
+    monkeypatch.setattr(voice.vc, "play", reject)
+    await voice.mgr.speak(s, "x")
+    assert source.cleaned is True
+    assert s.speaking is False
+    await voice.mgr.end(1000)
+
+
 # ------------------------------------------------------------------ language
 async def test_english_replies_for_the_invoker(env):
     m = make_member(env.guild, 10, "Ann")
@@ -532,3 +817,60 @@ async def test_transcribed_segments_are_logged_as_voice_memory(env, monkeypatch)
     assert (rec.kind, rec.author_name, rec.text) == ("voice", "แอน", "เรามาเริ่มกันเลย")
     assert s.transcript.lines  # the in-memory transcript still works
     await env.mgr.end(1000)
+
+
+def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
+    """Merged path: the wake-word answer uses our `ask` (memory tools + web client) and is both
+    posted as text and handed to the spoken-reply pipeline."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from salid import meeting as m
+
+    seen = {}
+
+    def fake_ask(*a, **kw):
+        seen.update(kw)
+        return SimpleNamespace(text="answer")
+
+    monkeypatch.setattr("salid.qa.ask", fake_ask)
+    posted, spoken = [], []
+
+    async def go():
+        async def memory_tools(where, guild, member):
+            return "MEM"
+
+        bot = SimpleNamespace(
+            s=SimpleNamespace(voice_reply=True, now=lambda: None),
+            team=SimpleNamespace(enabled=lambda g, f: True),
+            store=None,
+            is_exec_member=lambda mem: True,
+            _memory_tools=memory_tools,
+            _web_kw=lambda gid: {"web_client": "W"},
+        )
+        mgr = m.MeetingManager(bot)
+        s = SimpleNamespace(
+            guild_id=1,
+            transcript=SimpleNamespace(history=lambda now: ""),
+            answer_lock=asyncio.Lock(),
+            text_channel=None,
+            language="th",
+            ending=False,
+            vc=SimpleNamespace(is_connected=lambda: True),
+            tasks=[],
+        )
+
+        async def post(sess, text):
+            posted.append(text)
+
+        async def speak(sess, text, question=""):
+            spoken.append(text)
+
+        mgr._post, mgr.speak = post, speak
+        member = SimpleNamespace(id=5, guild=object(), mention="@u")
+        await mgr.answer(s, member, "u", "q?")
+        await asyncio.gather(*s.tasks)
+
+    asyncio.run(go())
+    assert seen["memory"] == "MEM" and seen["web_client"] == "W"
+    assert posted == ["@u answer"] and spoken == ["answer"]
