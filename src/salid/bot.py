@@ -55,6 +55,9 @@ GREETING_MESSAGE = (
 FOLLOWUP_WINDOW_SECONDS = 120
 # After Salid answers someone, their next messages in that channel need no @mention for this long.
 CONVERSATION_SECONDS = 180
+# Chat context handed to the model: this person's and Salid's recent messages in the channel.
+HISTORY_MESSAGES = 10
+HISTORY_SECONDS = 30 * 60
 SETUP_DENIED_MESSAGE = "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ครับ"
 SETUP_MESSAGE = (
     "ลิงก์เชื่อม {name} กับศูนย์บัญชาการของสลิด 🔗\n{url}\n"
@@ -337,6 +340,29 @@ class SecretaryBot(discord.Client):
             text = text.replace(f"<@&{role.id}>", "")
         return text.strip()
 
+    async def _recent_chat(self, message: discord.Message) -> str:
+        """Recent lines between this person and Salid here, oldest first (context only; the
+        ledger scope is still decided in code)."""
+        history = getattr(message.channel, "history", None)
+        if history is None:
+            return ""
+        lines: list[str] = []
+        try:
+            async for prev in history(limit=30, before=message):
+                if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
+                    break
+                if prev.author.id not in (message.author.id, getattr(self.user, "id", None)):
+                    continue
+                text = self._strip_mentions(prev.content, prev)
+                if text:
+                    who = "สลิด" if prev.author == self.user else prev.author.display_name
+                    lines.append(f"{who}: {text[:500]}")
+                if len(lines) >= HISTORY_MESSAGES:
+                    break
+        except discord.HTTPException:
+            logger.warning("could not read channel history", exc_info=True)
+        return "\n".join(reversed(lines))
+
     async def _previous_text(self, message: discord.Message) -> str:
         """The author's own message just before a bare @mention ("Hi" then "@Salid")."""
         history = getattr(message.channel, "history", None)
@@ -376,6 +402,7 @@ class SecretaryBot(discord.Client):
         if not self.team.enabled(gid, "qa"):
             await message.reply(QA_OFF_MESSAGE, mention_author=False)
             return
+        history = await self._recent_chat(message)
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -385,6 +412,7 @@ class SecretaryBot(discord.Client):
                 guild_id=gid,
                 is_exec=is_exec,
                 user_id=message.author.id,
+                history=history,
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         self._note_talking(message)

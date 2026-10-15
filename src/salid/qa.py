@@ -152,12 +152,18 @@ class LedgerTools:
 def system_prompt(settings: Settings, scoped: bool, now=None) -> str:
     now = now or settings.now()
     p = (
-        f"คุณชื่อ “สลิด” เป็นเลขาของร้าน ดูแลเรื่องใบเสร็จและบัญชี ตอบเป็นภาษาไทยสั้น กระชับ ตรงประเด็น (เหมาะกับ Discord) ลงท้ายด้วยคำว่าครับเสมอ\n"
+        "คุณชื่อ “สลิด” เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
+        "นิสัยเป็นกันเอง สุภาพ อารมณ์ดี พูดภาษาไทยเป็นธรรมชาติ ลงท้ายด้วยคำว่าครับ "
+        "ตอบตามภาษาที่ผู้ใช้พิมพ์มา และปรับความยาวตามคำถาม (คุยเล่นตอบสั้น งานที่ขอรายละเอียดตอบละเอียดได้)\n"
+        "คุยได้ทุกเรื่องเหมือนผู้ช่วย AI ทั่วไป: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
+        "ช่วยคิดไอเดีย ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
+        "ถ้าเป็นข่าวหรือข้อมูลล่าสุดที่อาจไม่รู้ ให้บอกตรงๆ ว่าอาจไม่อัปเดต\n"
+        "ความสามารถพิเศษคือดูแลใบเสร็จและบัญชีค่าใช้จ่ายของร้านผ่านเครื่องมือ\n"
         f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
         f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD\n"
-        "กฎเหล็ก: ห้ามคำนวณตัวเลขเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
-        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วย ฿. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดา. "
-        "ถ้าคำถามไม่เกี่ยวกับค่าใช้จ่าย/ใบเสร็จ ให้ปฏิเสธสั้นๆ. เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว"
+        "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
+        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วย ฿. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
+        "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้ใช้เป็นบริบทและตอบเฉพาะข้อความล่าสุด"
     )
     if scoped:
         p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
@@ -289,12 +295,12 @@ def build_agent(
             client_kwargs={"location": settings.gemini_location},
             retry_options=RETRY_OPTIONS,
         ),
-        description="Answers expense questions from the receipt ledger using tools.",
+        description="Chats with the team and answers expense questions from the ledger.",
         # A callable skips ADK's {placeholder} templating of the instruction string.
         instruction=lambda _ctx: prompt,
         tools=tools,
         generate_content_config=types.GenerateContentConfig(
-            temperature=0.0, thinking_config=types.ThinkingConfig(thinking_level="LOW")
+            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level="LOW")
         ),
         before_model_callback=before_model,
     )
@@ -308,10 +314,11 @@ async def ask_async(
     guild_id: int,
     is_exec: bool,
     user_id: int,
+    history: str = "",
     now=None,
     model=None,
 ) -> Answer:
-    """Answer a question with an ADK agent. Scope is decided here in code, before any data
+    """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
     whose `forced_submitter_id` is the asker for non-executives."""
     started = time.monotonic()
@@ -325,7 +332,8 @@ async def ask_async(
     await runner.session_service.create_session(
         app_name=APP_NAME, user_id=adk_user, session_id=session_id
     )
-    message = types.Content(role="user", parts=[types.Part(text=question)])
+    text_in = f"บทสนทนาก่อนหน้า:\n{history}\n\nข้อความล่าสุด:\n{question}" if history else question
+    message = types.Content(role="user", parts=[types.Part(text=text_in)])
     rounds, text = 0, ""
     async for event in runner.run_async(
         user_id=adk_user,
@@ -353,6 +361,7 @@ def ask(
     guild_id: int,
     is_exec: bool,
     user_id: int,
+    history: str = "",
     now=None,
     model=None,
 ) -> Answer:
@@ -365,6 +374,7 @@ def ask(
             guild_id=guild_id,
             is_exec=is_exec,
             user_id=user_id,
+            history=history,
             now=now,
             model=model,
         )

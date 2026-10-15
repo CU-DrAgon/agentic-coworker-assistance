@@ -183,7 +183,7 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     del bot._answer  # use the real one
     m = Msg(world.b, world.b.text_channels[1], member(world.b, STAFF), "ยอดเท่าไร", mention=True)
     await bot._answer(m, world.b, m.author)
-    assert seen == [{"guild_id": OTHER_GUILD, "is_exec": False, "user_id": STAFF}]
+    assert seen == [{"guild_id": OTHER_GUILD, "is_exec": False, "user_id": STAFF, "history": ""}]
     assert m.replies == ["ok"]
 
 
@@ -471,3 +471,31 @@ async def test_channels_named_after_salid_answer_everything(bot, world):
     ch = FakeChannel(12, "ถาม-สลิด")
     await bot.on_message(Msg(world.a, ch, member(world.a, STAFF), "ทำอะไรได้บ้าง"))
     assert bot.calls == [("answer", GUILD)]
+
+
+async def test_recent_chat_keeps_only_this_person_and_salid(bot, world):
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime(2026, 10, 15, 10, 0, tzinfo=UTC)
+    me = member(world.a, STAFF)
+    me.display_name = "พี่"
+    other = member(world.a, BOSS)
+
+    def line(author, text, ago):
+        m = SimpleNamespace(author=author, content=text, created_at=now - timedelta(seconds=ago))
+        m.role_mentions = []
+        return m
+
+    class Chan(FakeChannel):
+        async def history(self, limit, before):
+            for p in [
+                line(ME, "สวัสดีครับ", 10),
+                line(other, "เรื่องอื่น", 20),
+                line(me, "ทักครับ", 30),
+                line(me, "เก่าเกินไป", 3600),
+            ]:
+                yield p
+
+    msg = Msg(world.a, Chan(10), me, "คุยต่อ")
+    msg.created_at = now
+    assert await bot._recent_chat(msg) == "พี่: ทักครับ\nสลิด: สวัสดีครับ"
