@@ -6,6 +6,11 @@ RUN npm install -g --prefix /opt/gemini @google/gemini-cli@0.64.0 \
 
 FROM python:3.12-slim-bookworm
 
+# Voice meetings: libopus (decode Discord voice) and ffmpeg (16 kHz FLAC for transcription).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libopus0 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # Node runtime (same Debian release as the build stage, so shared libs match) + the CLI.
 COPY --from=gemini /usr/local/bin/node /usr/local/bin/node
 COPY --from=gemini /opt/gemini /opt/gemini

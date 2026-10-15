@@ -163,10 +163,10 @@ async def test_ask_channels_and_mentions_answer_in_their_guild(bot, world):
 
 async def test_mentioning_the_bot_role_also_answers(bot, world):
     m = Msg(world.a, world.a.text_channels[0], member(world.a, STAFF))
-    m.role_mentions = [SimpleNamespace(tags=SimpleNamespace(bot_id=ME.id))]
+    m.role_mentions = [SimpleNamespace(id=5, tags=SimpleNamespace(bot_id=ME.id))]
     await bot.on_message(m)
     other = Msg(world.a, world.a.text_channels[0], member(world.a, STAFF))
-    other.role_mentions = [SimpleNamespace(tags=None)]  # an ordinary role
+    other.role_mentions = [SimpleNamespace(id=6, tags=None)]  # an ordinary role
     await bot.on_message(other)
     assert bot.calls == [("answer", GUILD)]
 
@@ -349,7 +349,7 @@ async def test_setup_command_allows_the_owner_and_admins(bot, world):
 def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
     bot._register_commands()
     cmds = {c.name: c for c in bot.tree.get_commands()}
-    assert set(cmds) == {"ตั้งค่า", "setup"}
+    assert set(cmds) == {"ตั้งค่า", "setup", "เข้าประชุม", "join", "ออกประชุม", "leave"}
     assert all(c.guild_only for c in cmds.values())
 
 

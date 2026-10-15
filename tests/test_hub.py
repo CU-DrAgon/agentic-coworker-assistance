@@ -256,7 +256,9 @@ def test_super_admin_can_open_any_guild(client):
 # ------------------------------------------------------------------ settings
 def test_settings_defaults_round_trip_and_layout(client):
     s = client.get(f"/api/hub/guilds/{A}/settings", headers=AUTH).json()
-    assert s["features"] == dict(receipts=True, qa=True, digest=True, deep_tasks=True)
+    assert s["features"] == dict(
+        receipts=True, qa=True, digest=True, deep_tasks=True, voice_meetings=True
+    )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
     body = {

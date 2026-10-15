@@ -260,11 +260,12 @@ const FEATURES = [
   { id: "receipts", name: "รับใบเสร็จและทำบัญชี", desc: "ส่งรูปใบเสร็จในห้อง สลิดอ่านยอดและบันทึกให้", where: "#ใบเสร็จ" },
   { id: "qa", name: "ตอบคำถามเรื่องค่าใช้จ่าย", desc: "ถามสลิดใน Discord แล้วได้คำตอบจากบัญชีของทีม", where: "@Salid" },
   { id: "meetings", name: "ส่งสรุปประชุมเข้าแชต", desc: "อัดประชุมจากหน้าเว็บ แล้วสลิดโพสต์สรุปและงานที่ต้องทำ เปิดไว้เสมอ", where: "#ประชุม", info: true },
+  { id: "voice_meetings", name: "ฟังประชุมในห้องเสียง", desc: "พิมพ์ /เข้าประชุม ให้สลิดเข้าห้องเสียง ถอดว่าใครพูดอะไร ตอบเมื่อถูกเรียก และสรุปตอนจบ", where: "/เข้าประชุม" },
   { id: "digest", name: "สรุปรายวันให้ผู้บริหาร", desc: "ทุกวัน ยอดใช้จ่าย หมวด และรายการที่ต้องตรวจ", where: "#ผู้บริหาร" },
   { id: "deep_tasks", name: "งานใหญ่หลายขั้น", desc: "ผู้บริหารสั่งงานวิเคราะห์ สลิดทำเบื้องหลังแล้วส่งรายงาน", where: "เฉพาะผู้บริหาร" },
   { id: "followup", name: "ติดตามงานที่รับปาก", desc: "จดว่าใครรับปากอะไร แล้วเตือนก่อนถึงกำหนด", where: "เร็วๆ นี้", soon: true },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true };
 let guilds = [];
 let guildId = null;
 
@@ -392,7 +393,7 @@ function renderDigestSelect(channels, selected) {
 }
 
 function fillSettings(s) {
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, ...s.features };
   const channels = s.channels || [];
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
   renderChecks($("ask-ids"), channels, s.ask_channel_ids);
@@ -447,7 +448,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), "กำลังบันทึก...");
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
