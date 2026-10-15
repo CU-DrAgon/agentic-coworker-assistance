@@ -375,7 +375,7 @@ async def test_at_most_four_images_per_message_and_big_or_non_images_skipped(bot
     atts = [att(f"{i}.png") for i in range(6)] + [att("doc.pdf", "application/pdf")]
     await send_images(bot, world, iw.a, "", atts)
     await settle(bot)
-    assert len(image_calls(llm)) == 4 and FakeAtt.reads == 4
+    assert len(image_calls(llm)) == 4 and FakeAtt.reads == 5  # + the PDF read for memory
     (rec,) = logged(bot)
     assert (
         rec.text.count("[รูป:") == 4

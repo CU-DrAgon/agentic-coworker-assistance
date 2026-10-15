@@ -38,6 +38,8 @@ def test_missing_document_means_defaults(gstore):
         voice_meetings=True,
         memory=True,
         image_memory=True,
+        media_memory=True,
+        doc_memory=True,
         web=True,
         documents=True,
         scheduling=True,

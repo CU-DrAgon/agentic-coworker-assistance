@@ -28,6 +28,7 @@ from .deep_task import (
     run_deep_task,
 )
 from .digest import build_daily_digest
+from .docs import doc_kind
 from .email_out import make_sender
 from .extract import (
     apply_correction,
@@ -55,6 +56,8 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .media import media_candidates
+from .media_bot import MediaMixin
 from .meeting import MeetingManager, parse_meeting_command
 from .memory import (
     MemoryScheduler,
@@ -225,7 +228,7 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(discord.Client):
+class SecretaryBot(MediaMixin, discord.Client):
     def __init__(
         self,
         settings: Settings,
@@ -309,6 +312,7 @@ class SecretaryBot(discord.Client):
         self._image_sem = asyncio.Semaphore(2)  # at most two images described at once
         self._image_notes: dict[int, dict[int, str]] = {}  # message id -> attachment idx -> note
         self.image_stats = {"described": 0, "failed": 0, "skipped": 0}  # cost visibility
+        self._init_media()
         self.importer = MemoryImporter(
             self.memory_store,
             settings,
@@ -533,6 +537,8 @@ class SecretaryBot(discord.Client):
             finally:
                 # images -> text for memory (and receipts anywhere nobody is talking to Salid),
                 # in the background. A message the agent read is not run through receipt intake.
+                self._media_soon(message, logged)
+                self._doc_soon(message, logged)
                 if describe:
                     to_agent = message.id in self._agent_msgs
                     self._agent_msgs.discard(message.id)
@@ -1049,8 +1055,21 @@ class SecretaryBot(discord.Client):
             )
             for i, a in enumerate(atts)
         ]
+        media_idx = {i for i, _a in media_candidates(message)}
+        office_idx = {
+            i for i, a in enumerate(atts) if doc_kind(a) in ("docx", "xlsx", "pptx", "doc", "xls")
+        }
+        for i in media_idx | office_idx:  # read in code (transcript / text), not as raw bytes
+            inputs[i].mime, inputs[i].size = "text/plain", 0
         usable, _skipped = select_files(inputs)
         for f in usable:
+            if f.index in media_idx:
+                async with message.channel.typing():
+                    await self._fill_media_input(message, f, atts[f.index])
+                continue
+            if f.index in office_idx:
+                await self._fill_office_input(f, atts[f.index])
+                continue
             try:
                 f.data = await atts[f.index].read()
                 f.size = len(f.data)
@@ -1154,6 +1173,8 @@ class SecretaryBot(discord.Client):
             actions = self._file_actions(
                 message, guild, member, is_exec, setting, asyncio.get_running_loop(), forwards
             )
+            q, files = self._voice_question(message, q, files)
+            lang = resolve_lang(setting, q)
         secretary = (
             None if interjection else self._secretary(message, guild, member, is_exec, setting)
         )
@@ -1196,6 +1217,13 @@ class SecretaryBot(discord.Client):
                 sent_ids.append(sent.id)
         if sent_ids:
             self._answers.add(message.channel.id, message.author.id, sent_ids)
+        lines = [
+            receipt_note(r)
+            for rid, _rx in getattr(ans, "receipts", ())
+            if (r := self.store.get(rid)) is not None
+        ]
+        if lines:  # the document note reuses these: a receipt is never ingested twice
+            self._agent_receipts[message.id] = lines
         for n, (receipt_id, reaction) in enumerate(getattr(ans, "receipts", ())):
             if n == 0 and first is not None:  # a correction by reply finds this receipt
                 self.store.set_reply_message(receipt_id, first.id)
@@ -2189,6 +2217,7 @@ class SecretaryBot(discord.Client):
                 self._import_resume_at = self._clock() + IMPORT_RESUME_S
             if self.team.enabled(guild.id, "image_memory"):
                 await self._image_backlog(guild, {t.cid for t in targets})
+            await self._media_doc_backlog(guild, {t.cid for t in targets})
 
     async def _import_targets(self, guild) -> list[Target]:
         """Readable, non-off channels (text, voice chat) and threads (active, and archived ones
@@ -2497,6 +2526,7 @@ class SecretaryBot(discord.Client):
             allowed,
             self.s,
             self.team.memory_retention_days(guild.id),
+            opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
         )
 
     # ------------------------------------------------------------- digest

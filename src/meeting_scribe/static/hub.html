@@ -937,6 +937,30 @@
   "th": "ห้องที่ไม่ใช่โหมดปิด",
   "en": "Channels not set to Off"
  },
+ "f_media_memory_n": {
+  "th": "จำเนื้อหาเสียงและวิดีโอ",
+  "en": "Remember audio and video content"
+ },
+ "f_media_memory_d": {
+  "th": "สลิดถอดเสียงพูดจากไฟล์เสียง วิดีโอ และข้อความเสียงที่โพสต์ในห้องที่เปิดความจำ (เฉพาะเสียง ไม่ส่งทั้งวิดีโอ) เพื่อให้ค้นหาและสรุปได้ จำกัดเวลาเสียงต่อวัน ไม่เก็บไฟล์ ต้องเปิดองค์ความรู้ของทีมไว้ด้วย",
+  "en": "Salid transcribes the speech in audio files, videos and voice messages posted in channels with memory on (audio only, the video itself is never sent) so they can be searched and summarized. Daily audio limit applies. Files are not stored. Team knowledge must be on too."
+ },
+ "f_media_memory_w": {
+  "th": "ห้องที่ไม่ใช่โหมดปิด",
+  "en": "Channels not set to Off"
+ },
+ "f_doc_memory_n": {
+  "th": "จำเนื้อหาเอกสาร (PDF ฯลฯ)",
+  "en": "Remember document content (PDF etc.)"
+ },
+ "f_doc_memory_d": {
+  "th": "สลิดอ่านไฟล์ PDF, Word, Excel, PowerPoint และไฟล์ข้อความที่โพสต์ในห้องที่เปิดความจำ แล้วจดสรุปและข้อความสำคัญ เพื่อให้ค้นหาและสรุปได้ จำกัดจำนวนหน้าต่อวัน ไม่เก็บไฟล์ ต้องเปิดองค์ความรู้ของทีมไว้ด้วย",
+  "en": "Salid reads PDF, Word, Excel, PowerPoint and text files posted in channels with memory on and keeps a summary and key text so they can be searched and summarized. A daily page limit applies. Files are not stored. Team knowledge must be on too."
+ },
+ "f_doc_memory_w": {
+  "th": "ห้องที่ไม่ใช่โหมดปิด",
+  "en": "Channels not set to Off"
+ },
  "f_web_n": {
   "th": "อ่านลิงก์และค้นอินเทอร์เน็ต",
   "en": "Read links and search the web"
@@ -1076,13 +1100,15 @@ const FEATURES = [
   { id: "deep_tasks" },
   { id: "memory" },
   { id: "image_memory" },
+  { id: "media_memory" },
+  { id: "doc_memory" },
   { id: "web" },
   { id: "documents" },
   { id: "scheduling" },
   { id: "email" },
   { id: "followup", soon: true },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1315,7 +1341,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1394,7 +1420,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

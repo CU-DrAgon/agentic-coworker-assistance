@@ -265,6 +265,8 @@ def test_settings_defaults_round_trip_and_layout(client):
         voice_meetings=True,
         memory=True,
         image_memory=True,
+        media_memory=True,
+        doc_memory=True,
         web=True,
         documents=True,
         scheduling=True,
