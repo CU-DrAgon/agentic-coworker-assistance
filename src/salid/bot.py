@@ -68,7 +68,7 @@ from .modes import (
     parse_snooze_command,
 )
 from .naming import command_text, mentions_name
-from .qa import MemoryTools, ask, is_no_reply
+from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,6 @@ MAX_JOIN_CANDIDATES = 5
 INTERJECT_SAME_USER_COOLDOWN = 600  # join mode: no second unprompted answer to one person
 SNOOZE_SECONDS = 3600
 TICK_SECONDS = 5.0
-IMAGE_NOTE_PREFIX = "[ผู้ใช้ส่งรูปภาพ / the user posted an image]"
 MEMORY_TICK_SECONDS = 30.0  # how often the memory scheduler looks for due summary updates
 MEMORY_QUEUE_MAX = 20000
 IMPORT_PAGE_SLEEP_S = 1.0  # pause between history pages (discord.py also rate-limits)
@@ -217,6 +216,7 @@ class SecretaryBot(discord.Client):
         self._tick_task: asyncio.Task | None = None
         self._digest_task: asyncio.Task | None = None
         self._digest_sent: dict[int, date] = {}
+        self._agent_msgs: set[int] = set()  # messages whose files went to the agent
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
         self._sync_last: dict[int, float] = {}
         self._sync_pending: dict[int, asyncio.Task] = {}
@@ -430,75 +430,78 @@ class SecretaryBot(discord.Client):
                 return
             mentioned = mentions_bot(message, self.user)
             receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
+            qa_on = self.team.enabled(gid, "qa")
+            # Receipt channels read receipts directly (reliable, quiet in listen mode). Elsewhere a
+            # message to Salid with files goes to the agent, which decides what to do; only with
+            # Q&A off does "@Salid + receipt file" still mean direct intake.
             is_receipt_post = message.attachments and (
                 message.channel.id in receipt_ids
                 or is_receipt_channel_name(getattr(message.channel, "name", ""))
-                or (mentioned and has_receipt_file(message))
+                or (mentioned and has_receipt_file(message) and not qa_on)
             )
-            image_only = not message.content.strip() and bool(self._image_candidates(message))
-            inline_image = (
-                not is_receipt_post
-                and image_only
-                and self._images_enabled(gid)
-                and (mode == "chat" or self._replying_to_salid(message))
-            )
-            if not own_receipt(is_receipt_post, receipts_on) and not inline_image:
-                # images -> text (and receipts, anywhere), in the background
-                self._describe_soon(
-                    message,
-                    logged,
-                    intake_mode=mode if receipts_on and not is_receipt_post else None,
+            describe = not own_receipt(is_receipt_post, receipts_on)
+            try:
+                await self._route(
+                    message, mode, mentioned, bool(is_receipt_post), receipts_on, qa_on
                 )
-            if is_receipt_post:
-                if receipts_on:
-                    await self._intake(message, quiet=mode == "listen")
-                return
-            called = mentioned or (self._starts_with_name(message))
-            if called and await self._meeting_command(message):
-                return
-            if called and await self._snooze_command(message):
-                return
-            if called and await self._language_command(message):
-                return
-            # no image describer: images are receipt candidates when Salid is addressed
-            if (
-                receipts_on
-                and self._image_candidates(message)
-                and not self._images_enabled(gid)
-                and (mode == "chat" or (mode in ("call", "join") and called))
-                and await self._intake(message)
-            ):
-                return
-            image_note = ""
-            if inline_image:
-                handled, notes = await self._describe_message(
-                    message,
-                    self._image_candidates(message),
-                    intake_mode=mode if receipts_on else None,
-                    apply=logged,
-                )
-                if handled:
-                    return
-                image_note = "\n".join(notes.values())
-                if not image_note:
-                    return
-            elif mode == "chat" and image_only:
-                return  # a bare image that is not a receipt: no generic greeting
-            if mode == "listen":
-                if mentioned and self._is_snoozed(message.channel.id):
-                    with contextlib.suppress(discord.HTTPException):
-                        await message.add_reaction("👂")
-                elif mentioned:  # listen answers a tag, never a bare name, never unprompted
-                    await self._answer(message, message.guild, message.author)
-                return
-            if mode == "chat":
-                await self._answer(
-                    message, message.guild, message.author, **self._note_kw(image_note)
-                )
-                return
-            await self._call_or_join(message, mode, mentioned, image_note)
+            finally:
+                # images -> text for memory (and receipts anywhere nobody is talking to Salid),
+                # in the background. A message the agent read is not run through receipt intake.
+                if describe:
+                    to_agent = message.id in self._agent_msgs
+                    self._agent_msgs.discard(message.id)
+                    self._describe_soon(
+                        message,
+                        logged,
+                        intake_mode=mode
+                        if receipts_on and not is_receipt_post and not to_agent
+                        else None,
+                    )
         except Exception:
             logger.exception("handler failed")
+
+    async def _route(
+        self,
+        message: discord.Message,
+        mode: str,
+        mentioned: bool,
+        is_receipt_post: bool,
+        receipts_on: bool,
+        qa_on: bool,
+    ) -> None:
+        gid = message.guild.id
+        if is_receipt_post:
+            if receipts_on:
+                await self._intake(message, quiet=mode == "listen")
+            return
+        called = mentioned or (self._starts_with_name(message))
+        if called and await self._meeting_command(message):
+            return
+        if called and await self._snooze_command(message):
+            return
+        if called and await self._language_command(message):
+            return
+        # Q&A off and no image describer: images are receipt candidates when Salid is addressed
+        if (
+            receipts_on
+            and not qa_on
+            and self._image_candidates(message)
+            and not self._images_enabled(gid)
+            and (mode == "chat" or (mode in ("call", "join") and called))
+            and await self._intake(message)
+        ):
+            return
+        if mode == "listen":
+            if mentioned and self._is_snoozed(message.channel.id):
+                with contextlib.suppress(discord.HTTPException):
+                    await message.add_reaction("👂")
+            elif mentioned:  # listen answers a tag, never a bare name, never unprompted
+                await self._answer(message, message.guild, message.author)
+            return
+        if mode == "chat":
+            await self._answer(message, message.guild, message.author)
+            return
+        await self._call_or_join(message, mode, mentioned)
 
     def _mode(self, channel, guild_id: int) -> str:
         """The channel's mode now: the resolved setting, or listen while snoozed."""
@@ -539,26 +542,20 @@ class SecretaryBot(discord.Client):
         locale = str(getattr(interaction, "locale", "") or "")
         return "en" if locale and not locale.startswith("th") else "th"
 
-    @staticmethod
-    def _note_kw(image_note: str) -> dict:
-        return {"image_note": image_note} if image_note else {}
-
     def _starts_with_name(self, message: discord.Message) -> bool:
         """The message opens with Salid's name (no @tag): "Salid เข้าประชุมหน่อย"."""
         return command_text(self._strip_mentions(message.content or "", message))[1]
 
-    async def _call_or_join(
-        self, message: discord.Message, mode: str, mentioned: bool, image_note: str = ""
-    ) -> None:
+    async def _call_or_join(self, message: discord.Message, mode: str, mentioned: bool) -> None:
         """call/join: answer when called by tag or name, replied to, or (inside the conversation
         window) when the gate says the message is meant for Salid. Join mode also queues
         questions for the quiet-time batch gate."""
         cid = message.channel.id
         if mentioned or mentions_name(message.content):
-            await self._answer(message, message.guild, message.author, **self._note_kw(image_note))
+            await self._answer(message, message.guild, message.author)
             return
         if self._replying_to_salid(message):
-            await self._answer(message, message.guild, message.author, **self._note_kw(image_note))
+            await self._answer(message, message.guild, message.author)
             return
         if mentions_other(message, self.user):
             return  # talking to someone else
@@ -575,6 +572,11 @@ class SecretaryBot(discord.Client):
         if cid in self._pending:
             self._pending[cid].last_activity = self._clock()
 
+    @staticmethod
+    def _files_line(message: discord.Message) -> str:
+        """Gate text of a message that is only attachments."""
+        return " ".join(f"[{a.filename}]" for a in message.attachments)
+
     def _replying_to_salid(self, message: discord.Message) -> bool:
         ref = message.reference
         resolved = getattr(ref, "resolved", None) if ref else None
@@ -589,7 +591,7 @@ class SecretaryBot(discord.Client):
         line = GateLine(
             str(message.id),
             message.author.display_name,
-            self._strip_mentions(message.content, message),
+            self._strip_mentions(message.content, message) or self._files_line(message),
         )
         return await asyncio.to_thread(
             gate.addressed_to_salid,
@@ -876,6 +878,67 @@ class SecretaryBot(discord.Client):
             logger.warning("could not read channel history", exc_info=True)
         return ""
 
+    async def _file_inputs(self, message: discord.Message) -> list[FileInput]:
+        """The message's attachments as agent input, in order: readable ones downloaded (within
+        the size limits of qa.select_files), the rest carrying the reason they are skipped."""
+        atts = list(message.attachments)
+        inputs = [
+            FileInput(
+                i,
+                a.filename,
+                file_mime(a.filename, getattr(a, "content_type", None)),
+                size=int(getattr(a, "size", 0) or 0),
+            )
+            for i, a in enumerate(atts)
+        ]
+        usable, _skipped = select_files(inputs)
+        for f in usable:
+            try:
+                f.data = await atts[f.index].read()
+                f.size = len(f.data)
+            except Exception as e:  # never log contents
+                logger.warning("attachment download failed (%s)", type(e).__name__)
+                f.skip = "could not be downloaded"
+        return inputs
+
+    def _file_actions(
+        self, message, guild, member, is_exec: bool, setting: str, loop
+    ) -> FileActions:
+        """The side effects the agent may trigger for this message. Guild, submitter, channel and
+        message are bound here; the model only chooses which attachment."""
+        gid = guild.id
+        lang = self._lang(message)
+
+        def record(f: FileInput, note: str):
+            return ingest_attachment(
+                self.store,
+                self.llm,
+                self.s,
+                guild_id=gid,
+                data=f.data,
+                filename=f.filename,
+                content_type=f.mime,
+                submitter_id=member.id,
+                submitter_name=member.display_name,
+                channel_id=message.channel.id,
+                message_id=message.id,
+                note=" ".join(x for x in ((message.content or "").strip(), note.strip()) if x),
+                archive=self.archive,
+                lang=lang,
+            )
+
+        def deep(task: str) -> str:
+            status = self._deep_status(gid, task, is_exec)
+            if status == "ok":
+                loop.call_soon_threadsafe(self._launch_deep, message, gid, task, setting)
+                return "started"
+            return status
+
+        return FileActions(
+            record_receipt=record if self.team.enabled(gid, "receipts") else None,
+            start_deep_task=deep if self.team.enabled(gid, "deep_tasks") else None,
+        )
+
     async def _answer(
         self,
         message: discord.Message,
@@ -883,20 +946,19 @@ class SecretaryBot(discord.Client):
         member,
         *,
         interjection: bool = False,
-        image_note: str = "",
     ) -> bool:
         """Answer `message`. `interjection`: Salid was not asked (join mode), so the model may
-        stay silent (NO_REPLY). `image_note`: stored description of the image(s) in the message,
-        put in front of the question. Returns True when something was posted."""
+        stay silent (NO_REPLY). Attachments (images, PDFs, text files) go to the agent with the
+        text, and it decides what to do with them (record a receipt, summarise, ...); not for an
+        interjection, which was not addressed to Salid. Returns True when something was posted."""
         q = self._strip_mentions(message.content, message)
-        if not q:
+        with_files = bool(message.attachments) and not interjection
+        if not q and not with_files:
             q = await self._previous_text(message)
-        if not q and not image_note:
+        if not q and not with_files:
             sent = await message.reply(t("greeting", self._lang(message, "")), mention_author=False)
             self._note_answer(message, sent)
             return True
-        if image_note:
-            q = f"{IMAGE_NOTE_PREFIX} {image_note}\n{q}".strip()
         gid = guild.id
         is_exec = self.is_exec_member(member)
         setting = self._lang_setting(message)  # th / en / auto: auto lets the model follow the user
@@ -909,7 +971,7 @@ class SecretaryBot(discord.Client):
                 await message.reply(t("deep_off", lang), mention_author=False)
             return True
         if not self.team.enabled(gid, "qa"):
-            if interjection:
+            if interjection or (with_files and not q):  # a bare file is not worth a "Q&A is off"
                 return False
             await message.reply(t("qa_off", lang), mention_author=False)
             return True
@@ -918,6 +980,14 @@ class SecretaryBot(discord.Client):
         if meeting:  # talking in a live meeting's chat: the spoken transcript is context too
             history = t("history_meeting", lang, meeting=meeting, chat=history).rstrip()
         memory = await self._memory_tools(message, guild, member)
+        files: list[FileInput] = []
+        actions = None
+        if with_files:
+            self._agent_msgs.add(message.id)  # the agent reads these: no separate receipt intake
+            files = await self._file_inputs(message)
+            actions = self._file_actions(
+                message, guild, member, is_exec, setting, asyncio.get_running_loop()
+            )
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -931,18 +1001,43 @@ class SecretaryBot(discord.Client):
                 language=setting,
                 memory=memory,
                 interjection=interjection,
+                **({"files": files, "actions": actions} if files else {}),
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         if interjection and is_no_reply(ans.text):
             logger.info("interjection suppressed (nothing useful to add)")
             return False
-        sent = None
+        sent = first = None
         for i, part in enumerate(chunks(ans.text)):
             sent = await (
                 message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
             )
+            first = first or sent
+        for n, (receipt_id, reaction) in enumerate(getattr(ans, "receipts", ())):
+            if n == 0 and first is not None:  # a correction by reply finds this receipt
+                self.store.set_reply_message(receipt_id, first.id)
+            if reaction:
+                with contextlib.suppress(discord.HTTPException):
+                    await message.add_reaction(reaction)
         self._note_answer(message, sent)
         return True
+
+    def _deep_status(self, guild_id: int, task: str, is_exec: bool) -> str:
+        """Why a deep task cannot start now (not_executive / disabled / empty / busy), else ok."""
+        if not is_exec:
+            return "not_executive"
+        if not self.s.gemini_cli_path:
+            return "disabled"
+        if not task:
+            return "empty"
+        if any(not job.done() for job in self._deep_tasks):
+            return "busy"
+        return "ok"
+
+    def _launch_deep(self, message, guild_id: int, task: str, setting: str = "th") -> None:
+        job = asyncio.create_task(self._run_deep(message, guild_id, task, setting))
+        self._deep_tasks.add(job)
+        job.add_done_callback(self._deep_tasks.discard)
 
     async def _deep(
         self,
@@ -955,19 +1050,18 @@ class SecretaryBot(discord.Client):
         """Executives only. Acknowledge at once, run Gemini CLI in the background, post the result."""
         lang = resolve_lang(setting, task)
         reply = message.reply
-        if not is_exec:
-            await reply(t("deep_not_exec", lang), mention_author=False)
-        elif not self.s.gemini_cli_path:
-            await reply(t("deep_disabled", lang), mention_author=False)
-        elif not task:
-            await reply(t("deep_usage", lang), mention_author=False)
-        elif any(not job.done() for job in self._deep_tasks):
-            await reply(t("deep_busy", lang), mention_author=False)
-        else:
+        status = self._deep_status(guild_id, task, is_exec)
+        if status == "ok":
             await reply(t("deep_ack", lang), mention_author=False)
-            job = asyncio.create_task(self._run_deep(message, guild_id, task, setting))
-            self._deep_tasks.add(job)
-            job.add_done_callback(self._deep_tasks.discard)
+            self._launch_deep(message, guild_id, task, setting)
+        else:
+            key = {
+                "not_executive": "deep_not_exec",
+                "disabled": "deep_disabled",
+                "empty": "deep_usage",
+                "busy": "deep_busy",
+            }[status]
+            await reply(t(key, lang), mention_author=False)
 
     async def _run_deep(
         self, message: discord.Message, guild_id: int, task: str, setting: str = "th"
@@ -1711,6 +1805,10 @@ class SecretaryBot(discord.Client):
             keyword="[image:", limit=5000,
         )  # fmt: skip
         done = 0
+        logger.info(
+            "memory backlog images guild=%s pending=%d today=%d/%d", gid, len(rows),
+            gstate.images_done, cap,
+        )  # fmt: skip
         for rec in rows:
             if gstate.images_done >= cap:
                 break
@@ -1741,6 +1839,10 @@ class SecretaryBot(discord.Client):
         except discord.HTTPException:
             msg = None
         cands = self._image_candidates(msg) if msg is not None else []
+        logger.info(
+            "memory backlog message=%s fetched=%s images=%d", rec.message_id, msg is not None,
+            len(cands),
+        )  # fmt: skip
         for _i, att in cands:
             marker = describe_attachment(att)
             if marker not in text:

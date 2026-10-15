@@ -132,7 +132,15 @@ async def test_other_channels_need_a_mention_with_a_file(bot, world):
     await bot.on_message(Msg(world.a, general, u, "รูป", [photo()], mention=True))
     txt = Att(filename="n.txt", content_type="text/plain", size=1)
     await bot.on_message(Msg(world.a, general, u, "อ่านนี่", [txt], mention=True))
-    assert bot.calls == [("intake", GUILD), ("answer", GUILD)]  # a .txt mention is a question
+    # @mention + a file goes to the agent (it reads the file and decides); a .txt is one too
+    assert bot.calls == [("answer", GUILD), ("answer", GUILD)]
+
+
+async def test_mention_with_a_file_is_direct_intake_only_when_qa_is_off(bot, world):
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features={"qa": False}), "x")
+    u = member(world.a, STAFF)
+    await bot.on_message(Msg(world.a, world.a.text_channels[0], u, "รูป", [photo()], mention=True))
+    assert bot.calls == [("intake", GUILD)]
 
 
 async def test_configured_channels_still_work_and_are_per_guild(bot, world):

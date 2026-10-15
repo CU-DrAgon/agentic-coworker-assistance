@@ -119,6 +119,15 @@ opens the private one-time link (valid 15 minutes) to manage the server in the h
 Google. Executives are the owner, members with Administrator or Manage Server, members with a role in the
 server's executive role names (default `ผู้บริหาร`, `Executive`) and `SALID_EXEC_USER_IDS`.
 
+- **Files to Salid (agent).** Send Salid an image, PDF or small text file (up to 4 files, 15 MB each, 20 MB
+  total) by @mention, name, reply, DM, in a chat-mode channel or inside the 3-minute conversation window. The
+  Google ADK agent (Gemini) reads the files itself, says what is inside, and decides what to do next:
+  receipts, tax invoices and transfer slips are recorded in the ledger (tool `record_receipt`, bound in code
+  to that message, author and server, honouring the `receipts` switch; replying to Salid's message still
+  corrects the receipt), documents, screenshots and charts are summarised with team memory and 1-3 suggested
+  next steps, questions written in an image are answered, and heavy analysis can start a deep task
+  (`start_deep_task`, executives only, `deep_tasks` switch). Receipt channels (and unaddressed images
+  elsewhere) keep the direct receipt pipeline.
 - **Channel modes** (`/โหมด` or `/mode`, or the hub's "โหมดของแต่ละห้อง"): per channel, `🔇 off` (ignore the
   channel), `👂 listen` (receipts get an emoji reaction only; an @mention gets 👂), `🙋 call` (default:
   answers when @mentioned or called by name, `สลิด` and misspellings but not `สลิป`; for 3 minutes

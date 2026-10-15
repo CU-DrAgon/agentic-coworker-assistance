@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from google.adk.agents import LlmAgent
@@ -401,6 +403,135 @@ class MemoryTools:
             return {"error": str(e)}
 
 
+# ---------------------------------------------------------------- files sent to Salid
+MAX_FILES = 4
+MAX_FILE_BYTES = 15 * 1024 * 1024
+MAX_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_TEXT_FILE_BYTES = 200 * 1024
+NO_TEXT_TURN = "(ผู้ใช้ส่งไฟล์มาโดยไม่มีข้อความ)"
+_IMAGE_MIMES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "heic": "image/heic",
+    "heif": "image/heif",
+}
+_TEXT_EXTS = {"txt", "md", "csv", "tsv", "json", "log", "xml", "yaml", "yml", "html", "htm"}
+_RECEIPT_MIMES = {"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"}
+
+
+@dataclass
+class FileInput:
+    """One attachment of the message being answered. `index` is its position in the message's
+    attachments (the number the model passes to record_receipt). `size` defaults to len(data);
+    the bot may pass a size without data to plan what to read. `skip` = why it is not used."""
+
+    index: int
+    filename: str
+    mime: str | None
+    data: bytes = b""
+    size: int = 0
+    skip: str = ""
+
+    def __post_init__(self):
+        self.size = self.size or len(self.data)
+
+
+def file_mime(filename: str, content_type: str | None = None) -> str | None:
+    """The MIME type Salid can read (image, PDF, plain text), or None for anything else."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ext in _IMAGE_MIMES:
+        return _IMAGE_MIMES[ext]
+    if ext == "pdf":
+        return "application/pdf"
+    if ext in _TEXT_EXTS:
+        return "text/plain"
+    if ct in set(_IMAGE_MIMES.values()):
+        return ct
+    if ct == "application/pdf":
+        return ct
+    if ct.startswith("text/"):
+        return "text/plain"
+    return None
+
+
+def select_files(files: list[FileInput]) -> tuple[list[FileInput], list[FileInput]]:
+    """(usable, skipped): applies the count, per-file and total size limits in order. Skipped files
+    carry the reason in `skip`."""
+    ok: list[FileInput] = []
+    skipped: list[FileInput] = []
+    total = 0
+    for f in files:
+        reason = f.skip
+        if not reason and not f.mime:
+            reason = "unsupported file type"
+        elif not reason and f.mime == "text/plain" and f.size > MAX_TEXT_FILE_BYTES:
+            reason = f"text file over {MAX_TEXT_FILE_BYTES // 1024} KB"
+        elif not reason and f.size > MAX_FILE_BYTES:
+            reason = f"over {MAX_FILE_BYTES // 1024 // 1024} MB"
+        elif not reason and len(ok) >= MAX_FILES:
+            reason = f"more than {MAX_FILES} files"
+        elif not reason and total + f.size > MAX_TOTAL_BYTES:
+            reason = f"total size over {MAX_TOTAL_BYTES // 1024 // 1024} MB"
+        if reason:
+            f.skip = reason
+            skipped.append(f)
+        else:
+            ok.append(f)
+            total += f.size
+    return ok, skipped
+
+
+def _gif_first_frame(data: bytes) -> bytes:
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as im:
+        im.seek(0)
+        out = io.BytesIO()
+        im.convert("RGBA").save(out, format="PNG")
+        return out.getvalue()
+
+
+def file_parts(files: list[FileInput]) -> tuple[list[types.Part], list[FileInput]]:
+    """Model input for the usable files: a label part (with the attachment number) and then the
+    file as inline bytes (text files as text). Returns (parts, files that could not be read)."""
+    parts: list[types.Part] = []
+    bad: list[FileInput] = []
+    for f in files:
+        label = f"[ไฟล์ #{f.index}: {f.filename}]"
+        try:
+            if f.mime == "text/plain":
+                body = f.data.decode("utf-8", errors="replace")
+                parts.append(types.Part(text=f"{label}\n{body}"))
+                continue
+            data, mime = f.data, f.mime or ""
+            if mime == "image/gif":
+                data, mime = _gif_first_frame(data), "image/png"
+            parts.append(types.Part(text=label))
+            parts.append(types.Part.from_bytes(data=data, mime_type=mime))
+        except Exception:
+            f.skip = "could not be read"
+            bad.append(f)
+    return parts, bad
+
+
+def skipped_note(skipped: list[FileInput]) -> str:
+    return "\n".join(f"[file skipped: {f.filename}, {f.skip}]" for f in skipped)
+
+
+@dataclass
+class FileActions:
+    """What the file tools may do, bound by the bot to one message (guild, author, channel and
+    message ids are closed over there, never model input). `record_receipt` None = the receipts
+    feature is off; `start_deep_task` None = deep tasks are not available."""
+
+    record_receipt: Callable[[FileInput, str], object] | None = None  # -> extract.IngestResult
+    start_deep_task: Callable[[str], str] | None = None  # -> "started" or a reason
+
+
 PERSONA = {
     "th": (
         "คุณชื่อ “สลิด” เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
@@ -468,9 +599,32 @@ CAPABILITIES_PROMPT = (
     "สลิดจะทำงานเบื้องหลังแล้วส่งรายงานกลับมา\n"
     "7) ผู้ช่วยทั่วไป: คุยเล่น ตอบความรู้ทั่วไป ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ\n"
     "8) ตั้งค่า: แอดมินพิมพ์ /ตั้งค่า หรือ /setup เพื่อรับลิงก์เข้าหน้าศูนย์บัญชาการ (Hub) บนเว็บ "
-    "ที่เปิดปิดความสามารถ ตั้งห้อง โหมด ภาษา ระยะเวลาความจำ และดูความเคลื่อนไหวได้.\n"
+    "ที่เปิดปิดความสามารถ ตั้งห้อง โหมด ภาษา ระยะเวลาความจำ และดูความเคลื่อนไหวได้\n"
+    "9) อ่านรูปและไฟล์ที่ส่งมา: ส่งรูป PDF หรือไฟล์ข้อความ (ไม่เกิน 4 ไฟล์) ให้สลิดโดยตรง (แท็ก เรียกชื่อ ตอบกลับสลิด ส่ง DM หรือส่งในห้องคุยกับสลิด) "
+    "สลิดอ่านแล้วบอกว่าในไฟล์มีอะไร แล้วตัดสินใจเองว่าจะทำอะไรต่อ: ใบเสร็จ/บิล/สลิปโอนเงินบันทึกลงบัญชีให้ "
+    "เอกสารหรือภาพหน้าจอสรุปประเด็นแล้วเสนอขั้นตอนต่อไป คำถามในรูปก็ตอบให้.\n"
     "ข้อจำกัด: ค้นอินเทอร์เน็ตไม่ได้ (ข่าวหรือข้อมูลล่าสุดอาจไม่อัปเดต) และตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ "
     "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
+)
+
+
+FILES_PROMPT = (
+    "\nไฟล์ที่ผู้ใช้ส่งมา: ข้อความล่าสุดมีไฟล์แนบ (รูป, PDF, ไฟล์ข้อความ) ที่แนบมาให้อ่านโดยตรง "
+    "ติดป้าย [ไฟล์ #N: ชื่อ] (N คือเลขไฟล์ที่ใช้กับเครื่องมือ). ทำตามนี้:\n"
+    "(ก) ก่อนอื่นบอกสั้นๆ ว่าแต่ละไฟล์คืออะไร: ประเภทเอกสาร และเนื้อหาสำคัญ (ตัวเลข วันที่ ชื่อ ยอดรวม ประเด็นหลัก).\n"
+    "(ข) แล้วตัดสินใจเองว่าควรทำอะไรต่อ และลงมือทำเลย: "
+    "ใบเสร็จ / ใบกำกับภาษี / บิล / สลิปโอนเงิน -> เรียก record_receipt (ไม่ต้องถามก่อน) แล้วรายงานผล "
+    "(สำเร็จ ซ้ำ หรืออ่านไม่ชัด ให้บอกตามจริง); "
+    "เอกสาร ภาพหน้าจอ แคปแชต ตาราง หรือกราฟ -> สรุปประเด็นสำคัญ เชื่อมกับความจำของทีมถ้าเกี่ยวข้อง (chat_search) "
+    "แล้วเสนอสิ่งที่ทำต่อได้ 1-3 ข้อที่เป็นรูปธรรม หรือถามคำถามเดียวที่ช่วยให้ไปต่อได้; "
+    "ถ้าในรูปเป็นคำถาม -> ตอบคำถามนั้น; "
+    "ถ้าเป็นรูปถ่ายหรือมีม -> ตอบเป็นธรรมชาติและสั้นๆ; "
+    "ถ้างานที่ไฟล์ต้องการเป็นการวิเคราะห์ขนาดใหญ่ที่ต้องใช้ข้อมูลบัญชีทั้งหมด -> เรียก start_deep_task.\n"
+    "(ค) ถ้าข้อความของผู้ใช้บอกว่าจะให้ทำอะไร ให้ทำตามนั้นแทน.\n"
+    "ป้าย [ไฟล์ #N: ...] มีไว้ให้เครื่องมือเท่านั้น ห้ามพิมพ์ป้ายนี้ในคำตอบ (ถ้ามีหลายไฟล์ให้เรียกว่า รูปแรก/ไฟล์ที่สอง หรือชื่อไฟล์) "
+    "และไม่ต้องทักทายหรือแนะนำตัว เริ่มที่เนื้อหาเลย. "
+    "ห้ามแต่งเนื้อหาที่อ่านไม่ได้ ถ้าส่วนไหนอ่านไม่ออกให้บอกว่าอ่านไม่ออกตรงไหน. "
+    "ไฟล์ที่ถูกข้ามจะมีหมายเหตุ [file skipped: ...] ให้แจ้งผู้ใช้สั้นๆ. ตอบให้กระชับ."
 )
 
 
@@ -495,6 +649,7 @@ def system_prompt(
     language: str = "th",
     memory: bool = False,
     interjection: bool = False,
+    files: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message."""
     now = now or settings.now()
@@ -516,6 +671,8 @@ def system_prompt(
         p += MEMORY_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
+    if files:
+        p += FILES_PROMPT
     if language == "en":
         p += "\nLanguage: write your whole reply in English."
     elif language == "auto":
@@ -531,6 +688,7 @@ class Answer:
     rounds: int
     seconds: float
     tool_calls: list[tuple[str, dict]]
+    receipts: list[tuple[int, str | None]] = field(default_factory=list)  # (id, reaction) created
 
 
 def build_tools(
@@ -676,6 +834,79 @@ def build_tools(
     return [*tools, chat_days, chat_messages, chat_search]
 
 
+def build_file_tools(
+    files: list[FileInput],
+    actions: FileActions,
+    calls: list[tuple[str, dict]],
+    created: list[tuple[int, str | None]],
+) -> list:
+    """record_receipt / start_deep_task for the files of one message. The attachment number is
+    the only model input that selects data; guild, author, channel and message are bound in
+    `actions`. Receipts created are appended to `created` as (receipt id, reaction)."""
+    by_index = {f.index: f for f in files}
+    started: list[str] = []
+
+    def record_receipt(file_index: int, note: str = "") -> dict:
+        """Record an attachment of this message as a receipt / tax invoice / bill / bank transfer
+        slip in the shop's expense ledger. Do not ask the user first. Returns the status
+        (created, duplicate, ignored = not a receipt, disabled) and the saved fields.
+
+        Args:
+            file_index: the attachment number N of the file ([ไฟล์ #N: ...]).
+            note: optional extra context from the user (what the expense was for).
+        """
+        calls.append(("record_receipt", {"file_index": file_index}))
+        if actions.record_receipt is None:
+            return {"status": "disabled"}
+        f = by_index.get(file_index)
+        if f is None:
+            return {"status": "error", "error": f"no file #{file_index} in this message"}
+        if f.mime not in _RECEIPT_MIMES and f.mime not in ("application/pdf", "image/gif"):
+            return {"status": "ignored", "reason": "only an image or PDF can be a receipt"}
+        try:
+            res = actions.record_receipt(f, note or "")
+        except Exception as e:  # a failed extraction must not kill the turn
+            logger.warning("record_receipt failed (%s)", type(e).__name__)
+            return {"status": "error", "error": "could not read this file as a receipt"}
+        out: dict = {"status": res.status}
+        r = res.receipt
+        if r is not None:
+            out.update(
+                receipt_id=r.id,
+                vendor=r.vendor,
+                total=r.total,
+                total_fmt=baht(r.total) if r.total is not None else None,
+                date=r.receipt_date or r.effective_date,
+                category=r.category,
+                needs_check=res.reaction == "⚠️",
+            )
+        if res.reply:
+            out["reply_text"] = res.reply
+        if res.status == "created" and r is not None:
+            created.append((r.id, res.reaction))
+        return out
+
+    def start_deep_task(task: str) -> dict:
+        """Start a deep background analysis of the shop's ledger (executives only; the report is
+        posted in the channel later). Use only for a heavy analysis the file calls for, then tell
+        the user it has started.
+
+        Args:
+            task: what to analyse, in the user's language, including the relevant facts from the file.
+        """
+        calls.append(("start_deep_task", {}))
+        if actions.start_deep_task is None:
+            return {"status": "disabled"}
+        if started:
+            return {"status": "already_started"}
+        status = actions.start_deep_task(task)
+        if status == "started":
+            started.append(task)
+        return {"status": status}
+
+    return [record_receipt, start_deep_task]
+
+
 def _ensure_vertex_env(settings: Settings) -> None:
     # ADK reads these to route Gemini calls through Vertex AI (meeting_scribe sets them too).
     os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
@@ -694,6 +925,7 @@ def build_agent(
     language: str = "th",
     memory: bool = False,
     interjection: bool = False,
+    files: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -704,6 +936,7 @@ def build_agent(
         language=language,
         memory=memory,
         interjection=interjection,
+        files=files,
     )
     model_calls = 0
 
@@ -751,35 +984,52 @@ async def ask_async(
     language: str = "th",
     memory: MemoryTools | None = None,
     interjection: bool = False,
+    files: list[FileInput] | None = None,
+    actions: FileActions | None = None,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
-    whose `forced_submitter_id` is the asker for non-executives."""
+    whose `forced_submitter_id` is the asker for non-executives. `files`: the message's attachments
+    (read by the model itself as multimodal parts, within the size limits); with `actions` the model
+    also gets record_receipt / start_deep_task for them."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
+    created: list[tuple[int, str | None]] = []
     ledger = LedgerTools(store, guild_id, forced_submitter_id=None if is_exec else user_id)
+    usable, skipped = select_files(list(files or []))
+    f_parts, unreadable = file_parts(usable)
+    usable = [f for f in usable if f not in unreadable]
+    skipped += unreadable
+    tools = build_tools(ledger, calls, memory)
+    if usable and actions is not None:
+        tools += build_file_tools(usable, actions, calls, created)
     agent = build_agent(
         settings,
-        build_tools(ledger, calls, memory),
+        tools,
         scoped=not is_exec,
         now=now,
         model=model,
         language=language,
         memory=memory is not None,
         interjection=interjection,
+        files=bool(usable or skipped),
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
     await runner.session_service.create_session(
         app_name=APP_NAME, user_id=adk_user, session_id=session_id
     )
+    if files and not question.strip():
+        question = NO_TEXT_TURN
     text_in = (
         f"บทสนทนาก่อนหน้าในห้องนี้ (หลายคนคุยกัน เรียงจากเก่าไปใหม่):\n{history}\n\n"
         f"ข้อความล่าสุดที่ต้องตอบ:\n{question}"
         if history
         else question
     )
-    message = types.Content(role="user", parts=[types.Part(text=text_in)])
+    if skipped:
+        text_in += "\n" + skipped_note(skipped)
+    message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
     async for event in runner.run_async(
         user_id=adk_user,
@@ -798,6 +1048,7 @@ async def ask_async(
         rounds,
         time.monotonic() - started,
         calls,
+        created,
     )
 
 
@@ -815,6 +1066,8 @@ def ask(
     language: str = "th",
     memory: MemoryTools | None = None,
     interjection: bool = False,
+    files: list[FileInput] | None = None,
+    actions: FileActions | None = None,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -831,5 +1084,7 @@ def ask(
             language=language,
             memory=memory,
             interjection=interjection,
+            files=files,
+            actions=actions,
         )
     )
