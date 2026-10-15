@@ -71,6 +71,7 @@ from .modes import (
 )
 from .naming import command_text, mentions_name
 from .qa import MemoryTools, ask, is_no_reply
+from .recent import RecentMessages
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -268,6 +269,9 @@ class SecretaryBot(discord.Client):
             page_sleep=IMPORT_PAGE_SLEEP_S,
         )
         self._seen_mode: dict[int, str] = {}  # channel -> last mode seen (off -> on notice)
+        # Short-term context: recent messages per channel from gateway events (see salid.recent).
+        self.recent = RecentMessages(per_channel=HISTORY_MESSAGES + 10, max_age_s=HISTORY_SECONDS)
+        self._recent_swept = float("-inf")
         self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
 
     @staticmethod
@@ -292,12 +296,14 @@ class SecretaryBot(discord.Client):
 
     async def on_ready(self):
         logger.info("logged in as %s in %d guilds", self.user, len(self.guilds))
+        self.recent.reset()
         for guild in self.guilds:
             await self._sync_guild(guild)
         self._start_import()
 
     async def on_resumed(self):
-        self._start_import()  # a gateway outage may have dropped events
+        self.recent.reset()  # a gateway outage may have dropped events
+        self._start_import()
 
     # ------------------------------------------------------------- guild lifecycle
     @staticmethod
@@ -417,6 +423,7 @@ class SecretaryBot(discord.Client):
 
     # ------------------------------------------------------------- routing
     async def on_message(self, message: discord.Message):
+        self.recent.add(message)
         own = message.author == self.user
         logged = False
         if message.guild is not None and (own or not getattr(message.author, "bot", False)):
@@ -609,20 +616,38 @@ class SecretaryBot(discord.Client):
 
     async def _gate_lines(self, channel, limit: int, before=None) -> list[GateLine]:
         """The channel's last lines, oldest first, for a gate prompt."""
+        lines: list[GateLine] = []
+        for prev in await self._history(channel, limit, before):
+            text = self._strip_mentions(prev.content, prev)
+            if text:
+                who = "สลิด" if prev.author == self.user else prev.author.display_name
+                lines.append(GateLine(str(prev.id), who, text))
+        return lines[::-1]
+
+    async def _history(self, channel, limit: int, before=None) -> list:
+        """The channel's messages before `before` (default: the newest), newest first: from the
+        recent buffer when the channel is primed, else from Discord, which then primes it (only
+        when nothing newer than `before` could be missing)."""
+        cid = getattr(channel, "id", None)
+        if cid is not None:
+            got = self.recent.history(cid, limit, getattr(before, "id", None))
+            if got is not None:
+                return got
         history = getattr(channel, "history", None)
         if history is None:
             return []
-        lines: list[GateLine] = []
+        kw = {"limit": max(limit, self.recent.per_channel)}
+        if before is not None:
+            kw["before"] = before
         try:
-            kw = {"limit": limit} if before is None else {"limit": limit, "before": before}
-            async for prev in history(**kw):
-                text = self._strip_mentions(prev.content, prev)
-                if text:
-                    who = "สลิด" if prev.author == self.user else prev.author.display_name
-                    lines.append(GateLine(str(prev.id), who, text))
+            rows = [m async for m in history(**kw)]
         except discord.HTTPException:
             logger.warning("could not read channel history", exc_info=True)
-        return lines[::-1]
+            return []
+        newest = self.recent.newest_id(cid) if cid is not None else None
+        if cid is not None and (before is None or newest == getattr(before, "id", None)):
+            self.recent.prime(cid, rows)
+        return rows[:limit]
 
     def _command_text(self, message: discord.Message) -> str:
         """Text for the typed-command parsers: tag, a leading name ("Salid ...") and trailing
@@ -812,28 +837,24 @@ class SecretaryBot(discord.Client):
         """The room's recent conversation, oldest first: every participant (not only the asker)
         with local times, plus the message being replied to and today's summary of this channel
         when memory has one. Context only; the ledger and memory scopes are decided in code."""
-        history = getattr(message.channel, "history", None)
-        if history is None:
+        if getattr(message.channel, "history", None) is None:
             return ""
         zone = self.s.zone
         lines: list[str] = []
-        try:
-            async for prev in history(limit=HISTORY_MESSAGES + 10, before=message):
-                if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
-                    break
-                if getattr(prev.author, "bot", False) and prev.author != self.user:
-                    continue
-                text = self._strip_mentions(prev.content, prev)
-                if not text and getattr(prev, "attachments", None):
-                    text = " ".join(f"[{a.filename}]" for a in prev.attachments)
-                if text:
-                    who = "สลิด" if prev.author == self.user else prev.author.display_name
-                    at = prev.created_at.astimezone(zone).strftime("%H:%M")
-                    lines.append(f"[{at}] {who}: {text[:HISTORY_LINE_CHARS]}")
-                if len(lines) >= HISTORY_MESSAGES:
-                    break
-        except discord.HTTPException:
-            logger.warning("could not read channel history", exc_info=True)
+        for prev in await self._history(message.channel, HISTORY_MESSAGES + 10, before=message):
+            if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
+                break
+            if getattr(prev.author, "bot", False) and prev.author != self.user:
+                continue
+            text = self._strip_mentions(prev.content, prev)
+            if not text and getattr(prev, "attachments", None):
+                text = " ".join(f"[{a.filename}]" for a in prev.attachments)
+            if text:
+                who = "สลิด" if prev.author == self.user else prev.author.display_name
+                at = prev.created_at.astimezone(zone).strftime("%H:%M")
+                lines.append(f"[{at}] {who}: {text[:HISTORY_LINE_CHARS]}")
+            if len(lines) >= HISTORY_MESSAGES:
+                break
         lines.reverse()
         while lines and sum(len(x) + 1 for x in lines) > HISTORY_CHARS:
             lines.pop(0)
@@ -866,21 +887,15 @@ class SecretaryBot(discord.Client):
 
     async def _previous_text(self, message: discord.Message) -> str:
         """The author's own message just before a bare @mention ("Hi" then "@Salid")."""
-        history = getattr(message.channel, "history", None)
-        if history is None:
-            return ""
-        try:
-            async for prev in history(limit=5, before=message):
-                if prev.author.id != message.author.id:
-                    continue
-                age = (message.created_at - prev.created_at).total_seconds()
-                if age > FOLLOWUP_WINDOW_SECONDS:
-                    return ""
-                text = self._strip_mentions(prev.content, prev)
-                if text:
-                    return text
-        except discord.HTTPException:
-            logger.warning("could not read channel history", exc_info=True)
+        for prev in await self._history(message.channel, 5, before=message):
+            if prev.author.id != message.author.id:
+                continue
+            age = (message.created_at - prev.created_at).total_seconds()
+            if age > FOLLOWUP_WINDOW_SECONDS:
+                return ""
+            text = self._strip_mentions(prev.content, prev)
+            if text:
+                return text
         return ""
 
     async def _answer(
@@ -1280,6 +1295,9 @@ class SecretaryBot(discord.Client):
                 logger.exception("tick failed")
 
     async def tick(self) -> None:
+        if self._clock() - self._recent_swept >= 60:
+            self._recent_swept = self._clock()
+            self.recent.sweep(datetime.now(UTC))
         await self._signoff_due()
         await self._join_due()
         await self._memory_due()
@@ -1519,6 +1537,10 @@ class SecretaryBot(discord.Client):
 
     async def on_raw_message_edit(self, payload) -> None:
         data = getattr(payload, "data", None) or {}
+        if "content" in data:
+            self.recent.edit(
+                getattr(payload, "channel_id", None), payload.message_id, data["content"]
+            )
         if payload.guild_id is None or "content" not in data:
             return
         atts = [
@@ -1541,12 +1563,14 @@ class SecretaryBot(discord.Client):
         )
 
     async def on_raw_message_delete(self, payload) -> None:
+        self.recent.delete(getattr(payload, "channel_id", None), [payload.message_id])
         if payload.guild_id is not None:
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, [payload.message_id])
             )
 
     async def on_raw_bulk_message_delete(self, payload) -> None:
+        self.recent.delete(getattr(payload, "channel_id", None), payload.message_ids)
         if payload.guild_id is not None:
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, sorted(payload.message_ids))
