@@ -203,6 +203,19 @@ class FirestoreMemoryStore:
     def put_summary(self, s: DaySummary) -> None:
         self._sum_ref(s.guild_id, s.channel_id, s.local_date).set(s.model_dump())
 
+    def all_summaries(self, guild_id):
+        snaps = self._q(self.summaries_name, ("guild_id", "==", guild_id)).stream()
+        return sorted(
+            (_sum_from(s.to_dict()) for s in snaps), key=lambda s: (s.local_date, s.channel_id)
+        )
+
+    def put_summary_vectors(self, guild_id, channel_id, local_date, vec_model, vec_hashes, vecs):
+        ref = self._sum_ref(guild_id, channel_id, local_date)
+        if not ref.get().exists:
+            return False
+        ref.update({"vec_model": vec_model, "vec_hashes": list(vec_hashes), "vecs": vecs})
+        return True
+
     def summaries(self, guild_id, allowed_channels, start_date, end_date):
         allowed = set(allowed_channels)
         if not allowed:

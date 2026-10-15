@@ -25,6 +25,7 @@ from .deep_task import (
     run_deep_task,
 )
 from .digest import build_daily_digest
+from .embed import make_embedder
 from .extract import apply_correction, guess_mime, ingest_attachment
 from .gate import GateLine, is_join_candidate
 from .guild_settings import (
@@ -222,6 +223,7 @@ class SecretaryBot(discord.Client):
         self._sync_pending: dict[int, asyncio.Task] = {}
         self.meetings = MeetingManager(self)
         # Organisational memory: raw log + day summaries (see salid.memory).
+        self.embedder = make_embedder(settings, llm)  # NullEmbedder without a client (tests)
         self.memory_store = memory or self._default_memory_store(settings, store)
         self.memory = MemoryService(
             self.memory_store,
@@ -235,6 +237,7 @@ class SecretaryBot(discord.Client):
                 retention_of=self.team.memory_retention_days,
                 channel_name_of=self._channel_name,
                 enabled=lambda gid: self.team.enabled(gid, "memory"),
+                embedder=self.embedder,
             ),
         )
         self._memory_queue: asyncio.Queue | None = None

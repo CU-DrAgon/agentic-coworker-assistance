@@ -8,7 +8,16 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from conftest import GUILD, FakeClient, FixedClockSettings, fc_resp, json_resp, scripted, text_resp
+from conftest import (
+    GUILD,
+    FakeClient,
+    FakeEmbedder,
+    FixedClockSettings,
+    fc_resp,
+    json_resp,
+    scripted,
+    text_resp,
+)
 from fake_firestore import offline_memory_store
 from test_bot_multitenant import ME, member
 from test_modes import (  # noqa: F401  (fixtures)
@@ -25,6 +34,7 @@ from test_modes import (  # noqa: F401  (fixtures)
 )
 
 from salid import memory_summary
+from salid.embed import unpack
 from salid.guild_settings import (
     GuildSettings,
     GuildSettingsUpdate,
@@ -32,9 +42,17 @@ from salid.guild_settings import (
     default_retention_days,
 )
 from salid.i18n import t
-from salid.memory import MemoryScheduler, MemoryService, build_message, message_text
+from salid.memory import (
+    MemoryScheduler,
+    MemoryService,
+    build_message,
+    message_text,
+    vectorize,
+    vectors_usable,
+)
 from salid.memory_access import ChannelAccess, allowed_channel_ids
 from salid.memory_store import DaySummary, SQLiteMemoryStore
+from salid.memory_summary import summary_items
 from salid.qa import MemoryTools, ask
 
 BKK = ZoneInfo("Asia/Bangkok")
@@ -925,3 +943,105 @@ def test_import_state_parity(mstore):
         and mstore.get_guild_state(GUILD).images_done == 0
     )
     assert mstore.get_channel_state(GUILD + 1, 10) is not None
+
+
+# ------------------------------------------------------------------ vectors
+def test_summary_items_lists_every_part():
+    s = {"overview": "o", "topics": [{"title": "t", "details": "d", "people": ["แอน"]}],
+         "decisions": ["x"], "action_items": [{"who": "บอย", "what": "w", "due": ""}],
+         "numbers": ["5"], "open_questions": ["q"]}  # fmt: skip
+    assert summary_items(s) == [
+        "o", "Topic: t d แอน", "Decision: x", "Action: บอย w", "Number: 5", "Open: q",
+    ]  # fmt: skip
+
+
+def test_update_writes_vectors_and_reuses_unchanged_items(mstore, settings):
+    first = json_resp({"overview": "งบโฆษณา", "decisions": ["d1"]})
+    second = json_resp({"overview": "งบโฆษณา", "decisions": ["d1", "ซื้อน้ำแข็ง"]})
+    clock, llm, emb = Clock(bkk(14, 10)), FakeClient([first, second]), FakeEmbedder()
+    s = sched(mstore, settings, clock, llm, embedder=emb)
+    svc = MemoryService(mstore, settings, s)
+    for i in range(30):
+        log(svc, settings, i + 1, bkk(14, 9, i))
+    s.tick([GUILD])
+    for i in range(30, 60):
+        log(svc, settings, i + 1, bkk(14, 10, i - 30))  # after the first update's cursor
+    s.tick([GUILD])
+    assert emb.calls[1] == (["Decision: ซื้อน้ำแข็ง"], "document")
+    got = mstore.get_summary(GUILD, 10, "2026-10-14")
+    assert vectors_usable(got, "fake@4") and len(unpack(got.vecs, 4)) == 3
+
+
+def test_summary_is_saved_when_embedding_fails(mstore, settings):
+    clock, llm = Clock(bkk(14, 10)), FakeClient([summary_json("a")])
+    s = sched(mstore, settings, clock, llm, embedder=FakeEmbedder(fail=True))
+    svc = MemoryService(mstore, settings, s)
+    for i in range(30):
+        log(svc, settings, i + 1, bkk(14, 9, i))
+    s.tick([GUILD])
+    got = mstore.get_summary(GUILD, 10, "2026-10-14")
+    assert got.summary["overview"] == "overview a" and got.vec_model == ""
+
+
+def test_backfill_vectorises_old_summaries_newest_first_with_a_cap(mstore, settings):
+    for d in range(1, 13):
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      final=True, message_count=3, summary={"overview": f"day {d}"}))  # fmt: skip
+    emb = FakeEmbedder()
+    s = sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb)
+    s.tick([GUILD])
+    assert [c[0] for c in emb.calls][0] == ["day 12"] and len(emb.calls) == 10
+    s.tick([GUILD])
+    assert len(emb.calls) == 12
+    s.tick([GUILD])
+    assert len(emb.calls) == 12  # nothing left: the guild is skipped
+    assert all(vectors_usable(x, "fake@4") for x in mstore.all_summaries(GUILD))
+
+
+def test_backfill_redoes_vectors_of_another_model(mstore, settings):
+    old = vectorize({"overview": "งบโฆษณา"}, None, FakeEmbedder())
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01", final=True,
+                                  summary={"overview": "งบโฆษณา"}, vec_model="other@8",
+                                  vec_hashes=old.hashes, vecs=old.data))  # fmt: skip
+    emb = FakeEmbedder()
+    sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb).tick([GUILD])
+    assert mstore.get_summary(GUILD, 10, "2026-10-01").vec_model == "fake@4"
+
+
+def test_empty_summary_counts_as_vectorised():
+    s = DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01", summary={})
+    assert vectors_usable(s, "fake@4") and vectorize({}, None, FakeEmbedder()).embedded == 0
+
+
+def test_put_summary_vectors_and_all_summaries_parity(mstore):
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01",
+                                  summary={"overview": "a"}, message_count=4))  # fmt: skip
+    mstore.put_summary(DaySummary(guild_id=GUILD + 1, channel_id=10, local_date="2026-10-01",
+                                  summary={}))  # fmt: skip
+    assert mstore.put_summary_vectors(GUILD, 10, "2026-10-01", "fake@4", ["h"], b"\0" * 16)
+    assert not mstore.put_summary_vectors(GUILD, 99, "2026-10-01", "fake@4", ["h"], b"")
+    got = mstore.all_summaries(GUILD)
+    assert [(x.channel_id, x.vec_model, x.vecs, x.message_count) for x in got] == [
+        (10, "fake@4", b"\0" * 16, 4)
+    ]
+
+
+def test_old_sqlite_summary_table_gets_vector_columns(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    with sqlite3.connect(path) as c:
+        c.execute(
+            "CREATE TABLE salid_day_summaries (guild_id INTEGER, channel_id INTEGER, "
+            "local_date TEXT, summary TEXT, last_message_at TEXT, last_message_id INTEGER DEFAULT 0, "
+            "message_count INTEGER DEFAULT 0, updated_at TEXT, final INTEGER DEFAULT 0, "
+            "dirty INTEGER DEFAULT 0, PRIMARY KEY (guild_id, channel_id, local_date))"
+        )
+        c.execute(
+            "INSERT INTO salid_day_summaries (guild_id, channel_id, local_date, summary, updated_at) "
+            "VALUES (1000, 10, '2026-10-01', '{}', '')"
+        )
+    st = SQLiteMemoryStore(path)
+    assert st.get_summary(GUILD, 10, "2026-10-01").vec_model == ""
+    assert st.put_summary_vectors(GUILD, 10, "2026-10-01", "fake@4", ["h"], b"\1" * 16)
+    assert st.get_summary(GUILD, 10, "2026-10-01").vecs == b"\1" * 16

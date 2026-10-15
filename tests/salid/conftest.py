@@ -8,6 +8,7 @@ from google.adk.models import BaseLlm, LlmResponse
 from google.genai import types
 
 from salid.config import Settings
+from salid.embed import normalize
 from salid.models import Receipt
 from salid.store import SQLiteStore
 
@@ -86,6 +87,33 @@ def fc_resp(*calls):
     return SimpleNamespace(
         text=None, candidates=[SimpleNamespace(content=types.Content(role="model", parts=parts))]
     )
+
+
+CONCEPTS = {
+    "ads": ("งบโฆษณา", "โฆษณา", "ads", "marketing", "advertis"),
+    "ice": ("น้ำแข็ง", "ice"),
+    "rent": ("ค่าเช่า", "rent"),
+}
+
+
+class FakeEmbedder:
+    """Deterministic embedder: one axis per concept a text mentions (Thai or English) plus a small
+    constant axis, normalised. Same concept -> cosine 1.0; unrelated -> below 0.3."""
+
+    model_id, dim = "fake@4", 4
+
+    def __init__(self, fail=False):
+        self.calls, self.fail = [], fail
+
+    def embed(self, texts, task):
+        self.calls.append((list(texts), task))
+        if self.fail:
+            raise RuntimeError("embedding down")
+        low = [t.casefold() for t in texts]
+        return [
+            normalize([float(any(w in t for w in ws)) for ws in CONCEPTS.values()] + [0.3])
+            for t in low
+        ]
 
 
 class FixedClockSettings(Settings):

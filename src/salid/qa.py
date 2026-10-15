@@ -18,7 +18,7 @@ from google.genai import types
 from .config import Settings
 from .i18n import resolve_lang, t
 from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
-from .memory_summary import render_summary
+from .memory_summary import render_summary, summary_items
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -283,20 +283,6 @@ class MemoryTools:
             out["note"] = "nothing recorded in the channels you can see for this period"
         return out
 
-    @staticmethod
-    def _summary_lines(summary: dict) -> list[str]:
-        """Searchable lines of a summary: topics, decisions, action items, numbers, the rest."""
-        lines = [summary.get("overview") or ""]
-        for tp in summary.get("topics") or []:
-            people = ", ".join(tp.get("people") or [])
-            lines.append(f"Topic: {tp.get('title', '')} {tp.get('details', '')} {people}".strip())
-        lines += [f"Decision: {x}" for x in summary.get("decisions") or []]
-        for a in summary.get("action_items") or []:
-            lines.append(f"Action: {a.get('who', '')} {a.get('what', '')} {a.get('due', '')}")
-        lines += [f"Number: {x}" for x in summary.get("numbers") or []]
-        lines += [f"Open: {x}" for x in summary.get("open_questions") or []]
-        return [x.strip() for x in lines if x and x.strip()]
-
     def chat_search(
         self,
         keywords: list[str],
@@ -332,7 +318,7 @@ class MemoryTools:
             )
 
         for x in self.store.summaries(self.guild_id, self.allowed, a, b):
-            for line in self._summary_lines(x.summary):
+            for line in summary_items(x.summary):
                 h = hits(line)
                 if h:
                     g = group(x.local_date, x.channel_id)
