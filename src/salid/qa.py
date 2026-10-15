@@ -910,8 +910,16 @@ MENTION_PROMPT = (
 )
 
 
+LATENCY_PROMPT = (
+    "\nความเร็ว: ตอบตรงๆ ทันทีเมื่อไฟล์แนบหรือข้อความมีคำตอบอยู่แล้ว (เช่น สรุปไฟล์ ขั้นตอนถัดไปจากเนื้อหาไฟล์ "
+    "แปล เขียนร่าง คุยเล่น) ไม่ต้องเรียกเครื่องมือ. เรียกเครื่องมือเฉพาะเมื่อคำถามต้องใช้ข้อมูลนั้นจริงๆ "
+    "และเรียกที่ต้องใช้พร้อมกันในรอบเดียว ไม่ทยอยเรียกทีละตัว."
+)
+
+
 MEMORY_PROMPT = (
-    "\nความจำของทีม: เมื่อถูกถามว่าเกิดอะไรขึ้น ใครพูดอะไร หรืองาน/เรื่องใดถึงไหนแล้ว "
+    "\nความจำของทีม (ค้นรอบเดียวแล้วตอบ ไม่เจอก็บอกว่าไม่พบ ไม่ต้องวนค้นซ้ำ; ไม่ต้องค้นถ้าข้อความหรือไฟล์ที่แนบมีคำตอบอยู่แล้ว): "
+    "เมื่อถูกถามว่าเกิดอะไรขึ้น ใครพูดอะไร หรืองาน/เรื่องใดถึงไหนแล้ว "
     "ถ้าคำถามไม่มีวันที่ชัดเจน ให้เรียก chat_search ก่อนด้วยคำค้น 3-8 คำ ทั้งไทย อังกฤษ คำพ้อง ชื่อคน และตัวย่อ "
     "(เช่น งบโฆษณา, ค่าโฆษณา, ads, marketing budget) แล้วค่อยเปิดวันที่เจอด้วย chat_days หรือ chat_messages. "
     "ถ้าคำถามมีวันที่ ให้เรียก chat_days (สรุปรายวันต่อห้อง) ได้เลย "
@@ -929,6 +937,7 @@ MEMORY_PROMPT = (
 # are registered (see `build_agent(coo=True)`).
 COO_PROMPT = (
     "\nบทบาทผู้ประสานงานของทีม (COO/PM): สลิดดูความเคลื่อนไหวของทุกคนเอง ไม่ต้องรอให้ใครมารายงาน "
+    "อย่าเรียก list_tasks ถ้าคำถามไม่ได้เกี่ยวกับงานค้าง/ผู้รับผิดชอบ (เช่น ขั้นตอนถัดไปในไฟล์ที่แนบมา ให้ตอบจากไฟล์). "
     "จดงานที่ใครรับปากหรือถูกมอบหมายเป็นรายการงาน ติดตามทุกเช้าด้วยสรุปเช้าส่วนตัวทาง DM (มีงานที่ครบกำหนดรวมอยู่ด้วย) และส่งรายงานเย็นให้ผู้บริหาร "
     "(ห้อง “รายงานจากสลิด”, /รายงาน หรือ /report). ใช้ list_tasks ดูงาน, update_task ปิดงานหรือเปิดใหม่ "
     "(สมาชิกแก้ได้เฉพาะงานของตัวเอง ผู้บริหารแก้ได้ทุกงาน) เมื่อมีคนบอกว่าทำงานไหนเสร็จหรือติดอะไร "
@@ -1045,7 +1054,7 @@ FILES_PROMPT = (
     "(ข) แล้วตัดสินใจเองว่าควรทำอะไรต่อ และลงมือทำเลย: "
     "ใบเสร็จ / ใบกำกับภาษี / บิล / สลิปโอนเงิน -> เรียก record_receipt (ไม่ต้องถามก่อน) แล้วรายงานผล "
     "(สำเร็จ ซ้ำ หรืออ่านไม่ชัด ให้บอกตามจริง); "
-    "เอกสาร ภาพหน้าจอ แคปแชต ตาราง หรือกราฟ -> สรุปประเด็นสำคัญ เชื่อมกับความจำของทีมถ้าเกี่ยวข้อง (chat_search) "
+    "เอกสาร ภาพหน้าจอ แคปแชต ตาราง หรือกราฟ -> สรุปประเด็นสำคัญจากตัวไฟล์เอง (ค้นความจำของทีมด้วย chat_search เฉพาะเมื่อผู้ใช้ถามถึงเรื่องในแชตจริงๆ) "
     "แล้วเสนอสิ่งที่ทำต่อได้ 1-3 ข้อที่เป็นรูปธรรม หรือถามคำถามเดียวที่ช่วยให้ไปต่อได้; "
     "ถ้าในรูปเป็นคำถาม -> ตอบคำถามนั้น; "
     "ถ้าเป็นรูปถ่ายหรือมีม -> ตอบเป็นธรรมชาติและสั้นๆ; "
@@ -1146,6 +1155,7 @@ def system_prompt(
         "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
+    p += LATENCY_PROMPT
     p += DUPLICATES_PROMPT
     if scoped:
         p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
@@ -1548,10 +1558,43 @@ def build_agent(
     )
 
 
+def spoken_hint(particle: str = "") -> str:
+    """Hint appended to a question whose answer will be spoken. `particle`: the voice's
+    politeness particle (ค่ะ for the female voice; questions use คะ)."""
+    hint = SPOKEN_HINT
+    if particle:
+        q = "คะ" if particle == "ค่ะ" else particle
+        hint += (
+            f"\n(เสียงพูดเป็นผู้หญิง ลงท้ายประโยคด้วย “{particle}” เสมอ ประโยคคำถามใช้ “{q}” "
+            "ห้ามใช้ ครับ/นะครับ ปนกัน / end spoken sentences with the voice particle)"
+        )
+    return hint
+
+
 SPOKEN_HINT = (
     "(คำตอบนี้จะถูกพูดออกเสียงในห้องเสียง: ตอบ 1-3 ประโยคสั้น ๆ พูดได้ลื่น ไม่ใช้รายการหรือ markdown / "
     "answer in 1-3 short sentences suitable for speaking, no lists or markdown)"
 )
+
+
+_FILE_REF_RE = re.compile(
+    r"ไฟล์|เอกสาร|รูป|ภาพ|แนบ|pdf|docx?|\bfile\b|\bimage\b|\bphoto\b|\bdocument\b|ใบเสร็จ|สลิป",
+    re.I,
+)
+_MEMORY_REF_RE = re.compile(
+    r"เมื่อวาน|เมื่อกี้|ก่อนหน้า|ที่ผ่านมา|ในห้อง|ในแชต|ใครพูด|ใครบอก|คุยกัน|ประชุม|เคย|ค้น|หา(?:ใน)?"
+    r"|chat|yesterday|earlier|previous|last\s+(?:week|time)|who\s+(?:said|told)|search|find|meeting",
+    re.I,
+)
+
+
+def is_file_only_question(question: str) -> bool:
+    """The message is just attachments, or a request about them that does not mention the chat's
+    history ("สรุปไฟล์นี้ให้หน่อย"): the chat-memory tools would only cost a model round."""
+    q = (question or "").strip()
+    if not q or q == NO_TEXT_TURN:
+        return True
+    return bool(_FILE_REF_RE.search(q)) and not _MEMORY_REF_RE.search(q)
 
 
 async def ask_async(
@@ -1599,6 +1642,8 @@ async def ask_async(
     f_parts, unreadable = file_parts(usable)
     usable = [f for f in usable if f not in unreadable]
     skipped += unreadable
+    if memory is not None and usable and is_file_only_question(question):
+        memory = None  # the question is about the attached file only: no chat-memory tools
     tools = build_tools(ledger, calls, memory)
     if usable and actions is not None:
         tools += build_file_tools(usable, actions, calls, created)
@@ -1646,7 +1691,7 @@ async def ask_async(
     if skipped:
         text_in += "\n" + skipped_note(skipped)
     if spoken:
-        text_in += "\n" + SPOKEN_HINT
+        text_in += "\n" + spoken_hint(str(getattr(settings, "voice_particle", "") or ""))
     message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
     async for event in runner.run_async(

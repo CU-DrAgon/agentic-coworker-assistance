@@ -12,7 +12,9 @@ async def test_other_peoples_tags_become_names_before_the_model_sees_them(bot, w
     jemm = member(world.g, 77)
     jemm.display_name = "Jemm"
     sender = member(world.g, 78)
-    m = Msg(world.g, world.g.text_channels[0], sender, "<@999> ฝากบอก <@77> ทาง DM ว่าส่งงานด้วย <@!78>")
+    m = Msg(
+        world.g, world.g.text_channels[0], sender, "<@999> ฝากบอก <@77> ทาง DM ว่าส่งงานด้วย <@!78>"
+    )
     m.mentions = [ME, jemm]
     q = bot._name_mentions(bot._strip_mentions(m.content, m), m)
     assert q == "ฝากบอก @Jemm ทาง DM ว่าส่งงานด้วย @u78"  # the guild member lookup is the fallback

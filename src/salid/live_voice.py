@@ -305,12 +305,25 @@ class LiveAudioSource(discord.AudioSource):
 
 
 # ------------------------------------------------------------------ instruction
+THAI_MONTHS = [
+    "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+    "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+]  # fmt: skip
+
+
+def thai_date_line(now) -> str:
+    """ "วันนี้คือ วันศุกร์ที่ 16 ตุลาคม 2026": Thai weekday and month, Gregorian year (no Buddhist
+    era, which the model would otherwise mix up), for the very top of the Live instruction."""
+    return f"วันนี้คือ วัน{THAI_DAYS[now.weekday()]}ที่ {now.day} {THAI_MONTHS[now.month - 1]} {now.year}"
+
+
 def build_instruction(
     settings: Any, language: str = "th", now=None, qa: bool = True, history: str = ""
 ) -> str:
     """System instruction for the Live session (Thai, built per connect so the date is current)."""
     now = now or settings.now()
     p = (
+        f"{thai_date_line(now)}\n"
         "คุณชื่อ “สลิด” (Salid) เป็นเพื่อนร่วมทีมและผู้ช่วยที่นั่งอยู่ในห้องเสียง Discord ของทีมและฟังทุกคนคุยกันอยู่ "
         "อ่านบรรยากาศในห้องเป็น เข้าร่วมบทสนทนาอย่างเป็นธรรมชาติ ถามชวนคุยเหมือนเพื่อนร่วมงานที่ดี "
         "ไม่สั่งสอน ไม่อ่านกฎหรือนโยบายให้ใคร\n"
@@ -329,6 +342,8 @@ def build_instruction(
         "เช่น “วันนี้ประชุมกันหรือเปล่าคะ” โดยเรียก ask_consent (ปกติเป็นข้อความ จะได้ไม่รบกวน; พูดเมื่อห้องเงียบหรือมีคนคุยกับคุณ) "
         "ถ้าตอบว่าไม่ใช่การประชุม/ไม่ต้องจด ให้เรียก set_recording(false) แล้วพูดสั้น ๆ ว่าไม่จดแล้ว และเงียบรอให้เรียก "
         "ถ้าเป็นการประชุมให้จดต่อ\n"
+        "- ถ้ามีคนบอกให้คุณออกจากห้อง/ออกประชุม/เลิกประชุม (“ออกประชุม”, “ออกไปก่อน”, “leave”) ระบบจัดการการออกเอง: "
+        "ห้ามเรียก set_recording และห้ามพูดว่า “ไม่จดแล้ว” ให้พูดลาสั้น ๆ ประโยคเดียว เช่น “แล้วเจอกันนะคะ” แล้วเงียบ\n"
         "- การคุยกับคนต้องเป็นเสียงเท่านั้น ห้ามส่งข้อความซ้ำสิ่งที่พูด ส่วนสิ่งที่ควรจดจริง ๆ (มติ งานที่ต้องทำพร้อมเจ้าของและกำหนดเวลา "
         "ตัวเลขที่มีคนขอให้จำ) ให้เรียก post_note บรรทัดสั้น ๆ ต่อหนึ่งเรื่อง ไม่ใช่ทุกประโยค\n"
         "- ถ้ามีคนบอกให้ส่งมติ/สรุปการประชุมไปห้องไหน ให้เรียกเครื่องมือ set_minutes_destination แล้วยืนยันสั้น ๆ\n"
@@ -393,7 +408,8 @@ class LiveVoice:
         self._said: list[str] = []
         self._turn_audio = False
         self._awaiting_answer = False  # a tool call was answered: its spoken answer comes next
-        self._last_audio_at = 0.0  # when the model last produced audio (monotonic)
+        self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
+        self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
 
     # ---- lifecycle
@@ -562,23 +578,29 @@ class LiveVoice:
             turns=types.Content(role="user", parts=[types.Part(text=text)]), turn_complete=False
         )
 
-    def ensure_reply(self, since: float, heard: str = "") -> None:
+    def ensure_reply(
+        self,
+        since: float,
+        heard: str = "",
+        *,
+        user_id: int | None = None,
+        question: str = "",
+    ) -> None:
         """Someone said the name (the utterance ended at `since`, monotonic). If the model has not
-        started answering `live_force_reply_seconds` after that, force a turn with a cue."""
-        self._spawn(self._force_reply(since, heard))
+        started answering `live_force_reply_seconds` after that, force a turn with a cue; no audio
+        `live_cue_retry_seconds` after the cue: cue once more; still nothing after another
+        `live_fallback_seconds`: the classic path (agent + TTS) answers `question` instead."""
+        self._spawn(self._force_reply(since, heard, user_id, question or heard))
 
-    async def _force_reply(self, since: float, heard: str = "") -> None:
-        wait = float(getattr(self.bot.s, "live_force_reply_seconds", 1.2))
-        delay = since + wait - time.monotonic()
-        if delay > 0:
-            await asyncio.sleep(delay)
-        live = self._live
-        if live is None or self._closing or self.session.ending:
-            return
-        if self._last_audio_at >= since or self._turn_audio or self._awaiting_answer:
-            return  # the model is answering (or answered, or waiting for a tool result) already
-        logger.info("live: name heard but no reply: forcing a turn")
-        self._last_audio_at = time.monotonic()  # one cue per call
+    def _answering(self, since: float) -> bool:
+        return (
+            self._real_audio_at >= since
+            or self._last_audio_at >= since
+            or self._turn_audio
+            or self._awaiting_answer
+        )
+
+    async def _cue(self, live: Any, heard: str) -> None:
         cue = FORCE_CUE
         if heard.strip():  # the model may have dropped the audio: say what was heard (transcript)
             cue += f" ข้อความที่เขาพูดคือ: “{heard.strip()[:300]}”"
@@ -586,6 +608,42 @@ class LiveVoice:
             turns=types.Content(role="user", parts=[types.Part(text=cue)]),
             turn_complete=True,
         )
+
+    async def _force_reply(
+        self, since: float, heard: str = "", user_id: int | None = None, question: str = ""
+    ) -> None:
+        sets = self.bot.s
+        wait = float(getattr(sets, "live_force_reply_seconds", 1.2))
+        delay = since + wait - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        live = self._live
+        if live is None or self._closing or self.session.ending:
+            return
+        if self._answering(since):
+            return  # the model is answering (or answered, or waiting for a tool result) already
+        logger.info("live: name heard but no reply: forcing a turn")
+        cue_at = time.monotonic()
+        self._last_audio_at = cue_at  # one cue per call
+        await self._cue(live, heard)
+        await asyncio.sleep(float(getattr(sets, "live_cue_retry_seconds", 6.0)))
+        live = self._live
+        if live is None or self._closing or self.session.ending or self.session.leaving:
+            return
+        if self._real_audio_at >= cue_at or self._turn_audio or self._awaiting_answer:
+            return
+        logger.info("live: still no audio after the cue: cueing once more")
+        cue_at = time.monotonic()
+        await self._cue(live, heard)
+        await asyncio.sleep(float(getattr(sets, "live_fallback_seconds", 4.0)))
+        if self._closing or self.session.ending or self.session.leaving:
+            return
+        if self._real_audio_at >= cue_at or self._turn_audio or self._awaiting_answer:
+            return
+        if user_id is None or not question.strip():
+            return
+        logger.warning("live: no audio from the model: answering through the classic path")
+        self._spawn(self.bot.meetings.live_fallback(self.session, user_id, question))
 
     # ---- audio in
     def _idle_s(self) -> float:
@@ -736,7 +794,7 @@ class LiveVoice:
     # ---- audio out
     def _on_audio(self, data: bytes) -> None:
         s = self.session
-        if s.ending or not self.bot.s.voice_reply or not _connected(s.vc):
+        if s.ending or s.leaving or not self.bot.s.voice_reply or not _connected(s.vc):
             return
         if not self._turn_audio:
             self._turn_audio = True
@@ -748,7 +806,7 @@ class LiveVoice:
                 self._latency_pending = False
         self._awaiting_answer = False
         s.introduced = True  # Salid has spoken: the room knows it is there
-        self._last_audio_at = time.monotonic()
+        self._last_audio_at = self._real_audio_at = time.monotonic()
         src = self._source
         if src is None or not src.feed(data):  # no source yet, or the last one is spent
             src = self._source = LiveAudioSource()

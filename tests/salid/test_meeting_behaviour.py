@@ -457,7 +457,8 @@ async def test_name_engages_and_every_next_utterance_is_answered_without_it(env,
     for _ in range(5):
         await env.mgr.handle_segment(s, segment(10))
     # listening: ignored; name: answered + engaged; engaged: answered; dismissed: listening again
-    assert asked == ["สวัสดีครับ", "แล้วงบเท่าไหร่"] or asked[1] == "แล้วงบเท่าไหร่"
+    # the bare greeting is answered by a fixed spoken line, not the agent
+    assert asked == ["แล้วงบเท่าไหร่"]
     assert "แล้วไงต่อ" not in asked and s.engaged is False
     await env.mgr.end((1000, 77), "shutdown")
 

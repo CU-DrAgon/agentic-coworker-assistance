@@ -70,8 +70,14 @@ async def main() -> int:
     print(table(rows))
     ok = sum(r["passed"] for r in rows)
     print(f"\n{ok}/{len(rows)} passed in {time.monotonic() - t0:.0f}s; live calls: {calls}")
-    out = Path(a.out) if a.out else Path(tempfile.gettempdir()) / f"salid_eval_{int(time.time())}.json"
-    out.write_text(json.dumps({"rows": rows, "live_calls": calls}, ensure_ascii=False, indent=2, default=str))
+    out = (
+        Path(a.out)
+        if a.out
+        else Path(tempfile.gettempdir()) / f"salid_eval_{int(time.time())}.json"
+    )
+    out.write_text(
+        json.dumps({"rows": rows, "live_calls": calls}, ensure_ascii=False, indent=2, default=str)
+    )
     print(f"report: {out}")
     return 0 if ok == len(rows) else 1
 

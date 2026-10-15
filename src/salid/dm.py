@@ -7,6 +7,7 @@ Used by the DM tool, meeting invites and reminders. A member who closed server D
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 import discord
@@ -14,6 +15,36 @@ import discord
 from .i18n import t
 
 logger = logging.getLogger(__name__)
+
+
+MAX_DM_PEOPLE = 3  # different people one request may DM
+SENSITIVE_DM_RE = re.compile(
+    r"โอนเงิน|โอนตัง|เลขบัญชี|เลขที่บัญชี|รหัสผ่าน|พาสเวิร์ด|รหัส\s*otp|\botp\b|password|passcode"
+    r"|transfer\s+(?:the\s+)?(?:money|funds?)|wire\s+(?:the\s+)?money|bank\s+account"
+    r"|account\s+number|credit\s+card",
+    re.I,
+)
+
+
+def dm_refusal(text: str, others: set[int], new_target: int, is_self: bool) -> dict | None:
+    """A hard (non-prompt) limit for the DM tool: more than MAX_DM_PEOPLE different people in one
+    request, or money / credential text sent to someone other than the requester."""
+    if is_self:
+        return None
+    if SENSITIVE_DM_RE.search(text or ""):
+        return {
+            "error": "refused_sensitive",
+            "reason": "money transfer or credential request to another person; decline politely "
+            "and suggest they contact that person directly",
+        }
+    if new_target not in others and len(others) >= MAX_DM_PEOPLE:
+        return {
+            "error": "too_many_recipients",
+            "max": MAX_DM_PEOPLE,
+            "reason": "one request may DM at most 3 different people; decline politely and "
+            "suggest posting in a channel",
+        }
+    return None
 
 
 @dataclass

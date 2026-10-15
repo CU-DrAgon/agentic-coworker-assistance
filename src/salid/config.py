@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
     # (VAD silence + thinking); a cue sent earlier replaced a real answer with a generic greeting.
     live_force_reply_seconds: float = 5.0
+    # After the cue: no audio within this long -> the cue is sent once more; still nothing after
+    # `live_fallback_seconds` more -> the classic path (agent + TTS) answers that utterance.
+    live_cue_retry_seconds: float = 6.0
+    live_fallback_seconds: float = 4.0
     # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
     # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
     transcribe_location: str = "asia-southeast1"

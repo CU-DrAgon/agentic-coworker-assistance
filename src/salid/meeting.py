@@ -49,7 +49,7 @@ from .minutes import (
 )
 from .naming import find_call
 from .permissions import channel_missing, permission_message
-from .speech import pcm_duration_s, pcm_source, say, spoken_text
+from .speech import pcm_duration_s, pcm_source, say, spoken_text, with_particle
 from .voice_pool import Claim, VoiceBody, VoicePool, pick_victim, room_score
 
 if TYPE_CHECKING:
@@ -86,7 +86,7 @@ TICK_S = 0.5
 SPEAK_COOLDOWN_S = 1.5  # after Salid speaks, ignore wake words this long (room echo)
 SPEAK_TIMEOUT_PAD_S = 10.0
 # Said right after the wake question is heard, so the room knows Salid is on it (pre-synthesized).
-ACK_TEXT = {"th": "ได้เลย แป๊บนึงนะ", "en": "Sure, one sec!"}
+ACK_TEXT = {"th": "ได้เลยค่ะ แป๊บนึงนะคะ", "en": "Sure, one sec!"}
 
 END_REASONS = ("command", "declined", "empty", "timeout", "disconnected", "shutdown", "preempted")
 BLOCK_AFTER_FAILURE_S = 300.0  # no auto-rejoin this soon after a timeout / lost connection
@@ -139,6 +139,19 @@ _GREETINGS = {"hey", "hi", "hello", "yo", "ok", "okay", "hey there", "hi there",
 def _clean_question(s: str) -> str:
     s = _LEAD_FILLER.sub("", s)
     return _TRAIL_FILLER.sub("", s).strip()
+
+
+_GREETING_ONLY_RE = re.compile(
+    r"^[\s,.!?~ๆ]*(?:(?:สวัสดี|หวัดดี|ว่าไง|เฮ้|เฮ้ย|ดี|ทักทาย|hello|hi|hey|yo|good\s+(?:morning|evening|afternoon))"
+    r"[\s,.!?~ๆ]*|(?:ครับ|ค่ะ|คะ|นะ|จ้า|จ๋า|ทุกคน|สลิด|salid)[\s,.!?~ๆ]*)+$",
+    re.I,
+)
+
+
+def is_greeting(text: str) -> bool:
+    """A bare greeting / name call ("หวัดดีครับ", "สวัสดีค่ะ", "hello"): no question in it."""
+    s = (text or "").strip()
+    return 0 < len(s) <= 30 and bool(_GREETING_ONLY_RE.match(s))
 
 
 def parse_wake(text: str) -> str | None:
@@ -303,7 +316,9 @@ class _Heard(BaseModel):
 TRANSCRIBE_PROMPT = (
     "ถอดเสียงพูดภาษาไทยหรือภาษาอังกฤษในคลิปนี้ (เสียงของคนคนเดียวในการประชุม) ตามที่พูดจริงทุกคำ "
     "ภาษาอังกฤษที่พูดให้คงเป็นภาษาอังกฤษ ไม่ต้องแปล ไม่ต้องใส่ชื่อผู้พูด\n"
-    "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ถ้าได้ยินคำนี้ให้เขียนว่า สลิด\n"
+    "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ถ้าได้ยินคำนี้ให้เขียนว่า สลิด "
+    "ชื่อนี้ถูกเรียกบ่อยมาก และมักมี “หวัดดีครับ/หวัดดีค่ะ” นำหน้า (เช่น “หวัดดีครับ สลิด”) "
+    "อย่าตัดคำท้ายประโยคทิ้ง และอย่าฟังชื่อนี้เป็นคำอื่น เช่น สนิท สิริ สลิป\n"
     "ถ้าไม่มีเสียงพูดชัดเจน (เงียบ เสียงรบกวน เสียงหายใจ) ให้ตอบ text เป็นสตริงว่าง ห้ามแต่งข้อความขึ้นเอง "
     'ตอบเป็น JSON {"text": "..."}'
 )
@@ -470,6 +485,7 @@ class MeetingSession:
     answer_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     empty_since: float | None = None
     ending: bool = False
+    leaving: bool = False  # "ออกประชุม" heard: goodbye, then end
     dropped: int = 0
     speech_pending: bool = False  # one shorten/TTS/playback pipeline at a time
     speaking: bool = False  # Salid is playing a spoken reply
@@ -685,6 +701,8 @@ class MeetingManager:
         if recording:
             s.recording = "recording"
             return {"status": "recording"}
+        if s.leaving:  # leaving is the system's job, not "stop taking notes"
+            return {"status": "ignored", "reason": "leaving the meeting; say only a short goodbye"}
         s.recording = "not_recording"
         s.transcript.lines.clear()
         return {"status": "not_recording"}
@@ -1446,10 +1464,10 @@ class MeetingManager:
         said = parse_wake(text)
         called = said is not None
         if called and parse_meeting_command(said) == "leave":
-            asyncio.create_task(self.end(s.key, "command"))  # "สลิด ออกประชุม"
+            self._spawn(s, self._leave_politely(s))  # "สลิด ออกประชุม"
             return
         if s.engaged and not called and parse_meeting_command(text) == "leave":
-            asyncio.create_task(self.end(s.key, "command"))  # "ออกจากห้องได้เลย" while engaged
+            self._spawn(s, self._leave_politely(s))  # "ออกจากห้องได้เลย" while engaged
             return
         if await self._minutes_instruction(s, member, text):
             return
@@ -1467,7 +1485,9 @@ class MeetingManager:
             if called and s.live is not None:
                 # Deterministic: the name was said, so Salid must answer. If the Live model has
                 # not started to speak by itself, give it a cue.
-                s.live.ensure_reply(seg.started + seg.duration_s, text)
+                s.live.ensure_reply(
+                    seg.started + seg.duration_s, text, user_id=seg.user_id, question=said or text
+                )
             return  # otherwise the Live session answers by itself; this is only the record
         if self._is_echo(s, seg):
             return  # probably Salid's own voice coming back through someone's mic
@@ -1479,6 +1499,12 @@ class MeetingManager:
                 question = text  # a conversation is going: no name needed
             else:
                 return
+        if question and is_greeting(question) and member is not None:
+            # A bare greeting / name call: answer at once with a fixed line (no agent, no
+            # "one sec" first).
+            s.pending_wake.pop(seg.user_id, None)
+            self._spawn(s, self._say_text(s, self._sp(s, "meet_greet_spoken")))
+            return
         if not question:
             s.pending_wake[seg.user_id] = now
             if member is not None:
@@ -1632,6 +1658,33 @@ class MeetingManager:
             s.tasks = [t for t in s.tasks if not t.done()]
             s.tasks.append(asyncio.create_task(self.speak(s, ans.text, question)))
 
+    async def _leave_politely(self, s: MeetingSession) -> None:
+        """ "ออกประชุม": the system handles leaving. The Live model is muted (it must not talk
+        about notes), a short goodbye is spoken, then the meeting ends."""
+        if s.leaving or s.ending:
+            return
+        s.leaving = True
+        if s.live is not None:
+            s.live.stop_playback()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._say_text(s, self._sp(s, "meet_bye_spoken")), timeout=12)
+        await self.end(s.key, "command")
+
+    async def live_fallback(self, s: MeetingSession, user_id: int, question: str) -> None:
+        """The Live model produced no audio for an utterance with Salid's name: answer through
+        the classic path (agent, spoken rewrite, TTS) so the person always gets an answer."""
+        if s.ending or s.leaving:
+            return
+        member = s.voice_channel.guild.get_member(user_id)
+        if member is None:
+            return
+        if is_greeting(question):
+            await self._say_text(s, self._sp(s, "meet_greet_spoken"))
+            return
+        s.tasks = [x for x in s.tasks if not x.done()]
+        s.tasks.append(asyncio.create_task(self.acknowledge(s)))
+        await self.answer(s, member, member.display_name, question)
+
     async def acknowledge(self, s: MeetingSession) -> None:
         """Play a short cached "one sec" right away, while the answer is being worked out."""
         if not self.bot.s.voice_reply or s.ending or s.speaking:
@@ -1640,7 +1693,10 @@ class MeetingManager:
         try:
             pcm = self._ack_pcm.get(lang)
             if pcm is None:
-                pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, ACK_TEXT[lang], lang)
+                line = with_particle(
+                    ACK_TEXT[lang], str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
+                )
+                pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, line, lang)
                 self._ack_pcm[lang] = pcm
             if not s.speech_ready:
                 await self._play(s, pcm)
@@ -1663,6 +1719,7 @@ class MeetingManager:
             spoken = await asyncio.to_thread(spoken_text, bot.llm, bot.s.gate_model, question, text)
             if not spoken:
                 return
+            spoken = with_particle(spoken, str(getattr(bot.s, "voice_particle", "ค่ะ") or "ค่ะ"))
             pcm = await asyncio.to_thread(say, bot.s, bot.llm, spoken, s.lang)
             s.speech_ready = True
             if not bot.s.voice_reply or s.ending:

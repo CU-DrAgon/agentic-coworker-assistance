@@ -70,6 +70,28 @@ def wants_everyone(requester_text: str, can_broadcast: bool) -> bool:
     return bool(can_broadcast and ASKED_EVERYONE_RE.search(requester_text or ""))
 
 
+RAW_MENTION_RE = re.compile(r"<@([!&]?)(\d{1,25})>")
+
+
+def defang_raw_mentions(text: str, guild) -> str:
+    """Rewrite `<@id>` / `<@!id>` / `<@&id>` the model wrote itself into plain `@DisplayName`
+    (no ping). Run BEFORE resolve_mentions, so only our own `@[name]` resolution pings."""
+
+    def one(m: re.Match) -> str:
+        kind, num = m.group(1), int(m.group(2))
+        name = None
+        if guild is not None:
+            if kind == "&":
+                role = guild.get_role(num) if hasattr(guild, "get_role") else None
+                name = getattr(role, "name", None)
+            else:
+                member = guild.get_member(num) if hasattr(guild, "get_member") else None
+                name = getattr(member, "display_name", None)
+        return f"@{name}" if name else "@" + ("role" if kind == "&" else "user")
+
+    return RAW_MENTION_RE.sub(one, text or "")
+
+
 def resolve_mentions(text: str, guild, *, allow_everyone: bool = False, pool=None) -> str:
     """Replace `@[name]` with real mentions where unambiguous (members first, then mentionable
     roles); anything else becomes plain `@name`. `@everyone` / `@here` are stripped unless

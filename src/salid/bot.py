@@ -36,7 +36,7 @@ from .deep_task import (
 )
 from .deliver import DeliverMixin
 from .digest import build_daily_digest
-from .dm import closed_dm_message, send_dm
+from .dm import closed_dm_message, dm_refusal, send_dm
 from .docs import doc_kind
 from .email_out import make_sender
 from .extract import (
@@ -82,12 +82,13 @@ from .memory_store import MemoryStore, SQLiteMemoryStore, make_memory_store
 from .memory_summary import render_summary
 from .mentions import (
     allowed_mentions_for,
+    defang_raw_mentions,
     match_members,
     resolve_mentions,
     tag_candidates,
     wants_everyone,
 )
-from .message_control import AnswerLog, parse_cancel_task, parse_delete_message
+from .message_control import AnswerLog, is_thanks, parse_cancel_task, parse_delete_message
 from .modes import (
     CHAT_CHANNEL_NAME,
     MODES,
@@ -652,6 +653,16 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             and (mode == "chat" or (mode in ("call", "join") and called))
             and await self._intake(message)
         ):
+            return
+        if (
+            mode in ("chat", "call", "join")
+            and not message.attachments
+            and (mode == "chat" or self._window_open(message.channel.id))
+            and not mentions_other(message, self.user)
+            and is_thanks(message.content)
+        ):  # gratitude / acknowledgement: a reaction, not a reply (no LLM)
+            with contextlib.suppress(discord.HTTPException):
+                await message.add_reaction(self._choose(("👍", "🙏")))
             return
         if mode == "listen":
             if mentioned and self._is_snoozed(message.channel.id):
@@ -1474,7 +1485,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         (last sent, first sent, ids of every answer message)."""
         if ack is not None:
             await ack.finish()
-        text = resolve_mentions(text, guild, allow_everyone=everyone)
+        text = resolve_mentions(defang_raw_mentions(text, guild), guild, allow_everyone=everyone)
         allowed = allowed_mentions_for(text, allow_everyone=everyone)
         acked = ack.sent if ack is not None else None
         sent = first = None
@@ -1602,8 +1613,14 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         def cancel() -> dict:
             return {"result": run(self._cancel_deep(gid, member, lang))}
 
+        dm_people: set[int] = set()  # other people this request has DMed (hard cap)
+
         def dm(text: str, to: str = "me", attach: str | None = None) -> dict:
-            return run(self._send_dm_tool(guild, member, text, to, attach, lang, secretary))
+            return run(
+                self._send_dm_tool(
+                    guild, member, text, to, attach, lang, secretary, dm_people=dm_people
+                )
+            )
 
         notif_on = self.team.enabled(gid, "briefings")
         request_id = new_id()  # one per request: a delivery confirms only in a later message
@@ -1667,7 +1684,15 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         return previous
 
     async def _send_dm_tool(
-        self, guild, member, text: str, to: str, attach: str | None, lang: str, secretary=None
+        self,
+        guild,
+        member,
+        text: str,
+        to: str,
+        attach: str | None,
+        lang: str,
+        secretary=None,
+        dm_people: set[int] | None = None,
     ) -> dict:
         """The send_dm tool. "me" DMs the requester; someone else gets a relay that says who it
         is from. A PDF goes only to the requester, or to a recipient who can see at least as much
@@ -1692,6 +1717,11 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             target = found[0]
             if target.id == member.id:
                 mine = True
+        if dm_people is None:
+            dm_people = set()
+        refused = dm_refusal(text, dm_people, target.id, mine)
+        if refused:
+            return refused
         files = []
         if attach:
             data = self.secretary_state.recall_pdf(guild.id, member.id, attach)
@@ -1717,6 +1747,8 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
                 }
             return {"error": "could_not_dm", "person": target.display_name}
         self._dm_sent[guild.id] = [*sent, now]
+        if not mine:
+            dm_people.add(target.id)
         if attach and secretary is not None:  # delivered privately: not also posted in the channel
             secretary.attachments[:] = [a for a in secretary.attachments if a[0] != attach]
         return {"status": "sent", "to": "requester" if mine else target.display_name}
