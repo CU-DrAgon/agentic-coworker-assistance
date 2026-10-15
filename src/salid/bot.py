@@ -566,6 +566,8 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
                 return
             if mode == "off":
                 return
+            if await self.meetings.on_chat_text(message):  # "ไม่ต้องจด" answering the notes question
+                return
             await self._asks_observe(message)  # pending asks (answers and new requests)
             if await self._maybe_delete_own(message):
                 return
@@ -825,6 +827,20 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         label = t(f"lang_label_{cmd}", new)
         await message.reply(t("lang_set", new, label=label), mention_author=False)
         return True
+
+    async def _join_voice_tool(self, message, member, lang: str) -> dict:
+        """Agent tool: join the voice channel the requester is in (explicit: overrides cooldowns)."""
+        channel = getattr(getattr(member, "voice", None), "channel", None)
+        if channel is None:
+            return {"error": "not_in_voice", "note": "the requester is not in a voice channel"}
+        reply = await self.meetings.join(member, fallback_channel=message.channel, lang=lang)
+        if self.meetings.session_in(member.guild.id, channel.id) is None:
+            return {"error": reply}
+        return {"status": "joined", "channel": channel.name}
+
+    async def _leave_voice_tool(self, message, member, lang: str) -> dict:
+        reply = await self.meetings.leave(member, lang=lang, text_channel_id=message.channel.id)
+        return {"result": reply}
 
     async def _meeting_command(self, message: discord.Message) -> bool:
         """'@Salid เข้าประชุม' / 'join' / 'ออกประชุม' / 'leave' typed in a text channel."""
@@ -1592,6 +1608,9 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             deliver_file=self._deliver_actions(
                 message, guild, member, lang, loop, secretary, request_id
             ),
+            join_voice=lambda: run(self._join_voice_tool(message, member, lang)),
+            leave_voice=lambda: run(self._leave_voice_tool(message, member, lang)),
+            deliver_minutes=self._minutes_actions(message, guild, member, lang, loop),
             **self._profile_actions(gid, member.id),
         )
 

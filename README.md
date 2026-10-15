@@ -273,7 +273,7 @@ draft, and the action runs only when the same call arrives again in a *later* me
   be set, otherwise sending stays in log-only mode.
 
 **Staying in the meeting.** Salid leaves only on /ออกประชุม, /leave-meeting, a typed or spoken "ออกประชุม"/"leave",
-after `SALID_MEETING_LEAVE_EMPTY_MINUTES` (default 5) without humans in the channel (an auto-joined meeting nobody
+after `SALID_MEETING_LEAVE_EMPTY_SECONDS` (default 30; the old `SALID_MEETING_LEAVE_EMPTY_MINUTES` still overrides it) without humans in the channel (the summary is posted as usual) (an auto-joined meeting nobody
 came to: `SALID_MEETING_EMPTY_MINUTES`, default 2), or at the 6 h cap (warned 10 min before). The active meeting is
 stored (`salid_active_meetings`); after a restart `on_ready` rejoins it (transcript reloaded from the memory log)
 or, if the channel is empty, posts the summary. An unexpected voice drop is retried 3 times before ending.
@@ -578,3 +578,19 @@ Deep tasks are Discord-only.
 Copyright (c) 2026 The Frontier Company Limited.
 
 This project is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may read, run and modify it for noncommercial purposes. Any commercial use requires a separate license from The Frontier Company Limited.
+
+**Voice meeting behaviour (Live mode).** Turn-taking: `SALID_LIVE_SILENCE_MS` (1200), `SALID_LIVE_PREFIX_PADDING_MS` (300),
+`SALID_LIVE_START_SENSITIVITY=high`, `SALID_LIVE_END_SENSITIVITY=low`, `SALID_LIVE_PROACTIVE_AUDIO=true`. Meetings stay voice:
+`SALID_MEETING_TEXT_ECHO=false` posts no echoes, answers or join text (only the end summary, notes, and replies to typed
+messages). Salid joins silently; when joined by itself and nobody addresses it within `SALID_CONSENT_DELAY_SECONDS` (20) of the
+first speech it asks once (text by default) whether this is a meeting; "no" -> not_recording (nothing logged, no summary).
+Notes: Live tools `post_note` / `ask_consent` / `set_recording` / `set_minutes_destination`; classic mode batches a gate every
+`SALID_NOTES_BATCH_SECONDS` (60). `SALID_VOICE_PARTICLE` (ค่ะ) sets the particle of spoken lines. Minutes go to the channel
+named by voice/text ("ส่งมติการประชุมไปห้อง X"); later "ส่งสรุปประชุมเมื่อกี้ไปห้อง X" uses `deliver_minutes`.
+`SALID_AUTO_JOIN_COOLDOWN_MINUTES` now defaults to 10 and is cleared when the channel empties.
+
+**Listening / engaged.** A voice session is *listening* (notes only, silent) until someone says Salid's name (also misheard:
+สะหลิด, สลิต, ซาลิด, ซะลิด, salid, saleed; สนิท / สิริ / Siri only as an address: greeting, particle, "น้อง", start/end of the utterance).
+Then it is *engaged* and answers every utterance without the name; "ขอบคุณครับ", "พอแล้ว", "ยุติได้", "thanks, that's all" or
+`SALID_ENGAGED_TIMEOUT_SECONDS` (90) of nobody addressing it return to listening. "ออกประชุม / ออกจากห้อง / ไปได้แล้ว / leave" leave the room.
+In Live mode the model is told the state; if it has not started answering `SALID_LIVE_FORCE_REPLY_SECONDS` (1.2) after the name, a cue forces a turn.

@@ -27,6 +27,9 @@ class ChatActions:
     set_my_notifications: Callable[..., dict] | None = None
     show_my_notifications: Callable[[], dict] | None = None
     deliver_file: Callable[..., dict] | None = None
+    join_voice: Callable[[], dict] | None = None
+    leave_voice: Callable[[], dict] | None = None
+    deliver_minutes: Callable[..., dict] | None = None
     remember_my_preference: Callable[[str, str], dict] | None = None
     show_my_preferences: Callable[[], dict] | None = None
     forget_my_preferences: Callable[[str | None], dict] | None = None
@@ -190,6 +193,31 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         )  # fmt: skip
         return logged("deliver_file", a, lambda: actions.deliver_file(**a))
 
+    def join_voice() -> dict:
+        """Join the voice channel the requester is in right now and take meeting notes. Use for
+        every request to come in NOW: "เข้ามาประชุมหน่อย", "มาฟังด้วย", "เข้าห้องเสียง", "join us",
+        "hop in". NEVER use schedule_meeting for these: that is only for a future time the user
+        names. If the result says not_in_voice, tell them to enter a voice channel first."""
+        return logged("join_voice", {}, actions.join_voice)
+
+    def leave_voice() -> dict:
+        """Leave the voice meeting (the summary is posted). Use for "ออกไปก่อน", "ไปได้แล้ว",
+        "ออกจากห้อง", "leave us", "you can go"."""
+        return logged("leave_voice", {}, actions.leave_voice)
+
+    def deliver_minutes(destination: str, meeting: str = "last") -> dict:
+        """Send the stored summary / resolutions (มติ) of a finished voice meeting to a text
+        channel. Use for "ส่งสรุปประชุมเมื่อกี้ไปห้อง X", "send the minutes to #x". Only a meeting the
+        requester attended or can see, and only a channel they can post in. Confirm in one short
+        sentence; if it is ambiguous ask which channel.
+
+        Args:
+            destination: the channel name (Thai or English) or a #mention.
+            meeting: "last" (the latest meeting in this server) or the voice channel's name.
+        """
+        a = dict(destination=destination, meeting=meeting)
+        return logged("deliver_minutes", a, lambda: actions.deliver_minutes(**a))
+
     def remember_my_preference(kind: str, value: str = "") -> dict:
         """Remember a LASTING preference of the requester about how Salid should treat them (only
         their own; anyone may). Use when they state it as a standing preference: "เรียกผมว่าพี่ปัส",
@@ -238,6 +266,9 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         "set_my_notifications": set_my_notifications,
         "show_my_notifications": show_my_notifications,
         "deliver_file": deliver_file,
+        "join_voice": join_voice,
+        "leave_voice": leave_voice,
+        "deliver_minutes": deliver_minutes,
         "remember_my_preference": remember_my_preference,
         "show_my_preferences": show_my_preferences,
         "forget_my_preferences": forget_my_preferences,

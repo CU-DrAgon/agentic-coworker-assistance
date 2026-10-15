@@ -61,6 +61,29 @@ class Settings(BaseSettings):
     live_model: str = "gemini-live-2.5-flash-native-audio"
     live_location: str = "us-central1"
     live_voice: str = "Leda"
+    # Live turn-taking (automatic activity detection): short greetings are picked up quickly (start
+    # sensitivity high), a pause is not an end of turn (end sensitivity low + silence_duration_ms).
+    live_silence_ms: int = 1200
+    live_prefix_padding_ms: int = 300
+    live_start_sensitivity: str = "high"  # high | low
+    live_end_sensitivity: str = "low"  # high | low
+    live_proactive_audio: bool = True  # the model may stay silent when not addressed
+    # Voice meetings stay voice: no "🔊" echoes, per-answer text or join announcement in the text
+    # chat (the end-of-meeting summary and replies to messages typed to Salid are always posted).
+    meeting_text_echo: bool = False
+    # Particle of Salid's spoken lines (the voice is female: ค่ะ, questions use คะ). ครับ also works.
+    voice_particle: str = "ค่ะ"
+    # Joined by itself / by schedule and nobody addressed Salid `consent_delay_seconds` after the
+    # first speech: it asks (once) whether it may take notes. A "no" is honoured for
+    # `consent_window_seconds` after the question; silence or an OK means it carries on.
+    consent_delay_seconds: float = 20.0
+    consent_window_seconds: float = 90.0
+    notes_batch_seconds: float = 60.0  # classic mode: how often the gate looks for decisions
+    # Two states: listening (speaks only when its name is called) and engaged (answers every
+    # utterance). Engaged falls back to listening after this long without anyone addressing it.
+    engaged_timeout_seconds: float = 90.0
+    # Live: the name was heard but the model has not started to answer after this long: force a turn.
+    live_force_reply_seconds: float = 1.2
     # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
     # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
     transcribe_location: str = "asia-southeast1"
@@ -89,12 +112,13 @@ class Settings(BaseSettings):
     meeting_noshow_minutes: int = 5  # DM attendees missing from the voice channel after this
     meeting_empty_minutes: int = 2  # an auto-joined meeting nobody ever came to ends after this
     # A meeting where people were present ends only after this long with no humans in the channel.
-    meeting_leave_empty_minutes: int = 5
+    meeting_leave_empty_seconds: float = 30.0  # covers a brief disconnect, then Salid leaves
+    meeting_leave_empty_minutes: float | None = None  # deprecated: when set, overrides the seconds
     # Auto-join (salid.voice_pool): Salid joins a voice channel as soon as `auto_join_min_humans`
     # people are in it. `auto_join_delay_seconds` > 0 adds a stability wait (default: none).
     auto_join_min_humans: int = 1
     auto_join_delay_seconds: float = 0.0
-    auto_join_cooldown_minutes: int = 60  # no auto-join where someone told Salid to leave
+    auto_join_cooldown_minutes: int = 10  # no auto-join where someone told Salid to leave
     # Email (salid.email_out): Gmail sends only when all three are set (refresh token = secret)
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
@@ -137,6 +161,13 @@ class Settings(BaseSettings):
             v = v.strip()
             return int(v) if v.isdigit() else None
         return v
+
+    @property
+    def leave_empty_seconds(self) -> float:
+        """How long a meeting waits with nobody in the room (old minutes setting still honoured)."""
+        if self.meeting_leave_empty_minutes is not None:
+            return float(self.meeting_leave_empty_minutes) * 60.0
+        return float(self.meeting_leave_empty_seconds)
 
     @property
     def zone(self) -> ZoneInfo:

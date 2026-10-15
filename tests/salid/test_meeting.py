@@ -61,7 +61,7 @@ def test_segmenter_cuts_at_max_length():
 
 def test_segmenter_drops_short_segments():
     s = Segmenter()
-    speak(s, 1, 0.0, 0.4)
+    speak(s, 1, 0.0, 0.3)
     assert s.tick(5.0) == [] and s.bufs == {}
 
 
@@ -233,7 +233,9 @@ def env(monkeypatch):
     chan.guild = guild
     llm = FakeClient([])
     bot = SecretaryBot(
-        FixedClockSettings(exec_user_ids={5}, voice_reply=False, voice_mode="classic"),
+        FixedClockSettings(
+            exec_user_ids={5}, voice_reply=False, voice_mode="classic", meeting_text_echo=True
+        ),
         None,
         llm,
         guilds=MemoryGuildStore(),
@@ -841,7 +843,7 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
             return "MEM"
 
         bot = SimpleNamespace(
-            s=SimpleNamespace(voice_reply=True, now=lambda: None),
+            s=SimpleNamespace(voice_reply=True, now=lambda: None, meeting_text_echo=True),
             team=SimpleNamespace(enabled=lambda g, f: True),
             store=None,
             is_exec_member=lambda mem: True,
@@ -995,13 +997,13 @@ async def _tick_once(env, s, monkeypatch):
     return ends
 
 
-async def test_manual_meeting_waits_five_minutes_after_humans_leave(env, monkeypatch):
+async def test_meeting_leaves_thirty_seconds_after_humans_leave(env, monkeypatch):
     s = await start(env)
-    assert s.empty_grace == 300.0
-    s.had_humans, s.empty_since = True, time.monotonic() - 120  # two minutes empty
+    assert s.empty_grace == 30.0
+    s.had_humans, s.empty_since = True, time.monotonic() - 20  # a brief disconnect
     env.chan.members = []
     assert await _tick_once(env, s, monkeypatch) == []
-    s.empty_since = time.monotonic() - 301
+    s.empty_since = time.monotonic() - 31
     assert await _tick_once(env, s, monkeypatch) == ["empty"]
 
 
@@ -1012,8 +1014,8 @@ async def test_auto_join_nobody_came_uses_the_short_grace(env, monkeypatch):
     env.chan.members = []
     s.empty_since = time.monotonic() - 121
     assert await _tick_once(env, s, monkeypatch) == ["empty"]
-    # once people were there, the long grace applies even for an auto-join
-    s.had_humans, s.empty_since = True, time.monotonic() - 121
+    # once people were there, the normal grace applies even for an auto-join
+    s.had_humans, s.empty_since = True, time.monotonic() - 10
     assert await _tick_once(env, s, monkeypatch) == []
 
 

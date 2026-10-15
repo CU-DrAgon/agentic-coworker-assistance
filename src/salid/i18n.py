@@ -452,6 +452,56 @@ CATALOG: dict[str, dict[str, str]] = {
         "(kept as text in memory only, no audio is recorded). "
         "Say “Salid” and ask away, or type /leave-meeting to get the summary and let me go.",
     },
+    # Fallbacks only: the consent question is normally generated. ค่ะ / คะ = voice particles.
+    "meet_consent_ask_1": {
+        "th": "สลิดขออนุญาตจดประชุมนี้นะคะ ถ้าไม่สะดวกบอกได้เลยค่ะ",
+        "en": "Salid would like to take notes of this meeting. Just say if you'd rather not.",
+    },
+    "meet_consent_ask_2": {
+        "th": "ขออนุญาตจดบันทึกการประชุมนะคะ ถ้าไม่ต้องการ บอกสลิดได้เลยนะคะ",
+        "en": "May I take notes here? Tell me if that's not okay.",
+    },
+    "meet_consent_ask_3": {
+        "th": "สลิดนั่งฟังและจดการประชุมอยู่นะคะ ถ้าไม่สะดวกบอกได้เลยค่ะ",
+        "en": "I'm listening in to take notes. Let me know if you'd prefer I didn't.",
+    },
+    "meet_dismiss_ack": {"th": "ได้ค่ะ", "en": "Okay!"},
+    "meet_not_recording": {
+        "th": "งั้นสลิดไม่จดนะคะ มีอะไรเรียกได้เลยค่ะ",
+        "en": "Then I won't take notes. Just call me if you need anything.",
+    },
+    "meet_consent_no_1": {
+        "th": "ได้ค่ะ งั้นสลิดขอตัวนะคะ",
+        "en": "Okay, I'll leave you to it.",
+    },
+    "meet_consent_no_2": {
+        "th": "รับทราบค่ะ สลิดไม่จดแล้วนะคะ ขอตัวก่อน",
+        "en": "Understood, no notes. I'll head out.",
+    },
+    "meet_consent_no_3": {
+        "th": "ไม่เป็นไรค่ะ สลิดออกไปก่อนนะคะ",
+        "en": "No problem, I'll step out.",
+    },
+    "minutes_set_spoken": {
+        "th": "ได้เลยค่ะ เดี๋ยวส่งสรุปไปที่ห้อง {channel} นะคะ",
+        "en": "Sure, I'll send the minutes to {channel}.",
+    },
+    "minutes_not_found_spoken": {
+        "th": "หาห้องที่บอกไม่เจอค่ะ ลองบอกชื่อห้องอีกทีนะคะ",
+        "en": "I couldn't find that channel. Please say its name again.",
+    },
+    "minutes_ambiguous_spoken": {
+        "th": "มีหลายห้องที่ชื่อใกล้เคียงกันค่ะ ช่วยบอกชื่อให้ชัดขึ้นหน่อยนะคะ",
+        "en": "Several channels match. Please be more specific.",
+    },
+    "minutes_not_allowed_spoken": {
+        "th": "ห้องนั้นคนในที่ประชุมบางคนยังมองไม่เห็นค่ะ เลยส่งสรุปไปที่นั่นไม่ได้",
+        "en": "Not everyone here can see that channel, so I can't send the minutes there.",
+    },
+    "minutes_forwarded": {
+        "th": "📝 สรุปการประชุม #{room} ({when}) ส่งต่อโดย {who}\n",
+        "en": "📝 Minutes of the meeting in #{room} ({when}), forwarded by {who}\n",
+    },
     "meet_not_in_voice": {
         "th": "ต้องเข้าห้องเสียง (Voice Channel) ก่อน แล้วค่อยเรียกสลิดเข้าประชุมนะครับ",
         "en": "Please join a voice channel first, then ask Salid to join the meeting.",

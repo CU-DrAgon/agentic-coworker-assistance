@@ -148,7 +148,7 @@ def test_instruction_has_date_persona_tools_and_language():
     th = build_instruction(s, "th")
     assert "2026-10-14" in th and "วันพุธ" in th and "สัปดาห์เริ่มวันจันทร์" in th
     assert "สลิด" in th and "Salid" in th and "เงียบ" in th and "เรียกเครื่องมือเสมอ" in th
-    assert "ห้ามใช้ ค่ะ คะ ครับ จ้ะ" in th and "พูดภาษาไทย" in th
+    assert "กำลังฟัง" in th and "กำลังคุยอยู่" in th and "พูดภาษาไทย" in th
     assert "always speak English" in build_instruction(s, "en")
     assert "ภาษาเดียวกับคนที่พูด" in build_instruction(s, "auto")
     assert "ดูข้อมูลบัญชีของร้านไม่ได้" in build_instruction(s, "th", qa=False)
@@ -261,7 +261,9 @@ def lv(monkeypatch, tmp_path):
     mk(store, 1, ALICE, "Alice", "Makro", "2026-10-01", 1000.0, guild=guild.id)
     mk(store, 2, ALICE, "Alice", "Grab", "2026-10-05", 250.5, "ค่าเดินทาง", guild=guild.id)
     bot = SecretaryBot(
-        FixedClockSettings(exec_user_ids={5}, voice_reply=True, voice_mode="live"),
+        FixedClockSettings(
+            exec_user_ids={5}, voice_reply=True, voice_mode="live", meeting_text_echo=True
+        ),
         store,
         FakeClient([]),
         guilds=MemoryGuildStore(),
@@ -340,6 +342,7 @@ async def test_live_not_started_when_voice_reply_off_or_classic_mode(lv):
 
 
 async def test_room_audio_is_mixed_streamed_and_ended_after_a_pause(lv):
+    lv.bot.s.live_silence_ms = 0  # idle = STREAM_IDLE_S (patched short)
     s, live = await lv.join(5, 11)
     for _ in range(5):
         s.on_pcm(5, pcm48(1000), time.monotonic())
@@ -358,10 +361,10 @@ async def test_room_audio_is_mixed_streamed_and_ended_after_a_pause(lv):
     await lv.mgr.end((1000, 77))
 
 
-async def test_audio_is_not_buffered_while_disconnected():
+async def test_audio_heard_while_connecting_is_kept_so_a_first_greeting_is_not_lost():
     live = LiveVoice(SimpleNamespace(), SimpleNamespace(), post=lambda t: None)
     live.feed(1, pcm48(1000))
-    assert live.mixer.pop() == b""
+    assert live.mixer.pop() != b""
 
 
 # ------------------------------------------------------------------ output
@@ -492,7 +495,8 @@ async def test_qa_feature_off_means_no_tools_in_the_config_and_a_refusal(lv):
     lv.bot.guilds_store.save_settings(1000, GuildSettingsUpdate(features=dict(qa=False)), "x")
     await asyncio.to_thread(lv.bot.team.current, 1000)
     s, live = await lv.join(5)
-    assert lv.connect.configs[0].tools is None
+    names = [d.name for d in lv.connect.configs[0].tools[0].function_declarations]
+    assert names == ["set_minutes_destination", "post_note", "ask_consent", "set_recording"]
     assert "ดูข้อมูลบัญชีของร้านไม่ได้" in lv.connect.configs[0].system_instruction
     live.push(tool_msg("flagged_receipts", {}))
     await until(lambda: live.tool_responses)

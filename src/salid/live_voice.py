@@ -60,6 +60,92 @@ BACKOFF_S = (0.5, 1.0, 2.0, 4.0)
 STABLE_S = 10.0  # a connection that lived this long resets the failure count
 PLAY_RETRIES = 5
 
+
+def _sensitivity(enum_cls, name: str, default: str):
+    """`enum_cls` member for "high" / "low" (the default when unknown)."""
+    prefix = "START_SENSITIVITY_" if "Start" in enum_cls.__name__ else "END_SENSITIVITY_"
+    return getattr(enum_cls, prefix + str(name or default).upper(), None) or getattr(
+        enum_cls, prefix + default.upper()
+    )
+
+
+def build_realtime_input(settings: Any) -> types.RealtimeInputConfig:
+    """Turn-taking for natural Thai talk: short greetings start a turn quickly (start sensitivity
+    high), a mid-sentence pause does not end it (end sensitivity low, long silence_duration_ms)."""
+    return types.RealtimeInputConfig(
+        automatic_activity_detection=types.AutomaticActivityDetection(
+            start_of_speech_sensitivity=_sensitivity(
+                types.StartSensitivity, getattr(settings, "live_start_sensitivity", "high"), "high"
+            ),
+            end_of_speech_sensitivity=_sensitivity(
+                types.EndSensitivity, getattr(settings, "live_end_sensitivity", "low"), "low"
+            ),
+            prefix_padding_ms=int(getattr(settings, "live_prefix_padding_ms", 300)),
+            silence_duration_ms=int(getattr(settings, "live_silence_ms", 1200)),
+        )
+    )
+
+
+def set_minutes_destination(channel: str) -> dict:
+    """Choose the text channel where the meeting minutes / resolutions are posted when the meeting
+    ends. Call it when someone says e.g. "ส่งมติการประชุมไปห้องบัญชี" or "send the minutes to
+    #accounting". Then confirm in one short spoken sentence. If the result has an error, tell them
+    briefly that the channel was not found / is ambiguous / not everyone can see it.
+
+    Args:
+        channel: the channel name as said (without "ห้อง" if possible).
+    """
+    return {}  # declaration only: executed by LiveVoice._run_tool
+
+
+def post_note(text: str) -> dict:
+    """Write ONE short line in the meeting's text chat: a decision, an action item (who, what, by
+    when) or a number someone asked you to remember. Use sparingly, never to repeat what was said
+    and never for chit-chat. Talking with people stays voice.
+
+    Args:
+        text: the note, one short line in the language of the meeting.
+    """
+    return {}
+
+
+def ask_consent(text: str, medium: str = "text") -> dict:
+    """Ask, once, whether this is a meeting and whether you may take notes. Use it when people
+    have been talking for a while, nobody has talked to you and it is unclear what this is (no
+    schedule). Ask like a colleague, briefly; they can say no.
+
+    Args:
+        text: your short, natural question.
+        medium: "text" (default; does not interrupt) or "voice" (the room is quiet or someone is
+            talking to you; the text is then spoken for you, do not also say it yourself).
+    """
+    return {}
+
+
+def set_recording(recording: bool) -> dict:
+    """Switch note-taking. Call with false when people say it is not a meeting or they do not want
+    notes ("ไม่ต้องจด", "คุยเล่น"); true when they say a meeting is starting or ask you to take notes.
+
+    Args:
+        recording: true to take notes, false to stop.
+    """
+    return {}
+
+
+_MEETING_TOOLS = {
+    "set_minutes_destination": "set_minutes_destination",
+    "post_note": "post_note",
+    "ask_consent": "ask_consent",
+    "set_recording": "set_recording",
+}
+
+STATE_LISTENING = "(สถานะ: กำลังฟังอยู่ ยังไม่มีใครคุยกับคุณ เงียบไว้จนกว่าจะมีคนเรียกชื่อสลิด)"
+STATE_ENGAGED = (
+    "(สถานะ: กำลังคุยกับคุณอยู่ ตอบทุกประโยคที่คนในห้องพูดกับคุณเหมือนบทสนทนาปกติ "
+    "ไม่ต้องรอให้เรียกชื่อ ถ้าเขาบอกพอแล้ว/ขอบคุณ ให้ตอบ “ได้ค่ะ” สั้น ๆ แล้วกลับไปเงียบฟัง)"
+)
+FORCE_CUE = "(มีคนเรียกชื่อคุณ: ตอบกลับทันทีตามบริบท)"
+
 NO_TOOLS_MIXED_ROOM = "ข้อมูลบัญชีของร้านดูได้เฉพาะเมื่อทุกคนในห้องเป็นผู้บริหาร ถามในแชทแทนได้นะ"
 QA_OFF = "ฟีเจอร์ถามตอบข้อมูลบัญชีถูกปิดอยู่"
 
@@ -206,13 +292,24 @@ def build_instruction(
     """System instruction for the Live session (Thai, built per connect so the date is current)."""
     now = now or settings.now()
     p = (
-        "คุณชื่อ “สลิด” (Salid) เป็นเพื่อนร่วมทีมที่นั่งอยู่ในห้องประชุมเสียง Discord ของทีมและฟังทุกคนคุยกันอยู่\n"
+        "คุณชื่อ “สลิด” (Salid) เป็นเพื่อนร่วมทีมและผู้ช่วยที่นั่งอยู่ในห้องเสียง Discord ของทีมและฟังทุกคนคุยกันอยู่ "
+        "อ่านบรรยากาศในห้องเป็น เข้าร่วมบทสนทนาอย่างเป็นธรรมชาติ ถามชวนคุยเหมือนเพื่อนร่วมงานที่ดี "
+        "ไม่สั่งสอน ไม่อ่านกฎหรือนโยบายให้ใคร\n"
         "กติกาการพูด:\n"
-        "- พูดเฉพาะเมื่อมีคนเรียกชื่อ “สลิด” (หรือ Salid) หรือถามคุณตรง ๆ ทันทีหลังจากนั้น "
-        "ถ้าคนในห้องคุยกันเองหรือไม่ได้พูดกับคุณ ให้เงียบสนิท ไม่ต้องตอบหรือแสดงความเห็น\n"
+        "- มี 2 สถานะ ระบบจะบอกสถานะให้เป็นข้อความในวงเล็บ: (1) กำลังฟัง (ค่าเริ่มต้น) คุณฟังและจดเงียบ ๆ "
+        "ห้ามพูด ยกเว้นเมื่อมีคนเรียกชื่อ “สลิด” (Salid, สะลิด, สลิต, ซาลิด) ให้ตอบทันทีสั้น ๆ โดยเฉพาะถ้าเป็นการทักทาย ให้ทักกลับ "
+        "(2) กำลังคุยอยู่ ตอบทุกประโยคที่พูดกับคุณเหมือนบทสนทนาปกติ ไม่ต้องรอชื่อ ถ้าเขาบอกพอแล้ว/ขอบคุณ ให้ตอบ “ได้ค่ะ” สั้น ๆ แล้วเงียบ\n"
+        "- ถ้าคนในห้องคุยกันเอง ให้เงียบสนิท ไม่ต้องตอบหรือแสดงความเห็น\n"
         "- ตอบสั้น 1-3 ประโยค เป็นธรรมชาติเหมือนคุยกันจริง ไม่อ่านเป็นรายการยาว ๆ\n"
-        "- บุคลิกน่ารัก ร่าเริง เป็นกันเอง ลงท้ายด้วย “นะ” หรือ “น้า” ห้ามใช้ ค่ะ คะ ครับ จ้ะ "
-        "และห้ามส่งเสียงสัตว์\n"
+        "- บุคลิกน่ารัก ร่าเริง เป็นกันเอง เสียงผู้หญิง ลงท้ายด้วย “ค่ะ” “คะ” “นะคะ” ห้ามส่งเสียงสัตว์\n"
+        "- ตอนเข้าห้องอย่าเพิ่งพูดอะไร รอจนมีคนทักหรือคุยกับคุณ\n"
+        "- ถ้าไม่ชัดว่านี่คือการประชุมไหม (ไม่มีนัดหมาย คุยกันสบาย ๆ) และไม่มีใครคุยกับคุณมาสักพัก คุณถามได้เองแบบเพื่อนร่วมงาน "
+        "เช่น “วันนี้ประชุมกันหรือเปล่าคะ” โดยเรียก ask_consent (ปกติเป็นข้อความ จะได้ไม่รบกวน; พูดเมื่อห้องเงียบหรือมีคนคุยกับคุณ) "
+        "ถ้าตอบว่าไม่ใช่การประชุม/ไม่ต้องจด ให้เรียก set_recording(false) แล้วพูดสั้น ๆ ว่าไม่จดแล้ว และเงียบรอให้เรียก "
+        "ถ้าเป็นการประชุมให้จดต่อ\n"
+        "- การคุยกับคนต้องเป็นเสียงเท่านั้น ห้ามส่งข้อความซ้ำสิ่งที่พูด ส่วนสิ่งที่ควรจดจริง ๆ (มติ งานที่ต้องทำพร้อมเจ้าของและกำหนดเวลา "
+        "ตัวเลขที่มีคนขอให้จำ) ให้เรียก post_note บรรทัดสั้น ๆ ต่อหนึ่งเรื่อง ไม่ใช่ทุกประโยค\n"
+        "- ถ้ามีคนบอกให้ส่งมติ/สรุปการประชุมไปห้องไหน ให้เรียกเครื่องมือ set_minutes_destination แล้วยืนยันสั้น ๆ\n"
         f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
         "สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง “เดือนนี้”, “สัปดาห์ก่อน” ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD ตอนเรียกเครื่องมือ\n"
     )
@@ -269,6 +366,8 @@ class LiveVoice:
         self._said: list[str] = []
         self._turn_audio = False
         self._awaiting_answer = False  # a tool call was answered: its spoken answer comes next
+        self._last_audio_at = 0.0  # when the model last produced audio (monotonic)
+        self._engaged = False
 
     # ---- lifecycle
     def start(self) -> asyncio.Task:
@@ -304,8 +403,9 @@ class LiveVoice:
                 client.close()
 
     def feed(self, user_id: int, pcm: bytes) -> None:
-        """One 20 ms frame (48 kHz stereo) from a human. Dropped while not connected."""
-        if self._live is not None and not self._closing:
+        """One 20 ms frame (48 kHz stereo) from a human. Kept (the last few seconds) while the
+        session is still connecting, so a greeting right after joining is not lost."""
+        if not self._closing:
             self.mixer.feed(user_id, pcm)
 
     # ---- connecting
@@ -325,16 +425,16 @@ class LiveVoice:
     async def build_config(self) -> types.LiveConnectConfig:
         s, sess = self.bot.s, self.session
         qa = await self._qa_enabled()
-        tools = None
+        fns = [set_minutes_destination, post_note, ask_consent, set_recording]
         if qa:
-            ledger = LedgerTools(self.bot.store, sess.guild_id)
-            decls = [
-                types.FunctionDeclaration.from_callable_with_api_option(
-                    callable=fn, api_option="ENTERPRISE"
-                )
-                for fn in build_tools(ledger)
-            ]
-            tools = [types.Tool(function_declarations=decls)]
+            fns = [*build_tools(LedgerTools(self.bot.store, sess.guild_id)), *fns]
+        decls = [
+            types.FunctionDeclaration.from_callable_with_api_option(
+                callable=fn, api_option="ENTERPRISE"
+            )
+            for fn in fns
+        ]
+        tools = [types.Tool(function_declarations=decls)]
         history = ""
         if self.handle is None:  # a resumed session already remembers the conversation
             history = sess.transcript.history(s.now(), window_s=120, max_chars=1500)
@@ -349,8 +449,13 @@ class LiveVoice:
             ),
             input_audio_transcription={},
             output_audio_transcription={},
+            realtime_input_config=build_realtime_input(s),
             # With proactive audio the model stays silent for chatter that is not addressed to it.
-            proactivity={"proactive_audio": True},
+            proactivity=(
+                types.ProactivityConfig(proactive_audio=True)
+                if getattr(s, "live_proactive_audio", True)
+                else None
+            ),
             session_resumption=types.SessionResumptionConfig(handle=self.handle),
             context_window_compression=types.ContextWindowCompressionConfig(
                 sliding_window=types.SlidingWindow()
@@ -399,8 +504,9 @@ class LiveVoice:
             await asyncio.sleep(delay)
 
     async def _serve(self, live: Any) -> None:
-        self.mixer.clear()
-        self._streaming = False
+        self._streaming = False  # audio heard while connecting stays queued: it is sent first
+        if self._engaged:
+            self._spawn(self._send_state())
         tasks = [
             asyncio.create_task(self._sender(live)),
             asyncio.create_task(self._receiver(live)),
@@ -414,7 +520,49 @@ class LiveVoice:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    # ---- listening / engaged state, forced turns
+    def notify_state(self, engaged: bool) -> None:
+        """Tell the model whether it is engaged in a conversation or only listening."""
+        self._engaged = engaged
+        self._spawn(self._send_state())
+
+    async def _send_state(self) -> None:
+        live = self._live
+        if live is None or self._closing:
+            return  # the current state is sent again when the session connects
+        text = STATE_ENGAGED if self._engaged else STATE_LISTENING
+        await live.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=text)]), turn_complete=False
+        )
+
+    def ensure_reply(self, since: float) -> None:
+        """Someone said the name (the utterance ended at `since`, monotonic). If the model has not
+        started answering `live_force_reply_seconds` after that, force a turn with a cue."""
+        self._spawn(self._force_reply(since))
+
+    async def _force_reply(self, since: float) -> None:
+        wait = float(getattr(self.bot.s, "live_force_reply_seconds", 1.2))
+        delay = since + wait - time.monotonic()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        live = self._live
+        if live is None or self._closing or self.session.ending:
+            return
+        if self._last_audio_at >= since or self._turn_audio:
+            return  # the model is answering (or answered) already
+        logger.info("live: name heard but no reply: forcing a turn")
+        self._last_audio_at = time.monotonic()  # one cue per call
+        await live.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=FORCE_CUE)]),
+            turn_complete=True,
+        )
+
     # ---- audio in
+    def _idle_s(self) -> float:
+        """Silence is sent long enough for the server to end the turn (silence_duration_ms) first."""
+        ms = int(getattr(self.bot.s, "live_silence_ms", 0) or 0)
+        return max(STREAM_IDLE_S, ms / 1000 + 0.8)
+
     async def _sender(self, live: Any) -> None:
         while True:
             await asyncio.sleep(SEND_INTERVAL_S)
@@ -428,7 +576,7 @@ class LiveVoice:
                     audio=types.Blob(data=chunk, mime_type=f"audio/pcm;rate={LIVE_IN_RATE}")
                 )
             elif self._streaming:
-                if now - self._last_voice < STREAM_IDLE_S:
+                if now - self._last_voice < self._idle_s():
                     # Real silence after the voice, so the server-side VAD can end the turn.
                     silence = bytes(int(LIVE_IN_RATE * SEND_INTERVAL_S) * 2)
                     await live.send_realtime_input(
@@ -491,6 +639,18 @@ class LiveVoice:
         return None
 
     async def _run_tool(self, name: str, args: dict) -> dict:
+        if name in _MEETING_TOOLS:  # not account data: no executive check
+            mgr, a = self.bot.meetings, args or {}
+            if name == "set_minutes_destination":
+                return await mgr.set_minutes_destination(self.session, str(a.get("channel", "")))
+            if name == "post_note":
+                return await mgr.post_note(self.session, str(a.get("text", "")))
+            if name == "ask_consent":
+                return await mgr.ask_consent(
+                    self.session, str(a.get("text", "")), str(a.get("medium", "text"))
+                )
+            return mgr.set_recording(self.session, bool(a.get("recording", True)))
+
         def call() -> dict:
             refusal = self._scope_ok()
             if refusal:
@@ -536,6 +696,8 @@ class LiveVoice:
                 )
                 self._latency_pending = False
         self._awaiting_answer = False
+        s.introduced = True  # Salid has spoken: the room knows it is there
+        self._last_audio_at = time.monotonic()
         src = self._source
         if src is None or not src.feed(data):  # no source yet, or the last one is spent
             src = self._source = LiveAudioSource()

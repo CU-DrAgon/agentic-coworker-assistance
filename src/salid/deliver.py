@@ -21,11 +21,12 @@ from difflib import SequenceMatcher
 
 import discord
 
-from .coo_store import DELIVERIES
+from .coo_store import DELIVERIES, MINUTES
 from .dm import closed_dm_message, send_dm
 from .i18n import t
 from .media import parse_message_ref
 from .mentions import MENTION_RE, find_member, match_members, resolve_mentions
+from .minutes import can_see, can_see_and_post, latest_visible, resolve_channel
 from .permissions import channel_missing, permission_message
 from .secretary import SecretaryTools, fingerprint
 from .secretary_store import new_id, utc_iso
@@ -481,3 +482,66 @@ class DeliverMixin:
     @staticmethod
     def _lang_of_ctx(secretary) -> str:
         return secretary.lang if secretary.lang in ("th", "en") else "th"
+
+    # ------------------------------------------------------------- meeting minutes
+    def _minutes_actions(self, message, guild, member, lang: str, loop):
+        """The sync `deliver_minutes` callable bound to this message (runs in the agent's thread)."""
+
+        def deliver_minutes(destination, meeting="last"):
+            fut = asyncio.run_coroutine_threadsafe(
+                self._deliver_minutes(guild, member, lang, destination, meeting), loop
+            )
+            return fut.result(timeout=60)
+
+        return deliver_minutes
+
+    async def _deliver_minutes(self, guild, member, lang, destination: str, meeting: str) -> dict:
+        """Post the stored summary of a finished voice meeting into `destination`. The requester
+        must have attended the meeting or be able to see its channel, and be able to see and post in
+        the destination (Salid must be able to post there too)."""
+        from .bot import chunks
+
+        gid = guild.id
+        records = await asyncio.to_thread(self.docs.find, MINUTES, gid)
+
+        def viewable(cid: int) -> bool:
+            ch = guild.get_channel(cid)
+            return ch is not None and can_see(ch, member)
+
+        want = (meeting or "last").strip().casefold()
+        pool = records
+        if want not in ("last", "latest", "", "ล่าสุด", "เมื่อกี้"):
+            pool = [r for r in records if want in str(r.get("voice_channel_name", "")).casefold()]
+        rec = latest_visible(pool, member.id, viewable)
+        if rec is None:
+            return {
+                "error": "no_meeting",
+                "note": "no finished meeting this requester attended or can see",
+            }
+        me = getattr(guild, "me", None)
+        res = resolve_channel(
+            guild.text_channels,
+            destination,
+            lambda c: can_see_and_post(c, member) and (me is None or can_see_and_post(c, me)),
+        )
+        if res.status == "ambiguous":
+            return {"error": "ambiguous", "candidates": [f"#{c.name}" for c in res.candidates[:8]]}
+        if res.status != "ok":
+            return {
+                "error": "not_allowed" if res.status == "not_allowed" else "destination_not_found"
+            }
+        when = str(rec.get("started_at", ""))[:16].replace("T", " ")
+        header = t(
+            "minutes_forwarded", lang, room=rec.get("voice_channel_name", ""), when=when,
+            who=getattr(member, "display_name", ""),
+        )  # fmt: skip
+        try:
+            for part in chunks(header + rec.get("summary", ""), 1900):
+                await res.channel.send(part, allowed_mentions=discord.AllowedMentions.none())
+        except discord.HTTPException:
+            return {"error": "could_not_post", "channel": res.channel.name}
+        return {
+            "status": "posted",
+            "channel": res.channel.name,
+            "meeting": rec.get("voice_channel_name"),
+        }

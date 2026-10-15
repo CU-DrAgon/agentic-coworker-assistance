@@ -105,7 +105,11 @@ def world(monkeypatch):
     guild.voice_channels = list(chans.values())
     bot = SecretaryBot(
         FixedClockSettings(
-            exec_user_ids={5}, voice_reply=False, voice_mode="classic", db_path=":memory:"
+            exec_user_ids={5},
+            voice_reply=False,
+            voice_mode="classic",
+            db_path=":memory:",
+            meeting_text_echo=True,
         ),
         None,
         FakeClient([]),
