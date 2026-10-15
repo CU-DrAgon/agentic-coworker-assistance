@@ -47,7 +47,10 @@ class ScriptedLlm(BaseLlm):
         self.requests.append(llm_request)
         item = self.script.pop(0)
         item = item(llm_request) if callable(item) else item
-        yield LlmResponse(content=item.candidates[0].content)
+        yield LlmResponse(
+            content=item.candidates[0].content,
+            usage_metadata=getattr(item, "usage_metadata", None),
+        )
 
 
 def scripted(*script) -> ScriptedLlm:
@@ -65,6 +68,17 @@ def text_resp(text):
 
 def json_resp(obj):
     return text_resp(json.dumps(obj, ensure_ascii=False))
+
+
+def usage(resp, prompt=0, cached=0, out=0, thought=0):
+    """Attach token usage to a scripted response (as Vertex reports it)."""
+    resp.usage_metadata = types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=prompt,
+        cached_content_token_count=cached,
+        candidates_token_count=out,
+        thoughts_token_count=thought,
+    )
+    return resp
 
 
 def fc_resp(*calls):

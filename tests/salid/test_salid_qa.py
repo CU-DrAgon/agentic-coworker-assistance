@@ -1,6 +1,6 @@
 import json
 
-from conftest import ALICE, BOB, EXEC_ID, GUILD, fc_resp, scripted, text_resp
+from conftest import ALICE, BOB, EXEC_ID, GUILD, fc_resp, scripted, text_resp, usage
 
 from salid.digest import build_daily_digest
 from salid.qa import MAX_ROUNDS, LedgerTools, ask
@@ -235,3 +235,26 @@ def test_digest_in_english(seeded):
     assert "Daily expense summary" in d and "Needs review" in d and "unclear data" in d
     assert "สรุปค่าใช้จ่าย" not in d
     assert "No receipts" in build_daily_digest(seeded, GUILD, "2026-01-01", "en")
+
+
+# ------------------------------------------------------------------ metrics
+def test_answer_reports_tokens_and_tool_time(settings, seeded):
+    llm = scripted(
+        usage(
+            fc_resp(("spending_summary", {"start_date": "2026-10-01", "end_date": "2026-10-14"})),
+            prompt=100, cached=40, out=10, thought=5,
+        ),
+        usage(text_resp("ยอด ฿10,370.50"), prompt=120, cached=60, out=20),
+    )  # fmt: skip
+    a = ask(settings, seeded, "เดือนนี้เท่าไร", guild_id=GUILD, is_exec=True, user_id=EXEC_ID,
+            model=llm)  # fmt: skip
+    assert (a.model_calls, a.tokens_in, a.tokens_cached, a.tokens_out, a.tokens_thought) == (
+        2, 220, 100, 30, 5,
+    )  # fmt: skip
+    assert set(a.tool_ms) == {"spending_summary"} and a.tool_ms["spending_summary"] >= 0
+
+
+def test_answer_without_usage_metadata_reports_zero_tokens(settings, seeded):
+    a = ask(settings, seeded, "hi", guild_id=GUILD, is_exec=True, user_id=EXEC_ID,
+            model=scripted(text_resp("hi")))  # fmt: skip
+    assert (a.model_calls, a.tokens_in, a.tool_ms) == (1, 0, {})

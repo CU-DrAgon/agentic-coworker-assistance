@@ -106,6 +106,18 @@ async def test_interjection_no_reply_is_suppressed(bot, world, monkeypatch):
     ]
 
 
+async def test_answer_logs_one_metrics_line_without_content(bot, world, monkeypatch, caplog):
+    _real_answer(bot, monkeypatch, "ลับมาก")
+    m = say(world, world.gen, "สลิด ยอดเท่าไร")
+    with caplog.at_level("INFO", logger="salid.bot"):
+        await bot._answer(m, world.g, m.author)
+    line = next(r.getMessage() for r in caplog.records if r.getMessage().startswith("answer "))
+    for key in ("guild=", "channel=", "ms_total=", "ms_context=", "ms_agent=", "tok_in=0",
+                "tok_cached=0"):  # fmt: skip
+        assert key in line
+    assert "ลับมาก" not in line and "ยอด" not in line
+
+
 # ------------------------------------------------------------------ A: stage-2 memory hints
 def test_keywords_drop_question_words_and_split_thai_on_particles():
     kws = gate.extract_keywords("ค่าน้ำมันเดือนนี้เท่าไหร่")

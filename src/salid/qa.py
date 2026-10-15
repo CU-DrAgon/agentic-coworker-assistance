@@ -6,7 +6,7 @@ import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from google.adk.agents import LlmAgent
@@ -29,6 +29,13 @@ APP_NAME = "salid"
 RETRY_OPTIONS = types.HttpRetryOptions(
     attempts=5, initial_delay=2.0, max_delay=30.0, http_status_codes=[429, 500, 502, 503, 504]
 )
+# Answer field -> usage_metadata attribute (Vertex token accounting per model call).
+USAGE_FIELDS = {
+    "tokens_in": "prompt_token_count",
+    "tokens_cached": "cached_content_token_count",
+    "tokens_out": "candidates_token_count",
+    "tokens_thought": "thoughts_token_count",
+}
 THAI_DAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
 
 
@@ -531,12 +538,20 @@ class Answer:
     rounds: int
     seconds: float
     tool_calls: list[tuple[str, dict]]
+    # Cost and latency (summed over every model call of the turn; 0 when not reported).
+    model_calls: int = 0
+    tokens_in: int = 0
+    tokens_cached: int = 0
+    tokens_out: int = 0
+    tokens_thought: int = 0
+    tool_ms: dict[str, float] = field(default_factory=dict)  # tool name -> total milliseconds
 
 
 def build_tools(
     ledger: LedgerTools,
     calls: list[tuple[str, dict]] | None = None,
     memory: MemoryTools | None = None,
+    timings: dict[str, float] | None = None,
 ) -> list:
     """The four ledger tools (plus the two memory tools when `memory` is given) as plain functions
     bound to `ledger` / `memory` (ADK wraps them as FunctionTools).
@@ -544,15 +559,20 @@ def build_tools(
     Permission scoping lives in `ledger.forced`: none of these signatures has a submitter
     parameter, so the model cannot pass one (ADK also drops undeclared arguments). Errors are
     returned to the model as data instead of raised, so a bad date never kills the turn.
+    `timings` (tool name -> milliseconds, summed) receives how long each tool took.
     """
     log = calls if calls is not None else []
+    spent = timings if timings is not None else {}
 
     def safe(name: str, args: dict, fn):
         log.append((name, {k: v for k, v in args.items() if v is not None}))
+        started = time.monotonic()
         try:
             return fn()
         except (TypeError, ValueError) as e:
             return {"error": str(e)}
+        finally:
+            spent[name] = spent.get(name, 0.0) + (time.monotonic() - started) * 1000
 
     def spending_summary(start_date: str, end_date: str, group_by: str = "none") -> dict:
         """Total spending and receipt count for a date range, optionally grouped.
@@ -757,13 +777,21 @@ async def ask_async(
     whose `forced_submitter_id` is the asker for non-executives."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
+    tool_ms: dict[str, float] = {}
+    model_calls = 0
+
+    def count_call(n: int) -> None:
+        nonlocal model_calls
+        model_calls = n
+
     ledger = LedgerTools(store, guild_id, forced_submitter_id=None if is_exec else user_id)
     agent = build_agent(
         settings,
-        build_tools(ledger, calls, memory),
+        build_tools(ledger, calls, memory, tool_ms),
         scoped=not is_exec,
         now=now,
         model=model,
+        on_model_call=count_call,
         language=language,
         memory=memory is not None,
         interjection=interjection,
@@ -781,12 +809,16 @@ async def ask_async(
     )
     message = types.Content(role="user", parts=[types.Part(text=text_in)])
     rounds, text = 0, ""
+    tokens = dict.fromkeys(USAGE_FIELDS, 0)
     async for event in runner.run_async(
         user_id=adk_user,
         session_id=session_id,
         new_message=message,
         run_config=RunConfig(max_llm_calls=MAX_ROUNDS + 2),
     ):
+        if event.usage_metadata is not None:
+            for name, attr in USAGE_FIELDS.items():
+                tokens[name] += getattr(event.usage_metadata, attr, None) or 0
         if event.get_function_calls():
             rounds += 1
         elif event.is_final_response() and event.content and event.content.parts:
@@ -798,6 +830,9 @@ async def ask_async(
         rounds,
         time.monotonic() - started,
         calls,
+        model_calls=model_calls,
+        tool_ms=tool_ms,
+        **tokens,
     )
 
 

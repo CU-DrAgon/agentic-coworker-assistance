@@ -888,6 +888,7 @@ class SecretaryBot(discord.Client):
         """Answer `message`. `interjection`: Salid was not asked (join mode), so the model may
         stay silent (NO_REPLY). `image_note`: stored description of the image(s) in the message,
         put in front of the question. Returns True when something was posted."""
+        t0 = time.monotonic()
         q = self._strip_mentions(message.content, message)
         if not q:
             q = await self._previous_text(message)
@@ -918,6 +919,7 @@ class SecretaryBot(discord.Client):
         if meeting:  # talking in a live meeting's chat: the spoken transcript is context too
             history = t("history_meeting", lang, meeting=meeting, chat=history).rstrip()
         memory = await self._memory_tools(message, guild, member)
+        t_ctx = time.monotonic()
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -932,7 +934,7 @@ class SecretaryBot(discord.Client):
                 memory=memory,
                 interjection=interjection,
             )
-        logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
+        self._log_answer(gid, message.channel.id, is_exec, ans, t0, t_ctx, time.monotonic())
         if interjection and is_no_reply(ans.text):
             logger.info("interjection suppressed (nothing useful to add)")
             return False
@@ -943,6 +945,21 @@ class SecretaryBot(discord.Client):
             )
         self._note_answer(message, sent)
         return True
+
+    @staticmethod
+    def _log_answer(gid, cid, is_exec, ans, t0: float, t_ctx: float, t_end: float) -> None:
+        """One metrics line per answer: ids, timings and token counts, never content. New Answer
+        fields are read with defaults (callers and tests may hand back a minimal object)."""
+        tool_ms = getattr(ans, "tool_ms", None) or {}
+        tools = ",".join(f"{k}:{v:.0f}" for k, v in tool_ms.items()) or "-"
+        logger.info(
+            "answer guild=%s channel=%s exec=%s rounds=%d calls=%d ms_total=%d ms_context=%d "
+            "ms_agent=%d tools=%s tok_in=%d tok_cached=%d tok_out=%d tok_thought=%d",
+            gid, cid, is_exec, getattr(ans, "rounds", 0), getattr(ans, "model_calls", 0),
+            (t_end - t0) * 1000, (t_ctx - t0) * 1000, (t_end - t_ctx) * 1000, tools,
+            getattr(ans, "tokens_in", 0), getattr(ans, "tokens_cached", 0),
+            getattr(ans, "tokens_out", 0), getattr(ans, "tokens_thought", 0),
+        )  # fmt: skip
 
     async def _deep(
         self,
