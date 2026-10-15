@@ -18,6 +18,7 @@ from . import gate
 from .archive import make_archive
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
 from .config import Settings
+from .coo import CooMixin, DisclosureButton
 from .deep_task import (
     REPORT_NAME,
     DeepCancelled,
@@ -219,7 +220,7 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(discord.Client):
+class SecretaryBot(CooMixin, discord.Client):
     def __init__(
         self,
         settings: Settings,
@@ -302,6 +303,7 @@ class SecretaryBot(discord.Client):
         )
         self._seen_mode: dict[int, str] = {}  # channel -> last mode seen (off -> on notice)
         self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
+        self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -310,12 +312,15 @@ class SecretaryBot(discord.Client):
         return SQLiteMemoryStore(getattr(store, "path", None) or ":memory:", settings.zone)
 
     def _channel_name(self, guild_id: int, channel_id: int) -> str:
+        if channel_id < 0:  # a member's DM notes (salid.memory_access.dm_scope)
+            return "DM"
         guild = next((g for g in self.guilds if g.id == guild_id), None)
         channel = guild.get_channel(channel_id) if guild else None
         return getattr(channel, "name", None) or str(channel_id)
 
     async def setup_hook(self):
         self._register_commands()
+        self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
         await self.tree.set_translator(SalidTranslator())
         try:
             await self.tree.sync()  # global commands; Discord may take a while to show them
@@ -773,7 +778,16 @@ class SecretaryBot(discord.Client):
             return
         guild, member = shared[0]
         await asyncio.to_thread(self.team.current, guild.id)
-        await self._answer(message, guild, member)
+        try:
+            handled, note = await self._coo_dm_record(message, guild, member)  # work info noted
+        except Exception:
+            logger.warning("could not record a DM note", exc_info=True)
+            handled, note = False, ""
+        if handled:
+            return
+        await self._answer(message, guild, member, **({"note": note} if note else {}))
+        with contextlib.suppress(Exception):
+            await self._coo_dm_notice(message, guild)
 
     async def _maybe_correction(self, message: discord.Message) -> bool:
         ref = message.reference
@@ -1032,6 +1046,7 @@ class SecretaryBot(discord.Client):
         member,
         *,
         interjection: bool = False,
+        note: str = "",
     ) -> bool:
         """Answer `message`. `interjection`: Salid was not asked (join mode), so the model may
         stay silent (NO_REPLY). Attachments (images, PDFs, text files) go to the agent with the
@@ -1045,6 +1060,8 @@ class SecretaryBot(discord.Client):
             sent = await message.reply(t("greeting", self._lang(message, "")), mention_author=False)
             self._note_answer(message, sent)
             return True
+        if note:  # e.g. the user marked a DM note confidential
+            q = f"{q}\n{note}"
         gid = guild.id
         is_exec = self.is_exec_member(member)
         setting = self._lang_setting(message)  # th / en / auto: auto lets the model follow the user
@@ -1078,6 +1095,11 @@ class SecretaryBot(discord.Client):
             actions = self._file_actions(
                 message, guild, member, is_exec, setting, asyncio.get_running_loop()
             )
+        coo_tools = (
+            self._coo_tools(guild, member, is_exec, memory, q, lang)
+            if memory is not None and not interjection
+            else []
+        )
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -1092,6 +1114,7 @@ class SecretaryBot(discord.Client):
                 memory=memory,
                 interjection=interjection,
                 **({"files": files, "actions": actions} if files else {}),
+                **({"extra_tools": coo_tools} if coo_tools else {}),
                 **self._web_kw(gid),
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
@@ -1439,6 +1462,7 @@ class SecretaryBot(discord.Client):
                 self.tree.add_command(
                     app_commands.Command(name=name, description=desc, callback=cb)
                 )
+        self._register_coo_commands()  # /รายงาน /report
 
     async def handle_summary(
         self,
@@ -1742,6 +1766,7 @@ class SecretaryBot(discord.Client):
         await self._signoff_due()
         await self._join_due()
         await self._memory_due()
+        await self._coo_due()
 
     async def _signoff_due(self) -> None:
         """Conversations whose window ran out: one short sign-off (or a 👋 reaction after a
@@ -2353,12 +2378,20 @@ class SecretaryBot(discord.Client):
         except Exception:
             logger.warning("could not compute memory scope", exc_info=True)
             return None
+        vis = None
+        try:  # role hierarchy and disclosure grants (salid.memory_access); failing = plain scope
+            allowed, vis = await asyncio.to_thread(
+                self._coo_scope, guild, member, answering, allowed
+            )
+        except Exception:
+            logger.warning("could not compute the role hierarchy scope", exc_info=True)
         return MemoryTools(
             self.memory_store,
             guild.id,
             allowed,
             self.s,
             self.team.memory_retention_days(guild.id),
+            visibility=vis,
         )
 
     # ------------------------------------------------------------- digest

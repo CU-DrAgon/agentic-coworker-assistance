@@ -120,8 +120,11 @@ class MemoryScheduler:
         channel_name_of: Callable[[int, int], str] = lambda gid, cid: str(cid),
         enabled: Callable[[int], bool] = lambda gid: True,
         max_updates: int = MAX_UPDATES_PER_TICK,
+        on_summary: Callable[[int, int, str, dict, list[MemoryMessage]], None] | None = None,
     ) -> None:
         self.store, self.s, self.llm = store, settings, llm
+        # called after a summary was stored: (guild, channel, day, summary dict, new messages)
+        self.on_summary = on_summary
         self.now = now or settings.now
         self.lang_of, self.channel_name_of, self.enabled = lang_of, channel_name_of, enabled
         self.max_updates = max_updates
@@ -227,6 +230,8 @@ class MemoryScheduler:
         try:
             after = None if dirty or summary is None else summary.cursor
             msgs = self.store.messages_after(gid, cid, day, after, MAX_FETCH)
+            # a DM note its author marked private is never summarised
+            shown = [m for m in msgs if m.visibility != "private"]
             if msgs or dirty:
                 prev = None if dirty or summary is None else summary.summary
                 new = (
@@ -234,16 +239,16 @@ class MemoryScheduler:
                         self.llm,
                         self.s.gate_model,
                         prev,
-                        msgs,
+                        shown,
                         channel=self.channel_name_of(gid, cid),
                         day=day,
                         lang=self.lang_of(gid),
                         zone=self.s.zone,
                     )
-                    if msgs
-                    else memory_summary.SummaryDoc().model_dump()
+                    if shown
+                    else (prev or memory_summary.SummaryDoc().model_dump())
                 )
-                calls = True
+                calls = bool(shown)
             else:
                 new, calls = (summary.summary if summary else {}), False
         except Exception:
@@ -279,6 +284,11 @@ class MemoryScheduler:
             dirty=bool(fresh and fresh.dirty and not dirty),
         )
         self.store.put_summary(out)
+        if self.on_summary is not None and msgs:
+            try:
+                self.on_summary(gid, cid, day, new, [m for m in msgs if m.visibility != "private"])
+            except Exception:
+                logger.warning("summary hook failed for %s/%s %s", gid, cid, day, exc_info=True)
         logger.info(
             "memory update guild=%s channel=%s day=%s new=%d llm=%s final=%s",
             gid, cid, day, len(msgs), calls, out.final,

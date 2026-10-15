@@ -260,6 +260,7 @@ async def hub_put_settings(
         *body.channel_modes,
         *body.channel_languages,
         body.digest_channel_id,
+        body.report_channel_id,
     } - {""}
     if known and chosen - known:  # the bot syncs the list; an empty list means "not synced yet"
         raise HTTPException(422, "Unknown channel id for this guild")

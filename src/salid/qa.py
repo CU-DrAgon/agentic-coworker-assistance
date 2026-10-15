@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -19,6 +20,7 @@ from google.genai import types
 
 from .config import Settings
 from .i18n import resolve_lang, t
+from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
 from .store import Store, duplicate_extras, is_active, pick_keep
@@ -371,9 +373,16 @@ class MemoryTools:
         allowed: dict[int, str],
         settings,
         retention_days: int | None = None,
+        visibility: Visibility | None = None,
     ):
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
         self.retention_days = retention_days or settings.memory_retention_days
+        # With `visibility` the role hierarchy and disclosure grants apply (salid.memory_access);
+        # `hidden` collects matching records the asker may not see (never shown, only counted, so
+        # Salid can offer a disclosure request).
+        self.vis = visibility
+        self.hidden: list[MemoryMessage] = []
+        self.hidden_in_dm = 0  # of those: would be visible if asked in a DM
 
     def _range(self, start_date: str, end_date: str) -> tuple[str, str]:
         a, b = date.fromisoformat(start_date), date.fromisoformat(end_date)
@@ -383,8 +392,62 @@ class MemoryTools:
             raise ValueError(f"range too long: at most {MAX_CHAT_DAYS} days per call")
         return a.isoformat(), b.isoformat()
 
+    def _shown(self) -> dict[int, str]:
+        """Channels whose day summaries may be read: the allowed ones plus, with a hierarchy,
+        the DM briefings of people the asker outranks (single-author, never private notes)."""
+        return {**self.allowed, **(self.vis.dm_names if self.vis else {})}
+
     def _name(self, channel_id: int) -> str:
-        return self.allowed.get(channel_id, str(channel_id))
+        shown = {**(self.vis.read_channels if self.vis else {}), **self._shown()}
+        if is_dm_scope(channel_id) and channel_id not in shown:
+            return "DM"
+        return shown.get(channel_id, str(channel_id))
+
+    def _read_ids(self) -> set[int]:
+        """Channels to read from the store: with a hierarchy, every channel (hidden records are
+        counted, then filtered by `_visible`)."""
+        return set(self.allowed) | (set(self.vis.read_channels) if self.vis else set())  # + hidden
+
+    def _visible(self, m: MemoryMessage) -> bool:
+        return self.vis is None or message_visible(m, self.vis.scope)
+
+    def _person_ids(self, person: str | None) -> tuple[set[int], str]:
+        """Member ids matching a name or mention, and the lower-cased text for author names."""
+        text = (person or "").strip().lstrip("@").casefold()
+        if not text:
+            return set(), ""
+        ids = {int(x) for x in re.findall(r"<@!?(\d{1,25})>", person or "")}
+        if text.isdigit():
+            ids.add(int(text))
+        if self.vis:
+            ids |= {i for i, n in self.vis.people.items() if text in n.casefold()}
+        return ids, text
+
+    def _by_person(self, m: MemoryMessage, ids: set[int], text: str) -> bool:
+        return not text or m.author_id in ids or text in m.author_name.casefold()
+
+    def _hide(self, m: MemoryMessage) -> None:
+        if self.vis is None or not hidden_but_askable(m, self.vis.scope):
+            return
+        if all(h.message_id != m.message_id for h in self.hidden):
+            self.hidden.append(m)
+            if m.author_id in self.vis.scope.dm_authors:
+                self.hidden_in_dm += 1
+
+    def _hidden_note(self) -> str | None:
+        if not self.hidden:
+            return None
+        n = len(self.hidden)
+        hint = (
+            " Part of it may be shareable if the person asks in a DM with Salid."
+            if self.hidden_in_dm
+            else ""
+        )
+        return (
+            f"{n} more matching record(s) exist that this person is NOT allowed to see (content "
+            "withheld; never guess it). Tell them you cannot share that yet and offer to ask the "
+            f"owner for permission with request_disclosure.{hint}"
+        )
 
     def _msg(self, m: MemoryMessage) -> dict:
         return {
@@ -414,7 +477,7 @@ class MemoryTools:
         start, end = self._range(start_date, end_date)
         sums = [
             x
-            for x in self.store.summaries(self.guild_id, self.allowed, start, end)
+            for x in self.store.summaries(self.guild_id, self._shown(), start, end)
             if x.message_count > 0
         ]
         # Messages newer than the (living) summary, so nothing between updates is missed.
@@ -426,7 +489,7 @@ class MemoryTools:
             if not start <= d <= end:
                 continue
             for cid in self.store.day_channels(self.guild_id, d):
-                if cid not in self.allowed:
+                if cid not in self._shown():
                     continue
                 x = covered.get((cid, d))
                 if x is not None and x.final:
@@ -434,7 +497,7 @@ class MemoryTools:
                 rows = self.store.messages_after(
                     self.guild_id, cid, d, x.cursor if x else None, TAIL_PER_CHANNEL
                 )
-                tail += [self._msg(m) for m in rows]
+                tail += [self._msg(m) for m in rows if self._visible(m)]
         tail = tail[-TAIL_TOTAL:]
         # Newest days first; the output is capped, so old days drop out first.
         all_days = [
@@ -481,6 +544,7 @@ class MemoryTools:
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
+        person: str | None = None,
     ) -> dict:
         kws = [k.strip().casefold() for k in (keywords or []) if isinstance(k, str) and k.strip()]
         kws = list(dict.fromkeys(kws))[:12]
@@ -497,6 +561,7 @@ class MemoryTools:
             raise ValueError("end_date is before start_date")
         start = max(start, end - timedelta(days=MAX_SEARCH_DAYS - 1))
         a, b = start.isoformat(), end.isoformat()
+        pids, ptext = self._person_ids(person)
 
         def hits(text: str) -> int:
             low = text.casefold()
@@ -509,19 +574,22 @@ class MemoryTools:
                 (day, cid), {"score": 0, "summary": [], "messages": [], "n_msgs": 0}
             )
 
-        for x in self.store.summaries(self.guild_id, self.allowed, a, b):
+        for x in self.store.summaries(self.guild_id, self._shown(), a, b):
             for line in self._summary_lines(x.summary):
                 h = hits(line)
-                if h:
+                if h and (not ptext or ptext in line.casefold()):
                     g = group(x.local_date, x.channel_id)
                     g["score"] += h * SUMMARY_WEIGHT
                     g["summary"].append(line[:300])
         rows = self.store.messages(
-            self.guild_id, self.allowed, a, b, limit=MAX_ROWS_SEARCH, newest_first=True
+            self.guild_id, self._read_ids(), a, b, limit=MAX_ROWS_SEARCH, newest_first=True
         )
         for m in rows:  # newest first
             h = hits(f"{m.text} {m.author_name}")
-            if h:
+            if h and self._by_person(m, pids, ptext):
+                if not self._visible(m):
+                    self._hide(m)
+                    continue
                 g = group(m.local_date, m.channel_id)
                 g["score"] += h
                 g["n_msgs"] += 1
@@ -545,6 +613,8 @@ class MemoryTools:
             out["note"] = "output truncated: more hits exist, use narrower keywords or dates"
         if not fit:
             out["note"] = "no matches in the channels you can see"
+        if self._hidden_note():
+            out["withheld"] = self._hidden_note()
         return out
 
     def chat_messages(
@@ -554,8 +624,10 @@ class MemoryTools:
         channel_name: str | None = None,
         keyword: str | None = None,
         limit: int = 50,
+        person: str | None = None,
     ) -> dict:
         start, end = self._range(start_date, end_date)
+        pids, ptext = self._person_ids(person)
         channel_id = None
         if channel_name:
             want = channel_name.strip().lstrip("#").casefold()
@@ -566,17 +638,41 @@ class MemoryTools:
                     "messages": [],
                     "note": f"no channel named {channel_name!r} available",
                 }
+        limit = max(1, min(int(limit), MAX_MESSAGE_LIMIT))
+        if self.vis is None and not ptext:
+            rows = self.store.messages(
+                self.guild_id,
+                self.allowed,
+                start,
+                end,
+                channel_id=channel_id,
+                keyword=keyword,
+                limit=limit,
+                newest_first=True,
+            )
+            return {"count": len(rows), "messages": [self._msg(m) for m in rows]}
         rows = self.store.messages(
             self.guild_id,
-            self.allowed,
+            self._read_ids() if channel_id is None else {channel_id},
             start,
             end,
             channel_id=channel_id,
             keyword=keyword,
-            limit=max(1, min(int(limit), MAX_MESSAGE_LIMIT)),
+            limit=MAX_ROWS_SEARCH,
             newest_first=True,
         )
-        return {"count": len(rows), "messages": [self._msg(m) for m in rows]}
+        shown = []
+        for m in rows:
+            if not self._by_person(m, pids, ptext):
+                continue
+            if self._visible(m):
+                shown.append(m)
+            elif keyword or ptext:
+                self._hide(m)
+        out: dict = {"count": len(shown[:limit]), "messages": [self._msg(m) for m in shown[:limit]]}
+        if self._hidden_note():
+            out["withheld"] = self._hidden_note()
+        return out
 
     def call(self, name: str, args: dict) -> dict:
         if name not in {"chat_days", "chat_messages", "chat_search"}:
@@ -721,19 +817,24 @@ class FileActions:
 
 PERSONA = {
     "th": (
-        "คุณชื่อ “สลิด” เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
+        "คุณชื่อ “สลิด” เป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (มือขวาของ COO/PM: ดูว่าใครทำอะไรอยู่ "
+        "ติดตามงาน รายงาน นัดหมาย และรักษาความลับตามลำดับชั้นของทีม) และเป็นเพื่อนร่วมทีมในแชต Discord "
         "นิสัยเป็นกันเอง สุภาพ อารมณ์ดี พูดภาษาไทยเป็นธรรมชาติ ลงท้ายด้วยคำว่าครับ "
         "ตอบตามภาษาที่ผู้ใช้พิมพ์มา และปรับความยาวตามคำถาม (คุยเล่นตอบสั้น งานที่ขอรายละเอียดตอบละเอียดได้)\n"
     ),
     "en": (
-        "Your name is “Salid” (สลิด). You are the shop's secretary and teammate in the team's "
-        "Discord chat. You are friendly, polite and upbeat. ALWAYS reply in English, even if the "
+        "Your name is “Salid” (สลิด). You are the team's executive assistant and coordinator (a "
+        "COO/PM's right hand: you keep track of who is doing what, follow up on work, report, "
+        "schedule, and keep confidential information according to the team's role hierarchy) and a "
+        "teammate in the team's Discord chat. You are friendly, polite and upbeat. ALWAYS reply in English, even if the "
         "user writes in Thai (keep Thai names, vendors and category names as they are). "
         "Adjust the length to the question (short for small talk, detailed when the user asks "
         "for detail)\n"
     ),
     "auto": (
-        "คุณชื่อ “สลิด” (Salid) เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
+        "คุณชื่อ “สลิด” (Salid) เป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามว่าใครทำอะไร ติดตามงาน "
+        "รายงาน นัดหมาย และรักษาความลับตามลำดับชั้น / executive assistant and coordinator) "
+        "และเป็นเพื่อนร่วมทีมในแชต Discord "
         "นิสัยเป็นกันเอง สุภาพ อารมณ์ดี ตอบด้วยภาษาเดียวกับข้อความล่าสุดของผู้ใช้ "
         "(reply in the same language as the user's latest message): ถ้าผู้ใช้พิมพ์ไทยให้ตอบไทยเป็นธรรมชาติ "
         "ลงท้ายด้วยคำว่าครับ ถ้าพิมพ์อังกฤษให้ตอบเป็นอังกฤษ "
@@ -753,6 +854,29 @@ MEMORY_PROMPT = (
     "ถ้าไม่พบข้อมูลให้บอกตรงๆ ว่าไม่พบ ห้ามเดา และห้ามพูดถึงห้องที่เครื่องมือไม่ได้คืนมา. "
     "แปลงคำอย่าง 'เมื่อวาน' หรือ 'สัปดาห์ที่แล้ว' เป็นช่วงวันที่ YYYY-MM-DD จากวันนี้ในเขตเวลาที่ระบุ "
     "(chat_days/chat_messages รับช่วงละไม่เกิน 31 วัน ผลลัพธ์ถูกตัดความยาว ถ้ามี note ให้ย่อช่วงหรือใช้ chat_search). ผลลัพธ์ newer_than_summary คือข้อความของวันนี้ที่ใหม่กว่าสรุป."
+)
+
+
+# The coordinator role: hierarchy, tasks, disclosure, DMs, reports. Added when the coordinator tools
+# are registered (see `build_agent(coo=True)`).
+COO_PROMPT = (
+    "\nบทบาทผู้ประสานงานของทีม (COO/PM): สลิดดูความเคลื่อนไหวของทุกคนเอง ไม่ต้องรอให้ใครมารายงาน "
+    "จดงานที่ใครรับปากหรือถูกมอบหมายเป็นรายการงาน ติดตามทุกเช้า (DM ถามความคืบหน้า) และส่งรายงานเย็นให้ผู้บริหาร "
+    "(ห้อง “รายงานจากสลิด”, /รายงาน หรือ /report). ใช้ list_tasks ดูงาน, update_task ปิดงานหรือเปิดใหม่ "
+    "(สมาชิกแก้ได้เฉพาะงานของตัวเอง ผู้บริหารแก้ได้ทุกงาน) เมื่อมีคนบอกว่าทำงานไหนเสร็จหรือติดอะไร "
+    "ให้ list_tasks ของเขาแล้ว update_task พร้อมโน้ตสั้นๆ และถามถึงงานที่ค้างหรือเลยกำหนด. "
+    "ถามว่า “วันนี้ผมทำอะไรไปบ้าง” ให้เรียก my_day. ถามถึงงานของคนใดคนหนึ่งให้ใส่ person ใน chat_messages / chat_search.\n"
+    "ความลับตามลำดับชั้น: เห็นข้อมูลเฉพาะที่เครื่องมือคืนมา ผู้ที่ตำแหน่ง (role) สูงกว่าเห็นงานของผู้ที่ต่ำกว่าได้ "
+    "แต่ผู้ที่ต่ำกว่าหรือเท่ากันไม่เห็นงานของผู้ที่สูงกว่า และห้องส่วนตัวไม่เปิดให้คนนอกห้อง ข้อมูลที่พูดในห้องสาธารณะบอกใครก็ได้. "
+    "ถ้าผลลัพธ์มี withheld แปลว่ามีข้อมูลที่เกี่ยวข้องแต่ผู้ถามยังไม่มีสิทธิ์เห็น: บอกตรงๆ อย่างสุภาพว่าตอนนี้ยังบอกไม่ได้ "
+    "(ห้ามบอกเนื้อหา ห้ามเดา ห้ามบอกว่าใครเป็นเจ้าของ) และเสนอว่า “ให้สลิดไปขออนุญาตเจ้าของข้อมูลไหมครับ” "
+    "เมื่อผู้ถามตอบตกลงแล้วเท่านั้น ให้เรียก request_disclosure(topic) แล้วแจ้งว่าส่งคำขอแล้ว "
+    "ถ้าเจ้าของอนุญาต สลิดจะส่งคำตอบให้ทาง DM เอง ถ้าถูกปฏิเสธจะแจ้งให้ทราบ. "
+    "ข้อมูลที่เจ้าของอนุญาตแล้วจะปรากฏในผลลัพธ์ของเครื่องมือตามปกติ คุยต่อกับคนนั้นได้ แต่ห้ามเล่าต่อให้คนอื่น.\n"
+    "DM กับสลิด: เมื่อสมาชิกทัก DM มาบอกเรื่องงาน (เช่น พรุ่งนี้ลา ลูกค้าขอเลื่อนส่งของ งานที่ทำอยู่) "
+    "ระบบจดไว้ให้อัตโนมัติ (ผู้ที่ตำแหน่งสูงกว่าเห็นได้ เว้นแต่เจ้าตัวบอกว่า “เรื่องนี้เก็บเป็นความลับ” / private) "
+    "ให้ตอบยืนยันสั้นๆ ว่าจดอะไรไว้ และถ้าเห็นว่ากระทบงานหรือคนอื่น ให้ถามหรือเสนอขั้นตอนต่อไป. "
+    "ถ้าในข้อความมีหมายเหตุว่าเป็นความลับ ให้ยืนยันว่าเก็บไว้เป็นความลับ."
 )
 
 
@@ -800,6 +924,11 @@ CAPABILITIES_PROMPT = (
     "11) สรุปแชต: /สรุป หรือ /summary เลือกช่วง (วันนี้ เมื่อวาน 7 วัน 30 วัน) ห้อง หรือทุกห้องที่ผู้สั่งเห็น พร้อมหัวข้อที่เน้น "
     "(ตามสิทธิ์การเห็นห้อง); ตอบกลับข้อความไหนด้วยคำว่า “สรุป” / “summarize” (พร้อมแท็กหรือเรียกชื่อสลิด) หรือคลิกขวาที่ข้อความแล้วเลือก "
     "“สรุปด้วยสลิด” (Summarize with Salid) เพื่อสรุปข้อความนั้น รวมไฟล์แนบและลิงก์\n"
+    "ผู้ประสานงานของทีม: สลิดดูเองว่าใครทำอะไร จดงานที่ใครรับปาก ติดตามความคืบหน้าทาง DM ทุกเช้า (ปิดได้ใน Hub) "
+    "ส่งรายงานเย็นเข้าห้องส่วนตัว “รายงานจากสลิด” สำหรับเจ้าของ/แอดมิน/ผู้บริหาร (หรือสั่งเองด้วย /รายงาน หรือ /report) "
+    "ใครก็ DM มาบอกเรื่องงานได้ (ผู้ที่ตำแหน่งสูงกว่าเห็น เว้นแต่บอกว่า “เรื่องนี้เก็บเป็นความลับ”) "
+    "และถามว่าวันนี้ตัวเองทำอะไรไปบ้าง (/รายงาน ของฉัน) ได้ ข้อมูลเปิดตามลำดับ role: คนตำแหน่งสูงกว่าเห็นงานของคนต่ำกว่า "
+    "ข้อมูลที่ยังไม่มีสิทธิ์เห็น สลิดขออนุญาตเจ้าของให้ได้\n"
     "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
     "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
 )
@@ -867,6 +996,7 @@ def system_prompt(
     interjection: bool = False,
     files: bool = False,
     web: bool = False,
+    coo: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message."""
     now = now or settings.now()
@@ -888,6 +1018,8 @@ def system_prompt(
         p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
     if memory:
         p += MEMORY_PROMPT
+    if coo:
+        p += COO_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1060,6 +1192,7 @@ def build_tools(
         channel_name: str | None = None,
         keyword: str | None = None,
         limit: int = 50,
+        person: str | None = None,
     ) -> dict:
         """Raw chat messages (newest first) with author, local time, channel, text and link.
 
@@ -1069,6 +1202,8 @@ def build_tools(
             channel_name: only this channel (name without #), optional.
             keyword: case-insensitive text to look for in the message or author name, optional.
             limit: max messages, default 50.
+            person: only messages written by this person (name or @mention), optional. Also
+                finds what a person told Salid in a DM when the asker may see it.
         """
         a = dict(
             start_date=start_date,
@@ -1076,6 +1211,7 @@ def build_tools(
             channel_name=channel_name,
             keyword=keyword,
             limit=limit,
+            person=person,
         )
         return safe("chat_messages", a, lambda: memory.chat_messages(**a))
 
@@ -1084,6 +1220,7 @@ def build_tools(
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
+        person: str | None = None,
     ) -> dict:
         """Search day summaries AND raw messages for ANY of the keywords (case-insensitive
         substring), in the channels the asker may see. Hits are grouped by date and channel,
@@ -1095,8 +1232,11 @@ def build_tools(
             start_date: ISO date YYYY-MM-DD, optional (default: the whole retention window).
             end_date: ISO date YYYY-MM-DD, optional (default: today).
             limit: max date/channel groups, default 20.
+            person: only what this person (name or @mention) wrote or is named in, optional.
         """
-        a = dict(keywords=keywords, start_date=start_date, end_date=end_date, limit=limit)
+        a = dict(
+            keywords=keywords, start_date=start_date, end_date=end_date, limit=limit, person=person
+        )
         return safe("chat_search", a, lambda: memory.chat_search(**a))
 
     return [*tools, chat_days, chat_messages, chat_search]
@@ -1196,6 +1336,7 @@ def build_agent(
     interjection: bool = False,
     files: bool = False,
     web: bool = False,
+    coo: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1208,6 +1349,7 @@ def build_agent(
         interjection=interjection,
         files=files,
         web=web,
+        coo=coo,
     )
     model_calls = 0
 
@@ -1258,6 +1400,7 @@ async def ask_async(
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
     web_client=None,
+    extra_tools: list | None = None,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -1265,7 +1408,8 @@ async def ask_async(
     (read by the model itself as multimodal parts, within the size limits); with `actions` the model
     also gets record_receipt / start_deep_task for them. `web_client` (a genai client): registers
     read_web (links + Google Search; see salid.web_read), fed only by `question` and the model's
-    short request."""
+    short request. `extra_tools`: the coordinator tools (see salid.coo_tools), registered with
+    their prompt section."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
     created: list[tuple[int, str | None]] = []
@@ -1284,6 +1428,7 @@ async def ask_async(
         tools += build_file_tools(usable, actions, calls, created)
     if web_client is not None:
         tools.append(make_read_web(web_client, settings.gemini_model, question, calls))
+    tools += extra_tools or []
     agent = build_agent(
         settings,
         tools,
@@ -1295,6 +1440,7 @@ async def ask_async(
         interjection=interjection,
         files=bool(usable or skipped),
         web=web_client is not None,
+        coo=bool(extra_tools),
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -1351,6 +1497,7 @@ def ask(
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
     web_client=None,
+    extra_tools: list | None = None,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1370,5 +1517,6 @@ def ask(
             files=files,
             actions=actions,
             web_client=web_client,
+            extra_tools=extra_tools,
         )
     )

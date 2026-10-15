@@ -266,6 +266,8 @@ def test_settings_defaults_round_trip_and_layout(client):
         memory=True,
         image_memory=True,
         web=True,
+        followups=True,
+        reports=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
@@ -304,12 +306,51 @@ def test_hub_cannot_change_admins_channels_or_active_flag(client):
         {"receipt_channel_ids": ["999"]},  # numeric but not a channel of this guild
         {"ask_channel_ids": [str(B + 1)]},  # a channel of the OTHER guild
         {"digest_channel_id": "12345"},
+        {"followup_time": "25:00"},
+        {"report_time": "6pm"},
+        {"report_channel_id": "1x"},
+        {"report_channel_id": "12345"},  # numeric but not a channel of this guild
     ],
 )
 def test_settings_validation(client, bad):
     r = client.put(f"/api/hub/guilds/{A}/settings", json=bad, headers=AUTH)
     assert r.status_code == 422
     assert client.guilds.get(A).updated_at == ""
+
+
+def test_hub_saves_coordinator_settings_and_features(client):
+    body = {
+        "features": {"followups": False, "reports": False},
+        "followup_time": "09:15",
+        "report_time": "19:00",
+        "report_channel_id": str(A + 2),
+    }
+    put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
+    assert put["followup_time"] == "09:15" and put["report_time"] == "19:00"
+    assert put["report_channel_id"] == str(A + 2)
+    assert put["features"]["followups"] is False and put["features"]["reports"] is False
+    assert client.guilds.get(B).followup_time == "10:00"  # defaults elsewhere: 10:00 / 18:30
+    assert client.guilds.get(B).report_time == "18:30" and client.guilds.get(B).features.followups
+
+
+def test_hub_page_has_both_languages_for_the_coordinator_controls():
+    import json
+    import re
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "src/meeting_scribe/static/hub.html").read_text()
+    for key in (
+        "f_followups_n", "f_followups_d", "f_followups_w", "f_reports_n", "f_reports_d",
+        "f_reports_w", "followup_time_l", "report_time_l", "report_id_l", "report_auto",
+        "report_id_s",
+    ):  # fmt: skip
+        m = re.search(rf'"{key}": (\{{.*?\}})', html, re.S)
+        assert m, key
+        d = json.loads(m.group(1))
+        assert d["th"] and d["en"], key
+    for ident in ("followup-time", "report-time", "report-id"):
+        assert f'id="{ident}"' in html
+    assert 'id: "followups"' in html and 'id: "reports"' in html
 
 
 def test_hub_saves_channel_modes_and_default_mode(client):
@@ -472,6 +513,7 @@ def test_update_model_is_what_the_hub_writes():
     assert set(GuildSettingsUpdate.model_fields) == {
         "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id",
         "digest_time", "exec_role_names", "channel_modes", "default_mode", "channel_languages", "default_language", "memory_retention_days",
+        "followup_time", "report_time", "report_channel_id",
     }  # fmt: skip
 
 

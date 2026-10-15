@@ -959,6 +959,7 @@ def test_every_slash_command_is_bilingual(bot):
         ("เข้าประชุม", "join"),
         ("ออกประชุม", "leave"),
         ("ยกเลิก", "cancel"),
+        ("รายงาน", "report"),
     ]
     for th_name, en_name in pairs:
         assert {th_name, en_name} <= names
