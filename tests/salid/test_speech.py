@@ -232,3 +232,26 @@ def test_pcm_source_pitch_filter(monkeypatch):
     sp.pcm_source(PCM, pitch=1.06)
     assert seen[0]["options"] is None
     assert "asetrate=25440" in seen[1]["options"] and "atempo=0.9434" in seen[1]["options"]
+
+
+def test_speakable_drops_symbols_tts_reads_aloud():
+    import salid.speech as sp
+
+    assert sp.speakable("เมี้ยว~ แป๊บนึงน้า") == "เมี้ยว แป๊บนึงน้า"
+    assert sp.speakable("**12,450 บาท** (8 ใบ) ~ เก่งมาก!") == "12,450 บาท 8 ใบ เก่งมาก!"
+    assert sp.speakable("งบโฆษณา 80% ของเดือน 10/2026") == "งบโฆษณา 80% ของเดือน 10/2026"
+    assert "~" not in "".join(__import__("salid.meeting", fromlist=["ACK_TEXT"]).ACK_TEXT.values())
+
+
+def test_say_never_sends_a_tilde_to_the_engine(monkeypatch):
+    import salid.speech as sp
+
+    got = []
+    monkeypatch.setattr(
+        sp, "synthesize_cloud", lambda p, v, t, lang="th", rate=1.0: got.append(t) or b"x"
+    )
+    st = SimpleNamespace(
+        tts_backend="cloud", gcp_project="p", cloud_tts_voice="Leda", tts_speaking_rate=1.0
+    )
+    sp.say(st, None, "เมี้ยว~ แป๊บนึงน้า~~")
+    assert got == ["เมี้ยว แป๊บนึงน้า"]

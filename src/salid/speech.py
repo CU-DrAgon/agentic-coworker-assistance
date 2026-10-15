@@ -34,8 +34,9 @@ SPOKEN_PROMPT = """คุณคือ “สลิด” ผู้ช่วย�
 - ใช้เฉพาะข้อมูลที่อยู่ในคำตอบ ห้ามเพิ่มข้อเท็จจริงใหม่
 - ไม่ใช้ markdown ไม่ใช้อีโมจิ ไม่ใส่ลิงก์หรือ URL ไม่ใช้ตาราง ไม่อ่านรายการยาว ๆ สรุปเฉพาะประเด็นหลัก
 - เขียนตัวเลขให้อ่านออกเสียงได้ลื่น เช่น “หนึ่งหมื่นสองพัน” หรือ “12,450 บาท” ตามที่ฟังเป็นธรรมชาติ
-- บุคลิก: “แมวฉอเลาะ” น่ารัก ขี้อ้อน ร่าเริง พูดเป็นกันเอง ใช้คำลงท้ายอย่าง “น้า” “นะเมี้ยว” “เมี้ยว~” แทน ครับ/ค่ะ \
-(ใส่ “เมี้ยว” ได้ไม่เกินหนึ่งครั้งต่อคำตอบ) ถ้าเป็นภาษาอังกฤษ ใช้น้ำเสียงน่ารักขี้เล่นแบบเดียวกัน เช่น “meow~”
+- บุคลิก: “แมวฉอเลาะ” น่ารัก ขี้อ้อน ร่าเริง พูดเป็นกันเอง ใช้คำลงท้ายอย่าง “น้า” “นะเมี้ยว” “เมี้ยว” แทน ครับ/ค่ะ \
+(ใส่ “เมี้ยว” ได้ไม่เกินหนึ่งครั้งต่อคำตอบ) ถ้าเป็นภาษาอังกฤษ ใช้น้ำเสียงน่ารักขี้เล่นแบบเดียวกัน เช่น “meow”
+- ห้ามใช้สัญลักษณ์ที่ระบบเสียงจะอ่านออกมาเป็นคำ เช่น ~ * # / ( ) [ ] ใช้แค่ตัวอักษร ตัวเลข และ , . ! ?
 - ความน่ารักต้องไม่ทำให้ข้อมูลผิดหรือหายไป ตัวเลข ชื่อ และวันที่ต้องครบตามคำตอบ
 - ความยาวไม่เกิน {max_chars} ตัวอักษร
 - ตอบเฉพาะประโยคที่จะพูด ไม่ต้องมีคำนำ
@@ -186,8 +187,21 @@ def synthesize_cloud(
     return audio
 
 
+# TTS engines read these aloud by name ("~" becomes "เครื่องหมายตัวหนอน"), so they never reach them.
+# % / $ + stay: engines read them correctly ("เปอร์เซ็นต์", "ทับ" in dates, "ดอลลาร์", "บวก").
+_UNSPOKEN = re.compile(r"[~*_#`|<>\[\]{}()^=\\]+")
+
+
+def speakable(text: str) -> str:
+    """Text safe to hand to a TTS engine: markdown stripped, symbols that are read aloud removed."""
+    return _SPACES.sub(" ", _UNSPOKEN.sub(" ", strip_markdown(text))).strip()
+
+
 def say(settings: Any, client: Any, text: str, lang: str = "th") -> bytes:
     """Blocking. PCM for `text` with the configured backend; Cloud TTS falls back to Gemini TTS."""
+    text = speakable(text)
+    if not text:
+        raise RuntimeError("nothing speakable")
     if getattr(settings, "tts_backend", "cloud") == "cloud":
         try:
             return synthesize_cloud(
