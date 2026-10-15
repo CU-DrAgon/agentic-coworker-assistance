@@ -16,12 +16,7 @@ from . import gate
 from .archive import make_archive
 from .config import Settings
 from .deep_task import (
-    ACK_MESSAGE,
-    BUSY_MESSAGE,
-    DISABLED_MESSAGE,
-    NOT_EXEC_MESSAGE,
     REPORT_NAME,
-    USAGE_MESSAGE,
     DeepTaskError,
     parse_deep_trigger,
     reply_parts,
@@ -31,13 +26,15 @@ from .digest import build_daily_digest
 from .extract import apply_correction, guess_mime, ingest_attachment
 from .gate import GateLine, is_join_candidate
 from .guild_settings import BotGuildSettings, GuildStore, make_guild_store
+from .i18n import LANGS, LANGUAGE_LABELS, parse_language_command, resolve_lang, t
 from .meeting import MeetingManager, parse_meeting_command
 from .modes import (
     CHAT_CHANNEL_NAME,
-    MODE_HELP,
-    MODE_LABELS,
     MODES,
     is_chat_channel_name,
+    mode_choice_name,
+    mode_help,
+    mode_label,
     parse_snooze_command,
 )
 from .naming import mentions_name
@@ -52,29 +49,12 @@ RECEIPT_CHANNEL_HINTS = (
     "ใบเสร็จ",
     "receipt",
 )  # a channel whose name has one of these takes receipts
-QA_OFF_MESSAGE = "ตอนนี้ปิดการถามตอบอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
-DEEP_OFF_MESSAGE = "ตอนนี้ปิดงานใหญ่อยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
-DM_MESSAGE = "สลิดแยกข้อมูลของแต่ละเซิร์ฟเวอร์ครับ รบกวนแท็ก {mention} ถามในห้องแชตของเซิร์ฟเวอร์ที่ต้องการนะครับ"
-WELCOME_MESSAGE = (
-    "สวัสดีครับ ผม “สลิด” เลขาและเพื่อนร่วมทีม 🐱\n"
-    "• คุยกับผมได้ทุกเรื่องในห้อง {chat} พิมพ์ได้เลยไม่ต้องแท็ก "
-    "ห้องอื่นแท็ก {mention} หรือเรียกชื่อ “สลิด” ได้เลยครับ "
-    "(พิมพ์ /โหมด เพื่อดูหรือปรับว่าผมจะคุยในแต่ละห้องแค่ไหน)\n"
-    "• ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” "
-    "หรือแท็ก {mention} พร้อมรูป ผมจะอ่านยอดและบันทึกให้เอง\n"
-    "• ผู้ดูแลพิมพ์ /ตั้งค่า เพื่อเชื่อมกับศูนย์บัญชาการ (หน้าเว็บสำหรับตั้งค่า)"
-)
 # CHAT_CHANNEL_NAME (salid.modes) is created on join (needs Manage Channels): mode "chat".
-CHAT_CHANNEL_TOPIC = "คุยกับน้องสลิดได้ทุกเรื่อง พิมพ์ได้เลยไม่ต้องแท็ก"
-GREETING_MESSAGE = (
-    'สวัสดีครับ สลิดเองครับ 🐱 ส่งรูปใบเสร็จมาได้เลย หรือแท็กสลิดพร้อมคำถาม เช่น "เดือนนี้จ่ายค่าวัตถุดิบไปเท่าไร" ครับ'
-)
 # A bare @mention right after the same person's message is treated as a question about it.
 FOLLOWUP_WINDOW_SECONDS = 120
 # After Salid answers in a channel, messages there need no @mention for this long (a gate decides
 # whether each one is meant for Salid). Silence for this long ends the conversation.
 CONVERSATION_SECONDS = 180
-SIGNOFF_MESSAGE = "ถ้ามีอะไรก็ทักน้องสลิดมาได้เลยนะครับ 👋"
 SIGNOFF_MIN_REPLIES = 2  # fewer replies: only a 👋 reaction on Salid's last reply
 GATE_HISTORY = 10  # channel lines the in-window gate reads
 JOIN_HISTORY = 15  # channel lines the join-mode batch gate reads
@@ -83,22 +63,11 @@ MAX_INTERJECTIONS_PER_HOUR = 3  # join mode: unprompted answers per channel, rol
 MAX_JOIN_CANDIDATES = 5
 SNOOZE_SECONDS = 3600
 TICK_SECONDS = 5.0
-SNOOZE_MESSAGE = "ได้เลยครับ สลิดเงียบในห้องนี้ 1 ชั่วโมง 🤫 พิมพ์ “@Salid คุยได้แล้ว” เมื่อไรก็เรียกกลับได้ครับ"
-UNSNOOZE_MESSAGE = "กลับมาคุยแล้วครับ 😊"
-NOT_SNOOZED_MESSAGE = "สลิดคุยได้ตามปกติอยู่แล้วครับ 🙂"
-MODE_DENIED_MESSAGE = "ปรับโหมดได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารครับ"
-MODE_FAILED_MESSAGE = "ตั้งโหมดไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะครับ"
 MODE_COMMANDS = ("โหมด", "mode")
+LANGUAGE_COMMANDS = ("ภาษา", "language")
 # Chat context handed to the model: this person's and Salid's recent messages in the channel.
 HISTORY_MESSAGES = 10
 HISTORY_SECONDS = 30 * 60
-SETUP_DENIED_MESSAGE = "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ครับ"
-SETUP_MESSAGE = (
-    "ลิงก์เชื่อม {name} กับศูนย์บัญชาการของสลิด 🔗\n{url}\n"
-    "เปิดลิงก์แล้วเข้าสู่ระบบด้วยบัญชี Google ของคุณ ลิงก์ใช้ได้ครั้งเดียวและหมดอายุใน 15 นาที "
-    "อย่าส่งต่อให้คนอื่นครับ"
-)
-SETUP_FAILED_MESSAGE = "สร้างลิงก์ไม่สำเร็จ ลองพิมพ์ /ตั้งค่า อีกครั้งภายหลังครับ"
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
 JOIN_COMMANDS = ("เข้าประชุม", "join")
 LEAVE_COMMANDS = ("ออกประชุม", "leave")
@@ -261,7 +230,9 @@ class SecretaryBot(discord.Client):
 
     async def on_guild_join(self, guild: discord.Guild):
         logger.info("joined guild %s", guild.id)
-        chat = await self._ensure_chat_channel(guild)
+        await asyncio.to_thread(self.team.current, guild.id)
+        lang = resolve_lang(self.team.current(guild.id).default_language)
+        chat = await self._ensure_chat_channel(guild, lang)
         if chat is not None:  # a reused channel must answer everything, whatever its name
             try:
                 await asyncio.to_thread(self.team.set_channel_mode, guild.id, chat.id, "chat")
@@ -276,9 +247,9 @@ class SecretaryBot(discord.Client):
         if target is not None:
             where = chat.mention if chat else f"#{CHAT_CHANNEL_NAME}"
             with contextlib.suppress(discord.HTTPException):
-                await target.send(WELCOME_MESSAGE.format(mention=self.user.mention, chat=where))
+                await target.send(t("welcome", lang, mention=self.user.mention, chat=where))
 
-    async def _ensure_chat_channel(self, guild: discord.Guild):
+    async def _ensure_chat_channel(self, guild: discord.Guild, lang: str = "th"):
         """The guild's Salid chat channel: an existing one with its name, else a new one."""
         existing = next((c for c in guild.text_channels if is_chat_channel_name(c.name)), None)
         if existing is not None:
@@ -289,7 +260,7 @@ class SecretaryBot(discord.Client):
             return None
         try:
             return await guild.create_text_channel(
-                CHAT_CHANNEL_NAME, topic=CHAT_CHANNEL_TOPIC, reason="Salid chat channel"
+                CHAT_CHANNEL_NAME, topic=t("chat_topic", lang), reason="Salid chat channel"
             )
         except discord.HTTPException:
             logger.warning("could not create chat channel in guild %s", guild.id, exc_info=True)
@@ -352,6 +323,8 @@ class SecretaryBot(discord.Client):
                 return
             if mentioned and await self._snooze_command(message):
                 return
+            if mentioned and await self._language_command(message):
+                return
             if mode == "listen":
                 if mentioned:
                     with contextlib.suppress(discord.HTTPException):
@@ -377,6 +350,31 @@ class SecretaryBot(discord.Client):
             del self._snoozed[channel_id]
             return False
         return until is not None
+
+    # ------------------------------------------------------------- reply language
+    def _lang_setting(self, target) -> str:
+        """th / en / auto for the channel of `target` (a message or a channel). DMs: auto."""
+        guild = getattr(target, "guild", None)
+        if guild is None:
+            return "auto"
+        channel = getattr(target, "channel", None) or target
+        return self.team.channel_language(guild.id, getattr(channel, "id", 0))
+
+    def _lang(self, target, text: str | None = None) -> str:
+        """Language (th or en) for Salid's fixed replies to `target`. `auto` follows `text`, by
+        default the message's own words."""
+        if text is None and hasattr(target, "content"):
+            text = self._strip_mentions(target.content or "", target)
+        return resolve_lang(self._lang_setting(target), text)
+
+    def _interaction_lang(self, interaction) -> str:
+        """Language for a slash command reply: the channel's setting; `auto` has no message to
+        follow, so the user's Discord locale (Thai, else English; Thai when unknown)."""
+        setting = self._lang_setting(interaction)
+        if setting != "auto":
+            return setting
+        locale = str(getattr(interaction, "locale", "") or "")
+        return "en" if locale and not locale.startswith("th") else "th"
 
     async def _call_or_join(self, message: discord.Message, mode: str, mentioned: bool) -> None:
         """call/join: answer when called by tag or name, replied to, or (inside the conversation
@@ -447,7 +445,8 @@ class SecretaryBot(discord.Client):
         return lines[::-1]
 
     async def _snooze_command(self, message: discord.Message) -> bool:
-        """'@Salid เงียบก่อน' (listen mode for an hour) / '@Salid คุยได้แล้ว'. Open to everyone."""
+        """'@Salid เงียบก่อน' / 'be quiet' (listen mode for an hour) and 'คุยได้แล้ว' / 'you can talk'
+        again. Open to everyone."""
         cmd = parse_snooze_command(self._strip_mentions(message.content, message))
         if cmd is None:
             return False
@@ -456,25 +455,50 @@ class SecretaryBot(discord.Client):
             self._snoozed[cid] = self._clock() + SNOOZE_SECONDS
             self._convos.pop(cid, None)
             self._pending.pop(cid, None)
-            text = SNOOZE_MESSAGE
+            key = "snooze"
         else:
-            text = (
-                UNSNOOZE_MESSAGE
-                if self._snoozed.pop(cid, None) is not None
-                else NOT_SNOOZED_MESSAGE
+            key = "unsnooze" if self._snoozed.pop(cid, None) is not None else "not_snoozed"
+        await message.reply(t(key, self._lang(message)), mention_author=False)
+        return True
+
+    async def _language_command(self, message: discord.Message) -> bool:
+        """'@Salid พูดภาษาอังกฤษ' / 'speak English' etc.: sets this channel's reply language.
+        Executives and server managers only; others get a short refusal."""
+        text = self._strip_mentions(message.content, message)
+        cmd = parse_language_command(text)
+        if cmd is None or message.guild is None:
+            return False
+        user = message.author
+        if not hasattr(user, "guild_permissions") or not (
+            can_manage_guild(user) or self.is_exec_member(user)
+        ):
+            await message.reply(t("lang_denied", self._lang(message)), mention_author=False)
+            return True
+        new = resolve_lang(cmd, text)  # the reply follows the language just chosen
+        try:
+            await asyncio.to_thread(
+                self.team.set_channel_language, message.guild.id, message.channel.id, cmd
             )
-        await message.reply(text, mention_author=False)
+        except Exception:
+            logger.exception("could not save channel language")
+            await message.reply(t("lang_failed", new), mention_author=False)
+            return True
+        label = t(f"lang_label_{cmd}", new)
+        await message.reply(t("lang_set", new, label=label), mention_author=False)
         return True
 
     async def _meeting_command(self, message: discord.Message) -> bool:
-        """'@Salid เข้าประชุม' / 'ออกประชุม' typed in a text channel."""
+        """'@Salid เข้าประชุม' / 'join' / 'ออกประชุม' / 'leave' typed in a text channel."""
         cmd = parse_meeting_command(self._strip_mentions(message.content, message))
         if cmd is None or not hasattr(message.author, "voice"):
             return False
+        lang = self._lang(message)
         if cmd == "join":
-            reply = await self.meetings.join(message.author, fallback_channel=message.channel)
+            reply = await self.meetings.join(
+                message.author, fallback_channel=message.channel, lang=lang
+            )
         else:
-            reply = await self.meetings.leave(message.author)
+            reply = await self.meetings.leave(message.author, lang=lang)
         await message.reply(reply, mention_author=False)
         return True
 
@@ -494,7 +518,9 @@ class SecretaryBot(discord.Client):
         shared = [(g, g.get_member(message.author.id)) for g in self.guilds]
         shared = [(g, m) for g, m in shared if m is not None]
         if len(shared) != 1:
-            await message.reply(DM_MESSAGE.format(mention=self.user.mention), mention_author=False)
+            await message.reply(
+                t("dm", self._lang(message), mention=self.user.mention), mention_author=False
+            )
             return
         guild, member = shared[0]
         await asyncio.to_thread(self.team.current, guild.id)
@@ -508,11 +534,17 @@ class SecretaryBot(discord.Client):
         if not receipt or receipt.guild_id != message.guild.id:
             return False
         if message.author.id != receipt.submitter_id and not self.is_exec_member(message.author):
-            await message.reply("แก้ไขได้เฉพาะผู้ส่งใบเสร็จหรือผู้บริหารเท่านั้น", mention_author=False)
+            await message.reply(t("correction_denied", self._lang(message)), mention_author=False)
             return True
         async with message.channel.typing():
             text = await asyncio.to_thread(
-                apply_correction, self.store, self.llm, self.s, receipt, message.content
+                apply_correction,
+                self.store,
+                self.llm,
+                self.s,
+                receipt,
+                message.content,
+                self._lang(message),
             )
         await message.reply(text, mention_author=False)
         return True
@@ -539,6 +571,7 @@ class SecretaryBot(discord.Client):
                     message_id=message.id,
                     note=note,
                     archive=self.archive,
+                    lang=self._lang(message),
                 )
             if res.status == "ignored":
                 continue
@@ -619,25 +652,27 @@ class SecretaryBot(discord.Client):
         if not q:
             q = await self._previous_text(message)
         if not q:
-            sent = await message.reply(GREETING_MESSAGE, mention_author=False)
+            sent = await message.reply(t("greeting", self._lang(message, "")), mention_author=False)
             self._note_answer(message, sent)
             return
         gid = guild.id
         is_exec = self.is_exec_member(member)
+        setting = self._lang_setting(message)  # th / en / auto: auto lets the model follow the user
+        lang = resolve_lang(setting, q)
         task = parse_deep_trigger(q)
         if task is not None:
             if self.team.enabled(gid, "deep_tasks"):
-                await self._deep(message, gid, task, is_exec)
+                await self._deep(message, gid, task, is_exec, setting)
             else:
-                await message.reply(DEEP_OFF_MESSAGE, mention_author=False)
+                await message.reply(t("deep_off", lang), mention_author=False)
             return
         if not self.team.enabled(gid, "qa"):
-            await message.reply(QA_OFF_MESSAGE, mention_author=False)
+            await message.reply(t("qa_off", lang), mention_author=False)
             return
         history = await self._recent_chat(message)
         meeting = self.meetings.context_for(message.channel.id)
         if meeting:  # talking in a live meeting's chat: the spoken transcript is context too
-            history = f"บันทึกการประชุมล่าสุด (ใครพูดอะไร):\n{meeting}\n\nแชต:\n{history}".rstrip()
+            history = t("history_meeting", lang, meeting=meeting, chat=history).rstrip()
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -648,6 +683,7 @@ class SecretaryBot(discord.Client):
                 is_exec=is_exec,
                 user_id=message.author.id,
                 history=history,
+                language=setting,
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         sent = None
@@ -657,33 +693,45 @@ class SecretaryBot(discord.Client):
             )
         self._note_answer(message, sent)
 
-    async def _deep(self, message: discord.Message, guild_id: int, task: str, is_exec: bool):
+    async def _deep(
+        self,
+        message: discord.Message,
+        guild_id: int,
+        task: str,
+        is_exec: bool,
+        setting: str = "th",
+    ):
         """Executives only. Acknowledge at once, run Gemini CLI in the background, post the result."""
+        lang = resolve_lang(setting, task)
+        reply = message.reply
         if not is_exec:
-            await message.reply(NOT_EXEC_MESSAGE, mention_author=False)
+            await reply(t("deep_not_exec", lang), mention_author=False)
         elif not self.s.gemini_cli_path:
-            await message.reply(DISABLED_MESSAGE, mention_author=False)
+            await reply(t("deep_disabled", lang), mention_author=False)
         elif not task:
-            await message.reply(USAGE_MESSAGE, mention_author=False)
-        elif any(not t.done() for t in self._deep_tasks):
-            await message.reply(BUSY_MESSAGE, mention_author=False)
+            await reply(t("deep_usage", lang), mention_author=False)
+        elif any(not job.done() for job in self._deep_tasks):
+            await reply(t("deep_busy", lang), mention_author=False)
         else:
-            await message.reply(ACK_MESSAGE, mention_author=False)
-            t = asyncio.create_task(self._run_deep(message, guild_id, task))
-            self._deep_tasks.add(t)
-            t.add_done_callback(self._deep_tasks.discard)
+            await reply(t("deep_ack", lang), mention_author=False)
+            job = asyncio.create_task(self._run_deep(message, guild_id, task, setting))
+            self._deep_tasks.add(job)
+            job.add_done_callback(self._deep_tasks.discard)
 
-    async def _run_deep(self, message: discord.Message, guild_id: int, task: str):
+    async def _run_deep(
+        self, message: discord.Message, guild_id: int, task: str, setting: str = "th"
+    ):
+        lang = resolve_lang(setting, task)
         try:
             res = await asyncio.to_thread(
-                run_deep_task, self.s, self.store, task, guild_id=guild_id
+                run_deep_task, self.s, self.store, task, guild_id=guild_id, lang=setting
             )
         except DeepTaskError as e:
             await message.channel.send(f"❌ {e}")
             return
         except Exception:
             logger.exception("deep task crashed")
-            await message.channel.send("❌ งานใหญ่ล้มเหลว ลองใหม่อีกครั้งภายหลังครับ")
+            await message.channel.send(t("deep_failed", lang))
             return
         logger.info(
             "deep task done in %.0fs, %d tokens, models=%s",
@@ -691,7 +739,7 @@ class SecretaryBot(discord.Client):
             res.tokens,
             list(res.models),
         )
-        text, attachment = reply_parts(res)
+        text, attachment = reply_parts(res, lang)
         file = discord.File(io.BytesIO(attachment), filename=REPORT_NAME) if attachment else None
         await message.reply(text, file=file, mention_author=False)
 
@@ -706,7 +754,7 @@ class SecretaryBot(discord.Client):
             self.tree.add_command(
                 app_commands.Command(
                     name=name,
-                    description="เชื่อมเซิร์ฟเวอร์นี้กับศูนย์บัญชาการของสลิด (ผู้ดูแลเท่านั้น)",
+                    description=t("cmd_setup"),
                     callback=setup,
                 )
             )
@@ -715,21 +763,34 @@ class SecretaryBot(discord.Client):
             await self.handle_mode(interaction, mode)
 
         mode_cb = app_commands.guild_only()(mode_cb)
-        mode_cb = app_commands.describe(mode="โหมดใหม่ของห้องนี้ (ไม่เลือก = ดูโหมดปัจจุบัน)")(mode_cb)
+        mode_cb = app_commands.describe(mode=t("cmd_mode_arg"))(mode_cb)
         mode_cb = app_commands.choices(
-            mode=[app_commands.Choice(name=MODE_LABELS[m], value=m) for m in MODES]
+            mode=[app_commands.Choice(name=mode_choice_name(m), value=m) for m in MODES]
         )(mode_cb)
         for name in MODE_COMMANDS:
             self.tree.add_command(
                 app_commands.Command(
                     name=name,
-                    description="ดูหรือตั้งโหมดการคุยของสลิดในห้องนี้",
+                    description=t("cmd_mode"),
                     callback=mode_cb,
                 )
             )
+
+        async def language_cb(interaction: discord.Interaction, language: str | None = None):
+            await self.handle_language(interaction, language)
+
+        language_cb = app_commands.guild_only()(language_cb)
+        language_cb = app_commands.describe(language=t("cmd_language_arg"))(language_cb)
+        language_cb = app_commands.choices(
+            language=[app_commands.Choice(name=LANGUAGE_LABELS[x], value=x) for x in LANGS]
+        )(language_cb)
+        for name in LANGUAGE_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
+            )
         for names, handler, desc in (
-            (JOIN_COMMANDS, self.handle_join, "ให้สลิดเข้าห้องเสียงที่คุณอยู่ เพื่อฟังและจดบันทึกประชุม"),
-            (LEAVE_COMMANDS, self.handle_leave, "ให้สลิดออกจากห้องเสียงและสรุปการประชุม"),
+            (JOIN_COMMANDS, self.handle_join, t("cmd_join")),
+            (LEAVE_COMMANDS, self.handle_leave, t("cmd_leave")),
         ):
             cb = self._command_callback(handler)
             for name in names:
@@ -748,13 +809,24 @@ class SecretaryBot(discord.Client):
         """/เข้าประชุม: join the invoker's voice channel and start the meeting."""
         await interaction.response.defer(ephemeral=True)
         await asyncio.to_thread(self.team.current, interaction.guild.id)
-        reply = await self.meetings.join(interaction.user, fallback_channel=interaction.channel)
+        reply = await self.meetings.join(
+            interaction.user,
+            fallback_channel=interaction.channel,
+            lang=self._interaction_lang(interaction),
+        )
         await interaction.followup.send(reply, ephemeral=True)
 
     async def handle_leave(self, interaction: discord.Interaction) -> None:
         """/ออกประชุม: leave and post the summary."""
-        await interaction.response.send_message(
-            await self.meetings.leave(interaction.user), ephemeral=True
+        await asyncio.to_thread(self.team.current, interaction.guild.id)
+        reply = await self.meetings.leave(
+            interaction.user, lang=self._interaction_lang(interaction)
+        )
+        await interaction.response.send_message(reply, ephemeral=True)
+
+    def _may_configure(self, user) -> bool:
+        return hasattr(user, "guild_permissions") and (
+            can_manage_guild(user) or self.is_exec_member(user)
         )
 
     async def handle_mode(self, interaction: discord.Interaction, mode: str | None) -> None:
@@ -762,42 +834,77 @@ class SecretaryBot(discord.Client):
         guild, channel, user = interaction.guild, interaction.channel, interaction.user
         send = interaction.response.send_message
         if guild is None or channel is None:
-            await send(SETUP_DENIED_MESSAGE, ephemeral=True)
+            await send(t("setup_denied"), ephemeral=True)
             return
         await asyncio.to_thread(self.team.current, guild.id)
+        lang = self._interaction_lang(interaction)
         if mode is None:
             current = self._mode(channel, guild.id)
-            lines = [f"โหมดของห้องนี้ตอนนี้: {MODE_LABELS[current]}", ""]
+            lines = [t("mode_current", lang, label=mode_label(current, lang)), ""]
             if self._is_snoozed(channel.id):
-                lines += ["(สลิดกำลังพักเงียบชั่วคราว ทำตัวเหมือนโหมดฟังเงียบ)", ""]
-            lines += [f"{MODE_LABELS[m]} — {MODE_HELP[m]}" for m in MODES]
-            lines += ["", "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /โหมด แล้วเลือกโหมดครับ"]
+                lines += [t("mode_snoozed", lang), ""]
+            lines += [f"{mode_label(m, lang)} — {mode_help(m, lang)}" for m in MODES]
+            lines += ["", t("mode_footer", lang)]
             await send("\n".join(lines), ephemeral=True)
             return
         if mode not in MODES:
-            await send(MODE_FAILED_MESSAGE, ephemeral=True)
+            await send(t("mode_failed", lang), ephemeral=True)
             return
-        if not hasattr(user, "guild_permissions") or not (
-            can_manage_guild(user) or self.is_exec_member(user)
-        ):
-            await send(MODE_DENIED_MESSAGE, ephemeral=True)
+        if not self._may_configure(user):
+            await send(t("mode_denied", lang), ephemeral=True)
             return
         try:
             await asyncio.to_thread(self.team.set_channel_mode, guild.id, channel.id, mode)
         except Exception:
             logger.exception("could not save channel mode")
-            await send(MODE_FAILED_MESSAGE, ephemeral=True)
+            await send(t("mode_failed", lang), ephemeral=True)
             return
         self._snoozed.pop(channel.id, None)
         self._convos.pop(channel.id, None)
         self._pending.pop(channel.id, None)
-        await send(f"ตั้งห้องนี้เป็น {MODE_LABELS[mode]} แล้วครับ")
+        await send(t("mode_set", lang, label=mode_label(mode, lang)))
+
+    async def handle_language(self, interaction: discord.Interaction, language: str | None) -> None:
+        """/ภาษา: show this channel's reply language, or (executives / server managers) set it."""
+        guild, channel, user = interaction.guild, interaction.channel, interaction.user
+        send = interaction.response.send_message
+        if guild is None or channel is None:
+            await send(t("setup_denied"), ephemeral=True)
+            return
+        await asyncio.to_thread(self.team.current, guild.id)
+        lang = self._interaction_lang(interaction)
+        if language is None:
+            current = self.team.channel_language(guild.id, channel.id)
+            lines = [
+                t("lang_current", lang, label=t(f"lang_label_{current}", lang)),
+                "",
+                t("lang_footer", lang),
+            ]
+            await send("\n".join(lines), ephemeral=True)
+            return
+        if language not in LANGS:
+            await send(t("lang_failed", lang), ephemeral=True)
+            return
+        if not self._may_configure(user):
+            await send(t("lang_denied", lang), ephemeral=True)
+            return
+        try:
+            await asyncio.to_thread(self.team.set_channel_language, guild.id, channel.id, language)
+        except Exception:
+            logger.exception("could not save channel language")
+            await send(t("lang_failed", lang), ephemeral=True)
+            return
+        new = lang if language == "auto" else language  # confirm in the language just chosen
+        await send(t("lang_set", new, label=t(f"lang_label_{language}", new)))
 
     async def handle_setup(self, interaction: discord.Interaction) -> None:
         """/ตั้งค่า: DM-style ephemeral reply with a one-time link to the hub for this guild."""
         guild, user = interaction.guild, interaction.user
+        if guild is not None:
+            await asyncio.to_thread(self.team.current, guild.id)
+        lang = self._interaction_lang(interaction)
         if guild is None or not hasattr(user, "guild_permissions") or not can_manage_guild(user):
-            await interaction.response.send_message(SETUP_DENIED_MESSAGE, ephemeral=True)
+            await interaction.response.send_message(t("setup_denied", lang), ephemeral=True)
             return
         try:
             code = await asyncio.to_thread(
@@ -805,11 +912,11 @@ class SecretaryBot(discord.Client):
             )
         except Exception:
             logger.exception("could not create a link code")
-            await interaction.response.send_message(SETUP_FAILED_MESSAGE, ephemeral=True)
+            await interaction.response.send_message(t("setup_failed", lang), ephemeral=True)
             return
         url = f"{self.s.hub_url.rstrip('/')}/hub?link={code}"
         await interaction.response.send_message(
-            SETUP_MESSAGE.format(name=guild.name, url=url), ephemeral=True
+            t("setup_message", lang, name=guild.name, url=url), ephemeral=True
         )
 
     # ------------------------------------------------------------- timers (sign-off, join batches)
@@ -836,7 +943,7 @@ class SecretaryBot(discord.Client):
             del self._convos[cid]
             try:
                 if convo.replies >= SIGNOFF_MIN_REPLIES:
-                    await convo.channel.send(SIGNOFF_MESSAGE)
+                    await convo.channel.send(t("signoff", self._lang(convo.channel)))
                 elif convo.last_reply is not None:
                     await convo.last_reply.add_reaction("👋")
             except discord.HTTPException:
@@ -894,7 +1001,10 @@ class SecretaryBot(discord.Client):
         for guild, channel in self.due_digests(now):
             self._digest_sent[guild.id] = now.date()
             try:
-                text = await asyncio.to_thread(build_daily_digest, self.store, guild.id, now.date())
+                lang = resolve_lang(self.team.channel_language(guild.id, channel.id))
+                text = await asyncio.to_thread(
+                    build_daily_digest, self.store, guild.id, now.date(), lang
+                )
                 for part in chunks(text):
                     await channel.send(part)
             except Exception:

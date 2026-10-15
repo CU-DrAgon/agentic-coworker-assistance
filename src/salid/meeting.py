@@ -1,5 +1,5 @@
 """Voice meetings: Salid joins a Discord voice channel, listens, transcribes who said what, answers
-when called by name, and posts a Thai summary when the meeting ends.
+when called by name, and posts a summary (in the text channel's language) when the meeting ends.
 
 Privacy: audio is never written to disk or any bucket. Per-speaker PCM lives in memory only until
 a segment is transcribed, and the transcript stays in memory only (per guild, last 3 hours) and is
@@ -35,6 +35,7 @@ from pydantic import BaseModel
 
 from meeting_scribe.audio import to_flac
 
+from .i18n import resolve_lang, t
 from .llm import generate
 from .naming import _WAKE_RE
 from .speech import pcm_duration_s, pcm_source, spoken_text, synthesize
@@ -69,46 +70,31 @@ TICK_S = 0.5
 SPEAK_COOLDOWN_S = 1.5  # after Salid speaks, ignore wake words this long (room echo)
 SPEAK_TIMEOUT_PAD_S = 10.0
 
-ANNOUNCE_MESSAGE = (
-    "สลิดเข้ามาฟังและจดบันทึกการประชุมครับ 🎙️ "
-    "(เก็บเป็นข้อความในหน่วยความจำเท่านั้น ไม่บันทึกเสียง) "
-    "เรียก “สลิด” แล้วถามได้เลย หรือพิมพ์ /ออกประชุม เพื่อสรุปและให้ผมออก"
-)
-NOT_IN_VOICE_MESSAGE = "ต้องเข้าห้องเสียง (Voice Channel) ก่อน แล้วค่อยเรียกสลิดเข้าประชุมนะครับ"
-ALREADY_MESSAGE = "สลิดกำลังอยู่ในการประชุมของเซิร์ฟเวอร์นี้แล้วครับ ({channel}) พิมพ์ /ออกประชุม เพื่อจบก่อนนะครับ"
-NO_MEETING_MESSAGE = "ตอนนี้สลิดไม่ได้อยู่ในการประชุมครับ"
-LEAVE_DENIED_MESSAGE = "ต้องอยู่ในห้องประชุมเดียวกัน (หรือเป็นผู้ดูแลเซิร์ฟเวอร์) ถึงจะสั่งให้สลิดออกได้ครับ"
-MEETINGS_OFF_MESSAGE = "ตอนนี้ปิดฟังการประชุมอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
-NO_PERMISSION_MESSAGE = "สลิดไม่มีสิทธิ์เชื่อมต่อ (Connect) ห้องเสียงนี้ครับ รบกวนผู้ดูแลเปิดสิทธิ์ให้ก่อน"
-CONNECT_FAILED_MESSAGE = "เข้าห้องเสียงไม่สำเร็จครับ ลองใหม่อีกครั้งภายหลังนะครับ"
-JOINED_MESSAGE = "สลิดเข้าห้อง {channel} แล้วครับ"
-LEFT_MESSAGE = "สลิดออกจากการประชุมแล้วครับ กำลังสรุปให้ในแชตของห้องเสียง"
-WAKE_EMPTY_MESSAGE = "ครับ? ว่ามาได้เลยครับ"
-NO_TRANSCRIPT_MESSAGE = "จบการประชุมแล้วครับ แต่ยังไม่ได้ยินเนื้อหาให้สรุปเลย 🙂"
-SUMMARY_FAILED_MESSAGE = "จบการประชุมแล้วครับ แต่สรุปไม่สำเร็จ ขออภัยด้วยนะครับ"
-END_REASONS = {
-    "command": "ผู้ใช้สั่งให้ออกจากการประชุม",
-    "empty": "ทุกคนออกจากห้องแล้ว",
-    "timeout": "ประชุมครบ 3 ชั่วโมง",
-    "disconnected": "สลิดหลุดจากห้องเสียง",
-    "shutdown": "สลิดกำลังปิดระบบ",
-}
+END_REASONS = ("command", "empty", "timeout", "disconnected", "shutdown")
 
 # ------------------------------------------------------------------ text triggers
-_JOIN_RE = re.compile(r"^(เข้า\s?ประชุม|เข้ามา\s?ฟัง|มา\s?ประชุม|join)", re.I)
-_LEAVE_RE = re.compile(r"^(ออก\s?ประชุม|เลิก\s?ประชุม|จบ\s?ประชุม|leave)", re.I)
+_JOIN_RE = re.compile(
+    r"^(เข้า\s?ประชุม|เข้ามา\s?ฟัง|มา\s?ประชุม"
+    r"|join(?:\s+(?:the\s+)?meeting)?\b|come\s+to\s+(?:the\s+)?meeting\b)",
+    re.I,
+)
+_LEAVE_RE = re.compile(
+    r"^(ออก\s?ประชุม|เลิก\s?ประชุม|จบ\s?ประชุม"
+    r"|leave(?:\s+(?:the\s+)?meeting)?\b|(?:end|stop)\s+(?:the\s+)?meeting\b)",
+    re.I,
+)
 
 
 def parse_meeting_command(text: str) -> str | None:
     """ "เข้าประชุม" / "join" -> "join", "ออกประชุม" / "leave" -> "leave", anything else None.
     Only the start of the (mention-stripped) message counts, so a long question that merely
     contains the words is not a command."""
-    t = (text or "").strip().lstrip("/").strip()
-    if not t or len(t) > 40:
+    s = (text or "").strip().strip(" \t\n/,.:;!-–—…")
+    if not s or len(s) > 40:
         return None
-    if _JOIN_RE.match(t):
+    if _JOIN_RE.match(s):
         return "join"
-    if _LEAVE_RE.match(t):
+    if _LEAVE_RE.match(s):
         return "leave"
     return None
 
@@ -117,6 +103,9 @@ def parse_meeting_command(text: str) -> str | None:
 # The wake word regex lives in naming.py (shared with the text-channel name detection).
 _LEAD_FILLER = re.compile(r"^[\s,.:;!?\-–—…ๆ]*(?:(?:ครับ|ค่ะ|คะ|นะ|จ๊ะ|จ้ะ|เอ่อ|อ่า|ว่า)\s*)*")
 _TRAIL_FILLER = re.compile(r"[\s,.:;!?\-–—…]+$")
+
+
+_GREETINGS = {"hey", "hi", "hello", "yo", "ok", "okay", "hey there", "hi there", "ว่าไง", "หวัดดี"}
 
 
 def _clean_question(s: str) -> str:
@@ -135,6 +124,8 @@ def parse_wake(text: str) -> str | None:
     if len(after) >= 2:
         return after
     before = _clean_question(text[: m.start()])
+    if before.casefold() in _GREETINGS:  # "Hey Salid": a greeting, not a question
+        return ""
     return before if len(before) >= 2 else ""
 
 
@@ -282,8 +273,8 @@ class _Heard(BaseModel):
 
 
 TRANSCRIBE_PROMPT = (
-    "ถอดเสียงพูดภาษาไทยในคลิปนี้ (เสียงของคนคนเดียวในการประชุม) ตามที่พูดจริงทุกคำ "
-    "ภาษาอังกฤษที่พูดปนให้คงเป็นภาษาอังกฤษ ไม่ต้องแปล ไม่ต้องใส่ชื่อผู้พูด\n"
+    "ถอดเสียงพูดภาษาไทยหรือภาษาอังกฤษในคลิปนี้ (เสียงของคนคนเดียวในการประชุม) ตามที่พูดจริงทุกคำ "
+    "ภาษาอังกฤษที่พูดให้คงเป็นภาษาอังกฤษ ไม่ต้องแปล ไม่ต้องใส่ชื่อผู้พูด\n"
     "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ถ้าได้ยินคำนี้ให้เขียนว่า สลิด\n"
     "ถ้าไม่มีเสียงพูดชัดเจน (เงียบ เสียงรบกวน เสียงหายใจ) ให้ตอบ text เป็นสตริงว่าง ห้ามแต่งข้อความขึ้นเอง "
     'ตอบเป็น JSON {"text": "..."}'
@@ -298,6 +289,21 @@ SUMMARY_PROMPT = """คุณคือ “สลิด” เลขาประ�
 
 บันทึกการประชุม:
 {transcript}"""
+
+
+SUMMARY_PROMPT_EN = """You are “Salid”, the team's meeting secretary. Below is a meeting transcript (format [time] name: text, \
+auto-transcribed so it may contain errors). Write a concise summary of the meeting in English. Use only \
+what is in the transcript and do not invent anything. Use these headings:
+**Meeting summary** (2-4 lines)
+**Decisions/agreements** (list; write None if there are none)
+**Action items** (list as "who: what (deadline if any)"; use the speaker names from the transcript as owners, \
+write Owner not specified if unclear)
+**Open issues/questions** (list; write None if there are none)
+Do not include personal information unrelated to work.
+
+Meeting transcript:
+{transcript}"""
+SUMMARY_PROMPTS = {"th": SUMMARY_PROMPT, "en": SUMMARY_PROMPT_EN}
 
 
 def pcm_to_wav(pcm: bytes) -> bytes:
@@ -332,12 +338,14 @@ def transcribe_pcm(client: Any, model: str, pcm: bytes) -> str:
     return "" if re.fullmatch(r"[\s\W_]*", text) else text
 
 
-def summarize_transcript(client: Any, model: str, transcript: str) -> str:
-    """Blocking: Thai meeting summary (decisions, action items with owners, open questions)."""
+def summarize_transcript(client: Any, model: str, transcript: str, language: str = "th") -> str:
+    """Blocking: meeting summary (decisions, action items with owners, open questions) in
+    `language` (th, en, or auto = the language the transcript is mostly in)."""
+    prompt = SUMMARY_PROMPTS[resolve_lang(language, transcript)]
     resp = generate(
         client,
         model,
-        [SUMMARY_PROMPT.format(transcript=transcript)],
+        [prompt.format(transcript=transcript)],
         types.GenerateContentConfig(temperature=0.2),
     )
     return (getattr(resp, "text", None) or "").strip()
@@ -433,6 +441,13 @@ class MeetingSession:
     speaking: bool = False  # Salid is playing a spoken reply
     speaking_since: float = 0.0
     speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
+    language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
+    fallback_lang: str = "th"  # th / en: what fixed messages use when `language` is auto
+
+    @property
+    def lang(self) -> str:
+        """Language of fixed messages (auto has no text to follow, so the starter's language)."""
+        return self.language if self.language in ("th", "en") else self.fallback_lang
 
     def push_threadsafe(self, user_id: int, pcm: bytes) -> None:
         with contextlib.suppress(RuntimeError):  # loop already closed on shutdown
@@ -485,35 +500,36 @@ class MeetingManager:
             except discord.HTTPException:
                 logger.warning("could not post to channel %s", getattr(ch, "id", "?"))
 
-    # ---- commands (return the Thai reply for the invoker)
-    async def join(self, member, fallback_channel=None) -> str:
+    # ---- commands (return the reply for the invoker, in `lang`)
+    async def join(self, member, fallback_channel=None, lang: str = "th") -> str:
         guild = member.guild
         if not self.bot.team.enabled(guild.id, "voice_meetings"):
-            return MEETINGS_OFF_MESSAGE
+            return t("meet_off", lang)
         existing = self.sessions.get(guild.id)
         if existing is not None:
-            return ALREADY_MESSAGE.format(channel=existing.voice_channel.name)
+            return t("meet_already", lang, channel=existing.voice_channel.name)
         if guild.id in self._joining:
-            return ALREADY_MESSAGE.format(channel="กำลังเข้า")
+            return t("meet_already", lang, channel=t("meet_joining", lang))
         voice = getattr(member, "voice", None)
         channel = getattr(voice, "channel", None)
         if channel is None:
-            return NOT_IN_VOICE_MESSAGE
+            return t("meet_not_in_voice", lang)
         if not channel.permissions_for(guild.me).connect:
-            return NO_PERMISSION_MESSAGE
+            return t("meet_no_permission", lang)
         # Reserve the guild slot before the first await so two commands cannot both join.
         self._joining.add(guild.id)
         try:
             vc = await self._connect(channel)
         except Exception:
             logger.exception("could not join voice channel %s", channel.id)
-            return CONNECT_FAILED_MESSAGE
+            return t("meet_connect_failed", lang)
         finally:
             self._joining.discard(guild.id)
         loop = asyncio.get_running_loop()
         session = MeetingSession(
             guild_id=guild.id, voice_channel=channel, text_channel=channel,
             fallback_channel=fallback_channel, vc=vc, loop=loop, started=time.monotonic(),
+            language=self.bot.team.channel_language(guild.id, channel.id), fallback_lang=lang,
         )  # fmt: skip
         self.sessions[guild.id] = session
         try:
@@ -523,28 +539,28 @@ class MeetingManager:
             self.sessions.pop(guild.id, None)
             with contextlib.suppress(Exception):
                 await vc.disconnect()
-            return CONNECT_FAILED_MESSAGE
+            return t("meet_connect_failed", lang)
         session.tasks = [
             asyncio.create_task(self._worker(session)) for _ in range(TRANSCRIBE_WORKERS)
         ]
         session.tasks.append(asyncio.create_task(self._ticker(session)))
-        await self._post(session, ANNOUNCE_MESSAGE)
+        await self._post(session, t("meet_announce", session.lang))
         logger.info("meeting started in guild %s channel %s", guild.id, channel.id)
-        return JOINED_MESSAGE.format(channel=channel.name)
+        return t("meet_joined", lang, channel=channel.name)
 
-    async def leave(self, member) -> str:
+    async def leave(self, member, lang: str = "th") -> str:
         session = self.sessions.get(member.guild.id)
         if session is None:
-            return NO_MEETING_MESSAGE
+            return t("meet_none", lang)
         in_channel = (
             getattr(getattr(member, "voice", None), "channel", None) == session.voice_channel
         )
         from .bot import can_manage_guild
 
         if not in_channel and not can_manage_guild(member):
-            return LEAVE_DENIED_MESSAGE
+            return t("meet_leave_denied", lang)
         asyncio.create_task(self.end(member.guild.id, "command"))
-        return LEFT_MESSAGE
+        return t("meet_left", lang)
 
     # ---- background work
     async def _ticker(self, s: MeetingSession) -> None:
@@ -583,7 +599,9 @@ class MeetingManager:
 
     async def handle_segment(self, s: MeetingSession, seg: Segment) -> None:
         member = s.voice_channel.guild.get_member(seg.user_id)
-        name = member.display_name if member else f"ผู้ร่วมประชุม {seg.user_id % 1000}"
+        name = (
+            member.display_name if member else t("meet_participant", s.lang, n=seg.user_id % 1000)
+        )
         text = await asyncio.to_thread(
             transcribe_pcm, self.bot.llm, self.bot.s.gemini_model, seg.pcm
         )
@@ -603,7 +621,7 @@ class MeetingManager:
         if not question:
             s.pending_wake[seg.user_id] = now
             if member is not None:
-                await self._post(s, f"{member.mention} {WAKE_EMPTY_MESSAGE}")
+                await self._post(s, f"{member.mention} {t('meet_wake_empty', s.lang)}")
             return
         s.pending_wake.pop(seg.user_id, None)
         await self.answer(s, member, name, question)
@@ -636,6 +654,7 @@ class MeetingManager:
                 is_exec=bot.is_exec_member(member),
                 user_id=member.id,
                 history=history,
+                language=s.language,
             )
             for i, part in enumerate(chunks(ans.text, 1800)):
                 await self._post(s, f"{member.mention} {part}" if i == 0 else part)
@@ -722,16 +741,16 @@ class MeetingManager:
         s.enqueue(s.segmenter.flush_all())
         with contextlib.suppress(asyncio.TimeoutError):  # let pending segments finish
             await asyncio.wait_for(s.queue.join(), timeout=90)
-        for t in s.tasks:
-            if t is not asyncio.current_task():
-                t.cancel()
+        for task in s.tasks:
+            if task is not asyncio.current_task():
+                task.cancel()
         await self._post_summary(s, reason)
 
     async def _post_summary(self, s: MeetingSession, reason: str) -> None:
         from .bot import chunks
 
         if not len(s.transcript):
-            await self._post(s, NO_TRANSCRIPT_MESSAGE)
+            await self._post(s, t("meet_no_transcript", s.lang))
             return
         try:
             body = await asyncio.to_thread(
@@ -739,14 +758,16 @@ class MeetingManager:
                 self.bot.llm,
                 self.bot.s.gemini_model,
                 s.transcript.full_text(),
+                s.language,
             )
         except Exception:
             logger.exception("meeting summary failed")
             body = ""
         if not body:
-            await self._post(s, SUMMARY_FAILED_MESSAGE)
+            await self._post(s, t("meet_summary_failed", s.lang))
             return
-        header = f"📝 สรุปการประชุม ({END_REASONS.get(reason, reason)})\n"
+        why = t(f"end_{reason}", s.lang) if reason in END_REASONS else reason
+        header = t("meet_summary_header", s.lang, reason=why)
         for part in chunks(header + body, 1900):
             await self._post(s, part)
         s.transcript.lines.clear()  # transcript is never persisted

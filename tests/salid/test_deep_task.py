@@ -10,13 +10,13 @@ from conftest import ALICE, EXEC_ID, GUILD
 from salid.cli import main as cli_main
 from salid.config import Settings
 from salid.deep_task import (
-    DISABLED_MESSAGE,
     DeepTaskError,
     build_cli_settings,
     build_command,
     parse_cli_output,
     run_deep_task,
 )
+from salid.i18n import t
 
 GOOD = {
     "session_id": "s1",
@@ -71,7 +71,7 @@ def ds(settings):
 def test_disabled_without_binary_path(seeded, settings):
     with pytest.raises(DeepTaskError, match="SALID_GEMINI_CLI_PATH") as e:
         run_deep_task(settings, seeded, "x", guild_id=GUILD)
-    assert str(e.value) == DISABLED_MESSAGE
+    assert str(e.value) == t("deep_disabled", "th")
 
 
 def test_run_returns_report_stats_and_cleans_up(seeded, ds):
@@ -299,3 +299,34 @@ async def test_bot_rejects_second_concurrent_task_and_reports_failure(bot, monke
     release.set()
     await asyncio.gather(*bot._deep_tasks)
     assert m1.sent[0][0] == "❌ พัง"
+
+
+# ------------------------------------------------------------------ language
+def test_task_file_report_language(seeded, ds, tmp_path):
+    from salid.deep_task import prepare_workspace
+
+    def task_md(lang, task="analyze"):
+        ws = tmp_path / f"ws-{lang}"
+        ws.mkdir(exist_ok=True)
+        prepare_workspace(ws, seeded, ds, task, GUILD, lang=lang)
+        return (ws / "TASK.md").read_text(encoding="utf-8")
+
+    assert "ฉบับสุดท้ายเป็นภาษาไทย" in task_md("th")
+    assert "เป็นภาษาอังกฤษ (English)" in task_md("en")
+    assert "ด้วยภาษาเดียวกับที่เขียนโจทย์" in task_md("auto")
+
+
+def test_deep_messages_follow_the_language(seeded, settings):
+    from salid.deep_task import DeepResult, parse_deep_trigger, reply_parts
+
+    with pytest.raises(DeepTaskError) as e:
+        run_deep_task(settings, seeded, "x", guild_id=GUILD, lang="en")
+    assert str(e.value) == t("deep_disabled", "en") and "not enabled" in str(e.value)
+    with pytest.raises(DeepTaskError) as e:  # auto follows the task text
+        run_deep_task(settings, seeded, "analyze spending", guild_id=GUILD, lang="auto")
+    assert "not enabled" in str(e.value)
+    long = DeepResult(text="line\n" * 1000, seconds=3.0)
+    text, _ = reply_parts(long, "en")
+    assert "attached as report.md" in text and "model:" in text
+    assert parse_deep_trigger("deep task: analyze") == "analyze"
+    assert parse_deep_trigger("Big task: analyze") == "analyze"

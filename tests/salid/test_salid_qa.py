@@ -183,3 +183,45 @@ def test_digest_top3(store):
 def test_is_exec(settings):
     assert settings.is_exec(EXEC_ID) and not settings.is_exec(5, ["staff"])
     assert settings.is_exec(5, ["ผู้บริหาร"]) and settings.is_exec(5, ["Executive"])
+
+
+def test_system_prompt_language_instruction(settings):
+    from salid.qa import system_prompt
+
+    th = system_prompt(settings, scoped=False)
+    assert th == system_prompt(settings, scoped=False, language="th")
+    assert "พูดภาษาไทยเป็นธรรมชาติ" in th and "English" not in th
+    en = system_prompt(settings, scoped=False, language="en")
+    assert "ALWAYS reply in English" in en and "พูดภาษาไทยเป็นธรรมชาติ" not in en
+    auto = system_prompt(settings, scoped=True, language="auto")
+    assert "same language as the user's latest message" in auto and "ไม่ใช่ผู้บริหาร" in auto
+
+
+def test_ask_passes_the_language_to_the_model(seeded, settings):
+    llm = scripted(text_resp("Total is ฿1,000"))
+    a = ask(
+        settings, seeded, "total?", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm,
+        language="en",
+    )  # fmt: skip
+    assert a.text == "Total is ฿1,000"
+    assert "ALWAYS reply in English" in llm.requests[0].config.system_instruction
+
+
+def test_empty_answer_falls_back_in_the_users_language(seeded, settings):
+    def empty(question, language):
+        llm = scripted(text_resp(""))
+        return ask(
+            settings, seeded, question, guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm,
+            language=language,
+        ).text  # fmt: skip
+
+    assert "ขออภัย" in empty("ยอดเท่าไร", "th")
+    assert "Sorry" in empty("total?", "en")
+    assert "Sorry" in empty("total?", "auto") and "ขออภัย" in empty("ยอดเท่าไร", "auto")
+
+
+def test_digest_in_english(seeded):
+    d = build_daily_digest(seeded, GUILD, "2026-10-14", "en")
+    assert "Daily expense summary" in d and "Needs review" in d and "unclear data" in d
+    assert "สรุปค่าใช้จ่าย" not in d
+    assert "No receipts" in build_daily_digest(seeded, GUILD, "2026-01-01", "en")

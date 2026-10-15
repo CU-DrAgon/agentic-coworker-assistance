@@ -10,9 +10,10 @@ from datetime import date
 from pathlib import Path
 
 from .config import Settings
-from .deep_task import NOT_EXEC_MESSAGE, DeepTaskError, format_stats, run_deep_task
+from .deep_task import DeepTaskError, format_stats, run_deep_task
 from .digest import build_daily_digest
 from .extract import extract_receipt, guess_mime
+from .i18n import LANGS, resolve_lang, t
 from .llm import make_client
 from .qa import ask
 from .store import make_store
@@ -39,6 +40,8 @@ def main(argv=None) -> None:
     d = sub.add_parser("digest")
     d.add_argument("date", nargs="?")
     d.add_argument("--guild", type=int, default=0, metavar="ID")
+    for sp in (a, dp, d):
+        sp.add_argument("--lang", choices=LANGS, default="th", help="reply language")
     args = ap.parse_args(argv)
     s = Settings.from_env()
 
@@ -58,23 +61,26 @@ def main(argv=None) -> None:
             guild_id=args.guild,
             is_exec=args.as_exec,
             user_id=args.as_user or 0,
+            language=args.lang,
         )
         print(ans.text)
         print(f"\n[{ans.seconds:.1f}s, {ans.rounds} tool rounds, calls={ans.tool_calls}]")
     elif args.cmd == "deep":
         if not args.as_exec:
-            print(NOT_EXEC_MESSAGE)
+            print(t("deep_not_exec", resolve_lang(args.lang, args.task)))
             return
         try:
-            res = run_deep_task(s, make_store(s), args.task, guild_id=args.guild)
+            res = run_deep_task(s, make_store(s), args.task, guild_id=args.guild, lang=args.lang)
         except DeepTaskError as e:
             print(e)
             raise SystemExit(1) from None
         print(res.text)
-        print(f"\n[{format_stats(res)}; pinned_ok={res.pinned_ok}]")
+        print(
+            f"\n[{format_stats(res, resolve_lang(args.lang, args.task))}; pinned_ok={res.pinned_ok}]"
+        )
     elif args.cmd == "digest":
         day = date.fromisoformat(args.date) if args.date else s.today()
-        print(build_daily_digest(make_store(s), args.guild, day))
+        print(build_daily_digest(make_store(s), args.guild, day, resolve_lang(args.lang)))
 
 
 if __name__ == "__main__":

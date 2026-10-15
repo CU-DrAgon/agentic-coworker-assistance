@@ -10,6 +10,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 from .config import Settings
+from .i18n import t
 from .llm import generate
 from .models import CATEGORIES, Receipt, ReceiptExtraction
 from .store import LOW_CONF, Store
@@ -93,25 +94,25 @@ class IngestResult:
     receipt: Receipt | None = None
 
 
-def fmt_money(x: float | None, currency: str = "THB") -> str:
+def fmt_money(x: float | None, currency: str = "THB", lang: str = "th") -> str:
     if x is None:
-        return "ไม่ทราบ"
+        return t("unknown", lang)
     s = f"{x:,.2f}".removesuffix(".00")
     return f"฿{s}" if currency == "THB" else f"{s} {currency}"
 
 
-def confirmation_text(r: Receipt, dup: Receipt | None, needs_check: bool) -> str:
+def confirmation_text(r: Receipt, dup: Receipt | None, needs_check: bool, lang: str = "th") -> str:
     lines = [
-        f"{'⚠️ กรุณาตรวจสอบ' if needs_check else '✅ บันทึกแล้ว'} (#{r.id})",
-        f"ร้าน: {r.vendor or 'ไม่ทราบ'}",
-        f"วันที่: {r.receipt_date or 'ไม่ทราบ (ใช้วันที่ส่ง)'}",
-        f"ยอดรวม: {fmt_money(r.total, r.currency)}",
-        f"หมวด: {r.category}",
+        f"{t('rc_check' if needs_check else 'rc_saved', lang)} (#{r.id})",
+        t("rc_vendor", lang, v=r.vendor or t("unknown", lang)),
+        t("rc_date", lang, v=r.receipt_date or t("rc_date_unknown", lang)),
+        t("rc_total", lang, v=fmt_money(r.total, r.currency, lang)),
+        t("rc_category", lang, v=r.category),
     ]
     if needs_check:
-        lines.append('อ่านข้อมูลไม่ชัด ตอบข้อความนี้เพื่อแก้ไข เช่น "ยอดจริง 450" หรือ "หมวด ค่าเดินทาง"')
+        lines.append(t("rc_unclear", lang))
     if dup:
-        lines.append(f"⚠️ อาจซ้ำกับใบเสร็จ #{dup.id} (ร้าน/วันที่/ยอดเท่ากัน)")
+        lines.append(t("rc_possible_dup", lang, id=dup.id))
     return "\n".join(lines)
 
 
@@ -130,6 +131,7 @@ def ingest_attachment(
     message_id: int,
     note: str = "",
     archive=None,
+    lang: str = "th",
 ) -> IngestResult:
     mime = guess_mime(filename, content_type)
     if not mime:
@@ -139,7 +141,13 @@ def ingest_attachment(
     if existing:
         return IngestResult(
             "duplicate",
-            f"ℹ️ ใบเสร็จนี้เคยบันทึกแล้ว (#{existing.id} ร้าน {existing.vendor or 'ไม่ทราบ'} ยอด {fmt_money(existing.total, existing.currency)}) ไม่บันทึกซ้ำ",
+            t(
+                "rc_duplicate",
+                lang,
+                id=existing.id,
+                vendor=existing.vendor or t("unknown", lang),
+                total=fmt_money(existing.total, existing.currency, lang),
+            ),
             "♻️",
             existing,
         )
@@ -180,7 +188,10 @@ def ingest_attachment(
     r = store.add_receipt(r)
     needs_check = ex.confidence < LOW_CONF or ex.total is None
     return IngestResult(
-        "created", confirmation_text(r, dup, needs_check), "⚠️" if needs_check else "✅", r
+        "created",
+        confirmation_text(r, dup, needs_check, lang),
+        "⚠️" if needs_check else "✅",
+        r,
     )
 
 
@@ -278,22 +289,27 @@ def parse_correction(client, settings: Settings, text: str, receipt: Receipt | N
     return out
 
 
-def apply_correction(store: Store, client, settings: Settings, receipt: Receipt, text: str) -> str:
+def apply_correction(
+    store: Store, client, settings: Settings, receipt: Receipt, text: str, lang: str = "th"
+) -> str:
     fields = parse_correction(client, settings, text, receipt)
     if not fields:
-        return (
-            'ไม่เข้าใจคำแก้ไข ลองพิมพ์ เช่น "ยอดจริง 450", "หมวด ค่าเดินทาง", "ร้าน ABC" หรือ "วันที่ 2026-10-12"'
-        )
+        return t("corr_unclear", lang)
     r = store.update_receipt(receipt.id, {**fields, "confidence": 1.0})  # human-verified
     names = {
-        "total": "ยอดรวม",
-        "vat": "VAT",
-        "vendor": "ร้าน",
-        "receipt_date": "วันที่",
-        "category": "หมวด",
-        "notes": "หมายเหตุ",
+        "total": t("corr_total", lang),
+        "vat": t("corr_vat", lang),
+        "vendor": t("corr_vendor", lang),
+        "receipt_date": t("corr_date", lang),
+        "category": t("corr_category", lang),
+        "notes": t("corr_notes", lang),
     }
     changed = ", ".join(
-        f"{names[k]}={fmt_money(v) if k in ('total', 'vat') else v}" for k, v in fields.items()
+        f"{names[k]}={fmt_money(v, lang=lang) if k in ('total', 'vat') else v}"
+        for k, v in fields.items()
     )
-    return f"✏️ แก้ไขใบเสร็จ #{r.id} แล้ว: {changed}\nตอนนี้: {r.vendor or 'ไม่ทราบ'} | {r.receipt_date or r.effective_date} | {fmt_money(r.total, r.currency)} | {r.category}"
+    now = (
+        f"{r.vendor or t('unknown', lang)} | {r.receipt_date or r.effective_date} | "
+        f"{fmt_money(r.total, r.currency, lang)} | {r.category}"
+    )
+    return t("corr_done", lang, id=r.id, changed=changed, now=now)

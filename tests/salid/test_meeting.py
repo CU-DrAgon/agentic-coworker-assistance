@@ -13,6 +13,7 @@ from conftest import FakeClient, FixedClockSettings, json_resp, text_resp
 from salid import meeting as mt
 from salid.bot import SecretaryBot
 from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
+from salid.i18n import t
 from salid.meeting import (
     PCM_BYTES_PER_SECOND,
     Segmenter,
@@ -96,8 +97,14 @@ def test_rms_ignores_silence():
         ("สะลิด วันนี้วันอะไร", "วันนี้วันอะไร"),
         ("สลิตร ขอสรุปหน่อย", "ขอสรุปหน่อย"),
         ("ช่วยสรุปให้หน่อยสลิด", "ช่วยสรุปให้หน่อย"),
+        ("Hey Salid, what did we spend?", "what did we spend"),
+        ("hey salid what did we spend this month", "what did we spend this month"),
+        ("what did we spend, salid", "what did we spend"),
+        ("sa lid summarize the meeting", "summarize the meeting"),
         ("สลิด", ""),
         ("สลิดครับ", ""),
+        ("hey salid", ""),
+        ("Hi, Salid", ""),
         ("เรามาประชุมกันเลย", None),
         ("", None),
     ],
@@ -113,8 +120,20 @@ def test_parse_wake(text, question):
         ("เข้าประชุมหน่อย", "join"),
         ("/เข้าประชุม", "join"),
         ("join", "join"),
+        ("Join meeting", "join"),
+        ("join the meeting", "join"),
+        ("  JOIN   THE  MEETING! ", "join"),
+        ("come to the meeting", "join"),
+        ("come to meeting please", "join"),
         ("ออกประชุม", "leave"),
         ("Leave", "leave"),
+        ("leave meeting", "leave"),
+        ("leave the meeting", "leave"),
+        ("end meeting", "leave"),
+        ("Stop the meeting", "leave"),
+        (", leave.", "leave"),
+        ("joined the call yesterday", None),
+        ("what did we decide in the meeting", None),
         ("เดือนนี้จ่ายอะไรบ้างและจะเข้าประชุมวันไหน ลองสรุปให้หน่อยนะ", None),
         ("สวัสดี", None),
     ],
@@ -233,14 +252,14 @@ def env(monkeypatch):
 # ------------------------------------------------------------------ join / leave guards
 async def test_join_requires_being_in_a_voice_channel(env):
     m = make_member(env.guild, 10, "แอน")
-    assert await env.mgr.join(m) == mt.NOT_IN_VOICE_MESSAGE
+    assert await env.mgr.join(m) == t("meet_not_in_voice", "th")
     assert env.mgr.sessions == {}
 
 
 async def test_join_needs_connect_permission(env):
     env.chan._connect = False
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert await env.mgr.join(m) == mt.NO_PERMISSION_MESSAGE
+    assert await env.mgr.join(m) == t("meet_no_permission", "th")
 
 
 async def test_join_respects_the_feature_toggle(env):
@@ -249,13 +268,13 @@ async def test_join_respects_the_feature_toggle(env):
     )
     await asyncio.to_thread(env.bot.team.current, 1000)
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert await env.mgr.join(m) == mt.MEETINGS_OFF_MESSAGE
+    assert await env.mgr.join(m) == t("meet_off", "th")
 
 
 async def test_join_announces_listens_and_blocks_a_second_meeting(env):
     m = make_member(env.guild, 10, "แอน", env.chan)
     assert "ห้องประชุม" in await env.mgr.join(m)
-    assert env.chan.sent == [mt.ANNOUNCE_MESSAGE]
+    assert env.chan.sent == [t("meet_announce", "th")]
     assert "สลิดเข้ามาฟังและจดบันทึกการประชุมครับ" in env.chan.sent[0]
     assert isinstance(env.vc.listening, mt.MeetingSink)
     again = await env.mgr.join(m)
@@ -265,14 +284,14 @@ async def test_join_announces_listens_and_blocks_a_second_meeting(env):
 
 async def test_leave_without_meeting(env):
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert await env.mgr.leave(m) == mt.NO_MEETING_MESSAGE
+    assert await env.mgr.leave(m) == t("meet_none", "th")
 
 
 async def test_leave_denied_for_outsiders(env):
     a = make_member(env.guild, 10, "แอน", env.chan)
     outsider = make_member(env.guild, 11, "ซี")
     await env.mgr.join(a)
-    assert await env.mgr.leave(outsider) == mt.LEAVE_DENIED_MESSAGE
+    assert await env.mgr.leave(outsider) == t("meet_leave_denied", "th")
     assert 1000 in env.mgr.sessions
     await env.mgr.end(1000)
 
@@ -294,7 +313,7 @@ async def test_segment_is_transcribed_with_the_speaker_name(env, monkeypatch):
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "เรามาเริ่มกันเลย")
     await env.mgr.handle_segment(s, segment(10))
     assert [(ln.speaker, ln.text) for ln in s.transcript.lines] == [("แอน", "เรามาเริ่มกันเลย")]
-    assert env.chan.sent == [mt.ANNOUNCE_MESSAGE]  # no wake word, no reply
+    assert env.chan.sent == [t("meet_announce", "th")]  # no wake word, no reply
     await env.mgr.end(1000)
 
 
@@ -348,7 +367,7 @@ async def test_bare_wake_word_takes_the_next_segment_as_the_question(env, monkey
     texts = iter(["สลิด", "วันนี้มีนัดอะไรบ้าง"])
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: next(texts))
     await env.mgr.handle_segment(s, segment(10))
-    assert env.chan.sent[-1].endswith(mt.WAKE_EMPTY_MESSAGE)
+    assert env.chan.sent[-1].endswith(t("meet_wake_empty", "th"))
     await env.mgr.handle_segment(s, segment(10))
     assert questions == ["วันนี้มีนัดอะไรบ้าง"]
     await env.mgr.end(1000)
@@ -378,7 +397,7 @@ async def test_leave_posts_a_summary_and_drops_the_transcript(env, monkeypatch):
 async def test_leave_with_nothing_heard(env):
     await start(env)
     await env.mgr.end(1000, "empty")
-    assert env.chan.sent[-1] == mt.NO_TRANSCRIPT_MESSAGE
+    assert env.chan.sent[-1] == t("meet_no_transcript", "th")
     assert env.llm.models.calls == []
 
 
@@ -701,3 +720,56 @@ async def test_speak_cleans_ffmpeg_source_when_play_rejects_it(voice, monkeypatc
     assert source.cleaned is True
     assert s.speaking is False
     await voice.mgr.end(1000)
+
+
+# ------------------------------------------------------------------ language
+async def test_english_replies_for_the_invoker(env):
+    m = make_member(env.guild, 10, "Ann")
+    assert await env.mgr.join(m, lang="en") == t("meet_not_in_voice", "en")
+    assert "voice channel" in t("meet_not_in_voice", "en")
+    assert await env.mgr.leave(m, lang="en") == "Salid is not in a meeting right now."
+
+
+async def test_meeting_follows_the_text_channels_language(env, monkeypatch):
+    env.bot.guilds_store.set_channel_language(1000, env.chan.id, "en")
+    m = make_member(env.guild, 10, "Ann", env.chan)
+    assert await env.mgr.join(m, lang="th") == t("meet_joined", "th", channel=env.chan.name)
+    s = env.mgr.sessions[1000]
+    assert s.language == "en" and s.lang == "en"
+    assert env.chan.sent == [t("meet_announce", "en")]  # announce uses the channel language
+    asked = {}
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="Done")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m_, pcm: "Salid, what did we decide?")
+    await env.mgr.handle_segment(s, segment(10))
+    assert asked["language"] == "en" and env.chan.sent[-1] == "<@10> Done"
+    s.transcript.add(env.bot.s.now(), "Ann", "Boy sends the report on Friday")
+    env.llm.models.script = [text_resp("**Meeting summary**\nBoy sends the report")]
+    await env.mgr.end(1000, "command")
+    prompt = env.llm.models.calls[0][1][0]
+    assert "in English" in prompt and "Action items" in prompt
+    assert env.chan.sent[-1].startswith("📝 Meeting summary (someone told Salid to leave)")
+
+
+async def test_auto_meeting_language_uses_the_starters_language_for_fixed_text(env):
+    env.bot.guilds_store.set_channel_language(1000, env.chan.id, "auto")
+    m = make_member(env.guild, 10, "Ann", env.chan)
+    await env.mgr.join(m, lang="en")
+    s = env.mgr.sessions[1000]
+    assert s.language == "auto" and s.lang == "en"
+    assert env.chan.sent == [t("meet_announce", "en")]
+    await env.mgr.end(1000, "empty")
+    assert env.chan.sent[-1] == t("meet_no_transcript", "en")
+
+
+def test_summary_language_auto_follows_the_transcript(env):
+    mt_ = mt
+    client = FakeClient([text_resp("x"), text_resp("y"), text_resp("z")])
+    mt_.summarize_transcript(client, "m", "[10:00] Ann: ship it on Friday", "auto")
+    mt_.summarize_transcript(client, "m", "[10:00] แอน: ส่งวันศุกร์", "auto")
+    mt_.summarize_transcript(client, "m", "[10:00] แอน: ส่งวันศุกร์")
+    en, th, default = (c[1][0] for c in client.models.calls)
+    assert "in English" in en and "เป็นภาษาไทย" in th and "เป็นภาษาไทย" in default

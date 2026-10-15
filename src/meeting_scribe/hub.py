@@ -229,6 +229,7 @@ async def hub_put_settings(
         *body.receipt_channel_ids,
         *body.ask_channel_ids,
         *body.channel_modes,
+        *body.channel_languages,
         body.digest_channel_id,
     } - {""}
     if known and chosen - known:  # the bot syncs the list; an empty list means "not synced yet"

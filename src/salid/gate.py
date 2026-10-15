@@ -26,12 +26,17 @@ LINE_CHARS = 300
 _QUESTION_RE = re.compile(
     r"\?|ไหม|มั้ย|หรือเปล่า|อะไร|ยังไง|อย่างไร|เท่าไหร่|เท่าไร|ใคร|ที่ไหน|เมื่อไหร่|ทำไม|กี่"
     r"|ค่าใช้จ่าย|งบ|บาท|ใบเสร็จ|เบิก|ประชุม|สรุป"
+    # English: question words, and the same domain words (whole words only)
+    r"|(?<![a-z])(?:what|how|when|where|who|why|which|can|could|should|does|is\s+there"
+    r"|are\s+there|expenses?|costs?|budget|receipts?|reimburs\w*|meetings?|summar\w+|baht"
+    r"|spend|spent)(?![a-z])",
+    re.I,
 )
 
 _ABOUT = (
-    "Salid (สลิด) is a Thai-speaking team assistant in a Discord server. It reads receipts into an "
-    "expense ledger, answers questions about spending, and can summarize meetings. Messages are "
-    "mostly Thai."
+    "Salid (สลิด) is a bilingual (Thai and English) team assistant in a Discord server. It reads "
+    "receipts into an expense ledger, answers questions about spending, and can summarize "
+    "meetings. Messages are in Thai or English."
 )
 
 

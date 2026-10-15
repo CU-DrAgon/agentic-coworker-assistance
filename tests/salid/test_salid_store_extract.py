@@ -143,3 +143,27 @@ def test_recent_returns_newest_first_and_respects_limit(seeded):
     assert [r.id for r in seeded.recent(GUILD, 3)] == [5, 4, 3]
     assert len(seeded.recent(GUILD)) == 5
     assert len(seeded.recent(GUILD, 0)) == 1  # limit is clamped to at least 1
+
+
+# ---------------------------------------------------------------- reply language
+def test_receipt_replies_follow_the_language(store, settings):
+    th = ingest(store, settings, FakeClient([json_resp(EX)]))
+    en = ingest(store, settings, FakeClient([json_resp(EX)]), data=b"img2", lang="en")
+    assert "บันทึกแล้ว" in th.reply and "ร้าน:" in th.reply
+    assert "Saved" in en.reply and "Vendor:" in en.reply and "บันทึกแล้ว" not in en.reply
+    dup = ingest(store, settings, FakeClient([]), data=b"img2", lang="en")
+    assert dup.status == "duplicate" and "already recorded" in dup.reply
+    assert "เคยบันทึกแล้ว" in ingest(store, settings, FakeClient([]), data=b"img2").reply
+    unclear = ingest(
+        store, settings, FakeClient([json_resp({**EX, "confidence": 0.3})]), data=b"img3", lang="en"
+    )
+    assert "Please check" in unclear.reply and "Reply to this message" in unclear.reply
+
+
+def test_corrections_reply_in_english(store, settings):
+    r = ingest(store, settings, FakeClient([json_resp(EX)])).receipt
+    msg = apply_correction(store, None, settings, r, "total 450", "en")
+    assert "Receipt #" in msg and "total=฿450" in msg and "Now:" in msg
+    assert "did not understand" in apply_correction(
+        store, FakeClient([json_resp({})]), settings, r, "555", "en"
+    )
