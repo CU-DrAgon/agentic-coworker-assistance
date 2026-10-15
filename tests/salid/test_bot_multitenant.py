@@ -161,6 +161,16 @@ async def test_ask_channels_and_mentions_answer_in_their_guild(bot, world):
     assert bot.calls == [("answer", OTHER_GUILD), ("answer", GUILD)]
 
 
+async def test_mentioning_the_bot_role_also_answers(bot, world):
+    m = Msg(world.a, world.a.text_channels[0], member(world.a, STAFF))
+    m.role_mentions = [SimpleNamespace(tags=SimpleNamespace(bot_id=ME.id))]
+    await bot.on_message(m)
+    other = Msg(world.a, world.a.text_channels[0], member(world.a, STAFF))
+    other.role_mentions = [SimpleNamespace(tags=None)]  # an ordinary role
+    await bot.on_message(other)
+    assert bot.calls == [("answer", GUILD)]
+
+
 # ------------------------------------------------------------------ real handlers, scoped per guild
 async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     seen = []

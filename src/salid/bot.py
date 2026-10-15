@@ -79,6 +79,17 @@ def can_manage_guild(member) -> bool:
     return member.guild.owner_id == member.id or perms.administrator or perms.manage_guild
 
 
+def mentions_bot(message: discord.Message, me: discord.ClientUser | None) -> bool:
+    """True for an @mention of the bot user or of its integration role. Discord's autocomplete
+    often picks the role, which has the same name as the bot."""
+    if me is None:
+        return False
+    if me in message.mentions:
+        return True
+    roles = getattr(message, "role_mentions", ())
+    return any(getattr(getattr(r, "tags", None), "bot_id", None) == me.id for r in roles)
+
+
 class SecretaryBot(discord.Client):
     def __init__(
         self, settings: Settings, store: Store, llm, guilds: GuildStore | None = None
@@ -205,7 +216,7 @@ class SecretaryBot(discord.Client):
             receipts_on = self.team.enabled(gid, "receipts")
             if receipts_on and await self._maybe_correction(message):
                 return
-            mentioned = self.user is not None and self.user in message.mentions
+            mentioned = mentions_bot(message, self.user)
             receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
             is_receipt_post = message.attachments and (
                 message.channel.id in receipt_ids
