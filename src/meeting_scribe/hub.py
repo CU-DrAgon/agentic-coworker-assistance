@@ -190,6 +190,7 @@ class ActivityItem(BaseModel):
     at: str  # ISO 8601, UTC
     status: str  # receipt: ok | review; meeting: the meeting status
     amount: float | None = None
+    currency: str | None = None  # ISO code of `amount`; missing counts as THB
 
 
 @router.get("/api/hub/me")
@@ -295,6 +296,7 @@ def build_activity(
                         at=at.isoformat(timespec="seconds"),
                         status="review" if flagged else "ok",
                         amount=r.total,
+                        currency=(r.currency or "THB").upper(),
                     ),
                 )
             )

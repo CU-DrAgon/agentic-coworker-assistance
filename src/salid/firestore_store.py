@@ -41,6 +41,8 @@ from .store import (
     LOW_CONF,
     UPDATABLE,
     VOID,
+    build_summary,
+    cur_of,
     find_duplicate_in,
     group_duplicates,
     is_active,
@@ -215,21 +217,12 @@ class FirestoreStore:
     ) -> dict:
         if group_by not in GROUPS:
             raise ValueError(f"bad group_by {group_by}")
-        acc: dict[str, list[float]] = {}
+        acc: dict[tuple[str, str], list[float]] = {}
         for r in self._in_range(guild_id, start, end, submitter_id):
-            g = acc.setdefault(_group_key(r, group_by), [0.0, 0])
+            g = acc.setdefault((_group_key(r, group_by), cur_of(r)), [0.0, 0])
             g[0] += r.total or 0.0
             g[1] += 1
-        groups = [{"key": k, "total": round(t, 2), "count": c} for k, (t, c) in acc.items()]
-        groups.sort(key=(lambda g: g["key"]) if group_by == "day" else (lambda g: -g["total"]))
-        return {
-            "start": start,
-            "end": end,
-            "group_by": group_by,
-            "total": round(sum(g["total"] for g in groups), 2),
-            "count": sum(g["count"] for g in groups),
-            "groups": [] if group_by == "none" else groups,
-        }
+        return build_summary(start, end, group_by, [(k, c, t, n) for (k, c), (t, n) in acc.items()])
 
     def list_receipts(
         self,

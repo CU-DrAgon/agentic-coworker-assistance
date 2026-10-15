@@ -20,6 +20,8 @@ from .channel_access import access_flags, hidden_channels, hidden_channels_messa
 from .config import Settings
 from .deep_task import (
     REPORT_NAME,
+    DeepCancelled,
+    DeepHandle,
     DeepTaskError,
     parse_deep_trigger,
     reply_parts,
@@ -65,6 +67,7 @@ from .memory_access import ChannelAccess, allowed_channel_ids
 from .memory_import import MemoryImporter, Target, import_progress
 from .memory_store import MemoryStore, SQLiteMemoryStore, make_memory_store
 from .memory_summary import render_summary
+from .message_control import AnswerLog, parse_cancel_task, parse_delete_message
 from .modes import (
     CHAT_CHANNEL_NAME,
     MODES,
@@ -122,6 +125,7 @@ CHANNELS_COMMANDS = ("ห้อง", "channels")
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
 JOIN_COMMANDS = ("เข้าประชุม", "join")
 LEAVE_COMMANDS = ("ออกประชุม", "leave")
+CANCEL_COMMANDS = ("ยกเลิก", "cancel")
 
 
 def chunks(text: str, n: int = 1900):
@@ -191,6 +195,13 @@ class _Pending:
     candidates: list = field(default_factory=list)
 
 
+@dataclass
+class _DeepJob:
+    task: asyncio.Task
+    handle: DeepHandle
+    starter_id: int
+
+
 class SecretaryBot(discord.Client):
     def __init__(
         self,
@@ -227,6 +238,8 @@ class SecretaryBot(discord.Client):
         self._digest_sent: dict[int, date] = {}
         self._agent_msgs: set[int] = set()  # messages whose files went to the agent
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
+        self._deep_jobs: dict[int, _DeepJob] = {}  # guild -> the running deep task
+        self._answers = AnswerLog(clock)  # chunk ids of Salid's answers, ~24 h
         self._sync_last: dict[int, float] = {}
         self._sync_pending: dict[int, asyncio.Task] = {}
         self.meetings = MeetingManager(self)
@@ -460,6 +473,8 @@ class SecretaryBot(discord.Client):
                 return
             if mode == "off":
                 return
+            if await self._maybe_delete_own(message):
+                return
             mentioned = mentions_bot(message, self.user)
             receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
             qa_on = self.team.enabled(gid, "qa")
@@ -510,6 +525,8 @@ class SecretaryBot(discord.Client):
         if called and await self._meeting_command(message):
             return
         if called and await self._snooze_command(message):
+            return
+        if called and await self._cancel_task_command(message):
             return
         if called and await self._language_command(message):
             return
@@ -751,6 +768,9 @@ class SecretaryBot(discord.Client):
             await message.reply(t("correction_denied", self._lang(message)), mention_author=False)
             return True
         action = parse_void_command(message.content)
+        delete_kind = parse_delete_message(self._command_text(message))
+        if action is None and delete_kind is not None:
+            action = "void"  # "remove"/"unsend" on a receipt message cancels the receipt
         if action:
             text = await asyncio.to_thread(
                 apply_void_command,
@@ -760,6 +780,10 @@ class SecretaryBot(discord.Client):
                 f"{message.author.display_name} ({message.author.id})",
                 self._lang(message),
             )
+            if action == "void" and delete_kind == "message":
+                # voiding is the important part; the receipt message itself goes too
+                await self._delete_messages(message.channel, [ref.message_id], message.guild.id)
+                text = t("receipt_void_ack", self._lang(message), id=receipt.id)
             await message.reply(text, mention_author=False)
             return True
         async with message.channel.typing():
@@ -1052,11 +1076,16 @@ class SecretaryBot(discord.Client):
             logger.info("interjection suppressed (nothing useful to add)")
             return False
         sent = first = None
+        sent_ids: list[int] = []
         for i, part in enumerate(chunks(ans.text)):
             sent = await (
                 message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
             )
             first = first or sent
+            if getattr(sent, "id", None) is not None:
+                sent_ids.append(sent.id)
+        if sent_ids:
+            self._answers.add(message.channel.id, message.author.id, sent_ids)
         for n, (receipt_id, reaction) in enumerate(getattr(ans, "receipts", ())):
             if n == 0 and first is not None:  # a correction by reply finds this receipt
                 self.store.set_reply_message(receipt_id, first.id)
@@ -1079,9 +1108,94 @@ class SecretaryBot(discord.Client):
         return "ok"
 
     def _launch_deep(self, message, guild_id: int, task: str, setting: str = "th") -> None:
-        job = asyncio.create_task(self._run_deep(message, guild_id, task, setting))
+        handle = DeepHandle()
+        job = asyncio.create_task(self._run_deep(message, guild_id, task, setting, handle))
         self._deep_tasks.add(job)
+        self._deep_jobs[guild_id] = _DeepJob(
+            job, handle, getattr(getattr(message, "author", None), "id", None)
+        )
         job.add_done_callback(self._deep_tasks.discard)
+        job.add_done_callback(
+            lambda _j, g=guild_id, me=job: (
+                self._deep_jobs.pop(g, None)
+                if getattr(self._deep_jobs.get(g), "task", None) is me
+                else None
+            )
+        )
+
+    async def _cancel_deep(self, guild_id: int, user, lang: str) -> str:
+        """Stop the guild's running deep task (cancel the asyncio task, kill the CLI process).
+        Allowed for whoever started it, server managers and executives."""
+        job = self._deep_jobs.get(guild_id)
+        if job is None or job.task.done():
+            return t("cancel_none", lang)
+        if user.id != job.starter_id and not (
+            hasattr(user, "guild_permissions") and self.is_exec_member(user)
+        ):
+            return t("cancel_denied", lang)
+        job.handle.cancel()
+        job.task.cancel()
+        return t("cancel_done", lang)
+
+    async def _cancel_task_command(self, message: discord.Message) -> bool:
+        """'@Salid ยกเลิกงาน' / 'cancel task'."""
+        if message.guild is None or not parse_cancel_task(self._command_text(message)):
+            return False
+        reply = await self._cancel_deep(message.guild.id, message.author, self._lang(message))
+        await message.reply(reply, mention_author=False)
+        return True
+
+    async def handle_cancel(self, interaction: discord.Interaction) -> None:
+        """/ยกเลิก: cancel the running big task."""
+        lang = self._interaction_lang(interaction)
+        if interaction.guild is None:
+            await interaction.response.send_message(t("cancel_none", lang), ephemeral=True)
+            return
+        reply = await self._cancel_deep(interaction.guild.id, interaction.user, lang)
+        await interaction.response.send_message(reply, ephemeral=True)
+
+    # ------------------------------------------------------------- deleting Salid's messages
+    async def _delete_messages(self, channel, ids: list[int], guild_id: int) -> None:
+        for mid in ids:
+            with contextlib.suppress(discord.HTTPException):
+                await channel.get_partial_message(mid).delete()
+        # the gateway delete event does the same; doing it here too makes it immediate
+        self._memory_enqueue(partial(self.memory.delete, guild_id, list(ids)))
+
+    async def _maybe_delete_own(self, message: discord.Message) -> bool:
+        """Reply to one of Salid's messages with just "ลบ" / "delete" / "unsend" ...: Salid deletes
+        it (and every chunk of the same answer). Allowed for the person Salid was answering,
+        server managers and executives. A thumbs up replaces a confirmation message."""
+        ref = message.reference
+        if not ref or not ref.message_id or not message.content.strip():
+            return False
+        if parse_delete_message(self._command_text(message)) is None:
+            return False
+        rec = self._answers.get(ref.message_id)
+        asker_id = rec.asker_id if rec else None
+        if rec is None:
+            target = getattr(ref, "resolved", None)
+            if target is None:
+                with contextlib.suppress(discord.HTTPException):
+                    target = await message.channel.fetch_message(ref.message_id)
+            if target is None or getattr(target, "author", None) != self.user:
+                return False  # not a Salid message: nothing to do here
+            origin = getattr(getattr(target, "reference", None), "resolved", None)
+            asker_id = getattr(getattr(origin, "author", None), "id", None)
+        user = message.author
+        allowed = user.id == asker_id or (
+            hasattr(user, "guild_permissions") and self.is_exec_member(user)
+        )
+        if not allowed:
+            await message.reply(t("delete_denied", self._lang(message)), mention_author=False)
+            return True
+        ids = list(rec.message_ids) if rec else [ref.message_id]
+        if rec:
+            self._answers.forget(rec)
+        await self._delete_messages(message.channel, ids, message.guild.id)
+        with contextlib.suppress(discord.HTTPException):
+            await message.add_reaction("👍")
+        return True
 
     async def _deep(
         self,
@@ -1108,13 +1222,29 @@ class SecretaryBot(discord.Client):
             await reply(t(key, lang), mention_author=False)
 
     async def _run_deep(
-        self, message: discord.Message, guild_id: int, task: str, setting: str = "th"
+        self,
+        message: discord.Message,
+        guild_id: int,
+        task: str,
+        setting: str = "th",
+        handle: DeepHandle | None = None,
     ):
         lang = resolve_lang(setting, task)
         try:
             res = await asyncio.to_thread(
-                run_deep_task, self.s, self.store, task, guild_id=guild_id, lang=setting
+                run_deep_task,
+                self.s,
+                self.store,
+                task,
+                guild_id=guild_id,
+                lang=setting,
+                **({"handle": handle} if handle is not None else {}),
             )
+        except (asyncio.CancelledError, DeepCancelled):
+            if handle is not None:
+                handle.cancel()  # make sure the CLI process is gone
+            logger.info("deep task cancelled")
+            return
         except DeepTaskError as e:
             await message.channel.send(f"❌ {e}")
             return
@@ -1188,6 +1318,7 @@ class SecretaryBot(discord.Client):
                 app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
             )
         for names, handler, desc in (
+            (CANCEL_COMMANDS, self.handle_cancel, t("cmd_cancel")),
             (CHANNELS_COMMANDS, self.handle_channels, t("cmd_channels")),
             (JOIN_COMMANDS, self.handle_join, t("cmd_join")),
             (LEAVE_COMMANDS, self.handle_leave, t("cmd_leave")),
@@ -1234,7 +1365,7 @@ class SecretaryBot(discord.Client):
         guild, channel, user = interaction.guild, interaction.channel, interaction.user
         send = interaction.response.send_message
         if guild is None or channel is None:
-            await send(t("setup_denied"), ephemeral=True)
+            await send(t("setup_denied", self._interaction_lang(interaction)), ephemeral=True)
             return
         await asyncio.to_thread(self.team.current, guild.id)
         lang = self._interaction_lang(interaction)
@@ -1278,7 +1409,7 @@ class SecretaryBot(discord.Client):
         guild, user = interaction.guild, interaction.user
         send = interaction.response.send_message
         if guild is None:
-            await send(t("setup_denied"), ephemeral=True)
+            await send(t("setup_denied", self._interaction_lang(interaction)), ephemeral=True)
             return
         await asyncio.to_thread(self.team.current, guild.id)
         lang = self._interaction_lang(interaction)
@@ -1334,7 +1465,7 @@ class SecretaryBot(discord.Client):
         guild, channel, user = interaction.guild, interaction.channel, interaction.user
         send = interaction.response.send_message
         if guild is None or channel is None:
-            await send(t("setup_denied"), ephemeral=True)
+            await send(t("setup_denied", self._interaction_lang(interaction)), ephemeral=True)
             return
         await asyncio.to_thread(self.team.current, guild.id)
         lang = self._interaction_lang(interaction)

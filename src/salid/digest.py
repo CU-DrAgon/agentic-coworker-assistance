@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import date
 
 from .i18n import t
-from .qa import baht
-from .store import Store, duplicate_extras
+from .qa import fmt_totals, money
+from .store import Store, cur_of, duplicate_extras
 
 
 def _duplicates_line(store: Store, guild_id: int, lang: str) -> str | None:
@@ -15,8 +15,11 @@ def _duplicates_line(store: Store, guild_id: int, lang: str) -> str | None:
         return None
     if not extras:
         return None
-    amount = sum(r.total or 0.0 for r in extras if r.currency == "THB")
-    return t("digest_dups", lang, n=len(extras), amount=baht(amount))
+    by: dict[str, float] = {}
+    for r in extras:  # per currency, never mixed
+        by[cur_of(r)] = by.get(cur_of(r), 0.0) + (r.total or 0.0)
+    amount = fmt_totals({c: round(v, 2) for c, v in sorted(by.items())})
+    return t("digest_dups", lang, n=len(extras), amount=amount)
 
 
 def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str = "th") -> str:
@@ -31,13 +34,20 @@ def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str =
     flagged = store.flagged(guild_id, d, d)
     lines = [
         t("digest_title", lang, day=d),
-        t("digest_total", lang, total=baht(total["total"]), count=total["count"]),
+        t(
+            "digest_total",
+            lang,
+            total=fmt_totals(total["totals_by_currency"]),
+            count=total["count"],
+        ),
         "",
         t("digest_by_category", lang),
     ]
-    lines += [f"• {g['key']}: {baht(g['total'])} ({g['count']})" for g in cats]
+    lines += [f"• {g['key']}: {fmt_totals(g['totals_by_currency'])} ({g['count']})" for g in cats]
     lines += ["", t("digest_top_vendors", lang)]
-    lines += [f"{i}. {g['key']}: {baht(g['total'])}" for i, g in enumerate(vendors, 1)]
+    lines += [
+        f"{i}. {g['key']}: {fmt_totals(g['totals_by_currency'])}" for i, g in enumerate(vendors, 1)
+    ]
     if flagged:
         lines += ["", t("digest_flagged", lang, n=len(flagged))]
         for r in flagged[:10]:
@@ -48,7 +58,9 @@ def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str =
                     lang,
                     id=r.id,
                     vendor=r.vendor or t("unknown", lang),
-                    amount=baht(r.total) if r.total is not None else t("digest_no_total", lang),
+                    amount=money(r.total, r.currency)
+                    if r.total is not None
+                    else t("digest_no_total", lang),
                     why=why,
                     who=r.submitter_name,
                 )

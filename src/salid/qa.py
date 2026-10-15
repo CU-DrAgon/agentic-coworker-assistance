@@ -35,7 +35,25 @@ THAI_DAYS = ["จันทร์", "อังคาร", "พุธ", "พฤห
 
 
 def baht(x: float) -> str:
+    """Thai baht only. For anything that may be another currency use `money`."""
     return "฿" + f"{x:,.2f}".removesuffix(".00")
+
+
+def money(amount: float, currency: str | None = "THB") -> str:
+    """Format in the receipt's own currency: ฿ for THB (also when missing), $ for USD, otherwise
+    "1,234.50 CODE". Never prefixes ฿ to another currency."""
+    cur = (currency or "THB").strip().upper() or "THB"
+    if cur == "THB":
+        return baht(amount)
+    if cur == "USD":
+        return ("-$" if amount < 0 else "$") + f"{abs(amount):,.2f}"
+    return f"{amount:,.2f} {cur}"
+
+
+def fmt_totals(by: dict[str, float]) -> str:
+    """Per-currency totals, e.g. "฿184,885.54, $131.99". Currencies are never added together."""
+    items = sorted(by.items(), key=lambda kv: (kv[0] != "THB", kv[0]))
+    return ", ".join(money(v, c) for c, v in items) or baht(0)
 
 
 class LedgerTools:
@@ -61,9 +79,9 @@ class LedgerTools:
         return self.forced is None
 
     def _fmt_summary(self, s: dict) -> dict:
-        s["total_fmt"] = baht(s["total"])
+        s["total_fmt"] = fmt_totals(s["totals_by_currency"])
         for g in s["groups"]:
-            g["total_fmt"] = baht(g["total"])
+            g["total_fmt"] = fmt_totals(g["totals_by_currency"])
         return s
 
     def spending_summary(self, start_date: str, end_date: str, group_by: str = "none") -> dict:
@@ -101,41 +119,54 @@ class LedgerTools:
     ) -> dict:
         a = self.store.summarize(self.guild_id, a_start, a_end, group_by, submitter_id=self.forced)
         b = self.store.summarize(self.guild_id, b_start, b_end, group_by, submitter_id=self.forced)
-        am, bm = (
-            {g["key"]: g["total"] for g in a["groups"]},
-            {g["key"]: g["total"] for g in b["groups"]},
-        )
+        am = {g["key"]: g["totals_by_currency"] for g in a["groups"]}
+        bm = {g["key"]: g["totals_by_currency"] for g in b["groups"]}
         rows = []
-        for k in sorted(set(am) | set(bm), key=lambda k: -(am.get(k, 0) + bm.get(k, 0))):
-            rows.append(self._delta(k, am.get(k, 0.0), bm.get(k, 0.0)))
+        for k in sorted(
+            set(am) | set(bm),
+            key=lambda k: -sum(am.get(k, {}).values()) - sum(bm.get(k, {}).values()),
+        ):
+            rows.append(self._delta(k, am.get(k, {}), bm.get(k, {})))
         return {
+            "note": "amounts are compared per currency; never add different currencies",
             "period_a": {
                 "start": a_start,
                 "end": a_end,
-                "total_fmt": baht(a["total"]),
+                "total_fmt": fmt_totals(a["totals_by_currency"]),
                 "total": a["total"],
+                "totals_by_currency": a["totals_by_currency"],
             },
             "period_b": {
                 "start": b_start,
                 "end": b_end,
-                "total_fmt": baht(b["total"]),
+                "total_fmt": fmt_totals(b["totals_by_currency"]),
                 "total": b["total"],
+                "totals_by_currency": b["totals_by_currency"],
             },
-            "overall": self._delta("all", a["total"], b["total"]),
+            "overall": self._delta("all", a["totals_by_currency"], b["totals_by_currency"]),
             "groups": rows,
         }
 
     @staticmethod
-    def _delta(key, a, b):
-        diff = round(a - b, 2)
-        return {
-            "key": key,
-            "a": a,
-            "b": b,
-            "diff": diff,
-            "diff_fmt": ("+" if diff > 0 else "-" if diff < 0 else "") + baht(abs(diff)),
-            "pct_change_vs_b": round(diff / b * 100, 1) if b else None,
-        }
+    def _delta(key, a: dict, b: dict):
+        """Per-currency difference a - b. With a single currency the flat fields a/b/diff/... are
+        also present; with several they are None and `by_currency` carries each one."""
+        by = {}
+        for cur in sorted(set(a) | set(b), key=lambda c: (c != "THB", c)):
+            av, bv = a.get(cur, 0.0), b.get(cur, 0.0)
+            diff = round(av - bv, 2)
+            by[cur] = {
+                "a": av,
+                "b": bv,
+                "diff": diff,
+                "diff_fmt": ("+" if diff > 0 else "-" if diff < 0 else "") + money(abs(diff), cur),
+                "pct_change_vs_b": round(diff / bv * 100, 1) if bv else None,
+            }
+        out = {"key": key, "by_currency": by}
+        flat = next(iter(by.values())) if len(by) == 1 else None
+        for f in ("a", "b", "diff", "diff_fmt", "pct_change_vs_b"):
+            out[f] = flat[f] if flat else None
+        return out
 
     def flagged_receipts(self) -> dict:
         rows = self.store.flagged(self.guild_id, submitter_id=self.forced)
@@ -145,14 +176,14 @@ class LedgerTools:
     def _money(amount: float | None, currency: str = "THB") -> str | None:
         if amount is None:
             return None
-        return baht(amount) if (currency or "THB") == "THB" else f"{amount:,.2f} {currency}"
+        return money(amount, currency)
 
     def _sum_fmt(self, rows) -> tuple[dict, str]:
         by: dict[str, float] = {}
         for r in rows:
             by[r.currency or "THB"] = by.get(r.currency or "THB", 0.0) + (r.total or 0.0)
         by = {c: round(v, 2) for c, v in by.items()}
-        return by, " + ".join(self._money(v, c) for c, v in by.items()) or baht(0)
+        return by, fmt_totals(by)
 
     def _dup_entry(self, r) -> dict:
         out = {
@@ -280,7 +311,8 @@ class LedgerTools:
             "date": r.effective_date,
             "vendor": r.vendor,
             "total": r.total,
-            "total_fmt": baht(r.total) if r.total is not None else None,
+            "currency": r.currency or "THB",
+            "total_fmt": money(r.total, r.currency) if r.total is not None else None,
             "category": r.category,
             "submitter": r.submitter_name,
             "confidence": r.confidence,
@@ -752,8 +784,11 @@ CAPABILITIES_PROMPT = (
     "(ไทย / English / อัตโนมัติ = ตอบตามภาษาที่พิมพ์มา) หรือแท็กแล้วพิมพ์ “speak English” / “พูดไทย”. "
     "คำสั่งทุกอย่างพิมพ์ได้ทั้งไทยและอังกฤษ\n"
     "6) งานใหญ่: พิมพ์ขึ้นต้นด้วย “งานใหญ่:” หรือ “deep task:” ตามด้วยงาน เช่น วิเคราะห์ค่าใช้จ่ายทั้งไตรมาส "
-    "สลิดจะทำงานเบื้องหลังแล้วส่งรายงานกลับมา\n"
-    "7) ผู้ช่วยทั่วไป: คุยเล่น ตอบความรู้ทั่วไป ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ\n"
+    "สลิดจะทำงานเบื้องหลังแล้วส่งรายงานกลับมา ยกเลิกงานที่กำลังทำได้ด้วย “@Salid ยกเลิกงาน” / “cancel task” หรือ /ยกเลิก /cancel "
+    "(คนที่สั่ง ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหาร)\n"
+    "7) ผู้ช่วยทั่วไป: คุยเล่น ตอบความรู้ทั่วไป ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
+    "ลบข้อความของสลิดได้โดยตอบกลับข้อความนั้นว่า “ลบ” / “delete” (ได้เฉพาะคนที่สลิดตอบ ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหาร; "
+    "คำตอบยาวที่แบ่งหลายข้อความจะถูกลบทั้งหมด) ส่วนตอบกลับใบเสร็จว่า “ลบ” คือยกเลิกใบเสร็จ (กู้คืนได้) และ “ลบข้อความ” ยกเลิกใบเสร็จพร้อมลบข้อความ\n"
     "8) ตั้งค่า: แอดมินพิมพ์ /ตั้งค่า หรือ /setup เพื่อรับลิงก์เข้าหน้าศูนย์บัญชาการ (Hub) บนเว็บ "
     "ที่เปิดปิดความสามารถ ตั้งห้อง โหมด ภาษา ระยะเวลาความจำ และดูความเคลื่อนไหวได้\n"
     "9) อ่านรูปและไฟล์ที่ส่งมา: ส่งรูป PDF หรือไฟล์ข้อความ (ไม่เกิน 4 ไฟล์) ให้สลิดโดยตรง (แท็ก เรียกชื่อ ตอบกลับสลิด ส่ง DM หรือส่งในห้องคุยกับสลิด) "
@@ -828,7 +863,8 @@ def system_prompt(
         f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
         f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD\n"
         "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
-        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วย ฿. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
+        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วยสัญลักษณ์สกุลเงินของใบเสร็จนั้น (฿ = บาท, $ = USD). "
+        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยน: ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
         "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
@@ -1090,7 +1126,8 @@ def build_file_tools(
                 receipt_id=r.id,
                 vendor=r.vendor,
                 total=r.total,
-                total_fmt=baht(r.total) if r.total is not None else None,
+                currency=r.currency or "THB",
+                total_fmt=money(r.total, r.currency) if r.total is not None else None,
                 date=r.receipt_date or r.effective_date,
                 category=r.category,
                 needs_check=res.reaction == "⚠️",

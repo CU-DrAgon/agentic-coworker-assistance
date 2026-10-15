@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>สลิด ศูนย์บัญชาการ</title>
+<title>สลิด ศูนย์บัญชาการ · Salid Command Center</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@500&amp;display=swap">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -115,160 +115,166 @@
   .empty-state { align-items: flex-start; gap: 18px; }
   .btn.big { min-height: 56px; padding: 0 32px; font-size: 18px; border-radius: 14px; }
   .steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; }
+  .langsw { display: inline-flex; border: 1px solid #4A5190; border-radius: 8px; overflow: hidden; }
+  header .langsw button, .langsw button { background: none; border: 0; color: #C5CAE8; font-size: 13px; font-weight: 600;
+    padding: 5px 10px; text-decoration: none; min-height: 32px; }
+  .langsw button[aria-pressed="true"] { background: #5865F2; color: #fff; }
+  #login .pitch .grow { flex: 1 1 auto; }
 </style>
 </head>
 <body>
 
 <div id="login" hidden>
   <section class="pitch">
-    <div style="display:flex;align-items:center;gap:12px"><span class="mark" aria-hidden="true">ส</span><strong style="font-size:22px">สลิด</strong></div>
-    <h1>เลขาของทีมคุณ ทำงานอยู่ในแชตที่ทีมใช้อยู่แล้ว</h1>
-    <p>เชื่อมต่อ Discord ครั้งเดียว แล้วเลือกว่าจะให้สลิดทำอะไรให้ทีมจากหน้านี้ ทุกอย่างทำงานบน Google Cloud</p>
+    <div style="display:flex;align-items:center;gap:12px"><span class="mark" aria-hidden="true" data-i18n="mark"></span><strong style="font-size:22px" data-i18n="brand_name"></strong><div class="grow"></div><div class="langsw" role="group" data-i18n-attr="aria-label:lang_switch_aria"><button type="button" data-lang="th">TH</button><button type="button" data-lang="en">EN</button></div></div>
+    <h1 data-i18n="login_h1"></h1>
+    <p data-i18n="login_p"></p>
     <ul>
-      <li><span>01</span>รับรูปใบเสร็จ ทำบัญชีให้อัตโนมัติ</li>
-      <li><span>02</span>ผู้บริหารถามเรื่องค่าใช้จ่าย ได้คำตอบในไม่กี่วินาที</li>
-      <li><span>03</span>อัดประชุม Google Meet แล้วส่งสรุปเข้าห้องแชต</li>
+      <li><span>01</span><span class="li-t" data-i18n="login_li1"></span></li>
+      <li><span>02</span><span class="li-t" data-i18n="login_li2"></span></li>
+      <li><span>03</span><span class="li-t" data-i18n="login_li3"></span></li>
     </ul>
   </section>
   <section class="panel">
     <div class="box">
-      <h2>เข้าสู่ระบบ</h2>
-      <p>ใช้บัญชี Google ของคุณ แล้วเลือกเซิร์ฟเวอร์ Discord ที่คุณดูแล</p>
+      <h2 data-i18n="login_h2"></h2>
+      <p data-i18n="login_p2"></p>
       <div id="gsi-button"></div>
       <div class="notice error" id="login-msg" role="alert" hidden></div>
-      <div class="notice" id="not-configured" hidden>ระบบยังไม่ได้ตั้งค่าการเข้าสู่ระบบ (ต้องกำหนด HUB_GOOGLE_CLIENT_ID) กรุณาติดต่อผู้ดูแลระบบ</div>
-      <p style="font-size:13px;color:var(--faint)">ยังไม่มีเซิร์ฟเวอร์? เข้าสู่ระบบแล้วกด <strong>เพิ่ม Salid เข้า Discord</strong> ไม่ต้องติดตั้งหรือเขียนโค้ด</p>
-      <a href="/" style="font-size:14px">กลับหน้าอัดประชุม</a>
+      <div class="notice" id="not-configured" data-i18n="not_configured" hidden></div>
+      <p style="font-size:13px;color:var(--faint)" data-i18n-html="login_p3"></p>
+      <a href="/" style="font-size:14px" data-i18n="back_recorder"></a>
     </div>
   </section>
 </div>
 
 <div id="app" hidden>
   <header>
-    <div class="brand"><span class="mark" aria-hidden="true">ส</span><strong>สลิด</strong><span>ศูนย์บัญชาการ</span></div>
+    <div class="brand"><span class="mark" aria-hidden="true" data-i18n="mark"></span><strong data-i18n="brand_name"></strong><span data-i18n="brand_sub"></span></div>
     <div class="grow"></div>
     <img class="gicon" id="gicon" alt="" hidden>
-    <select id="guild-switch" aria-label="เลือกเซิร์ฟเวอร์ Discord" hidden></select>
+    <select id="guild-switch" data-i18n-attr="aria-label:guild_switch_aria" hidden></select>
     <span class="who" id="who"></span>
-    <button type="button" id="signout">ออกจากระบบ</button>
+    <div class="langsw" role="group" data-i18n-attr="aria-label:lang_switch_aria"><button type="button" data-lang="th">TH</button><button type="button" data-lang="en">EN</button></div>
+    <button type="button" id="signout" data-i18n="signout"></button>
   </header>
   <div class="layout">
-    <nav aria-label="เมนู">
-      <a href="#channels">ภาพรวม</a>
-      <a href="#channels">ช่องทางแชต</a>
-      <a href="#hidden-channels">ห้องที่สลิดมองไม่เห็น</a>
-      <a href="#skills">สลิดทำอะไรให้ทีม</a>
-      <a href="#command">สั่งสลิด</a>
-      <a href="#activity">กิจกรรมล่าสุด</a>
-      <a href="#people">ใครเห็นอะไร</a>
+    <nav data-i18n-attr="aria-label:nav_aria">
+      <a href="#channels" data-i18n="nav_overview"></a>
+      <a href="#channels" data-i18n="nav_channels"></a>
+      <a href="#hidden-channels" data-i18n="nav_hidden"></a>
+      <a href="#skills" data-i18n="nav_skills"></a>
+      <a href="#command" data-i18n="nav_command"></a>
+      <a href="#activity" data-i18n="nav_activity"></a>
+      <a href="#people" data-i18n="nav_people"></a>
     </nav>
     <main>
-      <h1>สวัสดีครับ วันนี้ให้สลิดช่วยอะไรดี</h1>
+      <h1 data-i18n="hello"></h1>
       <div class="notice error" id="app-msg" role="alert" hidden></div>
       <div class="notice" id="link-msg" role="status" hidden></div>
 
       <section class="card empty-state" id="no-guild" aria-labelledby="ng-h" hidden>
-        <h2 id="ng-h">ยังไม่มีเซิร์ฟเวอร์ที่เชื่อมกับบัญชีนี้</h2>
-        <a class="btn big discord" id="invite-big" href="#" target="_blank" rel="noopener" hidden>เพิ่ม Salid เข้า Discord</a>
-        <p id="invite-big-soon" class="hint" hidden>ยังไม่ได้ตั้งค่าแอป Discord (SALID_DISCORD_CLIENT_ID)</p>
+        <h2 id="ng-h" data-i18n="ng_h"></h2>
+        <a class="btn big discord" id="invite-big" href="#" target="_blank" rel="noopener" data-i18n="invite_big" hidden></a>
+        <p id="invite-big-soon" class="hint" data-i18n="discord_not_set" hidden></p>
         <ol class="steps">
-          <li>เพิ่ม Salid เข้าเซิร์ฟเวอร์</li>
-          <li>พิมพ์ <strong>/ตั้งค่า</strong> ใน Discord แล้วกดลิงก์ที่ได้</li>
+          <li data-i18n="ng_step1"></li>
+          <li data-i18n-html="ng_step2"></li>
         </ol>
-        <span class="hint">เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์เท่านั้นที่ขอลิงก์ได้ ลิงก์ใช้ได้ครั้งเดียวและหมดอายุใน 15 นาที</span>
+        <span class="hint" data-i18n="ng_hint"></span>
       </section>
 
       <div id="guild-view" hidden>
 
       <section class="card" id="channels" aria-labelledby="ch-h">
-        <h2 id="ch-h">ช่องทางที่เชื่อมต่อ</h2>
+        <h2 id="ch-h" data-i18n="ch_h"></h2>
         <div class="channels">
           <div class="ch">
-            <div class="top"><strong>Discord</strong><span class="pill ok" id="guild-pill">พร้อมใช้</span></div>
-            <p id="guild-name">เซิร์ฟเวอร์ที่เชื่อมอยู่</p>
-            <a class="btn discord" id="invite" href="#" target="_blank" rel="noopener" hidden>เพิ่ม Salid เข้าเซิร์ฟเวอร์อื่น</a>
-            <p id="invite-soon" hidden>ยังไม่ได้ตั้งค่าแอป Discord (SALID_DISCORD_CLIENT_ID)</p>
+            <div class="top"><strong>Discord</strong><span class="pill ok" id="guild-pill" data-i18n="ready"></span></div>
+            <p id="guild-name" data-i18n="guild_name_default"></p>
+            <a class="btn discord" id="invite" href="#" target="_blank" rel="noopener" data-i18n="invite_other" hidden></a>
+            <p id="invite-soon" data-i18n="discord_not_set" hidden></p>
           </div>
           <div class="ch">
-            <div class="top"><strong>Google Meet</strong><span class="pill ok">พร้อมใช้</span></div>
-            <p>อัดประชุมจากเบราว์เซอร์ แล้วส่งสรุปเข้า Discord</p>
-            <a href="/" style="font-weight:600">เริ่มอัดประชุม</a>
+            <div class="top"><strong>Google Meet</strong><span class="pill ok" data-i18n="ready"></span></div>
+            <p data-i18n="meet_p"></p>
+            <a href="/" style="font-weight:600" data-i18n="meet_start"></a>
           </div>
           <div class="ch soon">
-            <div class="top"><strong>LINE</strong><span class="pill">เร็วๆ นี้</span></div>
-            <p>ใช้สลิดตัวเดิมผ่าน LINE กลุ่มของทีม</p>
+            <div class="top"><strong>LINE</strong><span class="pill" data-i18n="soon"></span></div>
+            <p data-i18n="line_p"></p>
           </div>
         </div>
       </section>
 
       <section class="card" id="hidden-channels" aria-labelledby="hc-h">
-        <h2 id="hc-h">ห้องที่สลิดยังมองไม่เห็น <span class="pill warn" id="hc-count" hidden></span></h2>
-        <div id="hc-list"><div class="empty">กำลังโหลด...</div></div>
+        <h2 id="hc-h"><span data-i18n="hc_h"></span> <span class="pill warn" id="hc-count" hidden></span></h2>
+        <div id="hc-list"><div class="empty" data-i18n="loading"></div></div>
         <div id="hc-help" hidden>
-          <strong>วิธีให้สลิดเข้าห้อง</strong>
+          <strong data-i18n="hc_how"></strong>
           <ol class="steps">
-            <li>เปิด Discord แล้วกดชื่อห้องที่ต้องการ แล้วกด ⚙️ (Edit Channel)</li>
-            <li>ไปที่ Permissions → กด + (Add members or roles)</li>
-            <li>พิมพ์ Salid แล้วเลือก</li>
-            <li>ติ๊ก ✅ View Channel และ ✅ Read Message History แล้วกด Save</li>
+            <li data-i18n="hc_s1"></li>
+            <li data-i18n="hc_s2"></li>
+            <li data-i18n="hc_s3"></li>
+            <li data-i18n="hc_s4"></li>
           </ol>
-          <span class="hint">สลิดจะเริ่มอ่านห้องนั้นและประวัติย้อนหลังให้เองทันที ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มครับ</span>
+          <span class="hint" data-i18n="hc_hint1"></span>
         </div>
-        <span class="hint">รายการนี้อัปเดตเองภายใน 1 นาทีหลังแก้สิทธิ์ใน Discord (โหลดหน้าใหม่เพื่อดูล่าสุด)</span>
+        <span class="hint" data-i18n="hc_hint2"></span>
       </section>
 
       <section class="card" id="skills" aria-labelledby="sk-h">
-        <h2 id="sk-h">สลิดทำอะไรให้ทีมนี้</h2>
+        <h2 id="sk-h" data-i18n="sk_h"></h2>
         <div id="features"></div>
         <div class="fields">
-          <label>ห้องรับใบเสร็จเพิ่มเติม <div class="checks" id="receipt-ids"></div><small>ห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” รับใบเสร็จได้อยู่แล้วโดยไม่ต้องเลือก</small></label>
-          <label>ห้องตอบทุกข้อความ <div class="checks" id="ask-ids"></div><small>สลิดตอบทุกข้อความในห้องนี้ (เหมือนโหมด 💬) ห้องชื่อ “คุยกับน้องสลิด” เป็นแบบนี้อยู่แล้ว</small></label>
-          <label>ห้องสรุปรายวัน <select class="field" id="digest-id"></select></label>
-          <label>เก็บความจำของทีมไว้กี่วัน
-            <select id="mem-days"><option value="7">7 วัน</option><option value="30">30 วัน</option><option value="90">90 วัน</option><option value="180">180 วัน</option><option value="365">365 วัน</option><option value="custom">กำหนดเอง</option></select>
+          <label><span data-i18n="receipt_ids_l"></span> <div class="checks" id="receipt-ids"></div><small data-i18n="receipt_ids_s"></small></label>
+          <label><span data-i18n="ask_ids_l"></span> <div class="checks" id="ask-ids"></div><small data-i18n="ask_ids_s"></small></label>
+          <label><span data-i18n="digest_id_l"></span> <select class="field" id="digest-id"></select></label>
+          <label><span data-i18n="mem_days_l"></span>
+            <select id="mem-days"><option value="7" data-i18n="days_n" data-n="7"></option><option value="30" data-i18n="days_n" data-n="30"></option><option value="90" data-i18n="days_n" data-n="90"></option><option value="180" data-i18n="days_n" data-n="180"></option><option value="365" data-i18n="days_n" data-n="365"></option><option value="custom" data-i18n="custom"></option></select>
             <input type="number" id="mem-days-custom" min="1" max="3650" step="1" hidden>
-            <small>1-3650 วัน ใช้กับข้อความเก่าด้วย (ล้างวันละครั้ง) สลิดนำเข้าประวัติข้อความย้อนหลังตามจำนวนวันนี้ด้วย</small>
+            <small data-i18n="mem_days_s"></small>
             <small id="mem-progress"></small></label>
-          <label>เวลาส่งสรุปรายวัน <input type="time" id="digest-time" value="18:00"><small>เวลาไทย (Asia/Bangkok)</small></label>
-          <label>ชื่อ role ผู้บริหาร <input type="text" id="exec-roles" placeholder="ผู้บริหาร, Executive"><small>คั่นด้วยจุลภาค เจ้าของและแอดมินของเซิร์ฟเวอร์เป็นผู้บริหารอยู่แล้ว</small></label>
+          <label><span data-i18n="digest_time_l"></span> <input type="time" id="digest-time" value="18:00"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="exec_roles_l"></span> <input type="text" id="exec-roles" data-i18n-attr="placeholder:exec_roles_ph"><small data-i18n="exec_roles_s"></small></label>
         </div>
-        <h3 id="modes-h" style="margin:18px 0 6px;font-size:1rem">โหมดของแต่ละห้อง</h3>
+        <h3 id="modes-h" style="margin:18px 0 6px;font-size:1rem" data-i18n="modes_h"></h3>
         <div class="fields" id="modes">
-          <label>โหมดเริ่มต้นของเซิร์ฟเวอร์ <select class="field" id="default-mode"></select><small>ใช้กับห้องที่ไม่ได้เลือกโหมดเฉพาะ</small></label>
-          <label>ภาษาที่สลิดตอบ (เริ่มต้นของเซิร์ฟเวอร์) <select class="field" id="default-language"></select><small>ใช้กับห้องที่ไม่ได้เลือกภาษาเฉพาะ · อัตโนมัติ = ตอบตามภาษาที่คนพิมพ์มา</small></label>
+          <label><span data-i18n="default_mode_l"></span> <select class="field" id="default-mode"></select><small data-i18n="default_mode_s"></small></label>
+          <label><span data-i18n="default_lang_l"></span> <select class="field" id="default-language"></select><small data-i18n="default_lang_s"></small></label>
           <div id="channel-modes" class="fields"></div>
         </div>
-        <small class="hint">🔇 ปิด = สลิดไม่ยุ่งกับห้องนี้ · 👂 ฟังเงียบ = อ่านใบเสร็จแล้วแปะอีโมจิเท่านั้น · 🙋 เรียกแล้วคุย = ตอบเมื่อถูกแท็กหรือเรียกชื่อ · 🎧 ร่วมวง = เหมือนเรียกแล้วคุย และเข้าร่วมเองเมื่อมีคำถามที่ช่วยได้ · 💬 ตอบทุกข้อความ</small>
-        <span class="hint" id="no-channels" hidden>สลิดยังไม่ได้ส่งรายชื่อห้องของเซิร์ฟเวอร์นี้มา ลองรอสักครู่แล้วโหลดหน้าใหม่</span>
+        <small class="hint" data-i18n="modes_hint"></small>
+        <span class="hint" id="no-channels" data-i18n="no_channels" hidden></span>
         <div class="row">
-          <button type="button" class="btn" id="save">บันทึกการตั้งค่า</button>
+          <button type="button" class="btn" id="save" data-i18n="save"></button>
           <span class="hint" id="save-msg" role="status" aria-live="polite"></span>
         </div>
-        <span class="hint">สลิดอ่านการตั้งค่าใหม่ภายในประมาณ 1 นาที</span>
+        <span class="hint" data-i18n="save_hint"></span>
       </section>
 
       <section class="card" id="command" aria-labelledby="cm-h">
-        <h2 id="cm-h">สั่งสลิด</h2>
-        <div class="chat" id="chat" aria-live="polite"><div class="empty" id="chat-empty">ลองถาม เช่น "เดือนนี้ค่าวัตถุดิบเท่าไร ซื้อร้านไหนเยอะสุด"</div></div>
+        <h2 id="cm-h" data-i18n="cm_h"></h2>
+        <div class="chat" id="chat" aria-live="polite"><div class="empty" id="chat-empty" data-i18n="chat_empty"></div></div>
         <form class="row" id="ask-form">
-          <label for="ask" style="position:absolute;width:1px;height:1px;overflow:hidden">พิมพ์คำถาม</label>
-          <input type="text" id="ask" maxlength="1000" placeholder="ถามหรือสั่งงาน เช่น สรุปบัญชีสัปดาห์นี้" style="flex:1 1 280px;width:auto" autocomplete="off">
-          <button type="submit" class="btn" id="ask-btn">ส่ง</button>
+          <label for="ask" style="position:absolute;width:1px;height:1px;overflow:hidden" data-i18n="ask_label"></label>
+          <input type="text" id="ask" maxlength="1000" data-i18n-attr="placeholder:ask_ph" style="flex:1 1 280px;width:auto" autocomplete="off">
+          <button type="submit" class="btn" id="ask-btn" data-i18n="send"></button>
         </form>
-        <span class="hint">คำตอบเดียวกับที่ได้จากการถามสลิดใน Discord ในฐานะผู้บริหาร (เห็นบัญชีทั้งเซิร์ฟเวอร์นี้) งานใหญ่หลายขั้นตอนสั่งผ่าน Discord</span>
+        <span class="hint" data-i18n="ask_hint"></span>
       </section>
 
       <div class="cols">
         <section class="card" id="activity" aria-labelledby="ac-h">
-          <h2 id="ac-h">กิจกรรมล่าสุด</h2>
-          <div id="activity-list"><div class="empty">กำลังโหลด...</div></div>
+          <h2 id="ac-h" data-i18n="ac_h"></h2>
+          <div id="activity-list"><div class="empty" data-i18n="loading"></div></div>
         </section>
         <section class="card" id="people" aria-labelledby="pp-h">
-          <h2 id="pp-h">ใครเห็นอะไร</h2>
-          <div class="who-row"><strong>ผู้บริหาร</strong><span>เจ้าของเซิร์ฟเวอร์ แอดมิน ผู้ที่จัดการเซิร์ฟเวอร์ได้ หรือผู้มี role ตามที่ตั้งไว้ด้านบน เห็นบัญชีทั้งเซิร์ฟเวอร์ ถามได้ทุกเรื่อง สั่งงานใหญ่ได้</span></div>
-          <div class="who-row"><strong>พนักงาน</strong><span>ส่งใบเสร็จได้ เห็นเฉพาะใบเสร็จที่ตัวเองส่ง</span></div>
-          <div class="who-row"><strong>แยกตามเซิร์ฟเวอร์</strong><span>ข้อมูลของแต่ละเซิร์ฟเวอร์แยกจากกันทั้งหมด เซิร์ฟเวอร์อื่นมองไม่เห็นบัญชีของคุณ</span></div>
-          <div class="who-row"><strong>ผู้ดูแลหน้านี้</strong><span>บัญชี Google ที่เชื่อมผ่านคำสั่ง /ตั้งค่า เห็นภาพรวมและถามสลิดได้เหมือนผู้บริหาร</span></div>
+          <h2 id="pp-h" data-i18n="pp_h"></h2>
+          <div class="who-row"><strong data-i18n="pp1_t"></strong><span data-i18n="pp1_d"></span></div>
+          <div class="who-row"><strong data-i18n="pp2_t"></strong><span data-i18n="pp2_d"></span></div>
+          <div class="who-row"><strong data-i18n="pp3_t"></strong><span data-i18n="pp3_d"></span></div>
+          <div class="who-row"><strong data-i18n="pp4_t"></strong><span data-i18n="pp4_d"></span></div>
         </section>
       </div>
       </div>
@@ -276,29 +282,736 @@
   </div>
 </div>
 
-
+<script type="application/json" id="i18n-data">{
+ "title": {
+  "th": "สลิด ศูนย์บัญชาการ",
+  "en": "Salid Command Center"
+ },
+ "mark": {
+  "th": "ส",
+  "en": "S"
+ },
+ "brand_name": {
+  "th": "สลิด",
+  "en": "Salid"
+ },
+ "brand_sub": {
+  "th": "ศูนย์บัญชาการ",
+  "en": "Command center"
+ },
+ "login_h1": {
+  "th": "เลขาของทีมคุณ ทำงานอยู่ในแชตที่ทีมใช้อยู่แล้ว",
+  "en": "Your team's secretary, working inside the chat your team already uses"
+ },
+ "login_p": {
+  "th": "เชื่อมต่อ Discord ครั้งเดียว แล้วเลือกว่าจะให้สลิดทำอะไรให้ทีมจากหน้านี้ ทุกอย่างทำงานบน Google Cloud",
+  "en": "Connect Discord once, then choose from this page what Salid does for your team. Everything runs on Google Cloud."
+ },
+ "login_li1": {
+  "th": "รับรูปใบเสร็จ ทำบัญชีให้อัตโนมัติ",
+  "en": "Takes receipt photos and keeps the books automatically"
+ },
+ "login_li2": {
+  "th": "ผู้บริหารถามเรื่องค่าใช้จ่าย ได้คำตอบในไม่กี่วินาที",
+  "en": "Executives ask about spending and get answers in seconds"
+ },
+ "login_li3": {
+  "th": "อัดประชุม Google Meet แล้วส่งสรุปเข้าห้องแชต",
+  "en": "Record a Google Meet and post the summary to the chat channel"
+ },
+ "login_h2": {
+  "th": "เข้าสู่ระบบ",
+  "en": "Sign in"
+ },
+ "login_p2": {
+  "th": "ใช้บัญชี Google ของคุณ แล้วเลือกเซิร์ฟเวอร์ Discord ที่คุณดูแล",
+  "en": "Use your Google account, then choose the Discord server you manage"
+ },
+ "not_configured": {
+  "th": "ระบบยังไม่ได้ตั้งค่าการเข้าสู่ระบบ (ต้องกำหนด HUB_GOOGLE_CLIENT_ID) กรุณาติดต่อผู้ดูแลระบบ",
+  "en": "Sign-in is not configured yet (HUB_GOOGLE_CLIENT_ID must be set). Please contact the administrator."
+ },
+ "login_p3": {
+  "th": "ยังไม่มีเซิร์ฟเวอร์? เข้าสู่ระบบแล้วกด <strong>เพิ่ม Salid เข้า Discord<\/strong> ไม่ต้องติดตั้งหรือเขียนโค้ด",
+  "en": "No server yet? Sign in and press <strong>Add Salid to Discord<\/strong>. No installation or coding needed."
+ },
+ "back_recorder": {
+  "th": "กลับหน้าอัดประชุม",
+  "en": "Back to the meeting recorder"
+ },
+ "lang_switch_aria": {
+  "th": "ภาษา / Language",
+  "en": "ภาษา / Language"
+ },
+ "guild_switch_aria": {
+  "th": "เลือกเซิร์ฟเวอร์ Discord",
+  "en": "Choose a Discord server"
+ },
+ "signout": {
+  "th": "ออกจากระบบ",
+  "en": "Sign out"
+ },
+ "nav_aria": {
+  "th": "เมนู",
+  "en": "Menu"
+ },
+ "nav_overview": {
+  "th": "ภาพรวม",
+  "en": "Overview"
+ },
+ "nav_channels": {
+  "th": "ช่องทางแชต",
+  "en": "Chat channels"
+ },
+ "nav_hidden": {
+  "th": "ห้องที่สลิดมองไม่เห็น",
+  "en": "Channels Salid cannot see"
+ },
+ "nav_skills": {
+  "th": "สลิดทำอะไรให้ทีม",
+  "en": "What Salid does for the team"
+ },
+ "nav_command": {
+  "th": "สั่งสลิด",
+  "en": "Ask Salid"
+ },
+ "nav_activity": {
+  "th": "กิจกรรมล่าสุด",
+  "en": "Recent activity"
+ },
+ "nav_people": {
+  "th": "ใครเห็นอะไร",
+  "en": "Who sees what"
+ },
+ "hello": {
+  "th": "สวัสดีครับ วันนี้ให้สลิดช่วยอะไรดี",
+  "en": "Hello! What can Salid help you with today?"
+ },
+ "ng_h": {
+  "th": "ยังไม่มีเซิร์ฟเวอร์ที่เชื่อมกับบัญชีนี้",
+  "en": "No server is linked to this account yet"
+ },
+ "invite_big": {
+  "th": "เพิ่ม Salid เข้า Discord",
+  "en": "Add Salid to Discord"
+ },
+ "discord_not_set": {
+  "th": "ยังไม่ได้ตั้งค่าแอป Discord (SALID_DISCORD_CLIENT_ID)",
+  "en": "The Discord app is not configured yet (SALID_DISCORD_CLIENT_ID)"
+ },
+ "ng_step1": {
+  "th": "เพิ่ม Salid เข้าเซิร์ฟเวอร์",
+  "en": "Add Salid to your server"
+ },
+ "ng_step2": {
+  "th": "พิมพ์ <strong>/ตั้งค่า<\/strong> ใน Discord แล้วกดลิงก์ที่ได้",
+  "en": "Type <strong>/setup<\/strong> in Discord and open the link you get"
+ },
+ "ng_hint": {
+  "th": "เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์เท่านั้นที่ขอลิงก์ได้ ลิงก์ใช้ได้ครั้งเดียวและหมดอายุใน 15 นาที",
+  "en": "Only the server owner or people who can manage the server can request a link. The link works once and expires in 15 minutes."
+ },
+ "ch_h": {
+  "th": "ช่องทางที่เชื่อมต่อ",
+  "en": "Connected channels"
+ },
+ "ready": {
+  "th": "พร้อมใช้",
+  "en": "Ready"
+ },
+ "guild_left": {
+  "th": "สลิดออกจากเซิร์ฟเวอร์แล้ว",
+  "en": "Salid has left this server"
+ },
+ "guild_name_default": {
+  "th": "เซิร์ฟเวอร์ที่เชื่อมอยู่",
+  "en": "Linked server"
+ },
+ "invite_other": {
+  "th": "เพิ่ม Salid เข้าเซิร์ฟเวอร์อื่น",
+  "en": "Add Salid to another server"
+ },
+ "meet_p": {
+  "th": "อัดประชุมจากเบราว์เซอร์ แล้วส่งสรุปเข้า Discord",
+  "en": "Record a meeting from the browser and post the summary to Discord"
+ },
+ "meet_start": {
+  "th": "เริ่มอัดประชุม",
+  "en": "Start recording a meeting"
+ },
+ "soon": {
+  "th": "เร็วๆ นี้",
+  "en": "Coming soon"
+ },
+ "line_p": {
+  "th": "ใช้สลิดตัวเดิมผ่าน LINE กลุ่มของทีม",
+  "en": "Use the same Salid in your team's LINE group"
+ },
+ "hc_h": {
+  "th": "ห้องที่สลิดยังมองไม่เห็น",
+  "en": "Channels Salid cannot see yet"
+ },
+ "loading": {
+  "th": "กำลังโหลด...",
+  "en": "Loading..."
+ },
+ "hc_count": {
+  "th": "{n} ห้อง",
+  "en": "{n} channels"
+ },
+ "hc_how": {
+  "th": "วิธีให้สลิดเข้าห้อง",
+  "en": "How to let Salid into a channel"
+ },
+ "hc_s1": {
+  "th": "เปิด Discord แล้วกดชื่อห้องที่ต้องการ แล้วกด ⚙️ (Edit Channel)",
+  "en": "Open Discord, click the channel name, then click ⚙️ (Edit Channel)"
+ },
+ "hc_s2": {
+  "th": "ไปที่ Permissions → กด + (Add members or roles)",
+  "en": "Go to Permissions → click + (Add members or roles)"
+ },
+ "hc_s3": {
+  "th": "พิมพ์ Salid แล้วเลือก",
+  "en": "Type Salid and select it"
+ },
+ "hc_s4": {
+  "th": "ติ๊ก ✅ View Channel และ ✅ Read Message History แล้วกด Save",
+  "en": "Tick ✅ View Channel and ✅ Read Message History, then click Save"
+ },
+ "hc_hint1": {
+  "th": "สลิดจะเริ่มอ่านห้องนั้นและประวัติย้อนหลังให้เองทันที ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มครับ",
+  "en": "Salid will start reading that channel and its history right away. For private channels you do not want Salid to see, simply do not add it."
+ },
+ "hc_hint2": {
+  "th": "รายการนี้อัปเดตเองภายใน 1 นาทีหลังแก้สิทธิ์ใน Discord (โหลดหน้าใหม่เพื่อดูล่าสุด)",
+  "en": "This list updates by itself within 1 minute after you change permissions in Discord (reload the page to see the latest)"
+ },
+ "hc_none": {
+  "th": "สลิดเห็นทุกห้องแล้วครับ 👍",
+  "en": "Salid can see every channel 👍"
+ },
+ "hc_nolist": {
+  "th": "ยังไม่มีรายชื่อห้องจากสลิด",
+  "en": "Salid has not sent a channel list yet"
+ },
+ "hc_why_hidden": {
+  "th": "ไม่เห็นห้อง",
+  "en": "cannot see the channel"
+ },
+ "hc_why_history": {
+  "th": "อ่านย้อนหลังไม่ได้",
+  "en": "cannot read history"
+ },
+ "sk_h": {
+  "th": "สลิดทำอะไรให้ทีมนี้",
+  "en": "What Salid does for this team"
+ },
+ "receipt_ids_l": {
+  "th": "ห้องรับใบเสร็จเพิ่มเติม",
+  "en": "Extra receipt channels"
+ },
+ "receipt_ids_s": {
+  "th": "ห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” รับใบเสร็จได้อยู่แล้วโดยไม่ต้องเลือก",
+  "en": "Channels with “ใบเสร็จ” or “receipt” in the name already accept receipts without being selected"
+ },
+ "ask_ids_l": {
+  "th": "ห้องตอบทุกข้อความ",
+  "en": "Reply-to-everything channels"
+ },
+ "ask_ids_s": {
+  "th": "สลิดตอบทุกข้อความในห้องนี้ (เหมือนโหมด 💬) ห้องชื่อ “คุยกับน้องสลิด” เป็นแบบนี้อยู่แล้ว",
+  "en": "Salid replies to every message in these channels (like the 💬 mode). A channel named “คุยกับน้องสลิด” already works this way"
+ },
+ "digest_id_l": {
+  "th": "ห้องสรุปรายวัน",
+  "en": "Daily summary channel"
+ },
+ "digest_none": {
+  "th": "ไม่ส่งสรุปรายวัน",
+  "en": "No daily summary"
+ },
+ "mem_days_l": {
+  "th": "เก็บความจำของทีมไว้กี่วัน",
+  "en": "How many days to keep team memory"
+ },
+ "days_n": {
+  "th": "{n} วัน",
+  "en": "{n} days"
+ },
+ "custom": {
+  "th": "กำหนดเอง",
+  "en": "Custom"
+ },
+ "mem_days_s": {
+  "th": "1-3650 วัน ใช้กับข้อความเก่าด้วย (ล้างวันละครั้ง) สลิดนำเข้าประวัติข้อความย้อนหลังตามจำนวนวันนี้ด้วย",
+  "en": "1-3650 days. Applies to old messages too (cleaned once a day). Salid also imports past message history for this many days."
+ },
+ "mem_progress": {
+  "th": "นำเข้าประวัติแล้ว {done}/{total} ห้อง, {messages} ข้อความ, รูป {images}/{cap}",
+  "en": "History imported: {done}/{total} channels, {messages} messages, images {images}/{cap}"
+ },
+ "digest_time_l": {
+  "th": "เวลาส่งสรุปรายวัน",
+  "en": "Daily summary time"
+ },
+ "digest_time_s": {
+  "th": "เวลาไทย (Asia/Bangkok)",
+  "en": "Thailand time (Asia/Bangkok)"
+ },
+ "exec_roles_l": {
+  "th": "ชื่อ role ผู้บริหาร",
+  "en": "Executive role names"
+ },
+ "exec_roles_ph": {
+  "th": "ผู้บริหาร, Executive",
+  "en": "ผู้บริหาร, Executive"
+ },
+ "exec_roles_s": {
+  "th": "คั่นด้วยจุลภาค เจ้าของและแอดมินของเซิร์ฟเวอร์เป็นผู้บริหารอยู่แล้ว",
+  "en": "Separate with commas. The server owner and admins are already executives."
+ },
+ "modes_h": {
+  "th": "โหมดของแต่ละห้อง",
+  "en": "Mode of each channel"
+ },
+ "default_mode_l": {
+  "th": "โหมดเริ่มต้นของเซิร์ฟเวอร์",
+  "en": "Server default mode"
+ },
+ "default_mode_s": {
+  "th": "ใช้กับห้องที่ไม่ได้เลือกโหมดเฉพาะ",
+  "en": "Used for channels without their own mode"
+ },
+ "default_lang_l": {
+  "th": "ภาษาที่สลิดตอบ (เริ่มต้นของเซิร์ฟเวอร์)",
+  "en": "Language Salid replies in (server default)"
+ },
+ "default_lang_s": {
+  "th": "ใช้กับห้องที่ไม่ได้เลือกภาษาเฉพาะ · อัตโนมัติ = ตอบตามภาษาที่คนพิมพ์มา",
+  "en": "Used for channels without their own language · Auto = reply in the language people type in"
+ },
+ "modes_hint": {
+  "th": "🔇 ปิด = สลิดไม่ยุ่งกับห้องนี้ · 👂 ฟังเงียบ = อ่านใบเสร็จแล้วแปะอีโมจิเท่านั้น · 🙋 เรียกแล้วคุย = ตอบเมื่อถูกแท็กหรือเรียกชื่อ · 🎧 ร่วมวง = เหมือนเรียกแล้วคุย และเข้าร่วมเองเมื่อมีคำถามที่ช่วยได้ · 💬 ตอบทุกข้อความ",
+  "en": "🔇 Off = Salid stays out of the channel · 👂 Listen = only reads receipts and adds an emoji · 🙋 Call = replies when tagged or called by name · 🎧 Join = like Call, and joins in by itself when it can help with a question · 💬 Chat = replies to every message"
+ },
+ "mode_off": {
+  "th": "🔇 ปิด",
+  "en": "🔇 Off"
+ },
+ "mode_listen": {
+  "th": "👂 ฟังเงียบ",
+  "en": "👂 Listen"
+ },
+ "mode_call": {
+  "th": "🙋 เรียกแล้วคุย",
+  "en": "🙋 Call"
+ },
+ "mode_join": {
+  "th": "🎧 ร่วมวง",
+  "en": "🎧 Join"
+ },
+ "mode_chat": {
+  "th": "💬 ตอบทุกข้อความ",
+  "en": "💬 Chat"
+ },
+ "lang_th": {
+  "th": "ไทย",
+  "en": "Thai"
+ },
+ "lang_en": {
+  "th": "English",
+  "en": "English"
+ },
+ "lang_auto": {
+  "th": "อัตโนมัติ (ตามภาษาที่พิมพ์)",
+  "en": "Auto (follow the language typed)"
+ },
+ "lang_opt_default": {
+  "th": "ภาษา: ตามค่าเริ่มต้น",
+  "en": "Language: server default"
+ },
+ "mode_opt_default": {
+  "th": "ตามค่าเริ่มต้น",
+  "en": "Server default"
+ },
+ "no_channels": {
+  "th": "สลิดยังไม่ได้ส่งรายชื่อห้องของเซิร์ฟเวอร์นี้มา ลองรอสักครู่แล้วโหลดหน้าใหม่",
+  "en": "Salid has not sent this server's channel list yet. Wait a moment and reload the page."
+ },
+ "save": {
+  "th": "บันทึกการตั้งค่า",
+  "en": "Save settings"
+ },
+ "save_hint": {
+  "th": "สลิดอ่านการตั้งค่าใหม่ภายในประมาณ 1 นาที",
+  "en": "Salid picks up new settings within about 1 minute"
+ },
+ "saving": {
+  "th": "กำลังบันทึก...",
+  "en": "Saving..."
+ },
+ "saved": {
+  "th": "บันทึกแล้ว",
+  "en": "Saved"
+ },
+ "save_failed": {
+  "th": "บันทึกไม่สำเร็จ: {err}",
+  "en": "Could not save: {err}"
+ },
+ "no_channels_yet": {
+  "th": "ยังไม่มีห้อง",
+  "en": "No channels yet"
+ },
+ "channel_gone": {
+  "th": "{id} (ไม่พบห้องนี้แล้ว)",
+  "en": "{id} (this channel no longer exists)"
+ },
+ "cm_h": {
+  "th": "สั่งสลิด",
+  "en": "Ask Salid"
+ },
+ "chat_empty": {
+  "th": "ลองถาม เช่น \"เดือนนี้ค่าวัตถุดิบเท่าไร ซื้อร้านไหนเยอะสุด\"",
+  "en": "Try asking, e.g. \"How much did we spend on ingredients this month, and which shop did we buy from most?\""
+ },
+ "ask_label": {
+  "th": "พิมพ์คำถาม",
+  "en": "Type a question"
+ },
+ "ask_ph": {
+  "th": "ถามหรือสั่งงาน เช่น สรุปบัญชีสัปดาห์นี้",
+  "en": "Ask or give an order, e.g. summarize this week's expenses"
+ },
+ "send": {
+  "th": "ส่ง",
+  "en": "Send"
+ },
+ "ask_hint": {
+  "th": "คำตอบเดียวกับที่ได้จากการถามสลิดใน Discord ในฐานะผู้บริหาร (เห็นบัญชีทั้งเซิร์ฟเวอร์นี้) งานใหญ่หลายขั้นตอนสั่งผ่าน Discord",
+  "en": "The same answers you get by asking Salid in Discord as an executive (sees the whole server's ledger). Big multi-step tasks are started from Discord."
+ },
+ "thinking": {
+  "th": "สลิดกำลังคิด...",
+  "en": "Salid is thinking..."
+ },
+ "ask_failed": {
+  "th": "ตอบไม่ได้ในตอนนี้ ลองใหม่อีกครั้งครับ",
+  "en": "Cannot answer right now. Please try again."
+ },
+ "ac_h": {
+  "th": "กิจกรรมล่าสุด",
+  "en": "Recent activity"
+ },
+ "no_activity": {
+  "th": "ยังไม่มีกิจกรรม",
+  "en": "No activity yet"
+ },
+ "act_receipt": {
+  "th": "ใบเสร็จ {vendor} {amount}",
+  "en": "Receipt {vendor} {amount}"
+ },
+ "act_meeting": {
+  "th": "ประชุม \"{title}\"",
+  "en": "Meeting \"{title}\""
+ },
+ "amount_unknown": {
+  "th": "ไม่ทราบยอด",
+  "en": "amount unknown"
+ },
+ "vendor_unknown": {
+  "th": "ไม่ทราบร้าน",
+  "en": "unknown shop"
+ },
+ "st_ok": {
+  "th": "บันทึกแล้ว",
+  "en": "Recorded"
+ },
+ "st_review": {
+  "th": "รอตรวจ",
+  "en": "To review"
+ },
+ "st_recording": {
+  "th": "กำลังอัด",
+  "en": "Recording"
+ },
+ "st_summarizing": {
+  "th": "กำลังสรุป",
+  "en": "Summarizing"
+ },
+ "st_done": {
+  "th": "สรุปแล้ว",
+  "en": "Summarized"
+ },
+ "st_failed": {
+  "th": "ล้มเหลว",
+  "en": "Failed"
+ },
+ "pp_h": {
+  "th": "ใครเห็นอะไร",
+  "en": "Who sees what"
+ },
+ "pp1_t": {
+  "th": "ผู้บริหาร",
+  "en": "Executives"
+ },
+ "pp1_d": {
+  "th": "เจ้าของเซิร์ฟเวอร์ แอดมิน ผู้ที่จัดการเซิร์ฟเวอร์ได้ หรือผู้มี role ตามที่ตั้งไว้ด้านบน เห็นบัญชีทั้งเซิร์ฟเวอร์ ถามได้ทุกเรื่อง สั่งงานใหญ่ได้",
+  "en": "The server owner, admins, people who can manage the server, or people with a role set above. They see the whole server's ledger, can ask anything and can start big tasks."
+ },
+ "pp2_t": {
+  "th": "พนักงาน",
+  "en": "Staff"
+ },
+ "pp2_d": {
+  "th": "ส่งใบเสร็จได้ เห็นเฉพาะใบเสร็จที่ตัวเองส่ง",
+  "en": "Can submit receipts and sees only the receipts they submitted"
+ },
+ "pp3_t": {
+  "th": "แยกตามเซิร์ฟเวอร์",
+  "en": "Separate per server"
+ },
+ "pp3_d": {
+  "th": "ข้อมูลของแต่ละเซิร์ฟเวอร์แยกจากกันทั้งหมด เซิร์ฟเวอร์อื่นมองไม่เห็นบัญชีของคุณ",
+  "en": "Each server's data is fully separate. Other servers cannot see your ledger."
+ },
+ "pp4_t": {
+  "th": "ผู้ดูแลหน้านี้",
+  "en": "Admins of this page"
+ },
+ "pp4_d": {
+  "th": "บัญชี Google ที่เชื่อมผ่านคำสั่ง /ตั้งค่า เห็นภาพรวมและถามสลิดได้เหมือนผู้บริหาร",
+  "en": "Google accounts linked with the /setup command see the overview and can ask Salid like an executive"
+ },
+ "f_receipts_n": {
+  "th": "รับใบเสร็จและทำบัญชี",
+  "en": "Receive receipts and keep the books"
+ },
+ "f_receipts_d": {
+  "th": "ส่งรูปใบเสร็จในห้อง สลิดอ่านยอดและบันทึกให้",
+  "en": "Post a receipt photo in the channel and Salid reads the amount and records it"
+ },
+ "f_receipts_w": {
+  "th": "#ใบเสร็จ",
+  "en": "#receipt"
+ },
+ "f_qa_n": {
+  "th": "ตอบคำถามเรื่องค่าใช้จ่าย",
+  "en": "Answer questions about spending"
+ },
+ "f_qa_d": {
+  "th": "ถามสลิดใน Discord แล้วได้คำตอบจากบัญชีของทีม",
+  "en": "Ask Salid in Discord and get answers from the team's ledger"
+ },
+ "f_qa_w": {
+  "th": "@Salid",
+  "en": "@Salid"
+ },
+ "f_meetings_n": {
+  "th": "ส่งสรุปประชุมเข้าแชต",
+  "en": "Post meeting summaries to chat"
+ },
+ "f_meetings_d": {
+  "th": "อัดประชุมจากหน้าเว็บ แล้วสลิดโพสต์สรุปและงานที่ต้องทำ เปิดไว้เสมอ",
+  "en": "Record a meeting from the web page and Salid posts the summary and action items. Always on."
+ },
+ "f_meetings_w": {
+  "th": "#ประชุม",
+  "en": "#meetings"
+ },
+ "f_voice_meetings_n": {
+  "th": "ฟังประชุมในห้องเสียง",
+  "en": "Listen to meetings in voice channels"
+ },
+ "f_voice_meetings_d": {
+  "th": "พิมพ์ /เข้าประชุม ให้สลิดเข้าห้องเสียง ถอดว่าใครพูดอะไร ตอบเมื่อถูกเรียก และสรุปตอนจบ",
+  "en": "Type /join and Salid enters the voice channel, transcribes who said what, answers when called and summarizes at the end"
+ },
+ "f_voice_meetings_w": {
+  "th": "/เข้าประชุม",
+  "en": "/join"
+ },
+ "f_digest_n": {
+  "th": "สรุปรายวันให้ผู้บริหาร",
+  "en": "Daily summary for executives"
+ },
+ "f_digest_d": {
+  "th": "ทุกวัน ยอดใช้จ่าย หมวด และรายการที่ต้องตรวจ",
+  "en": "Every day: spending, categories and items to review"
+ },
+ "f_digest_w": {
+  "th": "#ผู้บริหาร",
+  "en": "#executives"
+ },
+ "f_deep_tasks_n": {
+  "th": "งานใหญ่หลายขั้น",
+  "en": "Big multi-step tasks"
+ },
+ "f_deep_tasks_d": {
+  "th": "ผู้บริหารสั่งงานวิเคราะห์ สลิดทำเบื้องหลังแล้วส่งรายงาน",
+  "en": "Executives order an analysis, Salid works in the background and sends a report"
+ },
+ "f_deep_tasks_w": {
+  "th": "เฉพาะผู้บริหาร",
+  "en": "Executives only"
+ },
+ "f_memory_n": {
+  "th": "องค์ความรู้ของทีม",
+  "en": "Team knowledge"
+ },
+ "f_memory_d": {
+  "th": "สลิดจำข้อความในห้องที่เปิดโหมด (ไม่ใช่ปิด) ไว้ 90 วัน เพื่อตอบว่าเมื่อวานคุยอะไร งานถึงไหน โดยเปิดเผยเฉพาะกับคนที่เห็นห้องนั้น",
+  "en": "Salid remembers messages in channels with a mode on (not Off) for 90 days, to answer what was discussed yesterday or where a task stands, revealing it only to people who can see that channel"
+ },
+ "f_memory_w": {
+  "th": "ถามสลิดได้เลย",
+  "en": "Just ask Salid"
+ },
+ "f_image_memory_n": {
+  "th": "จำเนื้อหารูปภาพ",
+  "en": "Remember image content"
+ },
+ "f_image_memory_d": {
+  "th": "สลิดอ่านรูปที่โพสต์ในห้องที่เปิดความจำ (บรรยายภาพและถอดข้อความในรูป) เพื่อให้ค้นหาและสรุปได้ ไม่เก็บไฟล์รูป ต้องเปิดองค์ความรู้ของทีมไว้ด้วย",
+  "en": "Salid reads images posted in channels with memory on (describes them and extracts text) so they can be searched and summarized. Image files are not stored. Team knowledge must be on too."
+ },
+ "f_image_memory_w": {
+  "th": "ห้องที่ไม่ใช่โหมดปิด",
+  "en": "Channels not set to Off"
+ },
+ "f_followup_n": {
+  "th": "ติดตามงานที่รับปาก",
+  "en": "Follow up on promises"
+ },
+ "f_followup_d": {
+  "th": "จดว่าใครรับปากอะไร แล้วเตือนก่อนถึงกำหนด",
+  "en": "Notes who promised what and reminds before the deadline"
+ },
+ "f_followup_w": {
+  "th": "เร็วๆ นี้",
+  "en": "Coming soon"
+ },
+ "sw_off": {
+  "th": "ปิด {name}",
+  "en": "Turn off {name}"
+ },
+ "sw_on": {
+  "th": "เปิด {name}",
+  "en": "Turn on {name}"
+ },
+ "err_generic": {
+  "th": "เกิดข้อผิดพลาด ({status})",
+  "en": "Something went wrong ({status})"
+ },
+ "err_invalid": {
+  "th": "ข้อมูลไม่ถูกต้อง",
+  "en": "Invalid data"
+ },
+ "err_forbidden_guild": {
+  "th": "บัญชีนี้ไม่มีสิทธิ์จัดการเซิร์ฟเวอร์นี้ พิมพ์ /ตั้งค่า ใน Discord เพื่อเชื่อมใหม่",
+  "en": "This account is not allowed to manage this server. Type /setup in Discord to link it again."
+ },
+ "err_forbidden": {
+  "th": "บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล ลองเข้าด้วยบัญชีอื่น",
+  "en": "This Google account has no verified email. Try another account."
+ },
+ "err_expired": {
+  "th": "เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง",
+  "en": "Your session has expired. Please sign in again."
+ },
+ "err_load": {
+  "th": "โหลดข้อมูลไม่สำเร็จ: {err}",
+  "en": "Could not load data: {err}"
+ },
+ "link_ok": {
+  "th": "เชื่อมกับเซิร์ฟเวอร์ “{name}” เรียบร้อยแล้ว",
+  "en": "Linked to the server “{name}”"
+ },
+ "link_bad": {
+  "th": "ลิงก์นี้ใช้ไม่ได้ (หมดอายุหรือถูกใช้ไปแล้ว) พิมพ์ /ตั้งค่า ใน Discord เพื่อขอลิงก์ใหม่",
+  "en": "This link cannot be used (expired or already used). Type /setup in Discord to get a new one."
+ }
+}</script>
 <script>
 "use strict";
 const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
 const TOKEN_KEY = "salid_hub_token";
 const LINK_KEY = "salid_hub_link";
 const GUILD_KEY = "salid_hub_guild";
+const LANG_KEY = "salid_hub_lang";
 const $ = (id) => document.getElementById(id);
 
+// ---------- language (Thai / English) ----------
+// Every visible string lives in the JSON dictionary above ({key: {th, en}}). Static markup uses
+// data-i18n / data-i18n-html / data-i18n-attr; dynamic text goes through tx() so that switching
+// the language re-renders everything without a reload.
+const I18N = JSON.parse($("i18n-data").textContent);
+function readLang(op, v) {
+  try {
+    if (op === "set") { localStorage.setItem(LANG_KEY, v); return null; }
+    const s = localStorage.getItem(LANG_KEY);
+    return s === "th" || s === "en" ? s : null;
+  } catch { return null; } // storage blocked: the choice then lasts until reload
+}
+function browserLang() {
+  const l = (navigator.language || (navigator.languages || [])[0] || "").toLowerCase();
+  return l.startsWith("th") ? "th" : "en";
+}
+let lang = readLang("get") || browserLang();
+const locale = () => (lang === "th" ? "th-TH" : "en-US");
+function t(key, params) {
+  const e = I18N[key];
+  let s = e ? (e[lang] ?? e.th) : key;
+  if (params) for (const [k, v] of Object.entries(params)) s = s.split("{" + k + "}").join(String(v));
+  return s;
+}
+// Set an element's text from a dictionary key and remember it so a language switch redoes it.
+function tx(el, key, params) { el.dataset.i18n = key; el._p = params || null; el.textContent = t(key, el._p); return el; }
+// A notice: a string, a function returning one (re-evaluated on a language switch), or empty.
+function note(el, msg) {
+  el._f = typeof msg === "function" ? msg : null;
+  el.textContent = el._f ? el._f() : msg || "";
+  el.hidden = !el.textContent;
+}
+let rerender = [];
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    const p = el._p || (el.dataset.n ? { n: el.dataset.n } : null);
+    el.textContent = t(el.dataset.i18n, p);
+  }
+  for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = t(el.dataset.i18nHtml);
+  for (const el of document.querySelectorAll("[data-i18n-attr]")) {
+    for (const pair of el.dataset.i18nAttr.split(";")) {
+      const [attr, key] = pair.split(":"); el.setAttribute(attr, t(key));
+    }
+  }
+  for (const el of document.querySelectorAll("[data-lang]")) el.setAttribute("aria-pressed", String(el.dataset.lang === lang));
+  for (const el of document.querySelectorAll(".notice, .hint")) if (el._f) el.textContent = el._f();
+}
+function setLang(l) {
+  lang = l; readLang("set", l);
+  applyStatic();
+  for (const fn of rerender) fn();
+}
+for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
+
 const FEATURES = [
-  { id: "receipts", name: "รับใบเสร็จและทำบัญชี", desc: "ส่งรูปใบเสร็จในห้อง สลิดอ่านยอดและบันทึกให้", where: "#ใบเสร็จ" },
-  { id: "qa", name: "ตอบคำถามเรื่องค่าใช้จ่าย", desc: "ถามสลิดใน Discord แล้วได้คำตอบจากบัญชีของทีม", where: "@Salid" },
-  { id: "meetings", name: "ส่งสรุปประชุมเข้าแชต", desc: "อัดประชุมจากหน้าเว็บ แล้วสลิดโพสต์สรุปและงานที่ต้องทำ เปิดไว้เสมอ", where: "#ประชุม", info: true },
-  { id: "voice_meetings", name: "ฟังประชุมในห้องเสียง", desc: "พิมพ์ /เข้าประชุม ให้สลิดเข้าห้องเสียง ถอดว่าใครพูดอะไร ตอบเมื่อถูกเรียก และสรุปตอนจบ", where: "/เข้าประชุม" },
-  { id: "digest", name: "สรุปรายวันให้ผู้บริหาร", desc: "ทุกวัน ยอดใช้จ่าย หมวด และรายการที่ต้องตรวจ", where: "#ผู้บริหาร" },
-  { id: "deep_tasks", name: "งานใหญ่หลายขั้น", desc: "ผู้บริหารสั่งงานวิเคราะห์ สลิดทำเบื้องหลังแล้วส่งรายงาน", where: "เฉพาะผู้บริหาร" },
-  { id: "memory", name: "องค์ความรู้ของทีม", desc: "สลิดจำข้อความในห้องที่เปิดโหมด (ไม่ใช่ปิด) ไว้ 90 วัน เพื่อตอบว่าเมื่อวานคุยอะไร งานถึงไหน โดยเปิดเผยเฉพาะกับคนที่เห็นห้องนั้น", where: "ถามสลิดได้เลย" },
-  { id: "image_memory", name: "จำเนื้อหารูปภาพ", desc: "สลิดอ่านรูปที่โพสต์ในห้องที่เปิดความจำ (บรรยายภาพและถอดข้อความในรูป) เพื่อให้ค้นหาและสรุปได้ ไม่เก็บไฟล์รูป ต้องเปิดองค์ความรู้ของทีมไว้ด้วย", where: "ห้องที่ไม่ใช่โหมดปิด" },
-  { id: "followup", name: "ติดตามงานที่รับปาก", desc: "จดว่าใครรับปากอะไร แล้วเตือนก่อนถึงกำหนด", where: "เร็วๆ นี้", soon: true },
+  { id: "receipts" },
+  { id: "qa" },
+  { id: "meetings", info: true },
+  { id: "voice_meetings" },
+  { id: "digest" },
+  { id: "deep_tasks" },
+  { id: "memory" },
+  { id: "image_memory" },
+  { id: "followup", soon: true },
 ];
 let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true };
 let guilds = [];
 let guildId = null;
+let lastSettings = null, lastActivity = null, lastProgress = null;
 
 // Browser storage may be blocked: every access is wrapped, and the page works without it.
 function mem(op, key, v) {
@@ -325,10 +1038,11 @@ try {
 linkCode = linkCode || mem("get", LINK_KEY);
 
 function show(view) { $("login").hidden = view !== "login"; $("app").hidden = view !== "app"; }
-function note(el, msg) { el.textContent = msg || ""; el.hidden = !msg; }
 
 class AuthError extends Error {}
-class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
+class ApiError extends Error { constructor(detail, status) { super(detail); this.status = status; } }
+// Localized text of an API failure; the server's detail (neutral English) is appended in brackets.
+const errText = (e) => (e instanceof ApiError ? t("err_generic", { status: e.status }) + (e.message ? " [" + e.message + "]" : "") : String(e.message));
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
@@ -339,8 +1053,8 @@ async function api(path, opts = {}) {
   if (res.status === 403) throw new AuthError("forbidden");
   if (!res.ok) {
     let detail = "";
-    try { const j = await res.json(); detail = typeof j.detail === "string" ? j.detail : "ข้อมูลไม่ถูกต้อง"; } catch { /* ignore */ }
-    throw new ApiError(detail || "เกิดข้อผิดพลาด (" + res.status + ")", res.status);
+    try { const j = await res.json(); detail = typeof j.detail === "string" ? j.detail : ""; } catch { /* ignore */ }
+    throw new ApiError(detail, res.status);
   }
   return res.json();
 }
@@ -363,17 +1077,19 @@ function renderGoogleButton() {
   if (!CLIENT_ID) { $("not-configured").hidden = false; $("gsi-button").hidden = true; return; }
   if (!window.google || !google.accounts) { setTimeout(renderGoogleButton, 200); return; }
   if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: onCredential }); gsiReady = true; }
-  google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signin_with", locale: "th", width: 300 });
+  $("gsi-button").textContent = "";
+  google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signin_with", locale: lang, width: 300 });
 }
+rerender.push(() => { if (!$("login").hidden) renderGoogleButton(); });
 
 // Returns true when `e` was an auth problem and has been handled. A 403 on a guild call only
 // means "not your guild" (the account itself is fine), so it does not sign the user out.
 function handleAuth(e, { guildCall = false } = {}) {
   if (!(e instanceof AuthError)) return false;
   if (e.message === "not_configured") { token = null; show("login"); $("not-configured").hidden = false; $("gsi-button").hidden = true; }
-  else if (e.message === "forbidden" && guildCall) note($("app-msg"), "บัญชีนี้ไม่มีสิทธิ์จัดการเซิร์ฟเวอร์นี้ พิมพ์ /ตั้งค่า ใน Discord เพื่อเชื่อมใหม่");
-  else if (e.message === "forbidden") toLogin("บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล ลองเข้าด้วยบัญชีอื่น");
-  else toLogin("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+  else if (e.message === "forbidden" && guildCall) note($("app-msg"), () => t("err_forbidden_guild"));
+  else if (e.message === "forbidden") toLogin(() => t("err_forbidden"));
+  else toLogin(() => t("err_expired"));
   return true;
 }
 
@@ -384,31 +1100,33 @@ function renderFeatures() {
     const on = f.info ? true : !f.soon && features[f.id];
     const row = document.createElement("div"); row.className = "feat";
     const txt = document.createElement("div"); txt.className = "txt";
-    const name = document.createElement("strong"); name.textContent = f.name;
-    const desc = document.createElement("span"); desc.textContent = f.desc;
+    const name = tx(document.createElement("strong"), "f_" + f.id + "_n");
+    const desc = tx(document.createElement("span"), "f_" + f.id + "_d");
     txt.append(name, desc);
-    const where = document.createElement("span"); where.className = "where"; where.textContent = f.where;
+    const where = tx(document.createElement("span"), "f_" + f.id + "_w"); where.className = "where";
     const sw = document.createElement("button");
     sw.type = "button"; sw.className = "switch"; sw.setAttribute("aria-pressed", String(!!on));
-    sw.setAttribute("aria-label", (on ? "ปิด " : "เปิด ") + f.name);
+    sw.setAttribute("aria-label", t(on ? "sw_off" : "sw_on", { name: t("f_" + f.id + "_n") }));
     sw.disabled = !!(f.soon || f.info);
     sw.append(document.createElement("i"));
     sw.addEventListener("click", () => { features[f.id] = !features[f.id]; renderFeatures(); });
     row.append(txt, where, sw); box.append(row);
   }
 }
+rerender.push(renderFeatures);
 
 // A checkbox list of the guild's text channels; ids that no longer exist stay visible so that
 // saving does not silently drop them.
 function renderChecks(box, channels, selected) {
   box.textContent = "";
   const known = new Set(channels.map((c) => c.id));
-  const all = [...channels, ...selected.filter((id) => !known.has(id)).map((id) => ({ id, name: id + " (ไม่พบห้องนี้แล้ว)" }))];
-  if (!all.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "ยังไม่มีห้อง"; box.append(e); return; }
-  for (const c of all) {
+  const gone = selected.filter((id) => !known.has(id));
+  if (!channels.length && !gone.length) { box.append(tx(Object.assign(document.createElement("span"), { className: "hint" }), "no_channels_yet")); return; }
+  for (const c of [...channels, ...gone.map((id) => ({ id, gone: true }))]) {
     const label = document.createElement("label");
     const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = c.id; cb.checked = selected.includes(c.id);
-    const span = document.createElement("span"); span.textContent = "#" + c.name;
+    const span = document.createElement("span");
+    if (c.gone) tx(span, "channel_gone", { id: c.id }); else span.textContent = "#" + c.name;
     label.append(cb, span); box.append(label);
   }
 }
@@ -416,27 +1134,28 @@ const checked = (box) => [...box.querySelectorAll("input:checked")].map((i) => i
 
 function renderDigestSelect(channels, selected) {
   const sel = $("digest-id"); sel.textContent = "";
-  const none = document.createElement("option"); none.value = ""; none.textContent = "ไม่ส่งสรุปรายวัน"; sel.append(none);
+  sel.append(Object.assign(tx(document.createElement("option"), "digest_none"), { value: "" }));
   const known = new Set(channels.map((c) => c.id));
-  const all = [...channels, ...(selected && !known.has(selected) ? [{ id: selected, name: selected + " (ไม่พบห้องนี้แล้ว)" }] : [])];
-  for (const c of all) { const o = document.createElement("option"); o.value = c.id; o.textContent = "#" + c.name; sel.append(o); }
+  for (const c of channels) { const o = document.createElement("option"); o.value = c.id; o.textContent = "#" + c.name; sel.append(o); }
+  if (selected && !known.has(selected)) sel.append(Object.assign(tx(document.createElement("option"), "channel_gone", { id: selected }), { value: selected }));
   sel.value = selected || "";
 }
 
-const MODES = [["off", "🔇 ปิด"], ["listen", "👂 ฟังเงียบ"], ["call", "🙋 เรียกแล้วคุย"], ["join", "🎧 ร่วมวง"], ["chat", "💬 ตอบทุกข้อความ"]];
-const LANGUAGES = [["th", "ไทย"], ["en", "English"], ["auto", "อัตโนมัติ (ตามภาษาที่พิมพ์)"]];
+const MODES = ["off", "listen", "call", "join", "chat"];
+const LANGUAGES = ["th", "en", "auto"];
 let currentModes = {}, currentLanguages = {};
+function option(value, key) { return Object.assign(tx(document.createElement("option"), key), { value }); }
 function languageSelect(value, withDefault) {
   const sel = document.createElement("select"); sel.className = "field";
-  if (withDefault) { const o = document.createElement("option"); o.value = ""; o.textContent = "ภาษา: ตามค่าเริ่มต้น"; sel.append(o); }
-  for (const [v, label] of LANGUAGES) { const o = document.createElement("option"); o.value = v; o.textContent = label; sel.append(o); }
+  if (withDefault) sel.append(option("", "lang_opt_default"));
+  for (const v of LANGUAGES) sel.append(option(v, "lang_" + v));
   sel.value = value || "";
   return sel;
 }
 function modeSelect(value, withDefault) {
   const sel = document.createElement("select"); sel.className = "field";
-  if (withDefault) { const o = document.createElement("option"); o.value = ""; o.textContent = "ตามค่าเริ่มต้น"; sel.append(o); }
-  for (const [v, label] of MODES) { const o = document.createElement("option"); o.value = v; o.textContent = label; sel.append(o); }
+  if (withDefault) sel.append(option("", "mode_opt_default"));
+  for (const v of MODES) sel.append(option(v, "mode_" + v));
   sel.value = value || "";
   return sel;
 }
@@ -464,12 +1183,15 @@ function collectLanguages() {
   return Object.fromEntries(sels.filter((x) => x.value).map((x) => [x.dataset.channel, x.value]));
 }
 
+function renderProgress() {
+  const box = $("mem-progress"), p = lastProgress;
+  if (!p || !p.channels_total) { box.textContent = ""; delete box.dataset.i18n; return; }
+  tx(box, "mem_progress", { done: p.channels_done, total: p.channels_total, messages: p.messages.toLocaleString(locale()), images: p.images_done, cap: p.images_cap });
+}
+rerender.push(renderProgress);
 async function loadMemoryStatus() {
-  const box = $("mem-progress"); box.textContent = "";
-  try {
-    const p = await gapi("/memory-status");
-    if (p.channels_total) box.textContent = `นำเข้าประวัติแล้ว ${p.channels_done}/${p.channels_total} ห้อง, ${p.messages.toLocaleString("th-TH")} ข้อความ, รูป ${p.images_done}/${p.images_cap}`;
-  } catch { /* progress is optional */ }
+  lastProgress = null; renderProgress();
+  try { lastProgress = await gapi("/memory-status"); renderProgress(); } catch { /* progress is optional */ }
 }
 function fillRetention(days) {
   const sel = $("mem-days"), box = $("mem-days-custom");
@@ -485,28 +1207,32 @@ function collectRetention() {
 // Channels Salid cannot read, from the bot-synced flags (missing flags count as visible).
 function hiddenChannels(channels) {
   return channels.filter((c) => c.visible === false || c.readable_history === false)
-    .map((c) => ({ name: c.name, why: c.visible === false ? "ไม่เห็นห้อง" : "อ่านย้อนหลังไม่ได้" }));
+    .map((c) => ({ name: c.name, why: c.visible === false ? "hc_why_hidden" : "hc_why_history" }));
 }
 function renderHidden(channels) {
   const rows = hiddenChannels(channels), box = $("hc-list");
   box.textContent = "";
   $("hc-count").hidden = rows.length === 0;
-  $("hc-count").textContent = rows.length + " ห้อง";
+  tx($("hc-count"), "hc_count", { n: rows.length });
   $("hc-help").hidden = rows.length === 0;
   if (!rows.length) {
-    const d = document.createElement("div"); d.className = "empty";
-    d.textContent = channels.length ? "สลิดเห็นทุกห้องแล้วครับ 👍" : "ยังไม่มีรายชื่อห้องจากสลิด";
+    const d = tx(document.createElement("div"), channels.length ? "hc_none" : "hc_nolist"); d.className = "empty";
     box.appendChild(d); return;
   }
   const ul = document.createElement("ul");
   for (const r of rows) {
     const li = document.createElement("li");
-    li.textContent = "#" + r.name + " (" + r.why + ")";
+    li.append("#" + r.name + " (", tx(document.createElement("span"), r.why), ")");
     ul.appendChild(li);
   }
   box.appendChild(ul);
 }
+function renderGuildPill(active) {
+  tx($("guild-pill"), active === false ? "guild_left" : "ready");
+  $("guild-pill").className = "pill " + (active === false ? "warn" : "ok");
+}
 function fillSettings(s) {
+  lastSettings = s;
   features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
@@ -519,37 +1245,55 @@ function fillSettings(s) {
   loadMemoryStatus();
   $("exec-roles").value = (s.exec_role_names || []).join(", ");
   $("no-channels").hidden = channels.length > 0;
-  $("guild-name").textContent = s.guild_name || "";
-  $("guild-pill").textContent = s.active === false ? "สลิดออกจากเซิร์ฟเวอร์แล้ว" : "พร้อมใช้";
-  $("guild-pill").className = "pill " + (s.active === false ? "warn" : "ok");
+  const gn = $("guild-name");
+  if (s.guild_name) { delete gn.dataset.i18n; gn.textContent = s.guild_name; } else gn.textContent = "";
+  renderGuildPill(s.active);
   renderFeatures();
 }
+// Labels of what is already on screen follow the language without touching unsaved edits.
+rerender.push(() => {
+  if (!lastSettings) return;
+  const channels = lastSettings.channels || [];
+  renderHidden(channels);
+});
 
-const STATUS = { ok: ["บันทึกแล้ว", "ok"], review: ["รอตรวจ", "warn"], recording: ["กำลังอัด", ""], summarizing: ["กำลังสรุป", ""], done: ["สรุปแล้ว", "ok"], failed: ["ล้มเหลว", "warn"] };
+const STATUS = { ok: ["st_ok", "ok"], review: ["st_review", "warn"], recording: ["st_recording", ""], summarizing: ["st_summarizing", ""], done: ["st_done", "ok"], failed: ["st_failed", "warn"] };
 function fmtTime(iso) {
   const d = new Date(iso);
   const sameDay = d.toDateString() === new Date().toDateString();
-  return sameDay ? d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false })
-    : d.toLocaleDateString("th-TH", { day: "numeric", month: "short" });
+  return sameDay ? d.toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit", hour12: false })
+    : d.toLocaleDateString(locale(), { day: "numeric", month: "short" });
 }
-function renderActivity(items) {
+// Money in the receipt's own currency (a missing currency counts as THB); never mixes currencies.
+function fmtMoney(amount, cur) {
+  const c = (cur || "THB").toUpperCase();
+  const n = Math.abs(amount).toLocaleString(locale(), { maximumFractionDigits: 2 });
+  const sign = amount < 0 ? "-" : "";
+  if (c === "THB") return sign + "฿" + n;
+  if (c === "USD") return sign + "$" + n;
+  return sign + n + " " + c;
+}
+function renderActivity() {
+  const items = lastActivity; if (!items) return;
   const box = $("activity-list"); box.textContent = "";
-  if (!items.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "ยังไม่มีกิจกรรม"; box.append(e); return; }
+  if (!items.length) { const e = tx(document.createElement("div"), "no_activity"); e.className = "empty"; box.append(e); return; }
   for (const it of items) {
     const row = document.createElement("div"); row.className = "act";
-    const t = document.createElement("time"); t.dateTime = it.at; t.textContent = fmtTime(it.at);
+    const time = document.createElement("time"); time.dateTime = it.at; time.textContent = fmtTime(it.at);
     const text = document.createElement("span"); text.className = "t";
     if (it.kind === "receipt") {
-      const amount = it.amount == null ? "ไม่ทราบยอด" : "฿" + it.amount.toLocaleString("th-TH", { maximumFractionDigits: 2 });
-      text.textContent = "ใบเสร็จ " + (it.title || "ไม่ทราบร้าน") + " " + amount;
+      const amount = it.amount == null ? t("amount_unknown") : fmtMoney(it.amount, it.currency);
+      text.textContent = t("act_receipt", { vendor: it.title || t("vendor_unknown"), amount });
     } else {
-      text.textContent = "ประชุม \"" + it.title + "\"";
+      text.textContent = t("act_meeting", { title: it.title });
     }
-    const [label, cls] = STATUS[it.status] || [it.status, ""];
-    const pill = document.createElement("span"); pill.className = "pill " + cls; pill.textContent = label;
-    row.append(t, text, pill); box.append(row);
+    const [key, cls] = STATUS[it.status] || [null, ""];
+    const pill = document.createElement("span"); pill.className = "pill " + cls;
+    if (key) tx(pill, key); else pill.textContent = it.status;
+    row.append(time, text, pill); box.append(row);
   }
 }
+rerender.push(renderActivity);
 
 function renderSwitcher() {
   const sel = $("guild-switch"); sel.textContent = "";
@@ -564,7 +1308,7 @@ function renderSwitcher() {
 
 // ---------- actions ----------
 async function save() {
-  const btn = $("save"); btn.disabled = true; note($("save-msg"), "กำลังบันทึก...");
+  const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
     features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory },
     receipt_channel_ids: checked($("receipt-ids")),
@@ -580,9 +1324,9 @@ async function save() {
   };
   try {
     fillSettings(await gapi("/settings", { method: "PUT", body: JSON.stringify(body) }));
-    note($("save-msg"), "บันทึกแล้ว");
+    note($("save-msg"), () => t("saved"));
   } catch (e) {
-    if (!handleAuth(e, { guildCall: true })) note($("save-msg"), "บันทึกไม่สำเร็จ: " + e.message);
+    if (!handleAuth(e, { guildCall: true })) note($("save-msg"), () => t("save_failed", { err: errText(e) }));
   } finally { btn.disabled = false; }
 }
 
@@ -596,12 +1340,12 @@ async function ask(ev) {
   ev.preventDefault();
   const q = $("ask").value.trim(); if (!q) return;
   $("ask").value = ""; $("ask-btn").disabled = true;
-  bubble(q, "me"); const wait = bubble("สลิดกำลังคิด...", "bot");
+  bubble(q, "me"); const wait = bubble(t("thinking"), "bot");
   try {
     wait.textContent = (await gapi("/ask", { method: "POST", body: JSON.stringify({ question: q }) })).answer;
   } catch (e) {
     if (handleAuth(e, { guildCall: true })) return;
-    wait.textContent = "ตอบไม่ได้ในตอนนี้ ลองใหม่อีกครั้งครับ"; wait.classList.add("err");
+    wait.textContent = t("ask_failed"); wait.classList.add("err");
   } finally { $("ask-btn").disabled = false; }
 }
 
@@ -609,16 +1353,16 @@ async function loadGuild(id) {
   guildId = id; mem("set", GUILD_KEY, id);
   renderSwitcher();
   $("chat").textContent = "";
-  const empty = document.createElement("div"); empty.className = "empty"; empty.id = "chat-empty";
-  empty.textContent = "ลองถาม เช่น \"เดือนนี้ค่าวัตถุดิบเท่าไร ซื้อร้านไหนเยอะสุด\""; $("chat").append(empty);
+  const empty = tx(document.createElement("div"), "chat_empty"); empty.className = "empty"; empty.id = "chat-empty"; $("chat").append(empty);
   $("guild-view").hidden = false; $("no-guild").hidden = true;
   note($("save-msg"), "");
   try {
     const [settings, activity] = await Promise.all([gapi("/settings"), gapi("/activity")]);
     note($("app-msg"), "");
-    fillSettings(settings); renderActivity(activity);
+    lastActivity = activity;
+    fillSettings(settings); renderActivity();
   } catch (e) {
-    if (!handleAuth(e, { guildCall: true })) note($("app-msg"), "โหลดข้อมูลไม่สำเร็จ: " + e.message);
+    if (!handleAuth(e, { guildCall: true })) note($("app-msg"), () => t("err_load", { err: errText(e) }));
   }
 }
 
@@ -631,13 +1375,13 @@ async function redeemLink() {
     const g = await api("/api/hub/link", { method: "POST", body: JSON.stringify({ code }) });
     linkCode = null; mem("clear", LINK_KEY);
     $("link-msg").className = "notice ok";
-    note($("link-msg"), "เชื่อมกับเซิร์ฟเวอร์ “" + g.name + "” เรียบร้อยแล้ว");
+    note($("link-msg"), () => t("link_ok", { name: g.name }));
     return g.id;
   } catch (e) {
     if (e instanceof AuthError) throw e;
     linkCode = null; mem("clear", LINK_KEY);
     $("link-msg").className = "notice error";
-    note($("link-msg"), "ลิงก์นี้ใช้ไม่ได้ (หมดอายุหรือถูกใช้ไปแล้ว) พิมพ์ /ตั้งค่า ใน Discord เพื่อขอลิงก์ใหม่");
+    note($("link-msg"), () => t("link_bad"));
     return null;
   }
 }
@@ -660,7 +1404,7 @@ async function start() {
     if (!guildId) { $("guild-view").hidden = true; $("no-guild").hidden = false; return; }
     await loadGuild(guildId);
   } catch (e) {
-    if (!handleAuth(e)) { show("app"); note($("app-msg"), "โหลดข้อมูลไม่สำเร็จ: " + e.message); }
+    if (!handleAuth(e)) { show("app"); note($("app-msg"), () => t("err_load", { err: errText(e) })); }
   }
 }
 
@@ -672,6 +1416,7 @@ $("signout").addEventListener("click", () => {
   try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch { /* ignore */ }
   toLogin("");
 });
+applyStatic();
 renderFeatures();
 if (token && CLIENT_ID) start(); else toLogin("");
 </script>

@@ -152,6 +152,14 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   `unsnooze`, `wake up`, `come back`. Slash commands have Thai names with English aliases (`/โหมด` `/mode`,
   `/ภาษา` `/language`, `/เข้าประชุม` `/join`, `/ออกประชุม` `/leave`, `/ตั้งค่า` `/setup`). The name is recognised in
   Latin letters too ("hey salid, what did we spend?").
+- **Deleting and cancelling.** Reply to one of Salid's messages with just `ลบ` / `ลบข้อความ` / `ยกเลิกข้อความ` /
+  `เอาออก` / `delete` / `remove` / `unsend` and Salid deletes it (all chunks of a long answer, tracked for about
+  24 h), then reacts 👍. Allowed for the person Salid was answering, server managers and executives. On a receipt
+  reply `ลบ` / `ยกเลิก` voids the receipt (restorable); `ลบข้อความ` / `delete message` also deletes Salid's
+  receipt message. `@Salid ยกเลิกงาน` / `cancel task` or `/ยกเลิก` `/cancel` stops the running deep task (kills
+  the Gemini CLI process) for whoever started it, managers and executives.
+- **Currencies.** Amounts are never added across currencies: summaries return `totals_by_currency`
+  (`total` only when a single currency is present), no FX conversion; a receipt with no currency counts as THB.
 - **Reply language** (`/ภาษา` or `/language`, `@Salid พูดภาษาอังกฤษ` / `speak English` / `English please`,
   `พูดไทย` / `speak Thai`, `ภาษาอัตโนมัติ` / `auto language`, or the hub's per-channel language select and the
   server default): `th` (default, the old behaviour), `en`, or `auto` (answer in the language of the message:
@@ -303,7 +311,7 @@ the Cloud Run pricing page for asia-southeast1).
 
 ## Salid command center (`/hub`)
 
-A Thai web page in the same app and Cloud Run service, multi-guild. Anyone signs in with Google (any
+A bilingual (Thai / English) web page in the same app and Cloud Run service, multi-guild. A TH | EN toggle in the header switches every string without a reload (choice kept in `localStorage`, default from the browser language: `th*` = Thai, else English); the dictionary is an inline JSON block in `static/hub.html` and a test checks both languages have the same keys. Anyone signs in with Google (any
 verified account); a guild switcher at the top lists the servers that account administers. Per server:
 the latest receipts, Salid expense Q&A as an executive, feature switches (receipts, Q&A, daily digest,
 deep tasks), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and

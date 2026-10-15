@@ -10,7 +10,7 @@ import re
 
 LANGS = ("th", "en", "auto")
 DEFAULT_LANGUAGE = "th"
-LANGUAGE_LABELS = {"th": "ไทย · Thai", "en": "English", "auto": "อัตโนมัติ · Auto"}
+LANGUAGE_LABELS = {"th": "ไทย · Thai", "en": "English · อังกฤษ", "auto": "อัตโนมัติ · Auto"}
 _THAI_RE = re.compile(r"[฀-๿]")
 
 
@@ -452,6 +452,27 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "🔁 อาจซ้ำ {n} รายการ รวม {amount} รอตรวจ",
         "en": "🔁 Possible duplicates: {n} receipts, {amount} awaiting review",
     },
+    "delete_denied": {
+        "th": "ลบได้เฉพาะคนที่สลิดตอบอยู่ ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหารเท่านั้นครับ",
+        "en": "Only the person Salid was answering, a server manager or an executive can delete this.",
+    },
+    "receipt_void_ack": {
+        "th": "ยกเลิกใบเสร็จ #{id} แล้ว (กู้คืนได้)",
+        "en": "Receipt #{id} is cancelled (it can be restored).",
+    },
+    "cancel_done": {
+        "th": "ยกเลิกงานใหญ่ที่กำลังทำอยู่แล้วครับ",
+        "en": "The running big task has been cancelled.",
+    },
+    "cancel_none": {
+        "th": "ตอนนี้ไม่มีงานใหญ่ที่กำลังทำอยู่ครับ",
+        "en": "There is no big task running right now.",
+    },
+    "cancel_denied": {
+        "th": "ยกเลิกงานใหญ่ได้เฉพาะคนที่สั่งงานนั้น ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหารเท่านั้นครับ",
+        "en": "Only the person who started the task, a server manager or an executive can cancel it.",
+    },
+    "cmd_cancel": _bi("ยกเลิกงานใหญ่ที่กำลังทำอยู่", "Cancel the running big task"),
     "corr_void_done": {
         "th": "🗑️ หักใบเสร็จ #{id} ({vendor} {total}) ออกจากยอดแล้ว (ถือว่าซ้ำ) ตอบ “กู้คืน” เพื่อนำกลับมา",
         "en": "🗑️ Receipt #{id} ({vendor} {total}) is deducted from the totals (marked as a "

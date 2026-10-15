@@ -875,7 +875,7 @@ def test_language_command_has_three_choices_in_both_languages(bot):
         assert cmds[name].guild_only
         assert all(len(c.description) <= 100 for c in cmds.values())
     names = [c.name for c in cmds["language"].parameters[0].choices]
-    assert names == ["ไทย · Thai", "English", "อัตโนมัติ · Auto"]
+    assert names == ["ไทย · Thai", "English · อังกฤษ", "อัตโนมัติ · Auto"]
 
 
 def test_mode_choices_are_bilingual(bot):
@@ -940,3 +940,75 @@ async def test_tax_invoice_channel_takes_receipts(bot, world):
     world.gen.name = "tax-invoice"
     await send(bot, world, world.gen, "", attachments=[photo()])
     assert bot.calls == [("intake", "")]
+
+
+def test_every_slash_command_is_bilingual(bot):
+    bot._register_commands()
+    cmds = bot.tree.get_commands()
+    names = {c.name for c in cmds}
+    pairs = [
+        ("ตั้งค่า", "setup"),
+        ("โหมด", "mode"),
+        ("ภาษา", "language"),
+        ("ความจำ", "memory"),
+        ("ห้อง", "channels"),
+        ("เข้าประชุม", "join"),
+        ("ออกประชุม", "leave"),
+        ("ยกเลิก", "cancel"),
+    ]
+    for th_name, en_name in pairs:
+        assert {th_name, en_name} <= names
+    for c in cmds:
+        assert " · " in c.description and len(c.description) <= 100, c.name
+        for p in c.parameters:
+            assert " · " in p.description, (c.name, p.name)
+            for ch in p.choices:
+                assert " · " in ch.name, ch.name
+    th_cmds = [c for c in cmds if not c.name.isascii()]
+    en_cmds = [c for c in cmds if c.name.isascii()]
+    assert len(th_cmds) == len(en_cmds) == len(pairs)
+
+
+def test_language_choice_labels_name_both_languages(bot):
+    bot._register_commands()
+    cmds = {c.name: c for c in bot.tree.get_commands()}
+    for ch in cmds["language"].parameters[0].choices:
+        assert " · " in ch.name
+
+
+async def test_ephemeral_replies_follow_locale_for_auto(bot, world):
+    set_lang(bot, 10, "auto")
+    for cb in (
+        lambda it: bot.handle_mode(it, "bogus"),
+        lambda it: bot.handle_mode(it, "join"),  # refused for a regular member
+    ):
+        for locale, lang in (("en-US", "en"), ("th", "th")):
+            it = Interaction(world.g, member(world.g, STAFF, roles=["x"]), world.gen)
+            it.locale = locale
+            await cb(it)
+            ((text, ephemeral),) = it.sent
+            assert ephemeral and text in (t("mode_failed", lang), t("mode_denied", lang))
+    it = Interaction(world.g, member(world.g, STAFF, roles=["x"]), world.gen)
+    it.locale = "en-GB"
+    await bot.handle_mode(it, None)
+    assert "Mode" in it.sent[0][0] or "mode" in it.sent[0][0].lower()
+    # in a DM (no guild) the denial also follows the locale
+    dm = Interaction(None, member(world.g, STAFF), None)
+    dm.locale = "en-US"
+    await bot.handle_language(dm, None)
+    assert dm.sent == [(t("setup_denied", "en"), True)]
+
+
+def test_typed_commands_have_thai_and_english_forms():
+    from salid.deep_task import parse_deep_trigger
+    from salid.i18n import parse_language_command
+    from salid.meeting import parse_meeting_command
+    from salid.modes import parse_snooze_command
+
+    assert parse_meeting_command("เข้าประชุม") == parse_meeting_command("join") == "join"
+    assert parse_meeting_command("ออกประชุม") == parse_meeting_command("leave meeting") == "leave"
+    assert parse_snooze_command("เงียบก่อน") == parse_snooze_command("be quiet") == "snooze"
+    assert parse_snooze_command("คุยได้แล้ว") == parse_snooze_command("you can talk") == "unsnooze"
+    assert parse_language_command("speak English") == "en"
+    assert parse_language_command("พูดไทย") == "th"
+    assert parse_deep_trigger("งานใหญ่: x") == parse_deep_trigger("deep task: x") == "x"

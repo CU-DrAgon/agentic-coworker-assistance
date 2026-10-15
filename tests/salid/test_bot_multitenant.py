@@ -220,7 +220,9 @@ async def test_deep_task_runs_on_the_asking_guild(bot, world, monkeypatch):
     del bot._answer
     await bot._answer(msg, world.b, msg.author)  # the owner is an executive
     await asyncio.gather(*bot._deep_tasks)
-    assert seen == [{"guild_id": OTHER_GUILD, "lang": "th"}]
+    assert [{k: v for k, v in kw.items() if k != "handle"} for kw in seen] == [
+        {"guild_id": OTHER_GUILD, "lang": "th"}
+    ]
 
 
 async def _append(lst, v):
@@ -374,6 +376,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
     bot._register_commands()
     cmds = {c.name: c for c in bot.tree.get_commands()}
     assert set(cmds) == {
+        "ยกเลิก",
+        "cancel",
         "ตั้งค่า",
         "setup",
         "เข้าประชุม",

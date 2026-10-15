@@ -17,6 +17,67 @@ GROUPS = {
     "day": "effective_date",
     "none": "'all'",
 }
+
+DEFAULT_CURRENCY = "THB"  # a receipt with a missing currency counts as THB
+
+
+def cur_of(r: Receipt) -> str:
+    return (r.currency or DEFAULT_CURRENCY).strip().upper() or DEFAULT_CURRENCY
+
+
+def _single_total(by: dict[str, float]) -> float | None:
+    """The plain total only when it is unambiguous (zero or one currency); never mix currencies."""
+    if not by:
+        return 0.0
+    return next(iter(by.values())) if len(by) == 1 else None
+
+
+def _size_key(g: dict) -> tuple:
+    by = g["totals_by_currency"]
+    return (-by.get(DEFAULT_CURRENCY, 0.0), *(-v for c, v in sorted(by.items()) if c != "THB"))
+
+
+def build_summary(start, end, group_by, rows) -> dict:
+    """Shared by every store. `rows` = (group key, currency, total, count) per key+currency.
+    Amounts are summed PER CURRENCY (no FX conversion): `totals_by_currency` always;
+    `total` is a number only when at most one currency is present, otherwise None."""
+    acc: dict[str, dict] = {}
+    for key, cur, total, count in rows:
+        cur = (cur or DEFAULT_CURRENCY).strip().upper() or DEFAULT_CURRENCY
+        g = acc.setdefault(key, {"key": key, "by": {}, "count": 0})
+        g["by"][cur] = g["by"].get(cur, 0.0) + (total or 0.0)
+        g["count"] += count
+    groups = []
+    for g in acc.values():
+        by = {c: round(v, 2) for c, v in sorted(g["by"].items())}
+        groups.append(
+            {
+                "key": g["key"],
+                "total": _single_total(by),
+                "totals_by_currency": by,
+                "count": g["count"],
+            }
+        )
+    if group_by == "day":
+        groups.sort(key=lambda g: g["key"])
+    else:  # biggest first, comparing THB first and then the other currencies
+        groups.sort(key=_size_key)
+    overall: dict[str, float] = {}
+    for g in groups:
+        for c, v in g["totals_by_currency"].items():
+            overall[c] = overall.get(c, 0.0) + v
+    overall = {c: round(v, 2) for c, v in sorted(overall.items())}
+    return {
+        "start": start,
+        "end": end,
+        "group_by": group_by,
+        "total": _single_total(overall),
+        "totals_by_currency": overall,
+        "count": sum(g["count"] for g in groups),
+        "groups": [] if group_by == "none" else groups,
+    }
+
+
 UPDATABLE = {
     "vendor",
     "receipt_date",
@@ -415,21 +476,14 @@ class SQLiteStore:
         if submitter_id is not None:
             where += " AND submitter_id=?"
             p.append(submitter_id)
-        order = "key" if group_by == "day" else "total DESC"
         with self._conn() as c:
             rows = c.execute(
-                f"SELECT {key} AS key, ROUND(COALESCE(SUM(total),0),2) AS total, COUNT(*) AS count FROM receipts WHERE {where} GROUP BY key ORDER BY {order}",
+                f"SELECT {key} AS key, COALESCE(NULLIF(UPPER(TRIM(currency)),''),'THB') AS cur, "
+                f"COALESCE(SUM(total),0) AS total, COUNT(*) AS count FROM receipts WHERE {where} "
+                "GROUP BY key, cur",
                 p,
             ).fetchall()
-        groups = [dict(r) for r in rows]
-        return {
-            "start": start,
-            "end": end,
-            "group_by": group_by,
-            "total": round(sum(g["total"] for g in groups), 2),
-            "count": sum(g["count"] for g in groups),
-            "groups": [] if group_by == "none" else groups,
-        }
+        return build_summary(start, end, group_by, [(r[0], r[1], r[2], r[3]) for r in rows])
 
     def list_receipts(
         self,
