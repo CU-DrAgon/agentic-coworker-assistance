@@ -70,7 +70,7 @@ TICK_S = 0.5
 SPEAK_COOLDOWN_S = 1.5  # after Salid speaks, ignore wake words this long (room echo)
 SPEAK_TIMEOUT_PAD_S = 10.0
 # Said right after the wake question is heard, so the room knows Salid is on it (pre-synthesized).
-ACK_TEXT = {"th": "เมี้ยว แป๊บนึงน้า", "en": "Meow, one sec!"}
+ACK_TEXT = {"th": "ได้เลย แป๊บนึงนะ", "en": "Sure, one sec!"}
 
 END_REASONS = ("command", "empty", "timeout", "disconnected", "shutdown")
 

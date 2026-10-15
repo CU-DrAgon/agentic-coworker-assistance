@@ -240,7 +240,8 @@ def test_speakable_drops_symbols_tts_reads_aloud():
     assert sp.speakable("เมี้ยว~ แป๊บนึงน้า") == "เมี้ยว แป๊บนึงน้า"
     assert sp.speakable("**12,450 บาท** (8 ใบ) ~ เก่งมาก!") == "12,450 บาท 8 ใบ เก่งมาก!"
     assert sp.speakable("งบโฆษณา 80% ของเดือน 10/2026") == "งบโฆษณา 80% ของเดือน 10/2026"
-    assert "~" not in "".join(__import__("salid.meeting", fromlist=["ACK_TEXT"]).ACK_TEXT.values())
+    acks = "".join(__import__("salid.meeting", fromlist=["ACK_TEXT"]).ACK_TEXT.values())
+    assert "~" not in acks and "เมี้ยว" not in acks
 
 
 def test_say_never_sends_a_tilde_to_the_engine(monkeypatch):
