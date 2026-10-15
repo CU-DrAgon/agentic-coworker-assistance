@@ -29,8 +29,8 @@ Move items between sections as work progresses.
 - [ ] LINE integration
 
 ## In progress
-- [ ] Per-channel modes: off / listen / call / join / chat ([#14](../../pull/14)) — live Discord test, then merge
-- [ ] PolyForm Noncommercial license ([#13](../../pull/13)) — waiting for merge
+- [ ] Thai and English commands, reply language th / en / auto ([#16](../../pull/16)) — live Discord test, then merge
+- [ ] Live Discord test of per-channel modes
 - [ ] Live test of voice meetings in a real Discord voice channel
 
 ## Done
@@ -41,4 +41,7 @@ Move items between sections as work progresses.
 - [x] Multi-tenant per Discord server, zero-config setup, general chat, `/ตั้งค่า` hub linking ([#10](../../pull/10))
 - [x] Voice meetings: join, transcribe, answer on wake word, summarize ([#11](../../pull/11))
 - [x] All of the above merged into `main` ([#12](../../pull/12))
+- [x] Per-channel modes: off / listen / call / join / chat ([#14](../../pull/14))
+- [x] PolyForm Noncommercial license, The Frontier Company Limited ([#13](../../pull/13))
+- [x] Project status list ([#15](../../pull/15))
 - [x] Checked the competition rules: no specific license required; the repository must be public
