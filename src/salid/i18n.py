@@ -172,6 +172,40 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "❌ The big task failed. Please try again later.",
     },
     # ---------------------------------------------------------------- bot: slash commands
+    "hidden_none": {
+        "th": "สลิดเห็นทุกห้องแล้วครับ 👍",
+        "en": "Salid can see every channel now 👍",
+    },
+    "hidden_header": {
+        "th": "🔒 ห้องที่สลิดยังมองไม่เห็น ({n} ห้อง)",
+        "en": "🔒 Channels Salid cannot see yet ({n})",
+    },
+    "hidden_reason_view": {"th": "ไม่เห็นห้อง", "en": "cannot see the channel"},
+    "hidden_reason_history": {"th": "อ่านย้อนหลังไม่ได้", "en": "cannot read history"},
+    "hidden_more": {
+        "th": "และอีก {m} ห้อง (ดูทั้งหมดในหน้า Hub)",
+        "en": "and {m} more (see all of them in the Hub)",
+    },
+    "hidden_steps": {
+        "th": "วิธีให้สลิดเข้าห้อง:\n"
+        "1. กดชื่อห้องด้านบน แล้วกด ⚙️ (Edit Channel)\n"
+        "2. ไปที่ Permissions → กด + (Add members or roles)\n"
+        "3. พิมพ์ Salid แล้วเลือก\n"
+        "4. ติ๊ก ✅ View Channel และ ✅ Read Message History แล้วกด Save",
+        "en": "How to let Salid in:\n"
+        "1. Click the channel name above, then click ⚙️ (Edit Channel)\n"
+        "2. Go to Permissions → click + (Add members or roles)\n"
+        "3. Type Salid and pick it\n"
+        "4. Tick ✅ View Channel and ✅ Read Message History, then click Save",
+    },
+    "hidden_footer": {
+        "th": "สลิดจะเริ่มอ่านห้องนั้นและประวัติย้อนหลังให้เองทันที ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มครับ",
+        "en": "Salid will start reading that channel and its history by itself right away. "
+        "Private channels you don't want Salid to know about: just leave them out.",
+    },
+    "cmd_channels": _bi(
+        "ดูห้องที่สลิดยังมองไม่เห็น และวิธีเพิ่ม", "Channels Salid cannot see, and how to add it"
+    ),
     "setup_denied": {
         "th": "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ครับ",
         "en": "This command is only for the server owner or people who can manage the server.",
@@ -414,6 +448,27 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "⚠️ Needs review ({n}):",
     },
     "digest_dup": {"th": "อาจซ้ำ", "en": "possible duplicate"},
+    "digest_dups": {
+        "th": "🔁 อาจซ้ำ {n} รายการ รวม {amount} รอตรวจ",
+        "en": "🔁 Possible duplicates: {n} receipts, {amount} awaiting review",
+    },
+    "corr_void_done": {
+        "th": "🗑️ หักใบเสร็จ #{id} ({vendor} {total}) ออกจากยอดแล้ว (ถือว่าซ้ำ) ตอบ “กู้คืน” เพื่อนำกลับมา",
+        "en": "🗑️ Receipt #{id} ({vendor} {total}) is deducted from the totals (marked as a "
+        'duplicate). Reply "restore" to bring it back.',
+    },
+    "corr_restore_done": {
+        "th": "♻️ กู้คืนใบเสร็จ #{id} ({vendor} {total}) กลับเข้ายอดแล้ว",
+        "en": "♻️ Receipt #{id} ({vendor} {total}) is counted again.",
+    },
+    "corr_already_void": {
+        "th": "ใบเสร็จ #{id} ถูกหักออกไปแล้ว ตอบ “กู้คืน” เพื่อนำกลับมา",
+        "en": 'Receipt #{id} is already deducted. Reply "restore" to bring it back.',
+    },
+    "corr_not_void": {
+        "th": "ใบเสร็จ #{id} ยังนับอยู่ในยอด ไม่ต้องกู้คืน",
+        "en": "Receipt #{id} is still counted, nothing to restore.",
+    },
     "digest_unclear": {"th": "ข้อมูลไม่ชัด", "en": "unclear data"},
     "digest_no_total": {"th": "ไม่มียอด", "en": "no total"},
     "digest_flag_line": {

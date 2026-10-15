@@ -4,14 +4,28 @@ from datetime import date
 
 from .i18n import t
 from .qa import baht
-from .store import Store
+from .store import Store, duplicate_extras
+
+
+def _duplicates_line(store: Store, guild_id: int, lang: str) -> str | None:
+    """Possible duplicates still counted in the totals (the extra copies of every group)."""
+    try:
+        extras = duplicate_extras(store.duplicate_groups(guild_id))
+    except Exception:  # the digest must go out even if the duplicate scan fails
+        return None
+    if not extras:
+        return None
+    amount = sum(r.total or 0.0 for r in extras if r.currency == "THB")
+    return t("digest_dups", lang, n=len(extras), amount=baht(amount))
 
 
 def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str = "th") -> str:
     d = day.isoformat() if isinstance(day, date) else day
     total = store.summarize(guild_id, d, d, "none")
+    dup_line = _duplicates_line(store, guild_id, lang)
     if total["count"] == 0:
-        return f"{t('digest_title', lang, day=d)}\n{t('digest_none', lang)}"
+        none = f"{t('digest_title', lang, day=d)}\n{t('digest_none', lang)}"
+        return f"{none}\n\n{dup_line}" if dup_line else none
     cats = store.summarize(guild_id, d, d, "category")["groups"]
     vendors = store.summarize(guild_id, d, d, "vendor")["groups"][:3]
     flagged = store.flagged(guild_id, d, d)
@@ -39,4 +53,6 @@ def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str =
                     who=r.submitter_name,
                 )
             )
+    if dup_line:
+        lines += ["", dup_line]
     return "\n".join(lines)

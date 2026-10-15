@@ -333,6 +333,7 @@ class Interaction:
     def __init__(self, guild, user):
         self.guild, self.user, self.sent = guild, user, []
         self.response = SimpleNamespace(send_message=self._send)
+        self.followup = SimpleNamespace(send=self._send)
 
     async def _send(self, text, ephemeral=False):
         self.sent.append((text, ephemeral))
@@ -342,8 +343,11 @@ async def test_setup_command_gives_an_ephemeral_one_time_link(bot, world):
     bot.s = bot.s.model_copy(update={"hub_url": "https://hub.example/"})
     it = Interaction(world.a, member(world.a, MANAGER, manage_guild=True))
     await bot.handle_setup(it)
-    ((text, ephemeral),) = it.sent
-    assert ephemeral is True and "https://hub.example/hub?link=" in text
+    (text, ephemeral), (hidden, hidden_ephemeral) = it.sent  # the link, then the channel check
+    assert (
+        ephemeral is True and hidden_ephemeral is True and "https://hub.example/hub?link=" in text
+    )
+    assert hidden == t("hidden_none", "th")
     code = text.split("link=")[1].split()[0]
     doc = bot.guilds_store.client.collection("salid_link_codes").docs[code]
     assert doc["guild_id"] == GUILD and doc["discord_user_id"] == MANAGER and not doc["used"]
@@ -382,6 +386,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "language",
         "ความจำ",
         "memory",
+        "ห้อง",
+        "channels",
     }
     assert all(c.guild_only for c in cmds.values())
 

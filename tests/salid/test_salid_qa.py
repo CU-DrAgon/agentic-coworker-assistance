@@ -139,11 +139,19 @@ def test_exec_sees_everything(seeded, settings):
     assert "ไม่ใช่ผู้บริหาร" not in llm.requests[0].config.system_instruction
 
 
-def test_tools_are_the_four_ledger_tools(seeded, settings):
+def test_tools_are_the_ledger_tools(seeded, settings):
     llm = scripted(text_resp("ok"))
     ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
     names = {d.name for t in llm.requests[0].config.tools for d in t.function_declarations}
-    assert names == {"spending_summary", "list_receipts", "compare_periods", "flagged_receipts"}
+    assert names == {
+        "spending_summary",
+        "list_receipts",
+        "compare_periods",
+        "flagged_receipts",
+        "find_duplicates",
+        "void_receipts",
+        "restore_receipts",
+    }
 
 
 def test_bad_tool_args_return_error_to_model(seeded, settings):

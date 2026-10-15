@@ -517,3 +517,31 @@ def test_hub_memory_status_shows_import_progress(client):
     assert got["images_cap"] == 300 and got["images_done"] == 120
     assert client.get(url, headers=OTHER).status_code == 403  # other guild's admin
     assert client.get(f"/api/hub/guilds/{B}/memory-status", headers=AUTH).status_code == 403
+
+
+# ------------------------------------------------------------------ channels Salid cannot see
+def test_settings_expose_channel_visibility_for_the_hidden_channels_card(client):
+    client.guilds.upsert_guild(
+        A,
+        name="n",
+        icon_url="",
+        channels=[
+            {"id": "1", "name": "ok"},  # old synced data without the flags counts as visible
+            {"id": "2", "name": "secret", "visible": False, "readable_history": True},
+            {"id": "3", "name": "no-history", "visible": True, "readable_history": False},
+        ],
+    )
+    chans = client.get(f"/api/hub/guilds/{A}/settings", headers=AUTH).json()["channels"]
+    assert [(c["name"], c["visible"], c["readable_history"]) for c in chans] == [
+        ("ok", True, True),
+        ("secret", False, True),
+        ("no-history", True, False),
+    ]
+
+
+def test_hub_page_has_the_hidden_channels_card():
+    from importlib.resources import files
+
+    html = (files("meeting_scribe") / "static" / "hub.html").read_text(encoding="utf-8")
+    assert 'id="hidden-channels"' in html and "ห้องที่สลิดยังมองไม่เห็น" in html
+    assert "Read Message History" in html and "renderHidden" in html

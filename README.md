@@ -107,6 +107,14 @@ low-confidence or duplicate receipts, and replies in Thai. Executives ask questi
 ("how much did we spend on ingredients this week?") and get answers from ledger tool calls, plus an
 optional daily digest. Non-executives only see their own receipts.
 
+Duplicate bills (the same invoice sent twice, e.g. a PDF and a screenshot) are detected by one rule:
+same total and currency, dates within 3 days, and a similar vendor or the same invoice number.
+Ask Salid "which bills are duplicates?" and it lists each group (which copy stays, which would be
+deducted, the amount) and asks for confirmation; after an executive confirms, the extra copies are
+**voided** (soft delete: excluded from every total, list, digest and export, never hard-deleted,
+reversible with "restore"). Replying "ซ้ำ" / "duplicate" to a receipt reply voids it, "กู้คืน" /
+"restore" brings it back. The daily digest shows "possible duplicates awaiting review".
+
 **Multi-tenant.** Any Discord server (guild) can add Salid with the public invite link and gets its own
 isolated ledger and settings with no technical setup. The tenant key is the guild id: every receipt,
 dedupe check, Q&A tool, digest, deep-task export and hub view is scoped to one guild.

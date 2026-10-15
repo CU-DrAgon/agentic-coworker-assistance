@@ -156,6 +156,7 @@
     <nav aria-label="เมนู">
       <a href="#channels">ภาพรวม</a>
       <a href="#channels">ช่องทางแชต</a>
+      <a href="#hidden-channels">ห้องที่สลิดมองไม่เห็น</a>
       <a href="#skills">สลิดทำอะไรให้ทีม</a>
       <a href="#command">สั่งสลิด</a>
       <a href="#activity">กิจกรรมล่าสุด</a>
@@ -198,6 +199,22 @@
             <p>ใช้สลิดตัวเดิมผ่าน LINE กลุ่มของทีม</p>
           </div>
         </div>
+      </section>
+
+      <section class="card" id="hidden-channels" aria-labelledby="hc-h">
+        <h2 id="hc-h">ห้องที่สลิดยังมองไม่เห็น <span class="pill warn" id="hc-count" hidden></span></h2>
+        <div id="hc-list"><div class="empty">กำลังโหลด...</div></div>
+        <div id="hc-help" hidden>
+          <strong>วิธีให้สลิดเข้าห้อง</strong>
+          <ol class="steps">
+            <li>เปิด Discord แล้วกดชื่อห้องที่ต้องการ แล้วกด ⚙️ (Edit Channel)</li>
+            <li>ไปที่ Permissions → กด + (Add members or roles)</li>
+            <li>พิมพ์ Salid แล้วเลือก</li>
+            <li>ติ๊ก ✅ View Channel และ ✅ Read Message History แล้วกด Save</li>
+          </ol>
+          <span class="hint">สลิดจะเริ่มอ่านห้องนั้นและประวัติย้อนหลังให้เองทันที ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มครับ</span>
+        </div>
+        <span class="hint">รายการนี้อัปเดตเองภายใน 1 นาทีหลังแก้สิทธิ์ใน Discord (โหลดหน้าใหม่เพื่อดูล่าสุด)</span>
       </section>
 
       <section class="card" id="skills" aria-labelledby="sk-h">
@@ -465,9 +482,34 @@ function collectRetention() {
   const n = Number(sel.value === "custom" ? $("mem-days-custom").value : sel.value);
   return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : 90;
 }
+// Channels Salid cannot read, from the bot-synced flags (missing flags count as visible).
+function hiddenChannels(channels) {
+  return channels.filter((c) => c.visible === false || c.readable_history === false)
+    .map((c) => ({ name: c.name, why: c.visible === false ? "ไม่เห็นห้อง" : "อ่านย้อนหลังไม่ได้" }));
+}
+function renderHidden(channels) {
+  const rows = hiddenChannels(channels), box = $("hc-list");
+  box.textContent = "";
+  $("hc-count").hidden = rows.length === 0;
+  $("hc-count").textContent = rows.length + " ห้อง";
+  $("hc-help").hidden = rows.length === 0;
+  if (!rows.length) {
+    const d = document.createElement("div"); d.className = "empty";
+    d.textContent = channels.length ? "สลิดเห็นทุกห้องแล้วครับ 👍" : "ยังไม่มีรายชื่อห้องจากสลิด";
+    box.appendChild(d); return;
+  }
+  const ul = document.createElement("ul");
+  for (const r of rows) {
+    const li = document.createElement("li");
+    li.textContent = "#" + r.name + " (" + r.why + ")";
+    ul.appendChild(li);
+  }
+  box.appendChild(ul);
+}
 function fillSettings(s) {
   features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, ...s.features };
   const channels = s.channels || [];
+  renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
   renderChecks($("ask-ids"), channels, s.ask_channel_ids);
   renderDigestSelect(channels, s.digest_channel_id);

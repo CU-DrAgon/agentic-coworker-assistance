@@ -16,6 +16,7 @@ from discord import app_commands
 
 from . import gate
 from .archive import make_archive
+from .channel_access import access_flags, hidden_channels, hidden_channels_messages
 from .config import Settings
 from .deep_task import (
     REPORT_NAME,
@@ -25,7 +26,13 @@ from .deep_task import (
     run_deep_task,
 )
 from .digest import build_daily_digest
-from .extract import apply_correction, guess_mime, ingest_attachment
+from .extract import (
+    apply_correction,
+    apply_void_command,
+    guess_mime,
+    ingest_attachment,
+    parse_void_command,
+)
 from .gate import GateLine, is_join_candidate
 from .guild_settings import (
     MAX_RETENTION_DAYS,
@@ -97,6 +104,7 @@ TICK_SECONDS = 5.0
 MEMORY_TICK_SECONDS = 30.0  # how often the memory scheduler looks for due summary updates
 MEMORY_QUEUE_MAX = 20000
 IMPORT_PAGE_SLEEP_S = 1.0  # pause between history pages (discord.py also rate-limits)
+IMPORT_DEBOUNCE_S = 5.0  # access events within this window are folded into one import run
 IMPORT_RESUME_S = 600.0  # a run stopped by the guild cap is resumed this much later
 IMAGE_NOTES_KEPT = 500  # recent messages whose image notes are merged in memory
 VIEWERS_TTL_S = 60.0  # cache of "who can read channel X" used for memory access
@@ -110,6 +118,7 @@ HISTORY_MESSAGES = 30
 HISTORY_SECONDS = 3 * 3600
 HISTORY_CHARS = 8000  # oldest lines are dropped first
 HISTORY_LINE_CHARS = 500
+CHANNELS_COMMANDS = ("ห้อง", "channels")
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
 JOIN_COMMANDS = ("เข้าประชุม", "join")
 LEAVE_COMMANDS = ("ออกประชุม", "leave")
@@ -242,6 +251,7 @@ class SecretaryBot(discord.Client):
         self._memory_last = float("-inf")
         self._import_task: asyncio.Task | None = None
         self._import_requested = False
+        self._import_debounce: asyncio.Task | None = None
         self._import_resume_at: float | None = None
         self._memory_cfg_seen: dict[int, tuple[bool, int]] = {}  # guild -> (memory on, retention)
         self._bg_tasks: set[asyncio.Task] = set()
@@ -298,9 +308,16 @@ class SecretaryBot(discord.Client):
         return {
             "name": guild.name,
             "icon_url": guild.icon.url if guild.icon else "",
-            "channels": [{"id": str(c.id), "name": c.name} for c in guild.text_channels][
-                :MAX_SYNCED_CHANNELS
-            ],
+            "channels": [
+                {
+                    "id": str(c.id),
+                    "name": c.name,
+                    "visible": flags[0],
+                    "readable_history": flags[1],
+                }
+                for c in guild.text_channels
+                for flags in [access_flags(c, getattr(guild, "me", None))]
+            ][:MAX_SYNCED_CHANNELS],
         }
 
     async def _sync_guild(self, guild: discord.Guild, *, installed: bool = False) -> None:
@@ -391,10 +408,25 @@ class SecretaryBot(discord.Client):
 
     async def on_guild_channel_create(self, channel):
         self._request_sync(channel.guild)
+        self._request_import()
 
     async def on_guild_channel_update(self, before, after):
         if before.name != after.name:
             self._request_sync(after.guild)
+        if before.overwrites != after.overwrites:  # permissions changed: maybe newly readable
+            self._request_sync(after.guild)
+            self._request_import()
+
+    async def on_member_update(self, before, after):
+        if self.user is not None and after.id == self.user.id and before.roles != after.roles:
+            self._request_sync(after.guild)  # the owner changed Salid's roles
+            self._request_import()
+
+    async def on_guild_role_update(self, before, after):
+        me = getattr(after.guild, "me", None)
+        if me is not None and after in me.roles and before.permissions != after.permissions:
+            self._request_sync(after.guild)
+            self._request_import()
 
     async def on_guild_channel_delete(self, channel):
         self._request_sync(channel.guild)
@@ -717,6 +749,18 @@ class SecretaryBot(discord.Client):
             return False
         if message.author.id != receipt.submitter_id and not self.is_exec_member(message.author):
             await message.reply(t("correction_denied", self._lang(message)), mention_author=False)
+            return True
+        action = parse_void_command(message.content)
+        if action:
+            text = await asyncio.to_thread(
+                apply_void_command,
+                self.store,
+                receipt,
+                action,
+                f"{message.author.display_name} ({message.author.id})",
+                self._lang(message),
+            )
+            await message.reply(text, mention_author=False)
             return True
         async with message.channel.typing():
             text = await asyncio.to_thread(
@@ -1144,6 +1188,7 @@ class SecretaryBot(discord.Client):
                 app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
             )
         for names, handler, desc in (
+            (CHANNELS_COMMANDS, self.handle_channels, t("cmd_channels")),
             (JOIN_COMMANDS, self.handle_join, t("cmd_join")),
             (LEAVE_COMMANDS, self.handle_leave, t("cmd_leave")),
         ):
@@ -1338,6 +1383,35 @@ class SecretaryBot(discord.Client):
         await interaction.response.send_message(
             t("setup_message", lang, name=guild.name, url=url), ephemeral=True
         )
+        await self._send_hidden_channels(interaction, lang, first=False)
+
+    async def _send_hidden_channels(
+        self, interaction: discord.Interaction, lang: str, *, first: bool
+    ) -> None:
+        """Ephemeral "channels Salid cannot see" message(s); `first`: nothing was sent yet."""
+        entries = hidden_channels(interaction.guild, interaction.guild.me)
+        for text in hidden_channels_messages(entries, lang):
+            if first:
+                await interaction.response.send_message(text, ephemeral=True)
+                first = False
+            else:
+                await interaction.followup.send(text, ephemeral=True)
+
+    async def handle_channels(self, interaction: discord.Interaction) -> None:
+        """/ห้อง: which channels Salid cannot read and how to add it (managers and executives)."""
+        guild, user = interaction.guild, interaction.user
+        if guild is not None:
+            await asyncio.to_thread(self.team.current, guild.id)
+        lang = self._interaction_lang(interaction)
+        allowed = (
+            guild is not None
+            and hasattr(user, "guild_permissions")
+            and (can_manage_guild(user) or self.is_exec_member(user))
+        )
+        if not allowed:
+            await interaction.response.send_message(t("setup_denied", lang), ephemeral=True)
+            return
+        await self._send_hidden_channels(interaction, lang, first=True)
 
     # ------------------------------------------------------------- timers (sign-off, join batches)
     async def _tick_loop(self):
@@ -1630,6 +1704,18 @@ class SecretaryBot(discord.Client):
         self._import_requested = True
         if self._import_task is None or self._import_task.done():
             self._import_task = asyncio.create_task(self._import_loop())
+
+    def _request_import(self) -> None:
+        """Import soon after Salid may have gained access to channels. Debounced: events that
+        arrive while one request is waiting are folded into it, so a burst starts one run."""
+        if self._import_debounce is not None and not self._import_debounce.done():
+            return
+
+        async def later():
+            await asyncio.sleep(IMPORT_DEBOUNCE_S)
+            self._start_import()
+
+        self._import_debounce = asyncio.create_task(later())
 
     async def _import_loop(self) -> None:
         try:

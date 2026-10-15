@@ -21,7 +21,7 @@ from .config import Settings
 from .i18n import resolve_lang, t
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
-from .store import Store
+from .store import Store, duplicate_extras, is_active, pick_keep
 
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 4
@@ -43,10 +43,22 @@ class LedgerTools:
     `forced_submitter_id` are injected into every query and are NOT part of any tool schema, so the
     model cannot widen the scope."""
 
-    def __init__(self, store: Store, guild_id: int, forced_submitter_id: int | None = None):
+    def __init__(
+        self,
+        store: Store,
+        guild_id: int,
+        forced_submitter_id: int | None = None,
+        actor: str = "",
+    ):
         self.store = store
         self.guild_id = guild_id
         self.forced = forced_submitter_id
+        self.actor = actor  # who asked (recorded as `voided_by`)
+
+    @property
+    def is_exec(self) -> bool:
+        """Executives are the unscoped askers; only they may void or restore receipts."""
+        return self.forced is None
 
     def _fmt_summary(self, s: dict) -> dict:
         s["total_fmt"] = baht(s["total"])
@@ -69,6 +81,7 @@ class LedgerTools:
         vendor_contains: str | None = None,
         submitter: str | None = None,
         limit: int = 20,
+        include_void: bool = False,
     ) -> dict:
         rows = self.store.list_receipts(
             self.guild_id,
@@ -79,6 +92,7 @@ class LedgerTools:
             submitter,
             limit,
             submitter_id=self.forced,
+            include_void=include_void,
         )
         return {"count": len(rows), "receipts": [self._r(r) for r in rows]}
 
@@ -128,8 +142,140 @@ class LedgerTools:
         return {"count": len(rows), "receipts": [self._r(r) for r in rows]}
 
     @staticmethod
-    def _r(r) -> dict:
+    def _money(amount: float | None, currency: str = "THB") -> str | None:
+        if amount is None:
+            return None
+        return baht(amount) if (currency or "THB") == "THB" else f"{amount:,.2f} {currency}"
+
+    def _sum_fmt(self, rows) -> tuple[dict, str]:
+        by: dict[str, float] = {}
+        for r in rows:
+            by[r.currency or "THB"] = by.get(r.currency or "THB", 0.0) + (r.total or 0.0)
+        by = {c: round(v, 2) for c, v in by.items()}
+        return by, " + ".join(self._money(v, c) for c, v in by.items()) or baht(0)
+
+    def _dup_entry(self, r) -> dict:
+        out = {
+            "id": r.id,
+            "vendor": r.vendor,
+            "total": r.total,
+            "total_fmt": self._money(r.total, r.currency),
+            "date": r.effective_date,
+            "submitter": r.submitter_name,
+            "confidence": r.confidence,
+            "file_type": "pdf"
+            if (r.original_uri or "").lower().endswith(".pdf")
+            else "image/other",
+        }
+        if r.guild_id and r.channel_id and r.message_id:
+            out["source"] = {
+                "channel_id": r.channel_id,
+                "message_id": r.message_id,
+                "jump_url": f"https://discord.com/channels/{r.guild_id}/{r.channel_id}/{r.message_id}",
+            }
+        return out
+
+    def find_duplicates(self, start_date: str | None = None, end_date: str | None = None) -> dict:
+        """Groups of ACTIVE receipts that look like the same bill (read-only). Scoped users only
+        get duplicates among their own receipts."""
+        start = start_date or end_date and "0000-01-01"
+        end = end_date or start_date and "9999-12-31"
+        groups = self.store.duplicate_groups(
+            self.guild_id,
+            start if start and end else None,
+            end if start and end else None,
+            submitter_id=self.forced,
+        )
+        out = []
+        for g in groups:
+            keep = pick_keep(g)
+            extras = [r for r in g if r is not keep]
+            _, fmt = self._sum_fmt(extras)
+            out.append(
+                {
+                    "keep": self._dup_entry(keep),
+                    "duplicates": [self._dup_entry(r) for r in extras],
+                    "deduct_fmt": fmt,
+                }
+            )
+        by, fmt = self._sum_fmt(duplicate_extras(groups))
         return {
+            "group_count": len(out),
+            "groups": out,
+            "total_deduct_by_currency": by,
+            "total_deduct_fmt": fmt,
+            "can_void": self.is_exec,
+        }
+
+    def void_receipts(self, receipt_ids: list[int], reason: str) -> dict:
+        """Void (soft delete, reversible) ACTIVE receipts of this guild. Executives only."""
+        if not self.is_exec:
+            return {"error": "not_allowed"}
+        if not (reason or "").strip():
+            return {"error": "reason is required"}
+        ids = list(dict.fromkeys(int(i) for i in receipt_ids or []))
+        ignored, todo = [], {}
+        for rid in ids:
+            r = self.store.get(rid)
+            if r is None or r.guild_id != self.guild_id:
+                ignored.append({"id": rid, "reason": "not found in this server"})
+            elif not is_active(r):
+                ignored.append({"id": rid, "reason": "already void"})
+            else:
+                todo[rid] = r
+        refused = []
+        for g in self.store.duplicate_groups(self.guild_id):
+            gid = {r.id for r in g}
+            if gid <= set(todo):  # would leave the group with no active receipt
+                for rid in sorted(gid):
+                    refused.append(
+                        {"id": rid, "reason": "would void every copy of the bill; keep one"}
+                    )
+                    todo.pop(rid)
+        done = [
+            self.store.set_status(rid, "void", reason=reason.strip(), by=self.actor or "executive")
+            for rid in todo
+        ]
+        by, fmt = self._sum_fmt(done)
+        return {
+            "voided": [self._dup_entry(r) for r in done],
+            "ignored": ignored,
+            "refused": refused,
+            "deducted_by_currency": by,
+            "total_delta_fmt": "-" + fmt if done else baht(0),
+            "undo": "restore_receipts",
+        }
+
+    def restore_receipts(self, receipt_ids: list[int]) -> dict:
+        """Undo a void. Executives only."""
+        if not self.is_exec:
+            return {"error": "not_allowed"}
+        ignored, done = [], []
+        for rid in dict.fromkeys(int(i) for i in receipt_ids or []):
+            r = self.store.get(rid)
+            if r is None or r.guild_id != self.guild_id:
+                ignored.append({"id": rid, "reason": "not found in this server"})
+            elif is_active(r):
+                ignored.append({"id": rid, "reason": "not void"})
+            else:
+                done.append(self.store.set_status(rid, "active"))
+        by, fmt = self._sum_fmt(done)
+        return {
+            "restored": [self._dup_entry(r) for r in done],
+            "ignored": ignored,
+            "added_by_currency": by,
+            "total_delta_fmt": "+" + fmt if done else baht(0),
+        }
+
+    @staticmethod
+    def _r(r) -> dict:
+        extra = (
+            {"status": "void", "void_reason": r.void_reason, "voided_by": r.voided_by}
+            if not is_active(r)
+            else {}
+        )
+        return {
+            **extra,
             "id": r.id,
             "date": r.effective_date,
             "vendor": r.vendor,
@@ -143,7 +289,15 @@ class LedgerTools:
         }
 
     def call(self, name: str, args: dict) -> dict:
-        allowed = {"spending_summary", "list_receipts", "compare_periods", "flagged_receipts"}
+        allowed = {
+            "spending_summary",
+            "list_receipts",
+            "compare_periods",
+            "flagged_receipts",
+            "find_duplicates",
+            "void_receipts",
+            "restore_receipts",
+        }
         if name not in allowed:
             return {"error": f"unknown tool {name}"}
         fn = getattr(self, name)
@@ -577,7 +731,9 @@ CAPABILITIES_PROMPT = (
     "1) ใบเสร็จและบัญชี: ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า ใบเสร็จ/receipt/invoice/ใบกำกับ/สลิป/slip/บิล/bill/expense/ค่าใช้จ่าย/เบิก หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
     "แล้วบันทึกลงบัญชี เตือนถ้าน่าจะซ้ำ แก้ข้อมูลได้โดยตอบกลับ (reply) ข้อความใบเสร็จของสลิด. "
     "ถามยอดใช้จ่ายได้ เช่น เดือนนี้จ่ายค่าอะไรไปเท่าไร แยกหมวด ใครส่ง รายการที่ต้องตรวจ "
-    "(ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นเฉพาะของตัวเอง). มีสรุปรายวันส่งเข้าห้องตามเวลาที่ตั้งไว้\n"
+    "(ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นเฉพาะของตัวเอง). "
+    "ตรวจหาบิลที่ส่งซ้ำ (เช่น PDF กับภาพหน้าจอของใบเดียวกัน) ได้ และหักออกจากยอดได้ (void ไม่ลบทิ้ง กู้คืนได้ ผู้บริหารสั่งหัก); "
+    "มีสรุปรายวันส่งเข้าห้องตามเวลาที่ตั้งไว้\n"
     "2) ความจำของทีม: สลิดจดข้อความและอ่านรูปทุกรูป (รวมตัวหนังสือในรูป) ในห้องที่ไม่ได้ตั้งเป็น 🔇 ปิด "
     "เก็บตามจำนวนวันที่แอดมินตั้ง (ค่าเริ่มต้น 90 วัน ดูหรือปรับด้วย /ความจำ หรือ /memory) "
     "และสรุปแต่ละห้องเป็นรายวัน จึงตอบได้ว่าเมื่อวานคุยอะไร ใครรับงานอะไร เรื่องไหนถึงไหน พร้อมลิงก์ไปที่ข้อความจริง. "
@@ -607,6 +763,17 @@ CAPABILITIES_PROMPT = (
     "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
 )
 
+
+DUPLICATES_PROMPT = (
+    "\nบิลซ้ำ: เมื่อถูกถามเรื่องบิลซ้ำ/ส่งซ้ำ/หักซ้ำออก ให้เรียก find_duplicates ก่อน แล้วแสดงทีละกลุ่มให้ชัด "
+    "(ใบไหนเก็บไว้ ใบไหนจะถูกหักออก พร้อมเลข #, ร้าน, ยอด, วันที่, คนส่ง, ลิงก์ต้นทางถ้ามี) และยอดที่จะหักรวม "
+    "แล้วถามขอคำยืนยันก่อนเสมอ ห้ามเรียก void_receipts ในข้อความเดียวกับที่เพิ่งแสดงรายการ "
+    "เรียก void_receipts ได้ก็ต่อเมื่อผู้ใช้ยืนยันในข้อความถัดมา (เช่น “ยืนยัน”, “หักออกเลย”, “ok”, “yes”) "
+    "และส่งเฉพาะ id ของใบที่ซ้ำ (ไม่ใช่ใบที่เก็บไว้) หลังหักแล้วบอกยอดที่หักและว่ากู้คืนได้ (restore_receipts). "
+    "void_receipts / restore_receipts ใช้ได้เฉพาะผู้บริหาร ถ้าได้ not_allowed ให้บอกว่าต้องให้ผู้บริหารสั่ง. "
+    "คนทั่วไป (นอกจากผู้บริหาร) ดูได้เฉพาะบิลซ้ำของใบเสร็จที่ตัวเองส่ง. "
+    "ยอดสรุปทั้งหมดไม่นับใบที่ถูกหัก (void); ถ้าผู้ใช้อยากเห็นใบที่ถูกหักให้ใช้ list_receipts ด้วย include_void=true."
+)
 
 FILES_PROMPT = (
     "\nไฟล์ที่ผู้ใช้ส่งมา: ข้อความล่าสุดมีไฟล์แนบ (รูป, PDF, ไฟล์ข้อความ) ที่แนบมาให้อ่านโดยตรง "
@@ -665,6 +832,7 @@ def system_prompt(
         "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
+    p += DUPLICATES_PROMPT
     if scoped:
         p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
     if memory:
@@ -730,8 +898,10 @@ def build_tools(
         vendor_contains: str | None = None,
         submitter: str | None = None,
         limit: int = 20,
+        include_void: bool = False,
     ) -> dict:
-        """List individual receipts in a date range with optional filters.
+        """List individual receipts in a date range with optional filters. Void (deducted)
+        receipts are left out unless include_void is true; they are then marked status=void.
 
         Args:
             start_date: ISO date YYYY-MM-DD, inclusive.
@@ -740,6 +910,7 @@ def build_tools(
             vendor_contains: substring of the vendor name.
             submitter: substring of the submitter display name.
             limit: max rows, default 20.
+            include_void: also list void (deducted) receipts, marked status=void.
         """
         a = dict(
             start_date=start_date,
@@ -748,6 +919,7 @@ def build_tools(
             vendor_contains=vendor_contains,
             submitter=submitter,
             limit=limit,
+            include_void=include_void,
         )
         return safe("list_receipts", a, lambda: ledger.list_receipts(**a))
 
@@ -770,7 +942,50 @@ def build_tools(
         """Receipts needing attention: low confidence, missing total, or possible duplicates."""
         return safe("flagged_receipts", {}, ledger.flagged_receipts)
 
-    tools = [spending_summary, list_receipts, compare_periods, flagged_receipts]
+    def find_duplicates(start_date: str | None = None, end_date: str | None = None) -> dict:
+        """Find receipts that look like the same bill recorded twice (e.g. a PDF and a screenshot
+        of one invoice): same total and currency, dates within 3 days, similar vendor or same
+        invoice number. Read-only. Returns groups with which receipt would be kept, which would
+        be deducted, and the amount deducted per group and in total. Does not change anything.
+
+        Args:
+            start_date: optional ISO date YYYY-MM-DD, inclusive (give both dates or neither).
+            end_date: optional ISO date YYYY-MM-DD, inclusive.
+        """
+        a = dict(start_date=start_date, end_date=end_date)
+        return safe("find_duplicates", a, lambda: ledger.find_duplicates(**a))
+
+    def void_receipts(receipt_ids: list[int], reason: str) -> dict:
+        """Deduct receipts from all totals by voiding them (soft delete, reversible with
+        restore_receipts). Executives only. Call it ONLY after the user has confirmed, in a
+        later message, the exact receipts to deduct. At least one receipt of each duplicate
+        group stays active.
+
+        Args:
+            receipt_ids: ids of the receipts to void (the duplicates, not the one that stays).
+            reason: short reason, e.g. "duplicate of #12".
+        """
+        a = dict(receipt_ids=receipt_ids, reason=reason)
+        return safe("void_receipts", a, lambda: ledger.void_receipts(**a))
+
+    def restore_receipts(receipt_ids: list[int]) -> dict:
+        """Undo a void: count the receipts in the totals again. Executives only.
+
+        Args:
+            receipt_ids: ids of the void receipts to restore.
+        """
+        a = dict(receipt_ids=receipt_ids)
+        return safe("restore_receipts", a, lambda: ledger.restore_receipts(**a))
+
+    tools = [
+        spending_summary,
+        list_receipts,
+        compare_periods,
+        flagged_receipts,
+        find_duplicates,
+        void_receipts,
+        restore_receipts,
+    ]
     if memory is None:
         return tools
 
@@ -995,7 +1210,12 @@ async def ask_async(
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
     created: list[tuple[int, str | None]] = []
-    ledger = LedgerTools(store, guild_id, forced_submitter_id=None if is_exec else user_id)
+    ledger = LedgerTools(
+        store,
+        guild_id,
+        forced_submitter_id=None if is_exec else user_id,
+        actor=f"user {user_id}",
+    )
     usable, skipped = select_files(list(files or []))
     f_parts, unreadable = file_parts(usable)
     usable = [f for f in usable if f not in unreadable]
