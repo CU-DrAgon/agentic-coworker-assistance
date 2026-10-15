@@ -440,3 +440,34 @@ async def test_bare_mention_uses_previous_message_or_greets(bot, world, monkeypa
     lonely = msg(stale, "<@999>", now)
     await bot._answer(lonely, world.a, author)
     assert lonely.replies == [GREETING_MESSAGE]
+
+
+async def test_follow_up_without_mention_within_the_conversation_window(bot, world, monkeypatch):
+    import salid.bot as botmod
+
+    ch = world.a.text_channels[0]
+    author = member(world.a, STAFF)
+    await bot.on_message(Msg(world.a, ch, author, "ยอดเดือนนี้"))  # never talked: ignored
+    assert bot.calls == []
+    bot._note_talking(Msg(world.a, ch, author))
+    await bot.on_message(Msg(world.a, ch, author, "แล้วเดือนก่อนล่ะ"))
+    other = Msg(world.a, ch, author, "ไปกินข้าวกัน")
+    other.mentions = [SimpleNamespace(id=5)]  # talking to a person, not Salid
+    await bot.on_message(other)
+    assert bot.calls == [("answer", GUILD)]
+    monkeypatch.setattr(botmod, "CONVERSATION_SECONDS", 0)
+    await bot.on_message(Msg(world.a, ch, author, "ยังอยู่ไหม"))
+    assert bot.calls == [("answer", GUILD)]
+
+
+async def test_reply_to_a_salid_message_is_answered(bot, world):
+    m = Msg(world.a, world.a.text_channels[0], member(world.a, STAFF), "อธิบายเพิ่มหน่อย")
+    m.reference = SimpleNamespace(message_id=1, resolved=SimpleNamespace(author=ME))
+    await bot.on_message(m)
+    assert bot.calls == [("answer", GUILD)]
+
+
+async def test_channels_named_after_salid_answer_everything(bot, world):
+    ch = FakeChannel(12, "ถาม-สลิด")
+    await bot.on_message(Msg(world.a, ch, member(world.a, STAFF), "ทำอะไรได้บ้าง"))
+    assert bot.calls == [("answer", GUILD)]

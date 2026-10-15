@@ -53,6 +53,8 @@ GREETING_MESSAGE = (
 )
 # A bare @mention right after the same person's message is treated as a question about it.
 FOLLOWUP_WINDOW_SECONDS = 120
+# After Salid answers someone, their next messages in that channel need no @mention for this long.
+CONVERSATION_SECONDS = 180
 SETUP_DENIED_MESSAGE = "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ครับ"
 SETUP_MESSAGE = (
     "ลิงก์เชื่อม {name} กับศูนย์บัญชาการของสลิด 🔗\n{url}\n"
@@ -72,6 +74,15 @@ def chunks(text: str, n: int = 1900):
 def is_receipt_channel_name(name: str | None) -> bool:
     low = (name or "").casefold()
     return any(h in low for h in RECEIPT_CHANNEL_HINTS)
+
+
+# Channels named after Salid are for talking to it: every message there is a question.
+ASK_CHANNEL_HINTS = ("salid", "สลิด")
+
+
+def is_ask_channel_name(name: str | None) -> bool:
+    low = (name or "").casefold()
+    return any(h in low for h in ASK_CHANNEL_HINTS)
 
 
 def has_receipt_file(message) -> bool:
@@ -109,6 +120,7 @@ class SecretaryBot(discord.Client):
         self.team = BotGuildSettings(self.guilds_store)
         self.archive = make_archive(settings)
         self.tree = app_commands.CommandTree(self)
+        self._talking: dict[tuple[int, int], float] = {}  # (channel, user) -> last answer time
         self._digest_task: asyncio.Task | None = None
         self._digest_sent: dict[int, date] = {}
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
@@ -233,7 +245,12 @@ class SecretaryBot(discord.Client):
                     await self._intake(message)
                 return
             ask_ids = self.team.ask_channel_ids(gid, self.s.ask_channel_ids)
-            if mentioned or message.channel.id in ask_ids:
+            if (
+                mentioned
+                or message.channel.id in ask_ids
+                or is_ask_channel_name(getattr(message.channel, "name", ""))
+                or self._in_conversation(message)
+            ):
                 await self._answer(message, message.guild, message.author)
         except Exception:
             logger.exception("handler failed")
@@ -298,6 +315,21 @@ class SecretaryBot(discord.Client):
             if res.status == "created":
                 self.store.set_reply_message(res.receipt.id, sent.id)
 
+    def _in_conversation(self, message: discord.Message) -> bool:
+        """A reply to Salid, or a follow-up soon after Salid answered this person here.
+        Messages that @mention someone else are left alone: they are talking to that person."""
+        if any(u != self.user for u in message.mentions):
+            return False
+        ref = message.reference
+        resolved = getattr(ref, "resolved", None) if ref else None
+        if self.user is not None and getattr(resolved, "author", None) == self.user:
+            return True
+        last = self._talking.get((message.channel.id, message.author.id))
+        return last is not None and time.monotonic() - last < CONVERSATION_SECONDS
+
+    def _note_talking(self, message: discord.Message) -> None:
+        self._talking[(message.channel.id, message.author.id)] = time.monotonic()
+
     def _strip_mentions(self, text: str, message: discord.Message) -> str:
         if self.user:
             text = text.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "")
@@ -330,6 +362,7 @@ class SecretaryBot(discord.Client):
             q = await self._previous_text(message)
         if not q:
             await message.reply(GREETING_MESSAGE, mention_author=False)
+            self._note_talking(message)
             return
         gid = guild.id
         is_exec = self.is_exec_member(member)
@@ -354,6 +387,7 @@ class SecretaryBot(discord.Client):
                 user_id=message.author.id,
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
+        self._note_talking(message)
         for i, part in enumerate(chunks(ans.text)):
             await (
                 message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
