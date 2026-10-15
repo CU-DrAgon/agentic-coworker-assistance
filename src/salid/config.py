@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     # Cheap model for the "is this addressed to Salid?" yes/no gates (see salid.gate).
     gate_model: str = "gemini-3.5-flash-lite"
     low_confidence: float = 0.7
+    # Organisational memory (salid.memory): raw chat log + per-channel day summaries.
+    memory_retention_days: int = 90
+    memory_update_every: int = 30  # new messages in a channel that trigger a summary update
+    memory_quiet_minutes: int = 20  # quiet time after which any new messages are summarised
+    memory_messages_collection: str = "salid_messages"
+    memory_summaries_collection: str = "salid_day_summaries"
+    memory_channels_collection: str = "salid_memory_channels"  # history-import state per channel
+    memory_state_collection: str = "salid_memory_guilds"  # import budgets per guild
+    # History import (see salid.memory_import)
+    memory_import_guild_cap: int = 20000  # messages imported per guild per run
+    memory_import_images_per_day: int = 300  # historical images described per guild per day
+    memory_import_summaries_per_day: int = 200  # past-day summaries generated per guild per day
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).
     guild_collection: str = "salid_guilds"
     # Where `/ตั้งค่า` links point: the web service that serves /hub.

@@ -1,0 +1,906 @@
+# ruff: noqa: F811, F401
+"""Organisational memory: raw log, summaries, retention, access control, tools, bot wiring.
+Offline: SQLite and the Firestore fake, scripted LLMs, small Discord fakes."""
+
+import json
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+
+import pytest
+from conftest import GUILD, FakeClient, FixedClockSettings, fc_resp, json_resp, scripted, text_resp
+from fake_firestore import offline_memory_store
+from test_bot_multitenant import ME, member
+from test_modes import (  # noqa: F401  (fixtures)
+    EXEC,
+    MANAGER,
+    STAFF,
+    Chan,
+    Interaction,
+    TMsg,
+    bot,
+    send,
+    set_mode,
+    world,
+)
+
+from salid import memory_summary
+from salid.guild_settings import (
+    GuildSettings,
+    GuildSettingsUpdate,
+    MemoryGuildStore,
+    default_retention_days,
+)
+from salid.i18n import t
+from salid.memory import MemoryScheduler, MemoryService, build_message, message_text
+from salid.memory_access import ChannelAccess, allowed_channel_ids
+from salid.memory_store import DaySummary, SQLiteMemoryStore
+from salid.qa import MemoryTools, ask
+
+BKK = ZoneInfo("Asia/Bangkok")
+
+
+def bkk(day, hh, mm=0, ss=0):
+    return datetime(2026, 10, day, hh, mm, ss, tzinfo=BKK)
+
+
+@pytest.fixture(params=["sqlite", "firestore"])
+def mstore(request, tmp_path):
+    if request.param == "sqlite":
+        return SQLiteMemoryStore(str(tmp_path / "m.db"))
+    return offline_memory_store()
+
+
+@pytest.fixture
+def settings():
+    return FixedClockSettings()
+
+
+def mk(settings, mid, at, text="hello", cid=10, gid=GUILD, kind="chat", author="แอน", uid=1):
+    return build_message(
+        settings, guild_id=gid, channel_id=cid, message_id=mid, author_id=uid,
+        author_name=author, created_at=at, text=text, jump_url=f"https://d/{cid}/{mid}", kind=kind,
+    )  # fmt: skip
+
+
+# ------------------------------------------------------------------ message building
+def test_local_date_uses_the_configured_timezone(settings):
+    late = mk(settings, 1, datetime(2026, 10, 14, 17, 30, tzinfo=UTC))  # 00:30 next day, Bangkok
+    assert late.local_date == "2026-10-15" and late.created_at.tzinfo is not None
+    assert mk(settings, 2, datetime(2026, 10, 14, 16, 59, tzinfo=UTC)).local_date == "2026-10-14"
+
+
+def test_attachment_descriptors():
+    atts = [
+        SimpleNamespace(filename="receipt.jpg", content_type="image/jpeg"),
+        SimpleNamespace(filename="a.pdf", content_type="application/pdf"),
+    ]
+    assert message_text("ดูนี่", atts) == "ดูนี่ [image: receipt.jpg] [file: a.pdf]"
+    assert message_text("", []) == ""
+
+
+# ------------------------------------------------------------------ store parity
+def test_store_reads_never_leave_the_allowed_channels(mstore, settings):
+    now = bkk(14, 10).astimezone(UTC)
+    mstore.add_message(mk(settings, 1, now, "public งบโฆษณา", cid=10))
+    mstore.add_message(mk(settings, 2, now + timedelta(minutes=1), "secret งบโฆษณา", cid=11))
+    mstore.add_message(mk(settings, 3, now, "other guild", cid=10, gid=GUILD + 1))
+    got = mstore.messages(GUILD, {10}, "2026-10-14", "2026-10-14")
+    assert [m.text for m in got] == ["public งบโฆษณา"]
+    assert mstore.messages(GUILD, set(), "2026-10-14", "2026-10-14") == []
+    assert mstore.messages(GUILD, {10}, "2026-10-14", "2026-10-14", channel_id=11) == []
+    both = mstore.messages(GUILD, {10, 11}, "2026-10-14", "2026-10-14", keyword="งบ")
+    assert [m.message_id for m in both] == [2, 1]  # newest first
+    assert (
+        mstore.messages(GUILD, {10, 11}, "2026-10-14", "2026-10-14", keyword="SECRET")[0].channel_id
+        == 11
+    )
+    assert mstore.messages(GUILD, {10, 11}, "2026-10-14", "2026-10-14", limit=1)[0].message_id == 2
+    assert mstore.messages(GUILD, {10}, "2026-10-13", "2026-10-13") == []
+
+
+def test_store_edit_delete_and_dirty_flag(mstore, settings):
+    now = bkk(14, 10).astimezone(UTC)
+    mstore.add_message(mk(settings, 1, now, "old"))
+    mstore.add_message(mk(settings, 2, now, "keep"))
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-14",
+                                  summary={"overview": "x"}, message_count=2))  # fmt: skip
+    assert mstore.update_message_text(GUILD, 1, "new", now)
+    assert not mstore.update_message_text(GUILD, 99, "x", now)
+    assert mstore.messages(GUILD, {10}, "2026-10-14", "2026-10-14", keyword="new")[0].edited_at
+    assert mstore.delete_messages(GUILD, [1, 77]) == [(10, "2026-10-14")]
+    assert [m.message_id for m in mstore.messages(GUILD, {10}, "2026-10-14", "2026-10-14")] == [2]
+    assert mstore.get_summary(GUILD, 10, "2026-10-14").dirty
+    assert [s.channel_id for s in mstore.open_summaries(GUILD)] == [10]
+
+
+def test_store_cursor_and_day_channels(mstore, settings):
+    now = bkk(14, 10).astimezone(UTC)
+    for i in range(1, 5):
+        mstore.add_message(mk(settings, i, now + timedelta(seconds=i), f"m{i}", cid=10 + i % 2))
+    assert mstore.day_channels(GUILD, "2026-10-14") == [10, 11]
+    rows = mstore.messages_after(GUILD, 11, "2026-10-14")
+    assert [m.message_id for m in rows] == [1, 3]
+    assert [m.message_id for m in mstore.messages_after(GUILD, 11, "2026-10-14", rows[0].key)] == [
+        3
+    ]
+
+
+def test_store_delete_guild(mstore, settings):
+    now = bkk(14, 10).astimezone(UTC)
+    mstore.add_message(mk(settings, 1, now))
+    mstore.add_message(mk(settings, 2, now, gid=GUILD + 1))
+    assert mstore.delete_guild(GUILD) == 1
+    assert mstore.messages(GUILD, {10}, "2026-10-14", "2026-10-14") == []
+    assert len(mstore.messages(GUILD + 1, {10}, "2026-10-14", "2026-10-14")) == 1
+
+
+def test_purge_uses_each_guilds_current_retention(mstore, settings):
+    now = datetime(2026, 10, 14, 5, tzinfo=UTC)
+    for gid in (GUILD, GUILD + 1):
+        for days_ago, mid in ((100, 1), (40, 2), (5, 3)):
+            at = now - timedelta(days=days_ago)
+            mstore.add_message(mk(settings, mid + gid, at, gid=gid))
+            mstore.put_summary(DaySummary(guild_id=gid, channel_id=10,
+                                          local_date=at.astimezone(BKK).date().isoformat(),
+                                          message_count=1, final=True))  # fmt: skip
+    ids = lambda g: sorted(m.message_id - g for m in mstore.messages(  # noqa: E731
+        g, {10}, "2026-01-01", "2026-12-31", limit=50))  # fmt: skip
+    cut = lambda days: now - timedelta(days=days)  # noqa: E731
+    # guild A keeps 30 days, guild B keeps 365
+    assert mstore.purge({GUILD: cut(30), GUILD + 1: cut(365)}, cut(90)) == (2, 2)
+    assert ids(GUILD) == [3] and ids(GUILD + 1) == [1, 2, 3]
+    assert len(mstore.summaries(GUILD, {10}, "2026-01-01", "2026-12-31")) == 1
+    # shortening applies to data already stored; lengthening never resurrects deleted data
+    assert mstore.purge({GUILD: cut(365), GUILD + 1: cut(7)}, cut(90)) == (2, 2)
+    assert ids(GUILD) == [3] and ids(GUILD + 1) == [3]
+    # a guild the bot does not know uses the default cutoff
+    mstore.add_message(mk(settings, 50, cut(200), gid=GUILD + 2))
+    assert mstore.purge({}, cut(90))[0] == 1
+
+
+# ------------------------------------------------------------------ summaries
+def summary_json(tag):
+    return json_resp({"overview": f"overview {tag}", "topics": [{"title": "งบโฆษณา", "details": tag, "people": ["แอน"]}],
+                      "decisions": [], "action_items": [], "numbers": [], "open_questions": []})  # fmt: skip
+
+
+class Clock:
+    def __init__(self, at):
+        self.at = at
+
+    def __call__(self):
+        return self.at
+
+
+def sched(mstore, settings, clock, llm, **kw):
+    return MemoryScheduler(mstore, settings, llm, now=clock, **kw)
+
+
+def log(svc, settings, mid, at, text=None, cid=10):
+    svc.record(mk(settings, mid, at.astimezone(UTC), text or f"msg {mid}", cid=cid))
+
+
+def prompts(llm):
+    return [c[1] for c in llm.models.calls]
+
+
+def test_update_triggers_on_count_and_on_quiet_time(mstore, settings):
+    clock, llm = Clock(bkk(14, 10)), FakeClient([summary_json("a"), summary_json("b")])
+    s = sched(mstore, settings, clock, llm)
+    svc = MemoryService(mstore, settings, s)
+    for i in range(29):
+        log(svc, settings, i + 1, clock.at)
+    assert s.tick([GUILD]) == 0 and llm.models.calls == []  # 29 < 30 and not quiet yet
+    log(svc, settings, 30, clock.at)
+    assert s.tick([GUILD]) == 1  # 30th message: count trigger
+    first = mstore.get_summary(GUILD, 10, "2026-10-14")
+    assert (
+        first.message_count == 30 and not first.final and first.summary["overview"] == "overview a"
+    )
+    assert llm.models.calls[0][0] == settings.gate_model
+    # 3 more messages: below the count, so wait for the quiet period
+    for i in range(3):
+        log(svc, settings, 100 + i, clock.at, f"late-{i}")
+    clock.at += timedelta(minutes=19)
+    assert s.tick([GUILD]) == 0
+    clock.at += timedelta(minutes=2)
+    assert s.tick([GUILD]) == 1
+    second = prompts(llm)[1]
+    assert "overview a" in second  # previous summary goes in
+    assert all(f"late-{i}" in second for i in range(3))  # only the new messages ...
+    assert "msg 5" not in second  # ... never the old ones again
+    assert mstore.get_summary(GUILD, 10, "2026-10-14").message_count == 33
+    clock.at += timedelta(minutes=30)
+    assert s.tick([GUILD]) == 0  # nothing new: no model call
+
+
+def test_at_most_three_updates_per_tick(mstore, settings):
+    clock = Clock(bkk(14, 10))
+    llm = FakeClient([summary_json(str(i)) for i in range(5)])
+    s = sched(mstore, settings, clock, llm)
+    svc = MemoryService(mstore, settings, s)
+    for cid in range(10, 15):
+        log(svc, settings, cid, clock.at, "x", cid=cid)
+    clock.at += timedelta(minutes=21)
+    assert s.tick([GUILD]) == 3 and s.tick([GUILD]) == 2 and s.tick([GUILD]) == 0
+
+
+def test_day_end_finalises_once_and_never_rewrites(mstore, settings):
+    clock, llm = Clock(bkk(14, 22)), FakeClient([summary_json("a"), summary_json("b")])
+    s = sched(mstore, settings, clock, llm)
+    svc = MemoryService(mstore, settings, s)
+    log(svc, settings, 1, bkk(14, 22))
+    clock.at = bkk(14, 22, 30)
+    assert s.tick([GUILD]) == 1  # quiet update
+    clock.at = bkk(14, 23, 50)
+    log(svc, settings, 2, clock.at)  # arrives just before midnight
+    clock.at = bkk(14, 23, 55)
+    assert s.tick([GUILD]) == 0 and not mstore.get_summary(GUILD, 10, "2026-10-14").final
+    clock.at = bkk(15, 0, 5)  # the local day ended
+    assert s.tick([GUILD]) == 1
+    done = mstore.get_summary(GUILD, 10, "2026-10-14")
+    assert done.final and done.message_count == 2 and len(llm.models.calls) == 2
+    s.note(GUILD, 10, "2026-10-14")  # a straggler: ignored, no rewrite
+    clock.at = bkk(15, 2)
+    assert s.tick([GUILD]) == 0 and len(llm.models.calls) == 2
+    assert mstore.get_summary(GUILD, 10, "2026-10-14").summary["overview"] == "overview b"
+
+
+def test_finalising_a_quiet_day_needs_no_model_call(mstore, settings):
+    clock, llm = Clock(bkk(14, 10)), FakeClient([summary_json("a")])
+    s = sched(mstore, settings, clock, llm)
+    svc = MemoryService(mstore, settings, s)
+    log(svc, settings, 1, clock.at)
+    clock.at = bkk(14, 11)
+    s.tick([GUILD])
+    clock.at = bkk(15, 0, 1)
+    s.tick([GUILD])
+    assert mstore.get_summary(GUILD, 10, "2026-10-14").final and len(llm.models.calls) == 1
+
+
+def test_deleting_a_message_regenerates_the_day_once(mstore, settings):
+    clock = Clock(bkk(14, 10))
+    llm = FakeClient([summary_json("a"), summary_json("regen")])
+    s = sched(mstore, settings, clock, llm)
+    svc = MemoryService(mstore, settings, s)
+    log(svc, settings, 1, clock.at, "keep me")
+    log(svc, settings, 2, clock.at + timedelta(seconds=1), "secret to delete")
+    clock.at = bkk(14, 11)
+    s.tick([GUILD])
+    clock.at = bkk(15, 0, 5)
+    s.tick([GUILD])
+    assert mstore.get_summary(GUILD, 10, "2026-10-14").final
+    assert svc.delete(GUILD, [2]) == 1
+    assert mstore.get_summary(GUILD, 10, "2026-10-14").dirty
+    assert s.tick([GUILD]) == 1  # regenerated from the remaining raw messages only
+    redo = prompts(llm)[1]
+    assert "keep me" in redo and "secret to delete" not in redo and "overview a" not in redo
+    got = mstore.get_summary(GUILD, 10, "2026-10-14")
+    assert got.final and not got.dirty and got.message_count == 1
+    assert got.summary["overview"] == "overview regen"
+    assert s.tick([GUILD]) == 0 and len(llm.models.calls) == 2  # and then final again
+
+
+def test_a_failed_summary_call_is_retried_later(mstore, settings):
+    clock = Clock(bkk(14, 10))
+    llm = FakeClient([RuntimeError("boom"), summary_json("ok")])
+
+    def boom(contents, config):
+        raise RuntimeError("boom")
+
+    llm.models.script[0] = boom
+    s = sched(mstore, settings, clock, llm)
+    svc = MemoryService(mstore, settings, s)
+    log(svc, settings, 1, clock.at)
+    clock.at += timedelta(minutes=21)
+    assert s.tick([GUILD]) == 0 and mstore.get_summary(GUILD, 10, "2026-10-14") is None
+    clock.at += timedelta(minutes=1)
+    assert s.tick([GUILD]) == 0  # still backing off
+    clock.at += timedelta(minutes=5)
+    assert s.tick([GUILD]) == 1 and mstore.get_summary(GUILD, 10, "2026-10-14")
+
+
+def test_scheduler_picks_up_unfinished_work_after_a_restart(mstore, settings):
+    clock, llm = Clock(bkk(14, 10)), FakeClient([summary_json("a")])
+    mstore.add_message(mk(settings, 1, bkk(14, 9).astimezone(UTC)))
+    s = sched(mstore, settings, clock, llm)  # fresh scheduler: nothing noted in memory
+    s.tick([GUILD])  # seeds from the store; the channel is not quiet yet
+    clock.at += timedelta(minutes=21)
+    assert s.tick([GUILD]) == 1
+
+
+def test_scheduler_purges_once_a_day_by_guild_retention(mstore, settings):
+    clock = Clock(bkk(14, 10))
+    s = sched(mstore, settings, clock, FakeClient([]), retention_of=lambda gid: 30)
+    mstore.add_message(mk(settings, 1, bkk(14, 9).astimezone(UTC) - timedelta(days=40)))
+    mstore.add_message(mk(settings, 2, bkk(14, 9).astimezone(UTC) - timedelta(days=10)))
+    s.tick([GUILD])
+    assert [m.message_id for m in mstore.messages(GUILD, {10}, "2026-01-01", "2026-12-31")] == [2]
+    assert s.maybe_purge(clock.at) is None  # already ran today
+
+
+def test_summary_prompt_and_rendering():
+    prompt = memory_summary.build_prompt({"overview": "prev"}, [], channel="ads", day="2026-10-14",
+                                         lang="th", zone=BKK)  # fmt: skip
+    assert "Thai" in prompt and "#ads" in prompt and "prev" in prompt and "do not invent" in prompt
+    text = memory_summary.render_summary({
+        "overview": "o", "topics": [{"title": "T", "details": "d", "people": ["a"]}],
+        "decisions": ["dec"], "action_items": [{"who": "บอย", "what": "ส่งงาน", "due": "ศุกร์"}],
+        "numbers": ["50,000 บาท"], "open_questions": ["q?"]})  # fmt: skip
+    assert all(
+        x in text
+        for x in ("Topic: T (a): d", "Decision: dec", "บอย: ส่งงาน (due ศุกร์)", "50,000", "q?")
+    )
+
+
+# ------------------------------------------------------------------ access function
+def acc(cid, *viewers):
+    return ChannelAccess(cid, f"c{cid}", frozenset(viewers))
+
+
+def test_access_asker_must_read_the_source_channel():
+    chans = [acc(1, 7, 8), acc(2, 8)]
+    assert allowed_channel_ids(chans, 7, None) == {1}  # DM: the asker's channels
+    assert allowed_channel_ids(chans, 9, None) == set()
+
+
+def test_access_wider_audience_cannot_see_a_private_source():
+    private, public = acc(1, 7), acc(2, 7, 8, 9)
+    chans = [private, public]
+    assert allowed_channel_ids(chans, 7, 2) == {2}  # public answer: private source excluded
+    assert allowed_channel_ids(chans, 7, 1) == {1, 2}  # private answer: everything 7 reads
+    # same channel is always allowed, even when the asker is not in the viewer cache
+    assert allowed_channel_ids(chans, 99, 2) == {2}
+    assert allowed_channel_ids(chans, 7, 555) == set()  # unknown answering channel: nothing
+
+
+def test_access_equal_audience_is_fine():
+    chans = [acc(1, 7, 8), acc(2, 7, 8)]
+    assert allowed_channel_ids(chans, 7, 2) == {1, 2}
+
+
+# ------------------------------------------------------------------ discord adapter
+class RChan(Chan):
+    def __init__(self, id, name, readers):
+        super().__init__(id, name)
+        self.readers = set(readers)
+
+    def permissions_for(self, m):
+        ok = m.id in self.readers
+        return SimpleNamespace(read_messages=ok, read_message_history=ok, send_messages=True)
+
+
+@pytest.fixture
+def rworld(world, bot):
+    g = world.g
+    g.text_channels[:] = [RChan(10, "ทั่วไป", {STAFF, MANAGER}), RChan(11, "ผู้บริหาร", {EXEC}),
+                          RChan(12, "ads", {STAFF, MANAGER, EXEC})]  # fmt: skip
+    for c in g.text_channels:
+        c.guild = g
+    for uid in (STAFF, MANAGER, EXEC):
+        member(g, uid)
+    return SimpleNamespace(g=g, staff=g.members[STAFF], boss=g.members[EXEC])
+
+
+def scope(bot, w, who, answering):
+    bot._viewers.clear()
+    return bot._memory_scope(w.g, who, answering)
+
+
+def test_adapter_applies_permissions_audience_and_modes(bot, rworld):
+    w = rworld
+    assert scope(bot, w, w.staff, None) == {10: "ทั่วไป", 12: "ads"}  # DM: what staff can read
+    assert set(scope(bot, w, w.boss, None)) == {11, 12}
+    # answering in #ทั่วไป (staff+manager can read): #ads has more readers than staff? no: audience
+    # {STAFF, MANAGER} is inside #ads's readers, so #ads is allowed; #ผู้บริหาร is not readable
+    assert set(scope(bot, w, w.staff, 10)) == {10, 12}
+    assert set(scope(bot, w, w.boss, 10)) == {10, 12}  # boss cannot read 10: only the same channel
+    set_mode(bot, 12, "off")
+    assert set(scope(bot, w, w.staff, None)) == {10}  # off channels are never remembered
+
+
+# ------------------------------------------------------------------ tools
+def seeded_tools(mstore, settings, allowed, now=None):
+    now = now or bkk(14, 9).astimezone(UTC)
+    mstore.add_message(mk(settings, 1, now, "งบโฆษณาเดือนนี้ 50,000 บาท", cid=10, author="แอน"))
+    mstore.add_message(
+        mk(settings, 2, now + timedelta(minutes=5), "ลองใช้ ads ใหม่", cid=10, author="บอย")
+    )
+    mstore.add_message(
+        mk(settings, 3, now + timedelta(minutes=6), "ads ลับของผู้บริหาร", cid=11, author="เจ้านาย")
+    )
+    mstore.add_message(mk(settings, 4, now - timedelta(days=3), "ads old", cid=10))
+    return MemoryTools(mstore, GUILD, allowed, settings, retention_days=30)
+
+
+def test_tools_never_return_channels_outside_the_scope(mstore, settings):
+    tools = seeded_tools(mstore, settings, {10: "general"})
+    for fn, args in (
+        (tools.chat_messages, ("2026-10-01", "2026-10-14")),
+        (tools.chat_search, (["ads"],)),
+        (tools.chat_days, ("2026-10-14", "2026-10-14")),
+    ):
+        assert "ลับ" not in json.dumps(fn(*args), ensure_ascii=False)
+    # the model names a channel it cannot see
+    r = tools.call(
+        "chat_messages",
+        {"start_date": "2026-10-01", "end_date": "2026-10-14", "channel_name": "ผู้บริหาร"},
+    )
+    assert r["count"] == 0 and "no channel" in r["note"]
+    r = tools.call(
+        "chat_messages",
+        {"start_date": "2026-10-01", "end_date": "2026-10-14", "allowed": [11], "channel_id": 11},
+    )
+    assert {m["channel"] for m in r["messages"]} == {"general"}  # undeclared args are dropped
+    assert tools.call("chat_days", {"start_date": "x", "end_date": "y"})["error"]
+    assert tools.call("drop", {})["error"]
+
+
+def test_chat_messages_keyword_order_and_links(mstore, settings):
+    tools = seeded_tools(mstore, settings, {10: "general", 11: "exec"})
+    r = tools.chat_messages("2026-10-01", "2026-10-14", keyword="ADS")
+    assert [m["author"] for m in r["messages"]][:2] == ["เจ้านาย", "บอย"]  # newest first
+    assert r["messages"][0]["link"] == "https://d/11/3" and r["messages"][0]["time"].startswith(
+        "2026-10-14 "
+    )
+    assert (
+        tools.chat_messages("2026-10-01", "2026-10-14", channel_name="#GENERAL", keyword="ads")[
+            "count"
+        ]
+        == 2
+    )
+
+
+def test_chat_days_returns_summaries_and_todays_raw_tail(mstore, settings):
+    tools = seeded_tools(mstore, settings, {10: "general"})
+    cursor_msg = mstore.messages_after(GUILD, 10, "2026-10-14")[0]  # the 09:00 message
+    mstore.put_summary(DaySummary(
+        guild_id=GUILD, channel_id=10, local_date="2026-10-14", message_count=1,
+        summary={"overview": "คุยเรื่องงบ", "topics": [], "decisions": ["อนุมัติ"]},
+        last_message_at=cursor_msg.key[0], last_message_id=cursor_msg.message_id))  # fmt: skip
+    r = tools.chat_days("2026-10-14", "2026-10-14")
+    assert r["days"][0]["channel"] == "general" and "อนุมัติ" in r["days"][0]["summary"]
+    # only what is newer than the summary comes as raw messages
+    assert [m["text"] for m in r["newer_than_summary"]] == ["ลองใช้ ads ใหม่"]
+    empty = tools.chat_days("2026-10-01", "2026-10-02")
+    assert empty["count"] == 0 and "nothing recorded" in empty["note"]
+    assert "error" in tools.call(
+        "chat_days", {"start_date": "2026-01-01", "end_date": "2026-12-31"}
+    )
+
+
+def test_chat_days_output_is_capped_newest_days_first(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {10: "general"}, settings)
+    for d in range(1, 15):
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      message_count=5, final=True, summary={"overview": "x" * 2400}))  # fmt: skip
+    r = tools.chat_days("2026-10-01", "2026-10-14")
+    assert len(json.dumps(r, ensure_ascii=False)) < 7500 and "narrow" in r["note"]
+    dates = [d["date"] for d in r["days"]]
+    assert "2026-10-14" in dates and "2026-10-01" not in dates
+
+
+def test_chat_search_ranks_summary_hits_higher_and_matches_any_keyword(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {10: "general", 12: "ads"}, settings, retention_days=30)
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=12, local_date="2026-10-10", message_count=3,
+        summary={"overview": "", "topics": [{"title": "งบโฆษณา", "details": "ค่า ads 20,000", "people": ["แอน"]}],
+                 "decisions": [], "action_items": [], "numbers": [], "open_questions": []}))  # fmt: skip
+    mk_m = lambda mid, day, text, cid: mstore.add_message(  # noqa: E731
+        mk(settings, mid, bkk(day, 10).astimezone(UTC), text, cid=cid))  # fmt: skip
+    mk_m(1, 13, "มี ads ใหม่", 10)
+    mk_m(2, 12, "ads และ งบโฆษณา เหลือน้อย", 10)  # two keywords in one message
+    mk_m(3, 11, "ไม่เกี่ยว", 10)
+    r = tools.chat_search(["งบโฆษณา", "ADS", "marketing budget"])
+    keys = [(h["date"], h["channel"]) for h in r["hits"]]
+    assert keys == [("2026-10-10", "ads"), ("2026-10-12", "general"), ("2026-10-13", "general")]
+    top = r["hits"][0]
+    assert top["score"] == 6 and top["summary_hits"] and top["matching_messages"] == 0
+    assert r["hits"][1]["score"] == 2 > r["hits"][2]["score"] == 1
+    assert r["hits"][1]["messages"][0]["link"] == "https://d/10/2"
+    assert tools.chat_search(["nothing-here"])["hits"] == []
+    assert "error" in tools.chat_search([" ", ""])
+    # date range: defaults to the retention window, explicit range narrows it
+    assert [h["date"] for h in tools.chat_search(["ads"], "2026-10-13", "2026-10-13")["hits"]] == [
+        "2026-10-13"
+    ]
+
+
+def test_chat_search_ties_go_newest_first_and_limits_groups(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
+    for d in (5, 6, 7):
+        mstore.add_message(mk(settings, d, bkk(d, 10).astimezone(UTC), "ads", cid=10))
+    assert [h["date"] for h in tools.chat_search(["ads"])["hits"]] == [
+        "2026-10-07",
+        "2026-10-06",
+        "2026-10-05",
+    ]
+    assert len(tools.chat_search(["ads"], limit=2)["hits"]) == 2
+
+
+def test_chat_search_output_is_capped(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
+    for d in range(1, 15):
+        for i in range(4):
+            mstore.add_message(
+                mk(settings, d * 10 + i, bkk(d, 10, i).astimezone(UTC), "ads " + "ก" * 450, cid=10)
+            )
+    r = tools.chat_search(["ads"], limit=50)
+    assert len(json.dumps(r, ensure_ascii=False)) <= 4500 and "truncated" in r["note"]
+    assert all(len(h["messages"]) <= 3 for h in r["hits"])
+
+
+def test_ask_wires_the_memory_tools_and_prompt(mstore, settings, tmp_path):
+    from salid.store import SQLiteStore
+
+    tools = seeded_tools(mstore, settings, {10: "general"})
+    llm = scripted(fc_resp(("chat_search", {"keywords": ["ads", "งบโฆษณา"]})), text_resp("พบครับ"))
+    a = ask(settings, SQLiteStore(str(tmp_path / "l.db")), "งบโฆษณาเหลือเท่าไหร่", guild_id=GUILD,
+            is_exec=False, user_id=7, model=llm, memory=tools)  # fmt: skip
+    names = {d.name for t_ in llm.requests[0].config.tools for d in t_.function_declarations}
+    assert {"chat_days", "chat_messages", "chat_search", "spending_summary"} <= names
+    prompt = llm.requests[0].config.system_instruction
+    assert "chat_search" in prompt and "ความจำของทีม" in prompt
+    blob = json.dumps(
+        [
+            str(p.function_response)
+            for c in llm.requests[1].contents
+            for p in c.parts or []
+            if p.function_response
+        ],
+        ensure_ascii=False,
+    )
+    assert a.text == "พบครับ" and "50,000" in blob and "ลับ" not in blob
+    # without memory tools the prompt and tools do not mention them
+    llm2 = scripted(text_resp("ok"))
+    ask(
+        settings,
+        SQLiteStore(str(tmp_path / "l.db")),
+        "hi",
+        guild_id=GUILD,
+        is_exec=True,
+        user_id=7,
+        model=llm2,
+    )
+    assert "chat_search" not in llm2.requests[0].config.system_instruction
+
+
+# ------------------------------------------------------------------ bot: recording
+def recorded(bot, channel_ids=(10,), day="2026-10-14"):
+    return bot.memory_store.messages(
+        GUILD, set(channel_ids), day, day, limit=100, newest_first=False
+    )
+
+
+async def test_modes_decide_what_is_recorded(bot, world):
+    set_mode(bot, 10, "off")
+    await send(bot, world, world.gen, "private chat")
+    await send(bot, world, world.named, "in a call-mode channel")
+    for mode in ("listen", "call", "join", "chat"):
+        set_mode(bot, 10, mode)
+        await send(bot, world, world.gen, f"in {mode}")
+    await bot.drain_memory()
+    assert [m.text for m in recorded(bot)] == ["in listen", "in call", "in join", "in chat"]
+    assert [m.text for m in recorded(bot, (12,))] == ["in a call-mode channel"]
+    assert all(
+        m.kind == "chat" and m.author_name == "u4" and m.author_id == STAFF for m in recorded(bot)
+    )
+
+
+async def test_message_fields_and_attachments(bot, world):
+    from test_bot_multitenant import photo
+
+    m = await send(bot, world, world.gen, "ใบเสร็จวันนี้", attachments=[photo()])
+    m.jump_url = "https://discord.com/channels/1/10/5"
+    await bot.drain_memory()
+    (rec,) = recorded(bot)
+    assert rec.text == "ใบเสร็จวันนี้ [image: r.jpg]" and rec.channel_id == 10 and rec.thread_id is None
+    assert rec.local_date == "2026-10-14" and rec.message_id == m.id
+
+
+async def test_salids_own_replies_are_recorded_as_salid(bot, world):
+    own = TMsg(world.g, world.gen, ME, "ตอบแล้วครับ")
+    await bot.on_message(own)
+    await bot.drain_memory()
+    (rec,) = recorded(bot)
+    assert (rec.kind, rec.author_name, rec.text) == ("salid", "Salid", "ตอบแล้วครับ")
+
+
+async def test_other_bots_are_not_recorded(bot, world):
+    author = member(world.g, 77)
+    author.bot = True
+    await bot.on_message(TMsg(world.g, world.gen, author, "beep"))
+    await bot.drain_memory()
+    assert recorded(bot) == []
+
+
+async def test_threads_use_the_parent_channel(bot, world):
+    thread = Chan(500, "thread-x")
+    thread.parent_id, thread.parent, thread.guild = 12, world.named, world.g
+    await send(bot, world, thread, "in a thread")
+    private = Chan(501, "secret-thread")
+    private.parent_id, private.parent, private.guild = 12, world.named, world.g
+    private.is_private = lambda: True
+    await send(bot, world, private, "private thread")
+    set_mode(bot, 12, "off")
+    await send(bot, world, thread, "parent is off")
+    await bot.drain_memory()
+    (rec,) = recorded(bot, (12, 500))
+    assert (rec.channel_id, rec.thread_id, rec.text) == (12, 500, "in a thread")
+
+
+async def test_the_memory_feature_flag_turns_recording_off(bot, world):
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features=dict(memory=False)), "x")
+    bot.team._cache.clear()
+    await send(bot, world, world.gen, "nothing kept")
+    await bot.drain_memory()
+    assert recorded(bot) == []
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features=dict(memory=True)), "x")
+    bot.team._cache.clear()
+    assert await bot._memory_tools(
+        TMsg(world.g, world.gen, member(world.g, STAFF)), world.g, member(world.g, STAFF)
+    )
+
+
+async def test_edit_and_delete_events(bot, world):
+    a = await send(bot, world, world.gen, "first")
+    b = await send(bot, world, world.gen, "second")
+    await bot.drain_memory()
+    edit = SimpleNamespace(guild_id=GUILD, message_id=a.id, data={
+        "content": "first (edited)", "attachments": [{"filename": "x.png", "content_type": "image/png"}],
+        "edited_timestamp": "2026-10-14T05:00:00+00:00"})  # fmt: skip
+    await bot.on_raw_message_edit(edit)
+    await bot.on_raw_message_edit(
+        SimpleNamespace(guild_id=GUILD, message_id=b.id, data={"embeds": []})
+    )
+    await bot.on_raw_message_edit(
+        SimpleNamespace(guild_id=None, message_id=1, data={"content": "dm"})
+    )
+    await bot.drain_memory()
+    first, second = recorded(bot)
+    assert (
+        first.text == "first (edited) [image: x.png]"
+        and first.edited_at
+        and second.text == "second"
+    )
+    bot.memory_store.put_summary(
+        DaySummary(
+            guild_id=GUILD, channel_id=10, local_date="2026-10-14", message_count=2, final=True
+        )
+    )
+    await bot.on_raw_message_delete(SimpleNamespace(guild_id=GUILD, message_id=a.id))
+    await bot.drain_memory()
+    assert [m.text for m in recorded(bot)] == ["second"]
+    assert bot.memory_store.get_summary(GUILD, 10, "2026-10-14").dirty
+    await bot.on_raw_bulk_message_delete(SimpleNamespace(guild_id=GUILD, message_ids={b.id, 123}))
+    await bot.drain_memory()
+    assert recorded(bot) == []
+
+
+async def test_recording_failure_never_breaks_the_handler(bot, world, monkeypatch):
+    def boom(msg):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(bot.memory, "record", boom)
+    m = await send(bot, world, world.gen, "สลิด ยอดเท่าไร")
+    await bot.drain_memory()
+    assert bot.calls == [("answer", "สลิด ยอดเท่าไร")] and m.replies == ["ans"]
+
+
+async def test_the_message_is_logged_before_any_reply_work(bot, world):
+    order = []
+    orig = bot._memory_enqueue
+    bot._memory_enqueue = lambda job: (order.append("logged"), orig(job))[1]
+
+    async def slow_answer(m, guild, who):
+        order.append("answering")
+
+    bot._answer = slow_answer
+    await send(bot, world, world.gen, "สลิด ช่วยหน่อย")
+    assert order == ["logged", "answering"]
+
+
+async def test_voice_segments_are_logged_as_voice(bot, world):
+    voice = Chan(77, "ห้องประชุม")
+    voice.guild = world.g
+    at = datetime(2026, 10, 14, 5, 0, tzinfo=UTC)
+    await bot.record_voice(voice, STAFF, "แอน", "เลื่อนประชุมเป็นวันศุกร์", at)
+    await bot.record_voice(voice, STAFF, "แอน", "   ", at)
+    set_mode(bot, 77, "off")
+    await bot.record_voice(voice, STAFF, "แอน", "ไม่ควรเก็บ", at)
+    await bot.drain_memory()
+    (rec,) = recorded(bot, (77,))
+    assert (rec.kind, rec.channel_id, rec.author_name) == ("voice", 77, "แอน")
+    assert rec.text == "เลื่อนประชุมเป็นวันศุกร์" and "77" in rec.jump_url
+
+
+# ------------------------------------------------------------------ notices, /memory
+async def test_switching_a_channel_on_posts_a_one_time_notice(bot, world):
+    set_mode(bot, 10, "off")
+    await send(bot, world, world.gen, "hi")
+    assert world.gen.sent == []
+    it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
+    await bot.handle_mode(it, "call")
+    assert world.gen.sent == [t("memory_notice", "th", days=90)] and "90" in world.gen.sent[0]
+    await bot.handle_mode(it, "join")  # on -> on: no second notice
+    assert len(world.gen.sent) == 1
+    await bot.handle_mode(it, "off")
+    await bot.handle_mode(it, "chat")
+    assert len(world.gen.sent) == 2
+
+
+async def test_a_hub_change_from_off_is_noticed_on_the_next_message(bot, world):
+    set_mode(bot, 10, "off")
+    await send(bot, world, world.gen, "hi")
+    set_mode(bot, 10, "call")  # changed in the hub: the bot only sees it later
+    await send(bot, world, world.gen, "hello")
+    await send(bot, world, world.gen, "again")
+    assert world.gen.sent == [t("memory_notice", "th", days=90)]
+
+
+async def test_notice_shows_the_guilds_retention_days(bot, world):
+    bot.guilds_store.set_memory_retention_days(GUILD, 30)
+    bot.team._cache.clear()
+    set_mode(bot, 10, "off")
+    await send(bot, world, world.gen, "hi")
+    await bot.handle_mode(
+        Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen), "call"
+    )
+    assert "30" in world.gen.sent[0] and "90" not in world.gen.sent[0]
+    it = Interaction(world.g, member(world.g, STAFF), world.gen)
+    await bot.handle_mode(it, None)
+    assert "30 วัน" in it.sent[0][0]
+
+
+def test_mode_help_and_welcome_mention_memory():
+    for lang in ("th", "en"):
+        assert t("mode_help_off", lang, days=7) and "7" in t("mode_help_chat", lang, days=7)
+        assert "7" in t("welcome", lang, mention="@S", chat="#c", days=7)
+        assert "7" in t("memory_notice", lang, days=7)
+
+
+async def test_memory_command_status_and_permissions(bot, world):
+    it = Interaction(world.g, member(world.g, STAFF), world.gen)
+    await bot.handle_memory(it, None)
+    ((text, ephemeral),) = it.sent
+    assert ephemeral and "90" in text and t("memory_on", "th") in text
+    it2 = Interaction(world.g, member(world.g, STAFF, roles=["พนักงาน"]), world.gen)
+    await bot.handle_memory(it2, 30)
+    assert it2.sent == [(t("memory_denied", "th"), True)]
+    assert bot.team.memory_retention_days(GUILD) == 90
+    boss = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
+    await bot.handle_memory(boss, 30)
+    assert boss.sent == [(t("memory_set", "th", days=30), False)]  # public confirmation
+    assert bot.team.memory_retention_days(GUILD) == 30
+    for bad in (0, 3651, -5):
+        bad_it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
+        await bot.handle_memory(bad_it, bad)
+        assert bad_it.sent[0][1] is True and bad_it.sent[0][0] == t(
+            "memory_bad_days", "th", lo=1, hi=3650
+        )
+    assert bot.team.memory_retention_days(GUILD) == 30
+    exec_it = Interaction(world.g, member(world.g, EXEC), world.gen)
+    await bot.handle_memory(exec_it, 365)  # executives (env id) may change it too
+    assert bot.team.memory_retention_days(GUILD) == 365
+    bot.guilds_store.save_settings(
+        GUILD, GuildSettingsUpdate(features=dict(memory=False), memory_retention_days=365), "x"
+    )
+    bot.team._cache.clear()
+    off = Interaction(world.g, member(world.g, STAFF), world.gen)
+    await bot.handle_memory(off, None)
+    assert t("memory_off", "th") in off.sent[0][0] and "365" in off.sent[0][0]
+
+
+# ------------------------------------------------------------------ retention setting
+@pytest.mark.parametrize("value, expected", [(30, 30), (1, 1), (3650, 3650), ("180", 180), (365.0, 365),
+                                              (0, 90), (3651, 90), (-1, 90), ("abc", 90), (None, 90),
+                                              (True, 90), (12.5, 90), ([7], 90)])  # fmt: skip
+def test_retention_validation_bounds(value, expected):
+    assert GuildSettingsUpdate(memory_retention_days=value).memory_retention_days == expected
+    assert GuildSettings().memory_retention_days == default_retention_days() == 90
+
+
+def test_retention_env_default(monkeypatch):
+    monkeypatch.setenv("SALID_MEMORY_RETENTION_DAYS", "45")
+    assert GuildSettingsUpdate().memory_retention_days == 45
+    monkeypatch.setenv("SALID_MEMORY_RETENTION_DAYS", "99999")
+    assert GuildSettingsUpdate().memory_retention_days == 90
+
+
+def test_retention_is_stored_per_guild():
+    store = MemoryGuildStore()
+    store.save_settings(GUILD, GuildSettingsUpdate(memory_retention_days=30), "x")
+    store.save_settings(GUILD + 1, GuildSettingsUpdate(), "x")
+    assert (
+        store.get(GUILD).memory_retention_days == 30
+        and store.get(GUILD + 1).memory_retention_days == 90
+    )
+    store.set_memory_retention_days(GUILD, 7)
+    assert store.get(GUILD).memory_retention_days == 7
+    with pytest.raises(ValueError):
+        store.set_memory_retention_days(GUILD, 0)
+
+
+async def test_purge_follows_the_setting_changed_after_the_data_was_stored(bot, world, tmp_path):
+    old = bkk(14, 9).astimezone(UTC) - timedelta(days=60)
+    bot.memory_store.add_message(mk(bot.s, 1, old))
+    bot.team.set_memory_retention_days(GUILD, 30)  # shortened: the 60-day-old message goes
+    sch = bot.memory.scheduler
+    sch._known_guilds.add(GUILD)
+    sch.maybe_purge(bkk(14, 10))
+    assert bot.memory_store.messages(GUILD, {10}, "2026-01-01", "2026-12-31") == []
+
+
+# ------------------------------------------------------------------ the end-to-end scenario
+class FakeClockNow:
+    pass
+
+
+async def test_end_to_end_ads_budget_question_from_a_dm(bot, world):
+    """A member posts the budget in a channel; 18 s later another member who can read it asks in
+    a DM. No summary exists yet, but chat_search and chat_days(today) both return the raw
+    message. A member who cannot read the channel gets nothing."""
+    g = world.g
+    g.text_channels[:] = [RChan(10, "ads-team", {STAFF, MANAGER}), RChan(12, "ผู้บริหาร", {EXEC})]
+    for c in g.text_channels:
+        c.guild = g
+    poster, asker, outsider = member(g, STAFF), member(g, MANAGER), member(g, EXEC)
+    text = "งบโฆษณาเดือนนี้ 50,000 บาท ใช้ไปแล้ว 32,000"
+    posted = TMsg(g, g.text_channels[0], poster, text)
+    posted.jump_url = "https://discord.com/channels/1000/10/42"
+    await bot.on_message(posted)  # the log is written by the time the queue has run, no summary
+    await bot.drain_memory()
+    bot.clock.advance(18)
+    assert bot.memory_store.get_summary(GUILD, 10, "2026-10-14") is None
+
+    dm = SimpleNamespace(guild=None)  # a DM: no answering channel
+    tools = await bot._memory_tools(dm, g, asker)
+    assert tools.allowed == {10: "ads-team"}
+    found = tools.chat_search(["งบโฆษณา", "ads"])
+    assert found["count"] == 1 and found["hits"][0]["channel"] == "ads-team"
+    msg = found["hits"][0]["messages"][0]
+    assert msg["text"] == text and msg["link"].endswith("/42") and msg["author"] == "u4"
+    today = tools.chat_days("2026-10-14", "2026-10-14")
+    assert today["days"] == [] and [m["text"] for m in today["newer_than_summary"]] == [text]
+
+    nothing = await bot._memory_tools(dm, g, outsider)  # cannot read #ads-team
+    assert nothing.allowed == {12: "ผู้บริหาร"}
+    assert nothing.chat_search(["งบโฆษณา", "ads"])["hits"] == []
+    assert "newer_than_summary" not in nothing.chat_days("2026-10-14", "2026-10-14")
+    assert nothing.chat_messages("2026-10-14", "2026-10-14", keyword="งบ")["count"] == 0
+
+
+def test_latest_message_at_parity(mstore, settings):
+    now = bkk(14, 10).astimezone(UTC)
+    mstore.add_message(mk(settings, 1, now - timedelta(days=2)))
+    mstore.add_message(mk(settings, 2, now, cid=10))
+    mstore.add_message(mk(settings, 3, now + timedelta(hours=1), cid=11))
+    assert mstore.latest_message_at(GUILD, 10, "2026-10-01") == now
+    assert mstore.latest_message_at(GUILD, 12, "2026-10-01") is None
+    assert mstore.latest_message_at(GUILD, 10, "2026-10-15") is None
+
+
+def test_import_state_parity(mstore):
+    from salid.memory_store import ChannelState, GuildMemoryState
+
+    assert mstore.get_channel_state(GUILD, 10) is None and mstore.list_channel_states(GUILD) == []
+    st = ChannelState(
+        guild_id=GUILD,
+        channel_id=10,
+        imported_from="a",
+        last_message_at="b",
+        summary_days=["2026-10-01"],
+    )
+    mstore.put_channel_state(st)
+    mstore.put_channel_state(ChannelState(guild_id=GUILD + 1, channel_id=10))
+    assert mstore.get_channel_state(GUILD, 10) == st
+    assert [s.channel_id for s in mstore.list_channel_states(GUILD)] == [10]
+    assert mstore.get_guild_state(GUILD) == GuildMemoryState(guild_id=GUILD)
+    mstore.put_guild_state(GuildMemoryState(guild_id=GUILD, day="2026-10-14", images_done=5))
+    assert mstore.get_guild_state(GUILD).images_done == 5
+    mstore.delete_guild(GUILD)
+    assert (
+        mstore.get_channel_state(GUILD, 10) is None
+        and mstore.get_guild_state(GUILD).images_done == 0
+    )
+    assert mstore.get_channel_state(GUILD + 1, 10) is not None

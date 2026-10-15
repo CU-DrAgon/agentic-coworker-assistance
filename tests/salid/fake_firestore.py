@@ -49,6 +49,9 @@ class FakeRef:
     def update(self, fields):
         self.col.docs[self.id].update(fields)
 
+    def delete(self):
+        self.col.docs.pop(self.id, None)
+
 
 class FakeQuery:
     def __init__(self, col, filters=(), n=None):
@@ -103,3 +106,9 @@ class OfflineFirestoreStore(FirestoreStore):
     def _next_id(self):
         self._n += 1
         return self._n
+
+
+def offline_memory_store(**kw):
+    from salid.firestore_memory import FirestoreMemoryStore
+
+    return FirestoreMemoryStore(client=FakeFirestore(), **kw)

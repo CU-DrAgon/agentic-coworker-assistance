@@ -16,8 +16,8 @@ def mode_label(mode: str, lang: str = "th") -> str:
     return t(f"mode_label_{mode}", lang)
 
 
-def mode_help(mode: str, lang: str = "th") -> str:
-    return t(f"mode_help_{mode}", lang)
+def mode_help(mode: str, lang: str = "th", days: int = 90) -> str:
+    return t(f"mode_help_{mode}", lang, days=days)
 
 
 def mode_choice_name(mode: str) -> str:

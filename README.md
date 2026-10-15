@@ -179,6 +179,54 @@ Needs the **Connect** permission, the voice-states intent (non-privileged), `lib
 `Dockerfile.salid`) and `discord-ext-voice-recv` + `davey` (Discord's DAVE end-to-end encryption; see
 `src/salid/meeting.py`). Toggle: hub feature `voice_meetings`.
 
+**Team memory (องค์ความรู้).** Salid remembers what is said in the channels whose mode is not `off`, so it can
+answer "what did we discuss yesterday?", "where is customer X's job?" or "who owns the ad budget?" without
+spending many tokens and without leaking channels. Three layers (code in `src/salid/memory*.py`):
+
+1. **Raw log, no LLM.** Every human message and Salid's own replies (kind `salid`), threads under their parent
+   channel (private threads are skipped), voice-meeting segments (kind `voice`, channel = the voice channel),
+   with author, UTC time, `local_date` (`SALID_TZ`), text plus short attachment descriptors, and the jump URL.
+   Edits update the text; deletes remove the record and mark that channel-day summary `dirty`. Writes run in a
+   background queue and can never slow or break a reply. Stores: SQLite (same file as the ledger) or Firestore
+   (`salid_messages/{guild}_{message}`, `salid_day_summaries/{guild}_{channel}_{date}`,
+   `salid_memory_channels/{guild}_{channel}`, `salid_memory_guilds/{guild}`), chosen by `SALID_STORE`; every read
+   takes the guild and an explicit set of allowed channels. Firestore needs no composite index (equality and
+   single-field range queries only).
+2. **Per-channel day summaries, cheap model, batched.** `SALID_GATE_MODEL` (Flash-Lite) updates today's summary
+   when a channel has `SALID_MEMORY_UPDATE_EVERY` (30) new messages, or any new message and
+   `SALID_MEMORY_QUIET_MINUTES` (20) of quiet, sending only the previous summary plus the new messages (each
+   message is read about once). Summaries are structured (overview, topics, decisions, action items, numbers,
+   open questions). After the local day ends a summary is finalised and never rewritten, except once after a
+   deletion. At most 3 updates per tick.
+3. **Answering, access in code.** ADK tools `chat_search`, `chat_days` and `chat_messages` are bound to the guild
+   and an allowed-channel set computed from Discord permissions (`salid/memory_access.py`): the asker must be able
+   to read the channel, and when the answer is posted in channel X everyone who can read X must be able to read
+   the source (DMs: the asker's channels). The model cannot widen it. `chat_days` also returns today's raw messages
+   newer than the summary; outputs are capped (6,000 / 4,000 characters).
+
+- **Retention** is per guild: hub field "เก็บความจำไว้กี่วัน" or `/ความจำ days:<1-3650>` (`/memory`), default
+  `SALID_MEMORY_RETENTION_DAYS` (90). The daily purge deletes by the guild's *current* setting (no stored expiry,
+  so there is deliberately no Firestore TTL policy: a TTL on a stored date would ignore later changes). Shortening
+  applies to existing data at the next purge; lengthening triggers an import of the newly covered older range.
+- **History import** (`salid/memory_import.py`): for every readable non-`off` channel and thread (active and
+  archived) Salid imports the messages from now minus retention, including from before memory was enabled; on
+  startup it also catches up on downtime. Per channel progress (`imported_from`, `last_message_at`) makes it
+  resumable and idempotent. Throttled: one channel at a time, pages of 100, a pause between pages, at most
+  `SALID_MEMORY_IMPORT_GUILD_CAP` (20,000) messages per guild per run (a capped run resumes 10 minutes later).
+  Past channel-days with 3+ messages get one final summary through a queue capped at
+  `SALID_MEMORY_IMPORT_SUMMARIES_PER_DAY` (200) per guild per day, newest first.
+- **Images** (feature flag `image_memory`): each image (max 4 per message, 8 MB each) is described once by the cheap
+  multimodal model (description, all legible text verbatim, type) in a background task and added to the message's
+  record, so search and summaries see it; bytes are never stored. Images the receipt pipeline reads are not read
+  twice (the stored text is built from the extracted receipt). Historical images are described through a queue
+  capped at `SALID_MEMORY_IMPORT_IMAGES_PER_DAY` (300) per guild per day, newest first; the rest keep
+  `[image: name]` until reached (`[image-unread: name]` when the message is gone or the image unreadable).
+- **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
+  retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
+  same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.
+- `MemoryService.delete_guild(guild_id)` wipes a guild's memory; the bot does not call it on removal because it
+  keeps every other guild record too (retention expires the data).
+
 Discord setup (once, by the operator):
 
 1. Create an application and bot at the Discord Developer Portal (name it **Salid**); copy the bot token.
@@ -193,7 +241,7 @@ Discord setup (once, by the operator):
 
 Other keys: `SALID_DIGEST_TIME`, `SALID_STORE`, `SALID_DB_PATH`, `SALID_FIRESTORE_COLLECTION`,
 `SALID_RECEIPT_BUCKET`, `SALID_GEMINI_CLI_PATH`, `SALID_DEEP_TASK_TIMEOUT`, `SALID_DEEP_TASK_MODEL`,
-`SALID_GCP_PROJECT`, `SALID_GEMINI_LOCATION`, `SALID_GEMINI_MODEL`, `SALID_TZ` (see `.env.example`). All Salid variables carry the `SALID_` prefix so they
+`SALID_GCP_PROJECT`, `SALID_GEMINI_LOCATION`, `SALID_GEMINI_MODEL`, `SALID_TZ`, `SALID_MEMORY_*` (see `.env.example`). All Salid variables carry the `SALID_` prefix so they
 never collide with Meeting Scribe's.
 
 ```bash

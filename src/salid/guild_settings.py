@@ -2,7 +2,7 @@
 
 One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
 
-    features             {receipts, qa, digest, deep_tasks, voice_meetings}: bool, all default true
+    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory}: bool, all default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -35,6 +35,7 @@ saved the document, `digest_time` and `exec_role_names` *override* the env value
 from __future__ import annotations
 
 import logging
+import os
 import re
 import secrets
 import threading
@@ -51,12 +52,34 @@ logger = logging.getLogger(__name__)
 
 TTL_S = 60.0
 LINK_TTL = timedelta(minutes=15)
-FEATURES = ("receipts", "qa", "digest", "deep_tasks", "voice_meetings")
+FEATURES = ("receipts", "qa", "digest", "deep_tasks", "voice_meetings", "memory", "image_memory")
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
 MAX_CHANNEL_LANGUAGES = 500
 _ID = re.compile(r"^\d{1,25}$")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+MIN_RETENTION_DAYS, MAX_RETENTION_DAYS = 1, 3650
+
+
+def default_retention_days() -> int:
+    """SALID_MEMORY_RETENTION_DAYS when valid, else 90 (the default for guilds without a value)."""
+    v = os.environ.get("SALID_MEMORY_RETENTION_DAYS", "")
+    return int(v) if v.isdigit() and MIN_RETENTION_DAYS <= int(v) <= MAX_RETENTION_DAYS else 90
+
+
+def valid_retention_days(v) -> int | None:
+    """An int within bounds (bools and floats with a fraction rejected), else None."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, str) and v.strip().lstrip("-").isdigit():
+        v = int(v.strip())
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if isinstance(v, int) and MIN_RETENTION_DAYS <= v <= MAX_RETENTION_DAYS:
+        return v
+    return None
 
 
 def _now() -> datetime:
@@ -69,6 +92,8 @@ class Features(BaseModel):
     digest: bool = True
     deep_tasks: bool = True
     voice_meetings: bool = True
+    memory: bool = True
+    image_memory: bool = True  # describe images into the memory log (needs `memory`)
 
 
 class Channel(BaseModel):
@@ -96,6 +121,14 @@ class GuildSettingsUpdate(BaseModel):
     default_mode: str = DEFAULT_MODE
     channel_languages: dict[str, str] = Field(default_factory=dict)
     default_language: str = DEFAULT_LANGUAGE
+    memory_retention_days: int = Field(default_factory=default_retention_days)
+
+    @field_validator("memory_retention_days", mode="before")
+    @classmethod
+    def _retention(cls, v):
+        """1-3650 days; anything else falls back to the default."""
+        ok = valid_retention_days(v)
+        return default_retention_days() if ok is None else ok
 
     @field_validator("channel_modes", mode="before")
     @classmethod
@@ -283,6 +316,13 @@ class GuildStore:
 
         self._in_transaction(run)
 
+    def set_memory_retention_days(self, guild_id: int, days: int) -> None:
+        """Set how long this guild's chat memory is kept (1-3650 days)."""
+        ok = valid_retention_days(days)
+        if ok is None:
+            raise ValueError(f"retention must be {MIN_RETENTION_DAYS}-{MAX_RETENTION_DAYS} days")
+        self._ref(guild_id).set({"memory_retention_days": ok}, merge=True)
+
     def set_channel_language(self, guild_id: int, channel_id: int, language: str | None) -> None:
         """Set one channel's reply language (None removes the entry: the channel follows the
         guild default). Same map-replace semantics as `set_channel_mode`."""
@@ -447,6 +487,19 @@ class BotGuildSettings:
                 value = hit[1] if hit else GuildSettings()
             hit = self._cache[guild_id] = (now, value)
         return hit[1]
+
+    def memory_retention_days(self, guild_id: int) -> int:
+        return self.current(guild_id).memory_retention_days
+
+    def set_memory_retention_days(self, guild_id: int, days: int) -> None:
+        """Write one guild's retention (validated) and drop the cache so it applies at once."""
+        ok = valid_retention_days(days)
+        if ok is None:
+            raise ValueError(f"retention must be {MIN_RETENTION_DAYS}-{MAX_RETENTION_DAYS} days")
+        try:
+            self.store.set_memory_retention_days(guild_id, ok)
+        finally:
+            self._cache.pop(guild_id, None)
 
     def enabled(self, guild_id: int, feature: str) -> bool:
         return bool(getattr(self.current(guild_id).features, feature))

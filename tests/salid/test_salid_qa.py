@@ -190,11 +190,21 @@ def test_system_prompt_language_instruction(settings):
 
     th = system_prompt(settings, scoped=False)
     assert th == system_prompt(settings, scoped=False, language="th")
-    assert "พูดภาษาไทยเป็นธรรมชาติ" in th and "English" not in th
+    assert "พูดภาษาไทยเป็นธรรมชาติ" in th and "\nLanguage:" not in th
     en = system_prompt(settings, scoped=False, language="en")
     assert "ALWAYS reply in English" in en and "พูดภาษาไทยเป็นธรรมชาติ" not in en
     auto = system_prompt(settings, scoped=True, language="auto")
     assert "same language as the user's latest message" in auto and "ไม่ใช่ผู้บริหาร" in auto
+
+
+def test_system_prompt_lists_capabilities(settings):
+    from salid.qa import system_prompt
+
+    for lang in ("th", "en", "auto"):
+        p = system_prompt(settings, scoped=True, language=lang)
+        for cmd in ("/โหมด", "/mode", "/ภาษา", "/language", "/ความจำ", "/memory", "/join"):
+            assert cmd in p
+        assert "งานใหญ่:" in p and "ค้นอินเทอร์เน็ตไม่ได้" in p
 
 
 def test_ask_passes_the_language_to_the_model(seeded, settings):
