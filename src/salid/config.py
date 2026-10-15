@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     tts_pitch: float = 1.06  # ffmpeg pitch-up factor at playback (1.0 = unchanged)
     tts_model: str = "gemini-2.5-flash-tts"
     tts_voice: str = "Leda"
+    # How Salid talks in a voice meeting (needs voice_reply). "live": a Gemini Live native-audio
+    # session hears the room and answers ~1.5 s after someone stops talking (see salid.live_voice).
+    # "classic": wake word -> transcription -> text answer -> spoken rewrite -> TTS (~11 s).
+    voice_mode: str = "live"  # live | classic
+    live_model: str = "gemini-live-2.5-flash-native-audio"
+    live_location: str = "us-central1"
+    live_voice: str = "Leda"
     # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
     # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
     transcribe_location: str = "asia-southeast1"

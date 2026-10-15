@@ -417,7 +417,10 @@ class MeetingSink(voice_recv.AudioSink):
         except Exception:
             logger.debug("opus decode failed for %s", user.id, exc_info=True)
             return
-        self.session.push_threadsafe(user.id, pcm)
+        if getattr(user, "bot", False):
+            self.session.push_threadsafe(user.id, pcm, is_bot=True)
+        else:
+            self.session.push_threadsafe(user.id, pcm)
 
 
 # ------------------------------------------------------------------ meeting session
@@ -449,19 +452,25 @@ class MeetingSession:
     speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
     language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
     fallback_lang: str = "th"  # th / en: what fixed messages use when `language` is auto
+    # "live": a Gemini Live session (live_voice.LiveVoice) talks; wake words are not answered by
+    # the transcription pipeline. Falls back to "classic" when the Live session cannot connect.
+    voice_mode: str = "classic"
+    live: Any = None
 
     @property
     def lang(self) -> str:
         """Language of fixed messages (auto has no text to follow, so the starter's language)."""
         return self.language if self.language in ("th", "en") else self.fallback_lang
 
-    def push_threadsafe(self, user_id: int, pcm: bytes) -> None:
+    def push_threadsafe(self, user_id: int, pcm: bytes, *, is_bot: bool = False) -> None:
         with contextlib.suppress(RuntimeError):  # loop already closed on shutdown
-            self.loop.call_soon_threadsafe(self.on_pcm, user_id, pcm, time.monotonic())
+            self.loop.call_soon_threadsafe(self.on_pcm, user_id, pcm, time.monotonic(), is_bot)
 
-    def on_pcm(self, user_id: int, pcm: bytes, now: float) -> None:
+    def on_pcm(self, user_id: int, pcm: bytes, now: float, is_bot: bool = False) -> None:
         if not self.ending:
             self.enqueue(self.segmenter.feed(user_id, pcm, now))
+            if not is_bot and self.live is not None and self.voice_mode == "live":
+                self.live.feed(user_id, pcm)
 
     def enqueue(self, segments: list[Segment]) -> None:
         for seg in segments:
@@ -564,9 +573,33 @@ class MeetingManager:
             asyncio.create_task(self._worker(session)) for _ in range(TRANSCRIBE_WORKERS)
         ]
         session.tasks.append(asyncio.create_task(self._ticker(session)))
+        self._start_live(session)
         await self._post(session, t("meet_announce", session.lang))
         logger.info("meeting started in guild %s channel %s", guild.id, channel.id)
         return t("meet_joined", lang, channel=channel.name)
+
+    def _start_live(self, session: MeetingSession) -> None:
+        """Live voice mode: connect a Gemini Live session now (it takes ~2 s) so the first question
+        is answered fast. If it cannot connect the meeting falls back to classic wake words."""
+        s = self.bot.s
+        if not s.voice_reply or getattr(s, "voice_mode", "classic") != "live":
+            return
+        from .live_voice import LiveVoice
+
+        session.voice_mode = "live"
+        session.live = LiveVoice(
+            self.bot,
+            session,
+            post=lambda text: self._post(session, text),
+            on_failed=lambda: self._live_failed(session),
+        )
+        session.live.start()
+
+    def _live_failed(self, session: MeetingSession) -> None:
+        logger.error("live voice unavailable in guild %s: back to wake words", session.guild_id)
+        session.voice_mode = "classic"
+        if session.live is not None:
+            session.live.stop_playback()
 
     async def leave(self, member, lang: str = "th") -> str:
         session = self.sessions.get(member.guild.id)
@@ -629,6 +662,8 @@ class MeetingManager:
             return
         s.transcript.add(self.bot.s.now(), name, text)
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
+        if s.voice_mode == "live":
+            return  # the Live session hears the room itself and answers; this is only the record
         if self._is_echo(s, seg):
             return  # probably Salid's own voice coming back through someone's mic
         question = parse_wake(text)
@@ -775,6 +810,9 @@ class MeetingManager:
         s.ending = True
         self.sessions.pop(guild_id, None)
         logger.info("meeting ending in guild %s (%s)", guild_id, reason)
+        if s.live is not None:
+            with contextlib.suppress(Exception):
+                await s.live.close()
         _stop_playback(s.vc)
         with contextlib.suppress(Exception):
             s.vc.stop_listening()

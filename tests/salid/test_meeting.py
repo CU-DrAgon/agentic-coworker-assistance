@@ -233,7 +233,7 @@ def env(monkeypatch):
     chan.guild = guild
     llm = FakeClient([])
     bot = SecretaryBot(
-        FixedClockSettings(exec_user_ids={5}, voice_reply=False),
+        FixedClockSettings(exec_user_ids={5}, voice_reply=False, voice_mode="classic"),
         None,
         llm,
         guilds=MemoryGuildStore(),
