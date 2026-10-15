@@ -96,9 +96,10 @@ them.
 
 **Writing vectors.** `memory.vectorize(summary_dict, previous: DaySummary | None, embedder, dim)
 -> (vec_model, hashes, vecs)` reuses vectors for items whose hash exists in `previous` and embeds
-only new items in one batched call. `MemoryScheduler._update` calls it after the summary call;
-`MemoryImporter`'s past-day summaries do the same. Any embedding error is logged (counts only) and
-the summary is saved without vectors: summarising never depends on embedding.
+only new items in one batched call. `MemoryScheduler._update` calls it after the summary call.
+`MemoryImporter`'s past-day summaries are written without vectors and picked up by the backfill
+(no embedding code in the importer). Any embedding error is logged (counts only) and the summary is
+saved without vectors: summarising never depends on embedding.
 
 **Backfill.** Inside `MemoryScheduler.tick`, after due updates: one guild per tick
 (round-robin over the tick's guilds), up to `MAX_VECTORIZE_PER_TICK` (10) of its summaries without
@@ -207,7 +208,7 @@ queries):
 - Embedder: batching, task types, dim, normalisation, retry on 429; `NullEmbedder`.
 - `vectorize`: hash reuse embeds only changed items; error path.
 - Scheduler: vectors written on update; summary saved when embedding fails; backfill cap and
-  ordering; importer summaries get vectors.
+  ordering; importer summaries get vectors through the backfill.
 - `IndexedMemoryStore`: one `all_summaries` per guild on miss; coherence after `put_summary`,
   `put_summary_vectors`, `delete_messages`, `purge`, `delete_guild`; byte-bounded LRU eviction.
 - Hybrid `chat_search` with a deterministic fake embedder: English query finds a Thai-only day and
