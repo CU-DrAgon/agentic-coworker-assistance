@@ -614,6 +614,8 @@ class MeetingManager:
             return
         async with s.answer_lock:
             history = s.transcript.history(bot.s.now())
+            # the answer is posted in the voice channel's chat: its readers bound the memory scope
+            memory = await bot._memory_tools_for(member.guild, member, s.voice_channel.id)
             ans = await asyncio.to_thread(
                 ask,
                 bot.s,
@@ -624,6 +626,7 @@ class MeetingManager:
                 user_id=member.id,
                 history=history,
                 language=s.language,
+                memory=memory,
             )
             for i, part in enumerate(chunks(ans.text, 1800)):
                 await self._post(s, f"{member.mention} {part}" if i == 0 else part)

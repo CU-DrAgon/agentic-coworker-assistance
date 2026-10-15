@@ -1856,12 +1856,17 @@ class SecretaryBot(discord.Client):
         return {a.channel_id: a.name for a in access if a.channel_id in allowed}
 
     async def _memory_tools(self, message, guild, member) -> MemoryTools | None:
-        if not self.team.enabled(guild.id, "memory"):
-            return None
         answering = None
         if message.guild is not None:  # in a DM the asker's own readable channels are enough
             where = self._memory_channel(message.channel)
             answering = where[0] if where else -1
+        return await self._memory_tools_for(guild, member, answering)
+
+    async def _memory_tools_for(self, guild, member, answering: int | None) -> MemoryTools | None:
+        """Memory tools for `member`, scoped to what everyone reading `answering` (a channel id;
+        None = a DM, the asker alone) may see. None when memory is off or the scope fails."""
+        if not self.team.enabled(guild.id, "memory"):
+            return None
         try:
             allowed = await asyncio.to_thread(self._memory_scope, guild, member, answering)
         except Exception:

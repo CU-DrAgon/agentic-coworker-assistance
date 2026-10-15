@@ -319,6 +319,41 @@ async def test_wake_word_answers_with_transcript_history(env, monkeypatch):
     await env.mgr.end(1000)
 
 
+async def test_wake_word_answers_get_memory_scoped_to_the_voice_channel(env, monkeypatch):
+    s = await start(env)
+    scoped, asked = [], {}
+
+    async def tools_for(guild, member, answering):
+        scoped.append((guild.id, member.id, answering))
+        return "MEMORY"
+
+    monkeypatch.setattr(env.bot, "_memory_tools_for", tools_for)
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด เมื่อวานตกลงงบไว้เท่าไร")
+    await env.mgr.handle_segment(s, segment(11))
+    assert scoped == [(1000, 11, env.chan.id)] and asked["memory"] == "MEMORY"
+    await env.mgr.end(1000)
+
+
+async def test_wake_word_without_the_memory_feature_passes_no_memory(env, monkeypatch):
+    env.bot.guilds_store.save_settings(1000, GuildSettingsUpdate(features=dict(memory=False)), "x")
+    s = await start(env)
+    asked = {}
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปเมื่อวานหน่อย")
+    await env.mgr.handle_segment(s, segment(11))
+    assert asked["memory"] is None
+    await env.mgr.end(1000)
+
+
 async def test_wake_word_exec_flag_follows_the_speaker(env, monkeypatch):
     s = await start(env)
     boss = make_member(env.guild, 5, "เจ้านาย", env.chan)
