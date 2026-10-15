@@ -692,7 +692,7 @@ async def test_english_meeting_commands_by_mention(bot, world, monkeypatch):
         seen.append(("join", lang))
         return "joined"
 
-    async def leave(who, lang="th"):
+    async def leave(who, lang="th", **_):
         seen.append(("leave", lang))
         return "left"
 

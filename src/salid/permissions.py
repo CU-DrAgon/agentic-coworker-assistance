@@ -16,6 +16,10 @@ from .i18n import t
 # Connect, Create Events and Manage Events.
 SALID_PERMISSIONS = 1166416 | (1 << 44) | (1 << 33)
 
+# Voice helpers ("Salid · 2"...) only listen and speak: View Channel, Connect, Speak, Use Voice
+# Activity.
+HELPER_PERMISSIONS = (1 << 10) | (1 << 20) | (1 << 21) | (1 << 25)
+
 LABELS = {
     "view_channel": "View Channel",
     "send_messages": "Send Messages",
@@ -62,12 +66,24 @@ def reauthorize_url(app_id) -> str:
     )
 
 
-def permission_message(missing: Iterable[str], lang: str, app_id=None) -> str:
+def helper_invite_url(app_id) -> str:
+    """Invite link of a voice helper (voice-only permissions); empty without an application id."""
+    if not str(app_id or "").isdigit():
+        return ""
+    return (
+        f"https://discord.com/oauth2/authorize?client_id={app_id}"
+        f"&scope=bot&permissions={HELPER_PERMISSIONS}"
+    )
+
+
+def permission_message(
+    missing: Iterable[str], lang: str, app_id=None, *, helper: bool = False
+) -> str:
     """One or two plain sentences naming only what is missing, plus the re-authorize link."""
     names = [LABELS.get(m, m.replace("_", " ").title()) for m in missing]
     joined = (" และ " if lang != "en" else " and ").join(
         [", ".join(names[:-1]), names[-1]] if len(names) > 1 else names
     )
-    url = reauthorize_url(app_id)
+    url = helper_invite_url(app_id) if helper else reauthorize_url(app_id)
     key = "perm_missing" if url else "perm_missing_nolink"
     return t(key, lang, what=joined or "-", url=url)

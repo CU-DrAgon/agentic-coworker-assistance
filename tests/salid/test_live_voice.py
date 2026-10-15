@@ -273,7 +273,7 @@ def lv(monkeypatch, tmp_path):
     vc = FakeVC()
     connect = FakeConnect()
 
-    async def vc_connect(channel):
+    async def vc_connect(body, channel):
         return vc
 
     monkeypatch.setattr(bot.meetings, "_connect", vc_connect)
@@ -285,7 +285,7 @@ def lv(monkeypatch, tmp_path):
         members = [make_member(guild, uid, f"m{uid}", chan) for uid in member_ids]
         chan.members = members
         await env.mgr.join(members[0])
-        s = env.mgr.sessions[guild.id]
+        s = env.mgr.sessions[(guild.id, chan.id)]
         await until(lambda: connect.sessions and s.live._live is not None)
         return s, connect.sessions[0]
 
@@ -321,7 +321,7 @@ async def test_join_connects_live_at_once_and_builds_the_session_config(lv):
     assert "find_duplicates" in names
     assert "2026-10-14" in cfg.system_instruction
     assert live.closed is False
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
     assert live.closed
 
 
@@ -330,13 +330,13 @@ async def test_live_not_started_when_voice_reply_off_or_classic_mode(lv):
     m = make_member(lv.guild, 5, "boss", lv.chan)
     lv.chan.members = [m]
     await lv.mgr.join(m)
-    s = lv.mgr.sessions[1000]
+    s = lv.mgr.sessions[(1000, 77)]
     assert s.live is None and s.voice_mode == "classic" and lv.connect.configs == []
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
     lv.bot.s.voice_reply, lv.bot.s.voice_mode = True, "classic"
     await lv.mgr.join(m)
-    assert lv.mgr.sessions[1000].live is None
-    await lv.mgr.end(1000)
+    assert lv.mgr.sessions[(1000, 77)].live is None
+    await lv.mgr.end((1000, 77))
 
 
 async def test_room_audio_is_mixed_streamed_and_ended_after_a_pause(lv):
@@ -355,7 +355,7 @@ async def test_room_audio_is_mixed_streamed_and_ended_after_a_pause(lv):
     assert live.stream_ends == 1 and len(live.audio) == n  # idle: nothing more is sent
     s.on_pcm(5, pcm48(900), time.monotonic())  # speaking again resumes the stream
     await until(lambda: len(live.audio) > n)
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_audio_is_not_buffered_while_disconnected():
@@ -383,7 +383,7 @@ async def test_model_audio_plays_once_posts_the_transcript_and_updates_speaking(
     await until(lambda: s.speaking is False)
     assert s.speaking_until > time.monotonic()
     assert "live: user audio ended -> first audio" in caplog.text
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_a_second_turn_while_the_first_drains_continues_the_same_playback(lv):
@@ -393,7 +393,7 @@ async def test_a_second_turn_while_the_first_drains_continues_the_same_playback(
     live.push(audio_msg())
     await until(lambda: not play_source(lv)._complete)
     assert len(lv.vc.played) == 1  # one stream, no second vc.play
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_turn_complete_right_after_a_tool_call_does_not_end_playback(lv):
@@ -410,7 +410,7 @@ async def test_turn_complete_right_after_a_tool_call_does_not_end_playback(lv):
     await until(lambda: src._complete)
     assert drain(src) == 2 and src.read() == b""
     assert len(lv.vc.played) == 1
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_interruption_stops_playback_and_drops_queued_audio(lv):
@@ -427,7 +427,7 @@ async def test_interruption_stops_playback_and_drops_queued_audio(lv):
     live.push(audio_msg())  # the next answer plays on a fresh source
     await until(lambda: len(lv.vc.played) == 2)
     assert lv.vc.played[1] is not src
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_nothing_plays_when_voice_reply_is_switched_off_or_meeting_ends(lv):
@@ -442,7 +442,7 @@ async def test_nothing_plays_when_voice_reply_is_switched_off_or_meeting_ends(lv
     await asyncio.sleep(0.05)
     assert lv.vc.played == []
     s.ending = False
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 # ------------------------------------------------------------------ tools
@@ -453,7 +453,7 @@ async def test_tool_call_in_an_all_exec_room_returns_the_ledger_result(lv):
     (resp,) = live.tool_responses[0]
     assert resp.id == "call-1" and resp.name == "spending_summary"
     assert resp.response["total"] == 1250.5 and resp.response["total_fmt"] == "฿1,250.50"
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_tool_call_ignores_undeclared_arguments_and_unknown_tools(lv):
@@ -468,7 +468,7 @@ async def test_tool_call_ignores_undeclared_arguments_and_unknown_tools(lv):
     assert by_id["a"]["count"] == 0  # no flagged receipts; the injected id changed nothing
     assert "unknown tool" in by_id["b"]["error"]
     assert "error" in by_id["c"]  # a bad call is data for the model, not a crash
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_tool_call_in_a_mixed_room_is_refused(lv):
@@ -476,7 +476,7 @@ async def test_tool_call_in_a_mixed_room_is_refused(lv):
     live.push(tool_msg("spending_summary", {"start_date": "2026-10-01", "end_date": "2026-10-31"}))
     await until(lambda: live.tool_responses)
     assert live.tool_responses[0][0].response == {"error": lvm.NO_TOOLS_MIXED_ROOM}
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_tool_call_with_nobody_in_the_room_is_refused(lv):
@@ -485,7 +485,7 @@ async def test_tool_call_with_nobody_in_the_room_is_refused(lv):
     live.push(tool_msg("flagged_receipts", {}))
     await until(lambda: live.tool_responses)
     assert live.tool_responses[0][0].response == {"error": lvm.NO_TOOLS_MIXED_ROOM}
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_qa_feature_off_means_no_tools_in_the_config_and_a_refusal(lv):
@@ -497,7 +497,7 @@ async def test_qa_feature_off_means_no_tools_in_the_config_and_a_refusal(lv):
     live.push(tool_msg("flagged_receipts", {}))
     await until(lambda: live.tool_responses)
     assert live.tool_responses[0][0].response == {"error": lvm.QA_OFF}
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 # ------------------------------------------------------------------ reconnecting
@@ -512,7 +512,7 @@ async def test_go_away_reconnects_with_the_resumption_handle(lv):
     s.on_pcm(5, pcm48(1000), time.monotonic())  # audio now flows to the new session
     await until(lambda: second.audio)
     assert s.voice_mode == "live"
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
     assert second.closed
 
 
@@ -525,7 +525,7 @@ async def test_lost_connection_reconnects_and_a_fresh_session_gets_recent_contex
     assert cfg.session_resumption.handle is None  # never got a handle: starts over...
     assert "แอน: ตกลงส่งวันศุกร์" in cfg.system_instruction  # ...with the recent transcript
     assert s.voice_mode == "live"
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_reconnect_ends_playback_that_was_in_flight(lv):
@@ -535,7 +535,7 @@ async def test_reconnect_ends_playback_that_was_in_flight(lv):
     live.push(ConnectionError("lost"))
     await until(lambda: len(lv.connect.sessions) == 2)
     assert play_source(lv)._complete  # plays out what it has, then stops; never hangs open
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_connect_failure_falls_back_to_classic_wake_words(lv, monkeypatch):
@@ -543,7 +543,7 @@ async def test_connect_failure_falls_back_to_classic_wake_words(lv, monkeypatch)
     m = make_member(lv.guild, 5, "boss", lv.chan)
     lv.chan.members = [m]
     await lv.mgr.join(m)
-    s = lv.mgr.sessions[1000]
+    s = lv.mgr.sessions[(1000, 77)]
     await until(lambda: s.voice_mode == "classic")
     assert len(lv.connect.configs) == lvm.MAX_FAILURES and s.live._task.done()
     # wake words are answered by the classic pipeline again (spoken part off to stay offline)
@@ -554,14 +554,14 @@ async def test_connect_failure_falls_back_to_classic_wake_words(lv, monkeypatch)
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, mdl, pcm: "สลิด สรุปให้หน่อย")
     await lv.mgr.handle_segment(s, mt.Segment(5, bytes(3840 * 100), 0.0, 2.0))
     assert lv.chan.sent[-1] == "<@5> ได้เลยนะ"
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_a_flaky_connect_that_recovers_stays_in_live_mode(lv):
     lv.connect.fail_first = 2
     s, live = await lv.join(5)
     assert len(lv.connect.configs) == 3 and s.voice_mode == "live"
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 # ------------------------------------------------------------------ transcript pipeline in live mode
@@ -579,7 +579,7 @@ async def test_live_mode_records_the_transcript_but_does_not_answer_wake_words(l
     assert asked == [] and s.pending_wake == {}
     assert lv.chan.sent == [mt.t("meet_announce", "th")]  # nothing posted, no acknowledgment
     assert lv.vc.played == [] and s.speech_pending is False
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 # ------------------------------------------------------------------ lifecycle
@@ -589,7 +589,7 @@ async def test_end_closes_the_session_and_leaves_no_tasks_behind(lv):
     await until(lambda: "🔊 จบแล้วนะ" in lv.chan.sent)
     lv.vc.playing = True
     live_task = s.live._task
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
     assert live_task.done() and live.closed and lv.vc.disconnected
     assert s.live._bg == set() and s.live._live is None
     assert lv.vc.playing is False
@@ -600,7 +600,7 @@ async def test_close_is_idempotent_and_cancel_propagates(lv):
     await s.live.close()
     await s.live.close()
     assert s.live._task.done() and live.closed
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_feed_after_close_is_ignored(lv):
@@ -608,7 +608,7 @@ async def test_feed_after_close_is_ignored(lv):
     await s.live.close()
     s.on_pcm(5, pcm48(1000), time.monotonic())
     assert s.live.mixer.pop() == b""
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_next_turn_waits_for_the_previous_player_after_callback(lv):
@@ -629,7 +629,7 @@ async def test_next_turn_waits_for_the_previous_player_after_callback(lv):
 
     old_after(None)
     await until(lambda: len(lv.vc.played) == 2)
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_bot_audio_is_not_sent_to_live_but_still_reaches_transcription(lv):
@@ -638,7 +638,7 @@ async def test_bot_audio_is_not_sent_to_live_but_still_reaches_transcription(lv)
     s.push_threadsafe(42, frame, is_bot=True)
     await until(lambda: 42 in s.segmenter.bufs)
     assert live.audio == [] and s.segmenter.bufs[42].size == len(frame)
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))
 
 
 async def test_close_releases_owned_genai_transports_once(lv):
@@ -661,4 +661,4 @@ async def test_close_releases_owned_genai_transports_once(lv):
     await s.live.close()
     await s.live.close()
     assert client.async_closes == client.sync_closes == 1
-    await lv.mgr.end(1000)
+    await lv.mgr.end((1000, 77))

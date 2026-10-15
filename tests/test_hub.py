@@ -263,6 +263,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         digest=True,
         deep_tasks=True,
         voice_meetings=True,
+        auto_join_meetings=True,
         memory=True,
         image_memory=True,
         media_memory=True,

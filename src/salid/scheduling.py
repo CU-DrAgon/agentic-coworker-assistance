@@ -614,6 +614,43 @@ class MeetingService:
             except Exception:
                 logger.exception("meeting tick failed for %s", m.get("id"))
 
+    def _session_of(self, meeting_id: str):
+        """The voice session taking notes for this meeting (any body, any channel), if any."""
+        return next(
+            (
+                s
+                for s in self.meetings.sessions.values()
+                if getattr(s, "meeting_id", None) == meeting_id
+            ),
+            None,
+        )
+
+    def meeting_now(self, guild_id: int, channel_id: int) -> dict | None:
+        """The scheduled voice meeting happening now in this channel (not yet joined), if any."""
+        if not self.team.enabled(guild_id, "scheduling"):
+            return None
+        now = self.clock()
+        for m in self.store.list_meetings(statuses=("scheduled", "started")):
+            if m["guild_id"] != guild_id or m.get("voice_channel_id") != channel_id:
+                continue
+            if m["kind"] != "voice" or m["joined"]:
+                continue
+            start = datetime.fromisoformat(m["start_utc"])
+            if start <= now < start + NUDGE_GRACE and self._session_of(m["id"]) is None:
+                return m
+        return None
+
+    async def auto_join_now(self, m: dict) -> bool:
+        """Join a scheduled meeting right away (a person just entered its channel)."""
+        guild = self.get_guild(m["guild_id"])
+        if guild is None or not self.team.enabled(guild.id, "voice_meetings"):
+            return False
+        lang = self.lang_for(guild.id, m.get("text_channel_id"))
+        joined = await self._auto_join(guild, m, lang)
+        if joined:
+            self.store.put_meeting(m)
+        return joined
+
     def _humans_in_voice(self, m: dict, guild) -> list:
         ch = guild.get_channel(m["voice_channel_id"]) if m.get("voice_channel_id") else None
         return [x for x in (getattr(ch, "members", []) or []) if not x.bot]
@@ -628,8 +665,7 @@ class MeetingService:
         noshow = timedelta(minutes=self.s.meeting_noshow_minutes)
         dirty = False
         lang = self.lang_for(guild.id, m.get("text_channel_id"))
-        session = self.meetings.sessions.get(guild.id)
-        in_session = session is not None and getattr(session, "meeting_id", None) == m["id"]
+        in_session = self._session_of(m["id"]) is not None
 
         if now >= end + FINISH_AFTER and not in_session:
             await self._finish(guild, m, lang)
@@ -708,6 +744,14 @@ class MeetingService:
         async def on_end(session) -> None:
             await self.on_voice_end(m["id"], session)
 
+        # Salid already sits in this room (joined by itself or on command): take over as notes
+        # for the meeting instead of joining twice.
+        find = getattr(self.meetings, "session_in", None)
+        there = find(guild.id, ch.id) if find is not None else None
+        if there is not None and getattr(there, "meeting_id", None) is None:
+            await self.meetings.adopt(there, m["id"], on_end)
+            m["joined"] = True
+            return True
         await self.meetings.join(
             starter,
             lang=lang,
@@ -715,9 +759,9 @@ class MeetingService:
             first_grace=self.s.meeting_empty_minutes * 60.0,
             on_end=on_end,
             meeting_id=m["id"],
+            origin="scheduled",
         )
-        session = self.meetings.sessions.get(guild.id)
-        if session is not None and getattr(session, "meeting_id", None) == m["id"]:
+        if self._session_of(m["id"]) is not None:
             m["joined"] = True
             return True
         return False

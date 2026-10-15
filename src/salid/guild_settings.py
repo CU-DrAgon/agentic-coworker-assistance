@@ -67,6 +67,7 @@ FEATURES = (
     "digest",
     "deep_tasks",
     "voice_meetings",
+    "auto_join_meetings",
     "memory",
     "image_memory",
     "media_memory",
@@ -119,6 +120,7 @@ class Features(BaseModel):
     digest: bool = True
     deep_tasks: bool = True
     voice_meetings: bool = True
+    auto_join_meetings: bool = True  # Salid joins voice channels by itself (needs voice_meetings)
     memory: bool = True
     image_memory: bool = True  # describe images into the memory log (needs `memory`)
     media_memory: bool = True  # transcribe audio/video into the memory log (needs `memory`)

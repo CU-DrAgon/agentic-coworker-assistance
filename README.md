@@ -278,6 +278,33 @@ came to: `SALID_MEETING_EMPTY_MINUTES`, default 2), or at the 6 h cap (warned 10
 stored (`salid_active_meetings`); after a restart `on_ready` rejoins it (transcript reloaded from the memory log)
 or, if the channel is empty, posts the summary. An unexpected voice drop is retried 3 times before ending.
 
+**Voice helpers (Salid · 2, · 3).** Discord allows one voice connection per bot account per guild, so Salid
+"splits" across extra voice-only bot accounts driven by the main bot process (same event loop; text, memory, answers
+and TTS stay in the main bot, a helper only listens and plays audio). The main bot is body #0.
+
+- *Create a helper*: Discord Developer Portal -> New Application (name it "Salid · 2") -> Bot -> Reset Token -> copy
+  the token. Add it to `.env` with an editor, never paste it in chat: `SALID_VOICE_TOKENS=tokenA,tokenB`
+  (comma-separated, may be empty; tokens are never logged). No privileged intents are needed (the helper uses only
+  guilds + voice states). Restart the bot; a helper that cannot log in is logged as "voice helper N unavailable".
+- *Invite it* to each server with the voice-only link (View Channel, Connect, Speak, Use Voice Activity):
+  `https://discord.com/oauth2/authorize?client_id=<helper application id>&scope=bot&permissions=36701184`
+  (`permissions.helper_invite_url`; `show_settings` lists the bodies, whether each is in this server, and the
+  invite links of helpers that are not). A helper that is not in a guild is skipped for that guild.
+- *Auto-join*: when a person is in a voice channel (not mode `off`, hub feature `auto_join_meetings` on, default on)
+  Salid joins at once and announces it in the channel's text chat (`SALID_AUTO_JOIN_MIN_HUMANS=1`;
+  `SALID_AUTO_JOIN_DELAY_SECONDS=0` is an optional stability wait, 0 = no timer; rapid duplicate events for a
+  channel share one attempt). A channel where someone told Salid to leave (`/ออกประชุม`, "สลิด ออกประชุม") is not
+  auto-joined for 60 minutes (`SALID_AUTO_JOIN_COOLDOWN_MINUTES`). Sessions are keyed by (server, voice channel), so
+  two meetings run on two bodies; leaving in one room ends only that room.
+- *Importance* (when every body is busy): scheduled meeting now +100 > executive/manager +30 each (max 2) > people
+  +5 each, earlier start breaks ties; one person alone scores below any multi-person room. A newcomer takes the body of the
+  weakest *auto-joined* session if it outranks it by 20 (a scheduled meeting always does; a person alone yields to
+  any room of 2+). The old room gets "ขอไปช่วยประชุมที่นัดไว้ก่อนนะครับ ส่วนที่คุยมาสรุปไว้ให้แล้ว" and its summary.
+  Sessions started by a person's command or by a schedule are never preempted. `/เข้าประชุม` with no free body
+  follows the same rules or says which rooms occupy the bodies.
+- Restart: each record in `salid_active_meetings` is per (server, channel) with its body index; resume reuses that body
+  when it is still available.
+
 **Spoken replies.** When called by name in a voice meeting, Salid also says a 1-2 sentence version of
 the answer out loud (Gemini TTS `SALID_TTS_MODEL`, default `gemini-2.5-flash-tts`, voice `SALID_TTS_VOICE`,
 default `Puck`); the full answer still goes to the chat. While Salid is speaking and for 1.5 s after,

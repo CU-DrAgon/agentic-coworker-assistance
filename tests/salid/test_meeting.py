@@ -242,7 +242,7 @@ def env(monkeypatch):
     mgr = bot.meetings
     vc = FakeVC()
 
-    async def connect(channel):
+    async def connect(body, channel):
         return vc
 
     monkeypatch.setattr(mgr, "_connect", connect)
@@ -280,7 +280,7 @@ async def test_join_announces_listens_and_blocks_a_second_meeting(env):
     assert isinstance(env.vc.listening, mt.MeetingSink)
     again = await env.mgr.join(m)
     assert "กำลังอยู่ในการประชุม" in again
-    await env.mgr.end(1000, "command")
+    await env.mgr.end((1000, 77), "command")
 
 
 async def test_leave_without_meeting(env):
@@ -293,8 +293,8 @@ async def test_leave_denied_for_outsiders(env):
     outsider = make_member(env.guild, 11, "ซี")
     await env.mgr.join(a)
     assert await env.mgr.leave(outsider) == t("meet_leave_denied", "th")
-    assert 1000 in env.mgr.sessions
-    await env.mgr.end(1000)
+    assert (1000, 77) in env.mgr.sessions
+    await env.mgr.end((1000, 77))
 
 
 # ------------------------------------------------------------------ transcription + wake word
@@ -306,7 +306,7 @@ async def start(env):
     a = make_member(env.guild, 10, "แอน", env.chan)
     make_member(env.guild, 11, "บอย", env.chan)
     await env.mgr.join(a)
-    return env.mgr.sessions[1000]
+    return env.mgr.sessions[(1000, 77)]
 
 
 async def test_segment_is_transcribed_with_the_speaker_name(env, monkeypatch):
@@ -315,7 +315,7 @@ async def test_segment_is_transcribed_with_the_speaker_name(env, monkeypatch):
     await env.mgr.handle_segment(s, segment(10))
     assert [(ln.speaker, ln.text) for ln in s.transcript.lines] == [("แอน", "เรามาเริ่มกันเลย")]
     assert env.chan.sent == [t("meet_announce", "th")]  # no wake word, no reply
-    await env.mgr.end(1000)
+    await env.mgr.end((1000, 77))
 
 
 async def test_wake_word_answers_with_transcript_history(env, monkeypatch):
@@ -337,7 +337,7 @@ async def test_wake_word_answers_with_transcript_history(env, monkeypatch):
     assert asked["guild_id"] == 1000 and asked["user_id"] == 11 and asked["is_exec"] is False
     assert "บอย: ขอเลื่อนเป็นวันศุกร์นะ" in asked["history"]
     assert env.chan.sent[-1] == "<@11> ตกลงเลื่อนเป็นวันศุกร์ครับ"
-    await env.mgr.end(1000)
+    await env.mgr.end((1000, 77))
 
 
 async def test_wake_word_exec_flag_follows_the_speaker(env, monkeypatch):
@@ -352,7 +352,7 @@ async def test_wake_word_exec_flag_follows_the_speaker(env, monkeypatch):
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปให้หน่อย")
     await env.mgr.handle_segment(s, segment(boss.id))
     assert flags == [True]
-    await env.mgr.end(1000)
+    await env.mgr.end((1000, 77))
 
 
 async def test_bare_wake_word_takes_the_next_segment_as_the_question(env, monkeypatch):
@@ -371,13 +371,13 @@ async def test_bare_wake_word_takes_the_next_segment_as_the_question(env, monkey
     assert env.chan.sent[-1].endswith(t("meet_wake_empty", "th"))
     await env.mgr.handle_segment(s, segment(10))
     assert questions == ["วันนี้มีนัดอะไรบ้าง"]
-    await env.mgr.end(1000)
+    await env.mgr.end((1000, 77))
 
 
 def test_context_for_the_meeting_text_chat(env):
     s = SimpleNamespace(text_channel=env.chan, transcript=Transcript())
     s.transcript.add(env.bot.s.now(), "แอน", "ส่งงานวันศุกร์")
-    env.mgr.sessions[1000] = s
+    env.mgr.sessions[(1000, 77)] = s
     assert env.mgr.context_for(env.chan.id) == "แอน: ส่งงานวันศุกร์"
     assert env.mgr.context_for(123) == ""
 
@@ -387,8 +387,8 @@ async def test_leave_posts_a_summary_and_drops_the_transcript(env, monkeypatch):
     s = await start(env)
     s.transcript.add(env.bot.s.now(), "แอน", "ให้บอยส่งรายงานวันศุกร์")
     env.llm.models.script = [text_resp("**สรุปการประชุม**\nบอยส่งรายงานวันศุกร์")]
-    await env.mgr.end(1000, "command")
-    assert env.vc.disconnected and 1000 not in env.mgr.sessions
+    await env.mgr.end((1000, 77), "command")
+    assert env.vc.disconnected and (1000, 77) not in env.mgr.sessions
     assert "สรุปการประชุม" in env.chan.sent[-1]
     prompt = env.llm.models.calls[0][1][0]
     assert "แอน: ให้บอยส่งรายงานวันศุกร์" in prompt and "งานที่ต้องทำ" in prompt
@@ -397,7 +397,7 @@ async def test_leave_posts_a_summary_and_drops_the_transcript(env, monkeypatch):
 
 async def test_leave_with_nothing_heard(env):
     await start(env)
-    await env.mgr.end(1000, "empty")
+    await env.mgr.end((1000, 77), "empty")
     assert env.chan.sent[-1] == t("meet_no_transcript", "th")
     assert env.llm.models.calls == []
 
@@ -406,7 +406,7 @@ async def test_long_summary_is_split_for_discord(env):
     s = await start(env)
     s.transcript.add(env.bot.s.now(), "แอน", "x")
     env.llm.models.script = [text_resp("ก" * 4500)]
-    await env.mgr.end(1000, "command")
+    await env.mgr.end((1000, 77), "command")
     parts = env.chan.sent[1:]
     assert len(parts) == 3 and all(len(p) <= 2000 for p in parts)
 
@@ -529,7 +529,7 @@ async def test_speak_plays_and_clears_speaking_after_the_callback(voice):
     voice.vc.after(None)  # the player thread says it is done
     await task
     assert s.speaking is False and s.speaking_until > 0
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_speak_skips_when_not_connected_or_already_playing(voice, monkeypatch):
@@ -542,7 +542,7 @@ async def test_speak_skips_when_not_connected_or_already_playing(voice, monkeypa
     await voice.mgr.speak(s, "x")
     assert voice.vc.played == []
     voice.vc.playing = False
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_speak_skips_when_the_meeting_is_ending(voice):
@@ -551,7 +551,7 @@ async def test_speak_skips_when_the_meeting_is_ending(voice):
     await voice.mgr.speak(s, "x")
     assert voice.calls == [] and voice.vc.played == []
     s.ending = False
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_speak_swallows_tts_errors(voice, monkeypatch):
@@ -563,7 +563,7 @@ async def test_speak_swallows_tts_errors(voice, monkeypatch):
     monkeypatch.setattr(mt, "say", boom)
     await voice.mgr.speak(s, "x")  # must not raise
     assert voice.vc.played == [] and s.speaking is False
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_speak_times_out_stops_playback_and_clears_speaking(voice, monkeypatch):
@@ -573,7 +573,7 @@ async def test_speak_times_out_stops_playback_and_clears_speaking(voice, monkeyp
     await voice.mgr.speak(s, "x")  # the after-callback never fires
     assert voice.vc.played and voice.vc.playing is False  # stopped
     assert s.speaking is False and s.speaking_until > 0
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_answer_posts_text_then_speaks(voice, monkeypatch):
@@ -600,7 +600,7 @@ async def test_answer_posts_text_then_speaks(voice, monkeypatch):
     assert len(voice.vc.played) == 2
     voice.vc.playing = False
     voice.vc.after(None)
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_acknowledgment_audio_is_synthesized_once_per_language(voice):
@@ -616,7 +616,7 @@ async def test_acknowledgment_audio_is_synthesized_once_per_language(voice):
         await task
     assert [c for c in voice.calls if c[0] == "tts"] == [("tts", "th", mt.ACK_TEXT["th"])]
     assert len(voice.vc.played) == 2
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_answer_does_not_speak_when_voice_reply_is_off(voice, monkeypatch):
@@ -628,7 +628,7 @@ async def test_answer_does_not_speak_when_voice_reply_is_off(voice, monkeypatch)
     await asyncio.sleep(0.05)
     assert voice.calls == [] and voice.vc.played == []
     assert voice.chan.sent[-1].endswith("ตกลงเลื่อนเป็นวันศุกร์ครับ")
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_answer_text_still_posts_when_speech_fails(voice, monkeypatch):
@@ -644,7 +644,7 @@ async def test_answer_text_still_posts_when_speech_fails(voice, monkeypatch):
     await asyncio.sleep(0.05)
     assert voice.chan.sent[-1] == "<@11> ตกลงเลื่อนเป็นวันศุกร์ครับ"
     assert voice.vc.played == [] and s.speaking is False
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_echo_guard_ignores_wake_words_while_speaking_but_keeps_the_line(voice, monkeypatch):
@@ -662,7 +662,7 @@ async def test_echo_guard_ignores_wake_words_while_speaking_but_keeps_the_line(v
     s.speaking, s.speaking_until = False, time.monotonic() + 5  # inside the cooldown
     await voice.mgr.handle_segment(s, segment(11))
     assert asked == [] and len(s.transcript) == 2
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_echo_guard_uses_the_audio_timestamps_when_transcription_lags(voice, monkeypatch):
@@ -683,13 +683,13 @@ async def test_echo_guard_uses_the_audio_timestamps_when_transcription_lags(voic
     later = mt.Segment(11, FRAME * 100, now - 4, 2.0)  # after the cooldown: a real question
     await voice.mgr.handle_segment(s, later)
     assert asked == ["สรุปให้หน่อย"]
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_end_stops_playback_before_disconnecting(voice):
     await start(voice)
     voice.vc.playing = True
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
     assert voice.vc.playing is False and voice.vc.disconnected
 
 
@@ -698,7 +698,7 @@ async def test_speak_skips_when_voice_reply_is_disabled(voice):
     voice.bot.s.voice_reply = False
     await voice.mgr.speak(s, "x")
     assert voice.calls == [] and voice.vc.played == []
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_concurrent_speak_calls_only_generate_one_reply(voice, monkeypatch):
@@ -729,7 +729,7 @@ async def test_concurrent_speak_calls_only_generate_one_reply(voice, monkeypatch
     await asyncio.gather(first, second)
     assert len(calls) == 1
     assert len([call for call in voice.calls if call[0] == "tts"]) == 1
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 async def test_speak_cleans_ffmpeg_source_when_play_rejects_it(voice, monkeypatch):
@@ -751,7 +751,7 @@ async def test_speak_cleans_ffmpeg_source_when_play_rejects_it(voice, monkeypatc
     await voice.mgr.speak(s, "x")
     assert source.cleaned is True
     assert s.speaking is False
-    await voice.mgr.end(1000)
+    await voice.mgr.end((1000, 77))
 
 
 # ------------------------------------------------------------------ language
@@ -766,7 +766,7 @@ async def test_meeting_follows_the_text_channels_language(env, monkeypatch):
     env.bot.guilds_store.set_channel_language(1000, env.chan.id, "en")
     m = make_member(env.guild, 10, "Ann", env.chan)
     assert await env.mgr.join(m, lang="th") == t("meet_joined", "th", channel=env.chan.name)
-    s = env.mgr.sessions[1000]
+    s = env.mgr.sessions[(1000, 77)]
     assert s.language == "en" and s.lang == "en"
     assert env.chan.sent == [t("meet_announce", "en")]  # announce uses the channel language
     asked = {}
@@ -780,7 +780,7 @@ async def test_meeting_follows_the_text_channels_language(env, monkeypatch):
     assert asked["language"] == "en" and env.chan.sent[-1] == "<@10> Done"
     s.transcript.add(env.bot.s.now(), "Ann", "Boy sends the report on Friday")
     env.llm.models.script = [text_resp("**Meeting summary**\nBoy sends the report")]
-    await env.mgr.end(1000, "command")
+    await env.mgr.end((1000, 77), "command")
     prompt = env.llm.models.calls[0][1][0]
     assert "in English" in prompt and "Action items" in prompt
     assert env.chan.sent[-1].startswith("📝 Meeting summary (someone told Salid to leave)")
@@ -790,10 +790,10 @@ async def test_auto_meeting_language_uses_the_starters_language_for_fixed_text(e
     env.bot.guilds_store.set_channel_language(1000, env.chan.id, "auto")
     m = make_member(env.guild, 10, "Ann", env.chan)
     await env.mgr.join(m, lang="en")
-    s = env.mgr.sessions[1000]
+    s = env.mgr.sessions[(1000, 77)]
     assert s.language == "auto" and s.lang == "en"
     assert env.chan.sent == [t("meet_announce", "en")]
-    await env.mgr.end(1000, "empty")
+    await env.mgr.end((1000, 77), "empty")
     assert env.chan.sent[-1] == t("meet_no_transcript", "en")
 
 
@@ -816,7 +816,7 @@ async def test_transcribed_segments_are_logged_as_voice_memory(env, monkeypatch)
     (rec,) = env.bot.memory_store.messages(1000, {env.chan.id}, day, day)
     assert (rec.kind, rec.author_name, rec.text) == ("voice", "แอน", "เรามาเริ่มกันเลย")
     assert s.transcript.lines  # the in-memory transcript still works
-    await env.mgr.end(1000)
+    await env.mgr.end((1000, 77))
 
 
 def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
@@ -885,19 +885,19 @@ def _bot_guild(env, monkeypatch, text_ch=None):
 async def test_active_meeting_is_persisted_and_cleared_on_a_normal_end(env):
     store = env.bot.secretary_store
     await start(env)
-    rec = store.get_active_meeting(1000)
+    rec = store.get_active_meeting(1000, 77)
     assert rec["voice_channel_id"] == env.chan.id and rec["starter"] == "แอน"
     assert rec["language"] and rec["started_at"] and "meeting_id" in rec
-    await env.mgr.end(1000, "command")
-    assert store.get_active_meeting(1000) is None
+    await env.mgr.end((1000, 77), "command")
+    assert store.get_active_meeting(1000, 77) is None
 
 
 async def test_shutdown_keeps_the_record_and_posts_no_summary(env):
     s = await start(env)
     sent = len(env.chan.sent)
     await env.mgr.shutdown()
-    assert env.bot.secretary_store.get_active_meeting(1000) is not None
-    assert env.vc.disconnected and 1000 not in env.mgr.sessions and s.ending
+    assert env.bot.secretary_store.get_active_meeting(1000, 77) is not None
+    assert env.vc.disconnected and (1000, 77) not in env.mgr.sessions and s.ending
     assert len(env.chan.sent) == sent
 
 
@@ -912,12 +912,12 @@ async def test_rejoin_on_ready_continues_the_meeting_with_logged_lines(env, monk
     env.vc.disconnected = False
     _bot_guild(env, monkeypatch)
     await env.mgr.resume_all()
-    new = env.mgr.sessions[1000]
+    new = env.mgr.sessions[(1000, 77)]
     assert new is not s and isinstance(env.vc.listening, mt.MeetingSink)
     assert [ln.text for ln in new.transcript.lines] == ["ส่งงานวันศุกร์"]
     assert env.chan.sent == ["สลิดกลับเข้ามาจดประชุมต่อแล้วครับ (หลุดไปครู่หนึ่ง)"]
-    assert env.bot.secretary_store.get_active_meeting(1000) is not None
-    await env.mgr.end(1000, "command")
+    assert env.bot.secretary_store.get_active_meeting(1000, 77) is not None
+    await env.mgr.end((1000, 77), "command")
 
 
 async def test_rejoin_with_an_empty_channel_ends_with_a_summary(env, monkeypatch):
@@ -931,8 +931,8 @@ async def test_rejoin_with_an_empty_channel_ends_with_a_summary(env, monkeypatch
     _bot_guild(env, monkeypatch)
     monkeypatch.setattr(mt, "summarize_transcript", lambda c, m, text, lang: "สรุป: " + text)
     await env.mgr.resume_all()
-    assert 1000 not in env.mgr.sessions
-    assert env.bot.secretary_store.get_active_meeting(1000) is None
+    assert (1000, 77) not in env.mgr.sessions
+    assert env.bot.secretary_store.get_active_meeting(1000, 77) is None
     assert any("ตกลงตามนี้" in m and "สรุป" in m for m in env.chan.sent)
 
 
@@ -943,7 +943,7 @@ async def test_unexpected_disconnect_retries_then_continues(env, monkeypatch):
     calls = []
     new_vc = FakeVC()
 
-    async def flaky(channel):
+    async def flaky(body, channel):
         calls.append(1)
         if len(calls) < 3:
             raise RuntimeError("voice down")
@@ -952,8 +952,8 @@ async def test_unexpected_disconnect_retries_then_continues(env, monkeypatch):
     monkeypatch.setattr(env.mgr, "_connect", flaky)
     await env.mgr.on_disconnected(1000)
     assert len(calls) == 3 and s.vc is new_vc and isinstance(new_vc.listening, mt.MeetingSink)
-    assert t("meet_reconnected", "th") in env.chan.sent and 1000 in env.mgr.sessions
-    await env.mgr.end(1000)
+    assert t("meet_reconnected", "th") in env.chan.sent and (1000, 77) in env.mgr.sessions
+    await env.mgr.end((1000, 77))
 
 
 async def test_disconnect_gives_up_after_three_tries_and_announces(env, monkeypatch):
@@ -962,22 +962,22 @@ async def test_disconnect_gives_up_after_three_tries_and_announces(env, monkeypa
     env.chan.members = [make_member(env.guild, 10, "แอน", env.chan)]
     calls = []
 
-    async def dead(channel):
+    async def dead(body, channel):
         calls.append(1)
         raise RuntimeError("down")
 
     monkeypatch.setattr(env.mgr, "_connect", dead)
     await env.mgr.on_disconnected(1000)
-    assert len(calls) == 3 and 1000 not in env.mgr.sessions
+    assert len(calls) == 3 and (1000, 77) not in env.mgr.sessions
     assert t("meet_reconnect_failed", "th") in env.chan.sent
-    assert env.bot.secretary_store.get_active_meeting(1000) is None
+    assert env.bot.secretary_store.get_active_meeting(1000, 77) is None
 
 
 async def test_disconnect_with_nobody_left_just_ends(env):
     await start(env)
     env.chan.members = []
     await env.mgr.on_disconnected(1000)
-    assert 1000 not in env.mgr.sessions
+    assert (1000, 77) not in env.mgr.sessions
 
 
 async def _tick_once(env, s, monkeypatch):
@@ -1008,7 +1008,7 @@ async def test_manual_meeting_waits_five_minutes_after_humans_leave(env, monkeyp
 async def test_auto_join_nobody_came_uses_the_short_grace(env, monkeypatch):
     a = make_member(env.guild, 10, "แอน", env.chan)
     await env.mgr.join(a, first_grace=120.0)
-    s = env.mgr.sessions[1000]
+    s = env.mgr.sessions[(1000, 77)]
     env.chan.members = []
     s.empty_since = time.monotonic() - 121
     assert await _tick_once(env, s, monkeypatch) == ["empty"]
@@ -1033,4 +1033,4 @@ async def test_spoken_leave_ends_the_meeting(env, monkeypatch):
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด ออกประชุม")
     await env.mgr.handle_segment(s, segment(10))
     await asyncio.sleep(0.05)
-    assert 1000 not in env.mgr.sessions
+    assert (1000, 77) not in env.mgr.sessions

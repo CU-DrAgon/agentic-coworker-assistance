@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="SALID_", env_file=".env", extra="ignore")
 
     discord_token: str = ""
+    # Extra voice-only bot tokens (comma-separated, may be empty): "Salid · 2", "Salid · 3"...
+    # Secrets: never logged, never in repr.
+    voice_tokens: Annotated[list[str], NoDecode] = Field(default_factory=list, repr=False)
     # Comma-separated in the environment (NoDecode: skip pydantic-settings' JSON parsing).
     receipt_channel_ids: Annotated[set[int], NoDecode] = set()
     ask_channel_ids: Annotated[set[int], NoDecode] = set()
@@ -87,6 +90,11 @@ class Settings(BaseSettings):
     meeting_empty_minutes: int = 2  # an auto-joined meeting nobody ever came to ends after this
     # A meeting where people were present ends only after this long with no humans in the channel.
     meeting_leave_empty_minutes: int = 5
+    # Auto-join (salid.voice_pool): Salid joins a voice channel as soon as `auto_join_min_humans`
+    # people are in it. `auto_join_delay_seconds` > 0 adds a stability wait (default: none).
+    auto_join_min_humans: int = 1
+    auto_join_delay_seconds: float = 0.0
+    auto_join_cooldown_minutes: int = 60  # no auto-join where someone told Salid to leave
     # Email (salid.email_out): Gmail sends only when all three are set (refresh token = secret)
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
@@ -106,6 +114,13 @@ class Settings(BaseSettings):
     def _parse_ids(cls, v):
         if isinstance(v, str):
             return {int(x) for x in v.replace(" ", "").split(",") if x.strip().isdigit()}
+        return v
+
+    @field_validator("voice_tokens", mode="before")
+    @classmethod
+    def _parse_tokens(cls, v):
+        if isinstance(v, str):
+            return [x.strip() for x in v.split(",") if x.strip()]
         return v
 
     @field_validator("exec_role_names", mode="before")

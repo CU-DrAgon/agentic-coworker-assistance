@@ -36,6 +36,7 @@ def test_missing_document_means_defaults(gstore):
         digest=True,
         deep_tasks=True,
         voice_meetings=True,
+        auto_join_meetings=True,
         memory=True,
         image_memory=True,
         media_memory=True,

@@ -17,7 +17,9 @@ from typing import Any, Protocol
 
 MEETINGS = "salid_meetings"
 EMAILS = "salid_emails"
-ACTIVE_MEETINGS = "salid_active_meetings"  # one record per guild while Salid is in a meeting
+ACTIVE_MEETINGS = (
+    "salid_active_meetings"  # one record per (guild, voice channel) while Salid is in a meeting
+)
 
 
 class DocBackend(Protocol):
@@ -176,18 +178,26 @@ class SecretaryStore:
         return sorted(out, key=lambda m: m.get("start_utc", ""))
 
     # ---- active voice meetings (survive a bot restart; cleared on a normal end)
+    @staticmethod
+    def _active_id(guild_id: int, channel_id: int) -> str:
+        return f"{guild_id}:{channel_id}"
+
     def put_active_meeting(self, rec: dict) -> dict:
-        self.db.put(ACTIVE_MEETINGS, str(rec["guild_id"]), rec)
+        """One record per (guild, voice channel) while Salid is in a meeting there."""
+        self.db.put(ACTIVE_MEETINGS, self._active_id(rec["guild_id"], rec["voice_channel_id"]), rec)
         return rec
 
-    def get_active_meeting(self, guild_id: int) -> dict | None:
-        return self.db.get(ACTIVE_MEETINGS, str(guild_id))
+    def get_active_meeting(self, guild_id: int, channel_id: int) -> dict | None:
+        return self.db.get(ACTIVE_MEETINGS, self._active_id(guild_id, channel_id))
 
     def list_active_meetings(self) -> list[dict]:
         return self.db.query(ACTIVE_MEETINGS)
 
-    def clear_active_meeting(self, guild_id: int) -> None:
-        self.db.delete(ACTIVE_MEETINGS, str(guild_id))
+    def clear_active_meeting(self, guild_id: int, channel_id: int) -> None:
+        self.db.delete(ACTIVE_MEETINGS, self._active_id(guild_id, channel_id))
+        legacy = self.db.get(ACTIVE_MEETINGS, str(guild_id))  # one record per guild (old format)
+        if legacy is not None and legacy.get("voice_channel_id") == channel_id:
+            self.db.delete(ACTIVE_MEETINGS, str(guild_id))
 
     # ---- emails
     def put_email(self, e: dict) -> dict:

@@ -114,6 +114,7 @@ from .summary import (
     message_summary_question,
     summary_question,
 )
+from .voice_pool import VoicePool
 
 logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
@@ -299,6 +300,9 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         self._answers = AnswerLog(clock)  # chunk ids of Salid's answers, ~24 h
         self._sync_last: dict[int, float] = {}
         self._sync_pending: dict[int, asyncio.Task] = {}
+        self.voice_pool = VoicePool(
+            self, list(getattr(settings, "voice_tokens", []) or []), on_leave=self._helper_left
+        )
         self.meetings = MeetingManager(self)
         # Secretary: scheduled meetings, PDFs, email (see salid.secretary / scheduling / email_out)
         self.secretary_store = secretary_store or make_secretary_store(settings, store)
@@ -373,6 +377,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         return getattr(channel, "name", None) or str(channel_id)
 
     async def setup_hook(self):
+        self.voice_pool.start()  # voice helpers log in in the background
         self._register_commands()
         self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
         await self.tree.set_translator(SalidTranslator())
@@ -389,6 +394,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
             await self._sync_guild(guild)
         self._start_import()
         await self.meetings.resume_all()  # rejoin meetings a restart cut off
+        self.meetings.scan_all()  # people already in voice channels: join by importance
 
     async def on_resumed(self):
         self._start_import()  # a gateway outage may have dropped events
@@ -829,7 +835,9 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
                 message.author, fallback_channel=message.channel, lang=lang
             )
         else:
-            reply = await self.meetings.leave(message.author, lang=lang)
+            reply = await self.meetings.leave(
+                message.author, lang=lang, text_channel_id=message.channel.id
+            )
         await message.reply(reply, mention_author=False)
         return True
 
@@ -854,6 +862,14 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         """Salid itself was disconnected (network, gateway, kicked): reconnect, else end."""
         if member == self.user and after.channel is None and before.channel is not None:
             await self.meetings.on_disconnected(before.channel.guild.id)
+        try:
+            await self.meetings.on_voice_activity(member, before, after)
+        except Exception:
+            logger.exception("auto-join check failed")
+
+    async def _helper_left(self, body_index: int, guild_id: int) -> None:
+        """A voice helper lost its connection (network, kicked): reconnect it or end the meeting."""
+        await self.meetings.on_disconnected(guild_id, body_index)
 
     async def close(self):
         if self._tick_task is not None:
@@ -861,6 +877,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         if self._memory_worker is not None:
             self._memory_worker.cancel()
         await self.meetings.shutdown()
+        await self.voice_pool.close()
         await super().close()
 
     async def _direct_message(self, message: discord.Message):
@@ -1520,6 +1537,15 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
                 "reply_language": self.team.channel_language(gid, channel.id),
                 "memory_on": self.team.enabled(gid, "memory"),
                 "memory_days": self.team.memory_retention_days(gid),
+                "auto_join_meetings": self.team.enabled(gid, "auto_join_meetings"),
+                "voice_bodies": self.voice_pool.status_rows(gid, lang),
+                "voice_helper_invites": [
+                    {"name": n, "link": u} for n, u in self.voice_pool.invite_links(gid)
+                ],
+                "meetings_now": [
+                    {"channel": x.voice_channel.name, "body": getattr(x.body, "name", "Salid")}
+                    for x in self.meetings.sessions_in_guild(gid)
+                ],
             }
 
         def hidden() -> dict:
@@ -2110,7 +2136,9 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         """/ออกประชุม: leave and post the summary."""
         await asyncio.to_thread(self.team.current, interaction.guild.id)
         reply = await self.meetings.leave(
-            interaction.user, lang=self._interaction_lang(interaction)
+            interaction.user,
+            lang=self._interaction_lang(interaction),
+            text_channel_id=getattr(interaction.channel, "id", None),
         )
         await interaction.response.send_message(reply, ephemeral=True)
 

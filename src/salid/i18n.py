@@ -879,6 +879,36 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "สลิดเข้ามาจดประชุมตามนัดครับ 🎙️ (เก็บเป็นข้อความในความจำเท่านั้น ไม่บันทึกเสียง)",
         "en": "Salid has joined to take notes for the scheduled meeting 🎙️ (kept as text only, no audio is recorded).",
     },
+    "meet_announce_auto": {
+        "th": "สลิดเข้ามาจดประชุมนะครับ ไม่ต้องการพิมพ์ “@Salid ออกประชุม” ได้เลย "
+        "(เก็บเป็นข้อความในความจำเท่านั้น ไม่บันทึกเสียง)",
+        "en": "Salid has joined to take meeting notes. If you don't need me, just type "
+        "“@Salid leave meeting” (kept as text only, no audio is recorded).",
+    },
+    "meet_preempted": {
+        "th": "ขอไปช่วยประชุมที่นัดไว้ก่อนนะครับ ส่วนที่คุยมาสรุปไว้ให้แล้ว",
+        "en": "I have to go help with a scheduled meeting, sorry! The summary of what was said is below.",
+    },
+    "end_preempted": {
+        "th": "สลิดต้องไปประชุมที่สำคัญกว่า",
+        "en": "Salid moved to a more important meeting",
+    },
+    "meet_busy": {
+        "th": "ตอนนี้ร่างของสลิดติดประชุมอยู่ครบแล้วครับ ({rooms}) ถ้ามีผู้ช่วยเสียงเพิ่มจะแบ่งร่างไปได้อีก",
+        "en": "All of Salid's voices are in meetings right now ({rooms}). "
+        "More voice helpers would let Salid split further.",
+    },
+    "meet_leave_which": {
+        "th": "สลิดอยู่ในหลายห้อง ให้พิมพ์สั่งจากในห้องนั้นหรือเข้าห้องที่ต้องการก่อนนะครับ: {rooms}",
+        "en": "Salid is in several rooms. Type it from that room or join the room first: {rooms}",
+    },
+    "voice_bodies_title": {
+        "th": "ร่างเสียงของสลิด",
+        "en": "Salid's voices",
+    },
+    "voice_body_in": {"th": "อยู่ในเซิร์ฟเวอร์นี้", "en": "in this server"},
+    "voice_body_out": {"th": "ยังไม่ได้เชิญเข้าเซิร์ฟเวอร์นี้", "en": "not invited to this server"},
+    "voice_body_down": {"th": "ยังไม่พร้อมใช้งาน", "en": "unavailable"},
     # ---------------------------------------------------------------- coordinator: disclosure
     "disc_where_dm": {"th": "บันทึก DM ส่วนตัว", "en": "a private DM note"},
     "disc_desc": {
