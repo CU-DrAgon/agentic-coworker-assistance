@@ -106,8 +106,8 @@ def bot(world, seeded):
     )
     b.calls = []
 
-    async def intake(m):
-        b.calls.append(("intake", m.guild.id))
+    async def intake(m, quiet=False):
+        b.calls.append(("intake-quiet" if quiet else "intake", m.guild.id))
 
     async def answer(m, guild, who):
         b.calls.append(("answer", guild.id))
@@ -349,7 +349,7 @@ async def test_setup_command_allows_the_owner_and_admins(bot, world):
 def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
     bot._register_commands()
     cmds = {c.name: c for c in bot.tree.get_commands()}
-    assert set(cmds) == {"ตั้งค่า", "setup", "เข้าประชุม", "join", "ออกประชุม", "leave"}
+    assert set(cmds) == {"ตั้งค่า", "setup", "เข้าประชุม", "join", "ออกประชุม", "leave", "โหมด", "mode"}
     assert all(c.guild_only for c in cmds.values())
 
 
@@ -442,34 +442,10 @@ async def test_bare_mention_uses_previous_message_or_greets(bot, world, monkeypa
     assert lonely.replies == [GREETING_MESSAGE]
 
 
-async def test_follow_up_without_mention_within_the_conversation_window(bot, world, monkeypatch):
-    import salid.bot as botmod
-
-    ch = world.a.text_channels[0]
-    author = member(world.a, STAFF)
-    await bot.on_message(Msg(world.a, ch, author, "ยอดเดือนนี้"))  # never talked: ignored
-    assert bot.calls == []
-    bot._note_talking(Msg(world.a, ch, author))
-    await bot.on_message(Msg(world.a, ch, author, "แล้วเดือนก่อนล่ะ"))
-    other = Msg(world.a, ch, author, "ไปกินข้าวกัน")
-    other.mentions = [SimpleNamespace(id=5)]  # talking to a person, not Salid
-    await bot.on_message(other)
-    assert bot.calls == [("answer", GUILD)]
-    monkeypatch.setattr(botmod, "CONVERSATION_SECONDS", 0)
-    await bot.on_message(Msg(world.a, ch, author, "ยังอยู่ไหม"))
-    assert bot.calls == [("answer", GUILD)]
-
-
 async def test_reply_to_a_salid_message_is_answered(bot, world):
     m = Msg(world.a, world.a.text_channels[0], member(world.a, STAFF), "อธิบายเพิ่มหน่อย")
     m.reference = SimpleNamespace(message_id=1, resolved=SimpleNamespace(author=ME))
     await bot.on_message(m)
-    assert bot.calls == [("answer", GUILD)]
-
-
-async def test_channels_named_after_salid_answer_everything(bot, world):
-    ch = FakeChannel(12, "ถาม-สลิด")
-    await bot.on_message(Msg(world.a, ch, member(world.a, STAFF), "ทำอะไรได้บ้าง"))
     assert bot.calls == [("answer", GUILD)]
 
 

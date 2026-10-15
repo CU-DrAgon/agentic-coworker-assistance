@@ -225,7 +225,12 @@ async def hub_put_settings(
     guilds: GuildStore = Depends(get_guild_store),
 ) -> GuildSettings:
     known = {c.id for c in access.settings.channels}
-    chosen = {*body.receipt_channel_ids, *body.ask_channel_ids, body.digest_channel_id} - {""}
+    chosen = {
+        *body.receipt_channel_ids,
+        *body.ask_channel_ids,
+        *body.channel_modes,
+        body.digest_channel_id,
+    } - {""}
     if known and chosen - known:  # the bot syncs the list; an empty list means "not synced yet"
         raise HTTPException(422, "Unknown channel id for this guild")
     return await run_in_threadpool(guilds.save_settings, access.guild_id, body, access.email)

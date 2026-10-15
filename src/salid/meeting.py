@@ -36,6 +36,7 @@ from pydantic import BaseModel
 from meeting_scribe.audio import to_flac
 
 from .llm import generate
+from .naming import _WAKE_RE
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -110,11 +111,7 @@ def parse_meeting_command(text: str) -> str | None:
 
 
 # ------------------------------------------------------------------ wake word
-# "สลิด" as people say it and as speech-to-text often writes it (tone marks, ต/ด, extra ร).
-_WAKE_RE = re.compile(
-    r"(?:ส[ะั]?ลิ[ดตทธ]ร?[์๊๋]?|สลิ[ดตท][ร]?|ซา\s?ลิด|salid|saleed|salit|sa\s?lid)",
-    re.I,
-)
+# The wake word regex lives in naming.py (shared with the text-channel name detection).
 _LEAD_FILLER = re.compile(r"^[\s,.:;!?\-–—…ๆ]*(?:(?:ครับ|ค่ะ|คะ|นะ|จ๊ะ|จ้ะ|เอ่อ|อ่า|ว่า)\s*)*")
 _TRAIL_FILLER = re.compile(r"[\s,.:;!?\-–—…]+$")
 

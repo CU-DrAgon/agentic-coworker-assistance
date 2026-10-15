@@ -65,9 +65,43 @@ def test_document_layout(gstore):
     assert set(doc) == {
         "guild_name", "icon_url", "channels", "active", "installed_at", "features",
         "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "digest_time",
-        "exec_role_names", "updated_by", "updated_at",
+        "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
+
+
+def test_channel_modes_are_validated_and_bounded():
+    u = GuildSettingsUpdate(
+        channel_modes={"12": "join", "x": "chat", "13": "bogus", " 14 ": "off"}, default_mode="zzz"
+    )
+    assert u.channel_modes == {"12": "join", "14": "off"} and u.default_mode == "call"
+    big = GuildSettingsUpdate(channel_modes={str(i): "chat" for i in range(900)})
+    assert len(big.channel_modes) == gs.MAX_CHANNEL_MODES
+    assert GuildSettingsUpdate(default_mode="join").default_mode == "join"
+
+
+def test_set_channel_mode_sets_and_removes_one_channel(gstore):
+    gstore.set_channel_mode(GUILD, 5, "join")  # no document yet: created
+    gstore.set_channel_mode(GUILD, 6, "off")
+    assert gstore.get(GUILD).channel_modes == {"5": "join", "6": "off"}
+    gstore.set_channel_mode(GUILD, 5, None)
+    assert gstore.get(GUILD).channel_modes == {"6": "off"}
+    with pytest.raises(ValueError):
+        gstore.set_channel_mode(GUILD, 5, "bogus")
+
+
+def test_save_settings_replaces_the_channel_mode_map(gstore):
+    gstore.set_channel_mode(GUILD, 5, "join")
+    gstore.save_settings(GUILD, GuildSettingsUpdate(channel_modes={"6": "chat"}), "a@x.com")
+    assert gstore.get(GUILD).channel_modes == {"6": "chat"}
+
+
+def test_bot_cache_sees_a_mode_change_at_once(gstore):
+    team = gs.BotGuildSettings(gstore, ttl=3600)
+    assert team.channel_mode(GUILD, 5, "x", set()) == "call"
+    team.set_channel_mode(GUILD, 5, "listen")
+    assert team.channel_mode(GUILD, 5, "x", set()) == "listen"
+    assert team.channel_mode(GUILD, 6, "x", {6}) == "chat"  # env ask channel
 
 
 @pytest.mark.parametrize(

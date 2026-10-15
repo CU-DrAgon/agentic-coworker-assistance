@@ -4,7 +4,9 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
 
     features             {receipts, qa, digest, deep_tasks, voice_meetings}: bool, all default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
-    ask_channel_ids      list[str] channels where every message is a question
+    ask_channel_ids      list[str] channels where every message is answered (mode "chat")
+    channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
+    default_mode         mode of channels with no entry above (default "call")
     digest_channel_id    str ("" = no daily digest)
     digest_time          "HH:MM"
     exec_role_names      list[str] roles that count as executives (default ผู้บริหาร, Executive)
@@ -40,12 +42,15 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from .modes import DEFAULT_MODE, MODES, resolve_mode
+
 logger = logging.getLogger(__name__)
 
 TTL_S = 60.0
 LINK_TTL = timedelta(minutes=15)
 FEATURES = ("receipts", "qa", "digest", "deep_tasks", "voice_meetings")
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
+MAX_CHANNEL_MODES = 500
 _ID = re.compile(r"^\d{1,25}$")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -83,6 +88,22 @@ class GuildSettingsUpdate(BaseModel):
     digest_channel_id: str = ""
     digest_time: str = "18:00"
     exec_role_names: list[str] = Field(default_factory=lambda: list(DEFAULT_EXEC_ROLES))
+    channel_modes: dict[str, str] = Field(default_factory=dict)
+    default_mode: str = DEFAULT_MODE
+
+    @field_validator("channel_modes", mode="before")
+    @classmethod
+    def _modes(cls, v):
+        """Keep numeric channel ids with a known mode; drop the rest, bounded like other lists."""
+        if not isinstance(v, dict):
+            return {}
+        out = {str(k).strip(): m for k, m in v.items() if _ID.match(str(k).strip()) and m in MODES}
+        return dict(list(out.items())[:MAX_CHANNEL_MODES])
+
+    @field_validator("default_mode", mode="before")
+    @classmethod
+    def _default_mode(cls, v):
+        return v if v in MODES else DEFAULT_MODE
 
     @field_validator("receipt_channel_ids", "ask_channel_ids", mode="before")
     @classmethod
@@ -211,10 +232,35 @@ class GuildStore:
         self, guild_id: int, update: GuildSettingsUpdate, updated_by: str
     ) -> GuildSettings:
         data = update.model_dump()
+        modes = data.pop("channel_modes")
         data["updated_by"] = updated_by
         data["updated_at"] = _now().isoformat(timespec="seconds")
-        self._ref(guild_id).set(data, merge=True)
+        ref = self._ref(guild_id)
+        ref.set(data, merge=True)
+        # set(merge=True) would deep-merge the map and never remove a channel: replace it whole.
+        ref.update({"channel_modes": modes})
         return self.get(guild_id)
+
+    def set_channel_mode(self, guild_id: int, channel_id: int, mode: str | None) -> None:
+        """Set one channel's mode (None removes the entry so the channel follows the default)."""
+        if mode is not None and mode not in MODES:
+            raise ValueError(f"unknown mode {mode!r}")
+        ref, cid = self._ref(guild_id), str(channel_id)
+
+        def run(txn) -> None:
+            snap = ref.get(transaction=txn)
+            doc = snap.to_dict() if snap.exists else None
+            modes = dict((doc or {}).get("channel_modes") or {})
+            if mode is None:
+                modes.pop(cid, None)
+            else:
+                modes[cid] = mode
+            if doc is None:
+                txn.set(ref, {"channel_modes": modes})
+            else:  # update() replaces the whole map, so removals stick
+                txn.update(ref, {"channel_modes": modes})
+
+        self._in_transaction(run)
 
     # ------------------------------------------------------------ link codes
     def create_link_code(self, guild_id: int, user_id: int, user_name: str) -> str:
@@ -367,6 +413,25 @@ class BotGuildSettings:
 
     def ask_channel_ids(self, guild_id: int, env_ids: set[int]) -> set[int]:
         return env_ids | {int(x) for x in self.current(guild_id).ask_channel_ids}
+
+    def channel_mode(
+        self, guild_id: int, channel_id: int, channel_name: str | None, env_ask_ids: set[int]
+    ) -> str:
+        g = self.current(guild_id)
+        return resolve_mode(
+            channel_id,
+            channel_name,
+            channel_modes=g.channel_modes,
+            ask_channel_ids=self.ask_channel_ids(guild_id, env_ask_ids),
+            default_mode=g.default_mode,
+        )
+
+    def set_channel_mode(self, guild_id: int, channel_id: int, mode: str | None) -> None:
+        """Write one channel's mode and drop the cache so it applies at once."""
+        try:
+            self.store.set_channel_mode(guild_id, channel_id, mode)
+        finally:
+            self._cache.pop(guild_id, None)
 
     def digest_channel_id(self, guild_id: int, env_id: int | None) -> int | None:
         v = self.current(guild_id).digest_channel_id

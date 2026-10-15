@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     gemini_cli_path: str = ""
     deep_task_timeout: int = 600  # seconds
     deep_task_model: str = "gemini-3-flash-preview"  # see deep_task.build_cli_settings
+    # Cheap model for the "is this addressed to Salid?" yes/no gates (see salid.gate).
+    gate_model: str = "gemini-3.5-flash-lite"
     low_confidence: float = 0.7
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).
     guild_collection: str = "salid_guilds"

@@ -5,11 +5,14 @@ import contextlib
 import io
 import logging
 import time
+from collections import deque
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 import discord
 from discord import app_commands
 
+from . import gate
 from .archive import make_archive
 from .config import Settings
 from .deep_task import (
@@ -26,8 +29,18 @@ from .deep_task import (
 )
 from .digest import build_daily_digest
 from .extract import apply_correction, guess_mime, ingest_attachment
+from .gate import GateLine, is_join_candidate
 from .guild_settings import BotGuildSettings, GuildStore, make_guild_store
 from .meeting import MeetingManager, parse_meeting_command
+from .modes import (
+    CHAT_CHANNEL_NAME,
+    MODE_HELP,
+    MODE_LABELS,
+    MODES,
+    is_chat_channel_name,
+    parse_snooze_command,
+)
+from .naming import mentions_name
 from .qa import ask
 from .store import Store
 
@@ -45,21 +58,37 @@ DM_MESSAGE = "สลิดแยกข้อมูลของแต่ละเ
 WELCOME_MESSAGE = (
     "สวัสดีครับ ผม “สลิด” เลขาและเพื่อนร่วมทีม 🐱\n"
     "• คุยกับผมได้ทุกเรื่องในห้อง {chat} พิมพ์ได้เลยไม่ต้องแท็ก "
-    "ห้องอื่นแท็ก {mention} ก่อนครับ\n"
+    "ห้องอื่นแท็ก {mention} หรือเรียกชื่อ “สลิด” ได้เลยครับ "
+    "(พิมพ์ /โหมด เพื่อดูหรือปรับว่าผมจะคุยในแต่ละห้องแค่ไหน)\n"
     "• ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” "
     "หรือแท็ก {mention} พร้อมรูป ผมจะอ่านยอดและบันทึกให้เอง\n"
     "• ผู้ดูแลพิมพ์ /ตั้งค่า เพื่อเชื่อมกับศูนย์บัญชาการ (หน้าเว็บสำหรับตั้งค่า)"
 )
-# Created on join (needs Manage Channels); the name contains "สลิด", so it is an ask channel.
-CHAT_CHANNEL_NAME = "คุยกับน้องสลิด"
+# CHAT_CHANNEL_NAME (salid.modes) is created on join (needs Manage Channels): mode "chat".
 CHAT_CHANNEL_TOPIC = "คุยกับน้องสลิดได้ทุกเรื่อง พิมพ์ได้เลยไม่ต้องแท็ก"
 GREETING_MESSAGE = (
     'สวัสดีครับ สลิดเองครับ 🐱 ส่งรูปใบเสร็จมาได้เลย หรือแท็กสลิดพร้อมคำถาม เช่น "เดือนนี้จ่ายค่าวัตถุดิบไปเท่าไร" ครับ'
 )
 # A bare @mention right after the same person's message is treated as a question about it.
 FOLLOWUP_WINDOW_SECONDS = 120
-# After Salid answers someone, their next messages in that channel need no @mention for this long.
+# After Salid answers in a channel, messages there need no @mention for this long (a gate decides
+# whether each one is meant for Salid). Silence for this long ends the conversation.
 CONVERSATION_SECONDS = 180
+SIGNOFF_MESSAGE = "ถ้ามีอะไรก็ทักน้องสลิดมาได้เลยนะครับ 👋"
+SIGNOFF_MIN_REPLIES = 2  # fewer replies: only a 👋 reaction on Salid's last reply
+GATE_HISTORY = 10  # channel lines the in-window gate reads
+JOIN_HISTORY = 15  # channel lines the join-mode batch gate reads
+QUIET_SECONDS = 30  # join mode: a channel must be this quiet before the batch gate runs
+MAX_INTERJECTIONS_PER_HOUR = 3  # join mode: unprompted answers per channel, rolling hour
+MAX_JOIN_CANDIDATES = 5
+SNOOZE_SECONDS = 3600
+TICK_SECONDS = 5.0
+SNOOZE_MESSAGE = "ได้เลยครับ สลิดเงียบในห้องนี้ 1 ชั่วโมง 🤫 พิมพ์ “@Salid คุยได้แล้ว” เมื่อไรก็เรียกกลับได้ครับ"
+UNSNOOZE_MESSAGE = "กลับมาคุยแล้วครับ 😊"
+NOT_SNOOZED_MESSAGE = "สลิดคุยได้ตามปกติอยู่แล้วครับ 🙂"
+MODE_DENIED_MESSAGE = "ปรับโหมดได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารครับ"
+MODE_FAILED_MESSAGE = "ตั้งโหมดไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะครับ"
+MODE_COMMANDS = ("โหมด", "mode")
 # Chat context handed to the model: this person's and Salid's recent messages in the channel.
 HISTORY_MESSAGES = 10
 HISTORY_SECONDS = 30 * 60
@@ -86,15 +115,6 @@ def is_receipt_channel_name(name: str | None) -> bool:
     return any(h in low for h in RECEIPT_CHANNEL_HINTS)
 
 
-# Channels named after Salid are for talking to it: every message there is a question.
-ASK_CHANNEL_HINTS = ("salid", "สลิด")
-
-
-def is_ask_channel_name(name: str | None) -> bool:
-    low = (name or "").casefold()
-    return any(h in low for h in ASK_CHANNEL_HINTS)
-
-
 def has_receipt_file(message) -> bool:
     return any(guess_mime(a.filename, a.content_type) for a in message.attachments)
 
@@ -116,9 +136,44 @@ def mentions_bot(message: discord.Message, me: discord.ClientUser | None) -> boo
     return any(getattr(getattr(r, "tags", None), "bot_id", None) == me.id for r in roles)
 
 
+def mentions_other(message: discord.Message, me: discord.ClientUser | None) -> bool:
+    """True when the message @mentions a user or role other than Salid (it talks to someone else)."""
+    if any(u != me for u in message.mentions):
+        return True
+    roles = getattr(message, "role_mentions", ())
+    return any(
+        getattr(getattr(r, "tags", None), "bot_id", None) != getattr(me, "id", None) for r in roles
+    )
+
+
+@dataclass
+class _Convo:
+    """A running conversation with Salid in one channel (call/join modes)."""
+
+    channel: object
+    last: float  # clock time of Salid's latest answer
+    replies: int = 0
+    last_reply: object = None  # Salid's latest message, for the 👋 reaction
+
+
+@dataclass
+class _Pending:
+    """Join mode: candidate messages waiting for the channel to go quiet."""
+
+    channel: object
+    guild: object
+    last_activity: float
+    candidates: list = field(default_factory=list)
+
+
 class SecretaryBot(discord.Client):
     def __init__(
-        self, settings: Settings, store: Store, llm, guilds: GuildStore | None = None
+        self,
+        settings: Settings,
+        store: Store,
+        llm,
+        guilds: GuildStore | None = None,
+        clock=time.monotonic,
     ) -> None:
         intents = discord.Intents(
             guilds=True,
@@ -135,7 +190,12 @@ class SecretaryBot(discord.Client):
         self.team = BotGuildSettings(self.guilds_store)
         self.archive = make_archive(settings)
         self.tree = app_commands.CommandTree(self)
-        self._talking: dict[tuple[int, int], float] = {}  # (channel, user) -> last answer time
+        self._clock = clock  # injectable so conversation timers are testable without sleeping
+        self._convos: dict[int, _Convo] = {}  # channel -> running conversation
+        self._pending: dict[int, _Pending] = {}  # join mode: channel -> candidates
+        self._interjections: dict[int, deque[float]] = {}  # join mode budget, per channel
+        self._snoozed: dict[int, float] = {}  # channel -> snooze end (in memory only)
+        self._tick_task: asyncio.Task | None = None
         self._digest_task: asyncio.Task | None = None
         self._digest_sent: dict[int, date] = {}
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
@@ -150,6 +210,7 @@ class SecretaryBot(discord.Client):
         except discord.HTTPException:
             logger.exception("could not sync slash commands")
         self._digest_task = asyncio.create_task(self._digest_loop())
+        self._tick_task = asyncio.create_task(self._tick_loop())
 
     async def on_ready(self):
         logger.info("logged in as %s in %d guilds", self.user, len(self.guilds))
@@ -201,6 +262,11 @@ class SecretaryBot(discord.Client):
     async def on_guild_join(self, guild: discord.Guild):
         logger.info("joined guild %s", guild.id)
         chat = await self._ensure_chat_channel(guild)
+        if chat is not None:  # a reused channel must answer everything, whatever its name
+            try:
+                await asyncio.to_thread(self.team.set_channel_mode, guild.id, chat.id, "chat")
+            except Exception:
+                logger.exception("could not save chat mode for guild %s", guild.id)
         await self._sync_guild(guild, installed=True)
         target = chat or guild.system_channel
         if target is None or not target.permissions_for(guild.me).send_messages:
@@ -208,13 +274,13 @@ class SecretaryBot(discord.Client):
                 (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), None
             )
         if target is not None:
-            where = chat.mention if chat else f"ที่ชื่อมีคำว่า “สลิด” (เช่น #{CHAT_CHANNEL_NAME})"
+            where = chat.mention if chat else f"#{CHAT_CHANNEL_NAME}"
             with contextlib.suppress(discord.HTTPException):
                 await target.send(WELCOME_MESSAGE.format(mention=self.user.mention, chat=where))
 
     async def _ensure_chat_channel(self, guild: discord.Guild):
-        """The guild's Salid chat channel: an existing one named after Salid, else a new one."""
-        existing = next((c for c in guild.text_channels if is_ask_channel_name(c.name)), None)
+        """The guild's Salid chat channel: an existing one with its name, else a new one."""
+        existing = next((c for c in guild.text_channels if is_chat_channel_name(c.name)), None)
         if existing is not None:
             return existing
         perms = getattr(guild.me, "guild_permissions", None)
@@ -265,8 +331,11 @@ class SecretaryBot(discord.Client):
                 return
             gid = message.guild.id
             await asyncio.to_thread(self.team.current, gid)  # refresh the cache off the loop
+            mode = self._mode(message.channel, gid)
             receipts_on = self.team.enabled(gid, "receipts")
             if receipts_on and await self._maybe_correction(message):
+                return
+            if mode == "off":
                 return
             mentioned = mentions_bot(message, self.user)
             receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
@@ -277,20 +346,125 @@ class SecretaryBot(discord.Client):
             )
             if is_receipt_post:
                 if receipts_on:
-                    await self._intake(message)
+                    await self._intake(message, quiet=mode == "listen")
                 return
             if mentioned and await self._meeting_command(message):
                 return
-            ask_ids = self.team.ask_channel_ids(gid, self.s.ask_channel_ids)
-            if (
-                mentioned
-                or message.channel.id in ask_ids
-                or is_ask_channel_name(getattr(message.channel, "name", ""))
-                or self._in_conversation(message)
-            ):
+            if mentioned and await self._snooze_command(message):
+                return
+            if mode == "listen":
+                if mentioned:
+                    with contextlib.suppress(discord.HTTPException):
+                        await message.add_reaction("👂")
+                return
+            if mode == "chat":
                 await self._answer(message, message.guild, message.author)
+                return
+            await self._call_or_join(message, mode, mentioned)
         except Exception:
             logger.exception("handler failed")
+
+    def _mode(self, channel, guild_id: int) -> str:
+        """The channel's mode now: the resolved setting, or listen while snoozed."""
+        mode = self.team.channel_mode(
+            guild_id, channel.id, getattr(channel, "name", None), self.s.ask_channel_ids
+        )
+        return "listen" if mode != "off" and self._is_snoozed(channel.id) else mode
+
+    def _is_snoozed(self, channel_id: int) -> bool:
+        until = self._snoozed.get(channel_id)
+        if until is not None and self._clock() >= until:
+            del self._snoozed[channel_id]
+            return False
+        return until is not None
+
+    async def _call_or_join(self, message: discord.Message, mode: str, mentioned: bool) -> None:
+        """call/join: answer when called by tag or name, replied to, or (inside the conversation
+        window) when the gate says the message is meant for Salid. Join mode also queues
+        questions for the quiet-time batch gate."""
+        cid = message.channel.id
+        if mentioned or mentions_name(message.content):
+            await self._answer(message, message.guild, message.author)
+            return
+        if self._replying_to_salid(message):
+            await self._answer(message, message.guild, message.author)
+            return
+        if mentions_other(message, self.user):
+            return  # talking to someone else
+        if self._window_open(cid) and await self._gate_window(message):
+            await self._answer(message, message.guild, message.author)
+            return
+        if mode != "join":
+            return
+        if message.content and is_join_candidate(message.content):
+            pending = self._pending.get(cid)
+            if pending is None:
+                pending = self._pending[cid] = _Pending(message.channel, message.guild, 0.0)
+            pending.candidates = [*pending.candidates, message][-MAX_JOIN_CANDIDATES:]
+        if cid in self._pending:
+            self._pending[cid].last_activity = self._clock()
+
+    def _replying_to_salid(self, message: discord.Message) -> bool:
+        ref = message.reference
+        resolved = getattr(ref, "resolved", None) if ref else None
+        return self.user is not None and getattr(resolved, "author", None) == self.user
+
+    def _window_open(self, channel_id: int) -> bool:
+        convo = self._convos.get(channel_id)
+        return convo is not None and self._clock() - convo.last < CONVERSATION_SECONDS
+
+    async def _gate_window(self, message: discord.Message) -> bool:
+        history = await self._gate_lines(message.channel, GATE_HISTORY, before=message)
+        line = GateLine(
+            str(message.id),
+            message.author.display_name,
+            self._strip_mentions(message.content, message),
+        )
+        return await asyncio.to_thread(
+            gate.addressed_to_salid,
+            self.llm,
+            self.s.gate_model,
+            history,
+            line,
+            channel_id=message.channel.id,
+        )
+
+    async def _gate_lines(self, channel, limit: int, before=None) -> list[GateLine]:
+        """The channel's last lines, oldest first, for a gate prompt."""
+        history = getattr(channel, "history", None)
+        if history is None:
+            return []
+        lines: list[GateLine] = []
+        try:
+            kw = {"limit": limit} if before is None else {"limit": limit, "before": before}
+            async for prev in history(**kw):
+                text = self._strip_mentions(prev.content, prev)
+                if text:
+                    who = "สลิด" if prev.author == self.user else prev.author.display_name
+                    lines.append(GateLine(str(prev.id), who, text))
+        except discord.HTTPException:
+            logger.warning("could not read channel history", exc_info=True)
+        return lines[::-1]
+
+    async def _snooze_command(self, message: discord.Message) -> bool:
+        """'@Salid เงียบก่อน' (listen mode for an hour) / '@Salid คุยได้แล้ว'. Open to everyone."""
+        cmd = parse_snooze_command(self._strip_mentions(message.content, message))
+        if cmd is None:
+            return False
+        cid = message.channel.id
+        if cmd == "snooze":
+            self._snoozed[cid] = self._clock() + SNOOZE_SECONDS
+            self._convos.pop(cid, None)
+            self._pending.pop(cid, None)
+            text = SNOOZE_MESSAGE
+        else:
+            text = (
+                UNSNOOZE_MESSAGE
+                if self._snoozed.pop(cid, None) is not None
+                else NOT_SNOOZED_MESSAGE
+            )
+        await message.reply(text, mention_author=False)
+        return True
 
     async def _meeting_command(self, message: discord.Message) -> bool:
         """'@Salid เข้าประชุม' / 'ออกประชุม' typed in a text channel."""
@@ -310,6 +484,8 @@ class SecretaryBot(discord.Client):
             await self.meetings.end(before.channel.guild.id, "disconnected")
 
     async def close(self):
+        if self._tick_task is not None:
+            self._tick_task.cancel()
         await self.meetings.shutdown()
         await super().close()
 
@@ -341,7 +517,7 @@ class SecretaryBot(discord.Client):
         await message.reply(text, mention_author=False)
         return True
 
-    async def _intake(self, message: discord.Message):
+    async def _intake(self, message: discord.Message, quiet: bool = False):
         note = message.content.strip()
         for att in message.attachments:
             if att.size > ATTACH_LIMIT:
@@ -369,24 +545,25 @@ class SecretaryBot(discord.Client):
             if res.reaction:
                 with contextlib.suppress(discord.HTTPException):
                     await message.add_reaction(res.reaction)
+            if quiet:  # listen mode: reaction only, no text reply
+                continue
             sent = await message.reply(res.reply, mention_author=False)
             if res.status == "created":
                 self.store.set_reply_message(res.receipt.id, sent.id)
 
-    def _in_conversation(self, message: discord.Message) -> bool:
-        """A reply to Salid, or a follow-up soon after Salid answered this person here.
-        Messages that @mention someone else are left alone: they are talking to that person."""
-        if any(u != self.user for u in message.mentions):
-            return False
-        ref = message.reference
-        resolved = getattr(ref, "resolved", None) if ref else None
-        if self.user is not None and getattr(resolved, "author", None) == self.user:
-            return True
-        last = self._talking.get((message.channel.id, message.author.id))
-        return last is not None and time.monotonic() - last < CONVERSATION_SECONDS
-
-    def _note_talking(self, message: discord.Message) -> None:
-        self._talking[(message.channel.id, message.author.id)] = time.monotonic()
+    def _note_answer(self, message: discord.Message, sent) -> None:
+        """Salid answered here: open or refresh the channel's conversation (call/join only)."""
+        if message.guild is None:
+            return
+        cid = message.channel.id
+        self._pending.pop(cid, None)  # whatever was waiting has just been dealt with
+        if self._mode(message.channel, message.guild.id) not in ("call", "join"):
+            return
+        convo = self._convos.get(cid)
+        if convo is None or not self._window_open(cid):
+            convo = self._convos[cid] = _Convo(message.channel, self._clock())
+        convo.replies += 1
+        convo.last, convo.last_reply = self._clock(), sent
 
     def _strip_mentions(self, text: str, message: discord.Message) -> str:
         if self.user:
@@ -442,8 +619,8 @@ class SecretaryBot(discord.Client):
         if not q:
             q = await self._previous_text(message)
         if not q:
-            await message.reply(GREETING_MESSAGE, mention_author=False)
-            self._note_talking(message)
+            sent = await message.reply(GREETING_MESSAGE, mention_author=False)
+            self._note_answer(message, sent)
             return
         gid = guild.id
         is_exec = self.is_exec_member(member)
@@ -473,11 +650,12 @@ class SecretaryBot(discord.Client):
                 history=history,
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
-        self._note_talking(message)
+        sent = None
         for i, part in enumerate(chunks(ans.text)):
-            await (
+            sent = await (
                 message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
             )
+        self._note_answer(message, sent)
 
     async def _deep(self, message: discord.Message, guild_id: int, task: str, is_exec: bool):
         """Executives only. Acknowledge at once, run Gemini CLI in the background, post the result."""
@@ -532,6 +710,23 @@ class SecretaryBot(discord.Client):
                     callback=setup,
                 )
             )
+
+        async def mode_cb(interaction: discord.Interaction, mode: str | None = None):
+            await self.handle_mode(interaction, mode)
+
+        mode_cb = app_commands.guild_only()(mode_cb)
+        mode_cb = app_commands.describe(mode="โหมดใหม่ของห้องนี้ (ไม่เลือก = ดูโหมดปัจจุบัน)")(mode_cb)
+        mode_cb = app_commands.choices(
+            mode=[app_commands.Choice(name=MODE_LABELS[m], value=m) for m in MODES]
+        )(mode_cb)
+        for name in MODE_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name,
+                    description="ดูหรือตั้งโหมดการคุยของสลิดในห้องนี้",
+                    callback=mode_cb,
+                )
+            )
         for names, handler, desc in (
             (JOIN_COMMANDS, self.handle_join, "ให้สลิดเข้าห้องเสียงที่คุณอยู่ เพื่อฟังและจดบันทึกประชุม"),
             (LEAVE_COMMANDS, self.handle_leave, "ให้สลิดออกจากห้องเสียงและสรุปการประชุม"),
@@ -562,6 +757,42 @@ class SecretaryBot(discord.Client):
             await self.meetings.leave(interaction.user), ephemeral=True
         )
 
+    async def handle_mode(self, interaction: discord.Interaction, mode: str | None) -> None:
+        """/โหมด: show this channel's mode, or (executives / server managers) change it."""
+        guild, channel, user = interaction.guild, interaction.channel, interaction.user
+        send = interaction.response.send_message
+        if guild is None or channel is None:
+            await send(SETUP_DENIED_MESSAGE, ephemeral=True)
+            return
+        await asyncio.to_thread(self.team.current, guild.id)
+        if mode is None:
+            current = self._mode(channel, guild.id)
+            lines = [f"โหมดของห้องนี้ตอนนี้: {MODE_LABELS[current]}", ""]
+            if self._is_snoozed(channel.id):
+                lines += ["(สลิดกำลังพักเงียบชั่วคราว ทำตัวเหมือนโหมดฟังเงียบ)", ""]
+            lines += [f"{MODE_LABELS[m]} — {MODE_HELP[m]}" for m in MODES]
+            lines += ["", "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /โหมด แล้วเลือกโหมดครับ"]
+            await send("\n".join(lines), ephemeral=True)
+            return
+        if mode not in MODES:
+            await send(MODE_FAILED_MESSAGE, ephemeral=True)
+            return
+        if not hasattr(user, "guild_permissions") or not (
+            can_manage_guild(user) or self.is_exec_member(user)
+        ):
+            await send(MODE_DENIED_MESSAGE, ephemeral=True)
+            return
+        try:
+            await asyncio.to_thread(self.team.set_channel_mode, guild.id, channel.id, mode)
+        except Exception:
+            logger.exception("could not save channel mode")
+            await send(MODE_FAILED_MESSAGE, ephemeral=True)
+            return
+        self._snoozed.pop(channel.id, None)
+        self._convos.pop(channel.id, None)
+        self._pending.pop(channel.id, None)
+        await send(f"ตั้งห้องนี้เป็น {MODE_LABELS[mode]} แล้วครับ")
+
     async def handle_setup(self, interaction: discord.Interaction) -> None:
         """/ตั้งค่า: DM-style ephemeral reply with a one-time link to the hub for this guild."""
         guild, user = interaction.guild, interaction.user
@@ -580,6 +811,68 @@ class SecretaryBot(discord.Client):
         await interaction.response.send_message(
             SETUP_MESSAGE.format(name=guild.name, url=url), ephemeral=True
         )
+
+    # ------------------------------------------------------------- timers (sign-off, join batches)
+    async def _tick_loop(self):
+        await self.wait_until_ready()
+        while not self.is_closed():
+            await asyncio.sleep(TICK_SECONDS)
+            try:
+                await self.tick()
+            except Exception:
+                logger.exception("tick failed")
+
+    async def tick(self) -> None:
+        await self._signoff_due()
+        await self._join_due()
+
+    async def _signoff_due(self) -> None:
+        """Conversations whose window ran out: one short sign-off (or a 👋 reaction after a
+        single answer), once."""
+        now = self._clock()
+        for cid, convo in list(self._convos.items()):
+            if now - convo.last < CONVERSATION_SECONDS:
+                continue
+            del self._convos[cid]
+            try:
+                if convo.replies >= SIGNOFF_MIN_REPLIES:
+                    await convo.channel.send(SIGNOFF_MESSAGE)
+                elif convo.last_reply is not None:
+                    await convo.last_reply.add_reaction("👋")
+            except discord.HTTPException:
+                logger.warning("could not sign off in channel %s", cid, exc_info=True)
+
+    def _interjection_allowed(self, channel_id: int) -> bool:
+        used = self._interjections.setdefault(channel_id, deque())
+        while used and self._clock() - used[0] >= 3600:
+            used.popleft()
+        return len(used) < MAX_INTERJECTIONS_PER_HOUR
+
+    async def _join_due(self) -> None:
+        """Join mode: channels that went quiet get one batch-gate call over their candidates."""
+        now = self._clock()
+        for cid, pending in list(self._pending.items()):
+            if now - pending.last_activity < QUIET_SECONDS:
+                continue
+            del self._pending[cid]
+            if not pending.candidates or self._mode(pending.channel, pending.guild.id) != "join":
+                continue
+            if not self._interjection_allowed(cid):  # budget first: no tokens when out of budget
+                logger.info("join budget used up in channel %s", cid)
+                continue
+            lines = await self._gate_lines(pending.channel, JOIN_HISTORY)
+            ids = [str(m.id) for m in pending.candidates]
+            picked = await asyncio.to_thread(
+                gate.pick_interjection, self.llm, self.s.gate_model, lines, ids, channel_id=cid
+            )
+            target = next((m for m in pending.candidates if str(m.id) == picked), None)
+            if target is None:
+                continue
+            self._interjections[cid].append(self._clock())
+            try:
+                await self._answer(target, pending.guild, target.author)
+            except Exception:
+                logger.exception("join answer failed")
 
     # ------------------------------------------------------------- digest
     def due_digests(self, now: datetime) -> list[tuple[discord.Guild, discord.abc.Messageable]]:
