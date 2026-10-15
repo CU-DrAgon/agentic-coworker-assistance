@@ -304,6 +304,43 @@ def test_settings_validation(client, bad):
     assert client.guilds.get(A).updated_at == ""
 
 
+def test_hub_saves_channel_modes_and_default_mode(client):
+    body = {"channel_modes": {str(A + 1): "listen", str(A + 2): "join"}, "default_mode": "chat"}
+    put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
+    assert put["channel_modes"] == body["channel_modes"] and put["default_mode"] == "chat"
+    assert client.guilds.get(A).channel_modes == {str(A + 1): "listen", str(A + 2): "join"}
+    # saving again without a channel removes it (the hub sends the full map)
+    client.put(
+        f"/api/hub/guilds/{A}/settings", json={"channel_modes": {str(A + 2): "off"}}, headers=AUTH
+    )
+    g = client.guilds.get(A)
+    assert g.channel_modes == {str(A + 2): "off"} and g.default_mode == "call"
+    assert client.guilds.get(B).channel_modes == {}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"channel_modes": {"999": "join"}},  # not a channel of this guild
+        {"channel_modes": {str(B + 1): "join"}},  # a channel of the OTHER guild
+    ],
+)
+def test_hub_rejects_modes_for_unknown_channels(client, bad):
+    r = client.put(f"/api/hub/guilds/{A}/settings", json=bad, headers=AUTH)
+    assert r.status_code == 422 and client.guilds.get(A).channel_modes == {}
+
+
+def test_hub_drops_unknown_mode_values(client):
+    body = {"channel_modes": {str(A + 1): "bogus", str(A + 2): "off"}, "default_mode": "bogus"}
+    put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
+    assert put["channel_modes"] == {str(A + 2): "off"} and put["default_mode"] == "call"
+
+
+def test_hub_page_has_the_mode_section(client):
+    html = client.get("/hub").text
+    assert "โหมดของแต่ละห้อง" in html and 'id="default-mode"' in html and "channel_modes" in html
+
+
 def test_any_numeric_channel_is_accepted_until_the_bot_has_synced_the_list(client):
     client.guilds.upsert_guild(A, name="n", icon_url="", channels=[])
     r = client.put(
@@ -386,5 +423,5 @@ def test_home_page_links_to_hub(client):
 def test_update_model_is_what_the_hub_writes():
     assert set(GuildSettingsUpdate.model_fields) == {
         "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id",
-        "digest_time", "exec_role_names",
+        "digest_time", "exec_role_names", "channel_modes", "default_mode",
     }  # fmt: skip
