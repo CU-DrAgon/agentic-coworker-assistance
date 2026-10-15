@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from meeting_scribe import pipeline
+from meeting_scribe import hub, pipeline
 from meeting_scribe.config import get_settings
 from meeting_scribe.models import ChunkTranscript, Meeting, MeetingStatus
 
@@ -26,6 +26,7 @@ INDEX_HTML = Path(__file__).parent / "static" / "index.html"
 MAX_CHUNK_BYTES = 32 * 1024 * 1024  # Cloud Run's HTTP/1 request limit
 
 app = FastAPI(title="Meeting Scribe")
+app.include_router(hub.router)
 
 
 class CreateMeeting(BaseModel):

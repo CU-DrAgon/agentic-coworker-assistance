@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     # "Add Salid to Discord" link on the home page. Empty hides the link.
     salid_discord_client_id: str = ""
 
+    # Salid hub (/hub). Both empty = every /api/hub call fails closed.
+    # OAuth 2.0 Web client id (public, not a secret) used to verify Google ID tokens.
+    hub_google_client_id: str = ""
+    hub_admin_emails: str = ""  # comma-separated Google accounts allowed into the hub
+    # Firestore doc `{salid_team_collection}/{salid_team_id}` holds the team's Salid settings.
+    salid_team_collection: str = "salid_teams"
+    salid_team_id: str = "default"
+
 
 @lru_cache
 def get_settings() -> Settings:
