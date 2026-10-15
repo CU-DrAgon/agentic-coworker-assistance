@@ -149,6 +149,36 @@ SALID_GEMINI_CLI_PATH=/path/to/gemini SALID_DB_PATH=./data/demo.db \
 uv run pytest -m live -q                                 # one real Vertex call (skipped by default)
 ```
 
+## Deploying Salid
+
+Salid runs as a Cloud Run **worker pool** (no HTTP port; it holds the Discord gateway connection).
+
+```bash
+export SALID_DISCORD_TOKEN=...            # from your shell, never from a command line or git
+scripts/deploy_salid.sh                   # dry run (default): prints every command, changes nothing
+scripts/deploy_salid.sh --apply           # really deploy
+scripts/deploy_salid.sh --configure-hub   # optional, separate: set hub env vars on meeting-scribe
+```
+
+The script is idempotent: it enables missing APIs, creates the `salid-bot` service account with least
+privilege (`datastore.user`, `aiplatform.user`, `logging.logWriter`, `secretmanager.secretAccessor` on
+the one secret, `storage.objectAdmin` on `SALID_RECEIPT_BUCKET` only if set), stores the token in the
+`salid-discord-token` secret via stdin (new version only if none exists, or with `--rotate-token`),
+builds `Dockerfile.salid` with Cloud Build (`cloudbuild.salid.yaml`) and deploys the pool with
+`SALID_STORE=firestore`. Channel/role ids (`SALID_RECEIPT_CHANNEL_IDS` etc.) are passed through from
+your environment. It never touches the existing Meeting Scribe resources, except the optional
+`--configure-hub` step, which only runs `gcloud run services update --update-env-vars` (needs
+`HUB_GOOGLE_CLIENT_ID`, `HUB_ADMIN_EMAILS`, `SALID_DISCORD_CLIENT_ID` in your environment).
+
+**Cost.** One always-on instance (`--instances 1`: two would answer every Discord message twice),
+1 vCPU / 2 GiB. 2 GiB because the Gemini CLI (Node) runs beside the Python bot during deep tasks;
+1 vCPU because the bot is I/O bound. It bills around the clock (roughly tens of USD per month; check
+the Cloud Run pricing page for asia-southeast1).
+
+**Stop it** (keeps config and secret, stops billing for instances):
+`gcloud run worker-pools update salid-bot --region asia-southeast1 --instances 0`; restart with
+`--instances 1`. Remove it completely with `gcloud run worker-pools delete salid-bot --region asia-southeast1`.
+
 ## Salid command center (`/hub`)
 
 A Thai web page in the same app and Cloud Run service. Admins sign in with Google, see connected

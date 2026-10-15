@@ -1,0 +1,12 @@
+# Builds Dockerfile.salid (Cloud Build's --tag only supports a file named "Dockerfile").
+# Used by scripts/deploy_salid.sh: gcloud builds submit --config cloudbuild.salid.yaml
+#   --substitutions _IMAGE=<region>-docker.pkg.dev/<project>/<repo>/salid-bot:<tag> .
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.salid", "-t", "${_IMAGE}", "."]
+images:
+  - "${_IMAGE}"
+substitutions:
+  _IMAGE: ""
+options:
+  logging: CLOUD_LOGGING_ONLY

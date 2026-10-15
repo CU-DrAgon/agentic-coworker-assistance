@@ -44,8 +44,8 @@ Gemini (`gemini-3.5-flash`, transcribe + diarize) → Firestore. On Stop: `/fini
 ## Salid (`src/salid/`) — second package
 
 Discord bot "สลิด": receipt photos to an expense ledger, Thai executive Q&A. Env vars are all
-`SALID_*` (see `.env.example`). `SALID_STORE=sqlite` (default) or `firestore`. The Cloud Run worker pool
-is still **not built** and Salid is **not deployed**. Bot-facing replies and prompts are Thai.
+`SALID_*` (see `.env.example`). `SALID_STORE=sqlite` (default) or `firestore`. Deployment is prepared but **not run**: `Dockerfile.salid`, `cloudbuild.salid.yaml`, `scripts/deploy_salid.sh`
+(dry-run by default, `--apply` to execute; README "Deploying Salid"). Never use `--apply` without human approval. Bot-facing replies and prompts are Thai.
 
 | File | Role |
 | --- | --- |
