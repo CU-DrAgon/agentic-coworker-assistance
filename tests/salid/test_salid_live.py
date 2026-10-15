@@ -111,3 +111,32 @@ def test_live_firestore_store_and_gcs_archive():
                 snap.reference.delete()
         if uri:
             arch.delete(uri)
+
+
+def test_embedding_probe():
+    """One-off probe for memory search: model availability in the configured location, the batch
+    limit, the dimension, and Thai/English similarity (prints the numbers used to calibrate
+    salid.embed.EMBED_BATCH and qa.MIN_SIMILARITY)."""
+    from salid.embed import VertexEmbedder, cosine
+
+    s = Settings()
+    texts = ["งบโฆษณาเดือนนี้ 50,000 บาท", "marketing budget for this month", "ซื้อน้ำแข็ง 3 ถุง"]
+    client = make_client(s)
+    try:
+        vecs = VertexEmbedder(client, s.embed_model, 256, batch=3).embed(texts, "document")
+        batch_ok = True
+    except Exception as e:  # noqa: BLE001  (the probe reports which batch size works)
+        print(f"batch of 3 failed: {type(e).__name__}: {e}")
+        vecs = VertexEmbedder(client, s.embed_model, 256, batch=1).embed(texts, "document")
+        batch_ok = False
+    th, en, ice = vecs
+    q = VertexEmbedder(client, s.embed_model, 256).embed(["how big is the ads budget?"], "query")[0]
+    print(
+        f"model={s.embed_model} location={s.embed_location or s.gemini_location} "
+        f"batch3_ok={batch_ok} dims={[len(v) for v in vecs]}\n"
+        f"cos(th,en)={cosine(th, en):.3f} cos(th,ice)={cosine(th, ice):.3f} "
+        f"cos(en,ice)={cosine(en, ice):.3f} cos(q,th)={cosine(q, th):.3f} "
+        f"cos(q,ice)={cosine(q, ice):.3f}"
+    )
+    assert all(len(v) == 256 for v in vecs)
+    assert cosine(th, en) > cosine(th, ice) and cosine(q, th) > cosine(q, ice)
