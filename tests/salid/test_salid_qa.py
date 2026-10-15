@@ -224,7 +224,7 @@ def test_system_prompt_lists_capabilities(settings):
         p = system_prompt(settings, scoped=True, language=lang)
         for cmd in ("/โหมด", "/mode", "/ภาษา", "/language", "/ความจำ", "/memory", "/join"):
             assert cmd in p
-        assert "งานใหญ่:" in p and "ค้นอินเทอร์เน็ตไม่ได้" in p
+        assert "งานใหญ่:" in p and "ค้นอินเทอร์เน็ตไม่ได้" not in p and "Google Search" in p
 
 
 def test_ask_passes_the_language_to_the_model(seeded, settings):

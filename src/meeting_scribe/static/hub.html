@@ -879,6 +879,18 @@
   "th": "ห้องที่ไม่ใช่โหมดปิด",
   "en": "Channels not set to Off"
  },
+ "f_web_n": {
+  "th": "อ่านลิงก์และค้นอินเทอร์เน็ต",
+  "en": "Read links and search the web"
+ },
+ "f_web_d": {
+  "th": "สลิดอ่านลิงก์เว็บและวิดีโอ YouTube ที่ส่งมา และค้นข้อมูลล่าสุดด้วย Google Search พร้อมแนบแหล่งที่มา ข้อมูลของทีมไม่ถูกส่งออกไปค้น",
+  "en": "Salid reads web links and YouTube videos you send and looks up current information with Google Search, citing sources. Team data is never sent out in searches."
+ },
+ "f_web_w": {
+  "th": "แปะลิงก์หรือถามข่าวล่าสุด",
+  "en": "Paste a link or ask about the news"
+ },
  "f_followup_n": {
   "th": "ติดตามงานที่รับปาก",
   "en": "Follow up on promises"
@@ -1006,9 +1018,10 @@ const FEATURES = [
   { id: "deep_tasks" },
   { id: "memory" },
   { id: "image_memory" },
+  { id: "web" },
   { id: "followup", soon: true },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1233,7 +1246,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1310,7 +1323,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

@@ -171,6 +171,20 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   it was when the meeting started.
 - **Q&A runs on Google ADK**: an `LlmAgent` (Gemini on Vertex) with four ledger `FunctionTool`s that
   are built per request around the asker's scope, so the model cannot widen it. At most 4 tool rounds.
+- **Read links and search the web (`web` feature, default on)**: the `read_web(request)` tool makes a
+  separate Gemini call (`salid/web_read.py`) with Google's built-in `url_context` and `google_search`
+  tools (they cannot be mixed with function tools in one agent). Web pages are fetched by Google, never
+  by our servers (no SSRF). YouTube links (watch, youtu.be, shorts) go in as video parts. At most 5 links
+  per call; the answer comes back as text plus sources. Isolation: the outbound request is built only from
+  the current user message (text and links) and the model's `request` capped at 500 characters, so ledger,
+  memory and chat history are never forwarded. Logs carry domains only. Admins can switch it off per
+  server in the hub ("อ่านลิงก์และค้นอินเทอร์เน็ต"); then the tool is not registered.
+- **Summaries**: `/สรุป` (`/summary`, open to everyone) summarises a period (today, yesterday, 7 or 30
+  days) of one channel or all channels the member can see, with an optional focus topic and a private
+  (ephemeral) option; the memory scope is computed for the member and for where the reply is posted.
+  Replying to any message with just "สรุป" / "summarize" / "tl;dr" while addressing Salid, or the message
+  context menu "Summarize with Salid" (Thai: "สรุปด้วยสลิด"), summarises that one message including its
+  attachments and links.
 - **Storage**: `SALID_STORE=sqlite` (default, local dev) or `firestore` (collection
   `SALID_FIRESTORE_COLLECTION`, default `salid_receipts`, doc id `{guild_id}_{sha256}`). Each query filters
   `guild_id ==` server-side (automatic single-field index only, no composite index); the date range and
@@ -314,7 +328,7 @@ the Cloud Run pricing page for asia-southeast1).
 A bilingual (Thai / English) web page in the same app and Cloud Run service, multi-guild. A TH | EN toggle in the header switches every string without a reload (choice kept in `localStorage`, default from the browser language: `th*` = Thai, else English); the dictionary is an inline JSON block in `static/hub.html` and a test checks both languages have the same keys. Anyone signs in with Google (any
 verified account); a guild switcher at the top lists the servers that account administers. Per server:
 the latest receipts, Salid expense Q&A as an executive, feature switches (receipts, Q&A, daily digest,
-deep tasks), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and
+deep tasks, links and web search), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and
 the executive role names, and per-channel modes plus reply languages (with a server default for each). A user with no server sees a big "เพิ่ม Salid เข้า Discord" button and the two
 steps: 1. add Salid to the server, 2. type `/ตั้งค่า` in Discord and open the link.
 

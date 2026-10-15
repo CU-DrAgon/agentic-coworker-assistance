@@ -22,6 +22,7 @@ from .i18n import resolve_lang, t
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
 from .store import Store, duplicate_extras, is_active, pick_keep
+from .web_read import make_read_web
 
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 4
@@ -794,7 +795,12 @@ CAPABILITIES_PROMPT = (
     "9) อ่านรูปและไฟล์ที่ส่งมา: ส่งรูป PDF หรือไฟล์ข้อความ (ไม่เกิน 4 ไฟล์) ให้สลิดโดยตรง (แท็ก เรียกชื่อ ตอบกลับสลิด ส่ง DM หรือส่งในห้องคุยกับสลิด) "
     "สลิดอ่านแล้วบอกว่าในไฟล์มีอะไร แล้วตัดสินใจเองว่าจะทำอะไรต่อ: ใบเสร็จ/บิล/สลิปโอนเงินบันทึกลงบัญชีให้ "
     "เอกสารหรือภาพหน้าจอสรุปประเด็นแล้วเสนอขั้นตอนต่อไป คำถามในรูปก็ตอบให้.\n"
-    "ข้อจำกัด: ค้นอินเทอร์เน็ตไม่ได้ (ข่าวหรือข้อมูลล่าสุดอาจไม่อัปเดต) และตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ "
+    "10) อ่านลิงก์ (เว็บ, YouTube) และค้นอินเทอร์เน็ตด้วย Google Search: แปะลิงก์หรือถามข่าว/ข้อมูลล่าสุด สลิดอ่านแล้วสรุปพร้อมแหล่งที่มา "
+    "(ข้อมูลบัญชีและแชตของทีมไม่ถูกส่งไปค้น แอดมินปิดได้ในหน้า Hub)\n"
+    "11) สรุปแชต: /สรุป หรือ /summary เลือกช่วง (วันนี้ เมื่อวาน 7 วัน 30 วัน) ห้อง หรือทุกห้องที่ผู้สั่งเห็น พร้อมหัวข้อที่เน้น "
+    "(ตามสิทธิ์การเห็นห้อง); ตอบกลับข้อความไหนด้วยคำว่า “สรุป” / “summarize” (พร้อมแท็กหรือเรียกชื่อสลิด) หรือคลิกขวาที่ข้อความแล้วเลือก "
+    "“สรุปด้วยสลิด” (Summarize with Salid) เพื่อสรุปข้อความนั้น รวมไฟล์แนบและลิงก์\n"
+    "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
     "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
 )
 
@@ -830,6 +836,14 @@ FILES_PROMPT = (
 )
 
 
+WEB_PROMPT = (
+    "\nอ่านลิงก์และค้นอินเทอร์เน็ต: เมื่อข้อความมีลิงก์ (เว็บ, YouTube) หรือถามข้อมูลล่าสุด/ข่าว/ราคา/เรื่องนอกทีมที่ต้องค้นออนไลน์ "
+    "ให้เรียก read_web (ลิงก์ในข้อความถูกแนบให้อัตโนมัติ ใส่ใน request แค่สิ่งที่ต้องการรู้ ห้ามใส่ข้อมูลบัญชี ความจำ หรือแชตของทีม). "
+    "ในคำตอบ: บอกว่าแต่ละลิงก์คืออะไร สรุปประเด็นสำคัญ เสนอขั้นตอนต่อไปถ้ามีประโยชน์ และอ้างแหล่งที่มาเป็นลิงก์. "
+    "ถ้าลิงก์อ่านไม่ได้ (ต้องล็อกอิน เพย์วอล์ล ไม่พบหน้า) ให้บอกตรงๆ ห้ามเดาเนื้อหา. "
+    "คำถามเรื่องภายในทีม (บัญชี ใบเสร็จ ใครพูดอะไร) ให้ใช้ ledger/ความจำก่อน ไม่ต้องค้นเว็บ."
+)
+
 NO_REPLY = "NO_REPLY"
 INTERJECTION_PROMPT = (
     "\nYou were not asked directly. If the tools return nothing relevant or you have nothing "
@@ -852,6 +866,7 @@ def system_prompt(
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
+    web: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message."""
     now = now or settings.now()
@@ -877,6 +892,8 @@ def system_prompt(
         p += INTERJECTION_PROMPT
     if files:
         p += FILES_PROMPT
+    if web:
+        p += WEB_PROMPT
     if language == "en":
         p += "\nLanguage: write your whole reply in English."
     elif language == "auto":
@@ -1178,6 +1195,7 @@ def build_agent(
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
+    web: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1189,6 +1207,7 @@ def build_agent(
         memory=memory,
         interjection=interjection,
         files=files,
+        web=web,
     )
     model_calls = 0
 
@@ -1238,12 +1257,15 @@ async def ask_async(
     interjection: bool = False,
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
+    web_client=None,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
     whose `forced_submitter_id` is the asker for non-executives. `files`: the message's attachments
     (read by the model itself as multimodal parts, within the size limits); with `actions` the model
-    also gets record_receipt / start_deep_task for them."""
+    also gets record_receipt / start_deep_task for them. `web_client` (a genai client): registers
+    read_web (links + Google Search; see salid.web_read), fed only by `question` and the model's
+    short request."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
     created: list[tuple[int, str | None]] = []
@@ -1260,6 +1282,8 @@ async def ask_async(
     tools = build_tools(ledger, calls, memory)
     if usable and actions is not None:
         tools += build_file_tools(usable, actions, calls, created)
+    if web_client is not None:
+        tools.append(make_read_web(web_client, settings.gemini_model, question, calls))
     agent = build_agent(
         settings,
         tools,
@@ -1270,6 +1294,7 @@ async def ask_async(
         memory=memory is not None,
         interjection=interjection,
         files=bool(usable or skipped),
+        web=web_client is not None,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -1325,6 +1350,7 @@ def ask(
     interjection: bool = False,
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
+    web_client=None,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1343,5 +1369,6 @@ def ask(
             interjection=interjection,
             files=files,
             actions=actions,
+            web_client=web_client,
         )
     )

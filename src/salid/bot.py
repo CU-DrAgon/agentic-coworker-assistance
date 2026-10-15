@@ -80,6 +80,12 @@ from .modes import (
 from .naming import command_text, mentions_name
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .store import Store
+from .summary import (
+    PERIODS,
+    is_summarize_request,
+    message_summary_question,
+    summary_question,
+)
 
 logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
@@ -126,6 +132,8 @@ SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English
 JOIN_COMMANDS = ("เข้าประชุม", "join")
 LEAVE_COMMANDS = ("ออกประชุม", "leave")
 CANCEL_COMMANDS = ("ยกเลิก", "cancel")
+SUMMARY_COMMANDS = ("สรุป", "summary")
+MENU_SUMMARIZE = "Summarize with Salid"  # context menu; Thai name via SalidTranslator
 
 
 def chunks(text: str, n: int = 1900):
@@ -173,6 +181,15 @@ def mentions_other(message: discord.Message, me: discord.ClientUser | None) -> b
     return any(
         getattr(getattr(r, "tags", None), "bot_id", None) != getattr(me, "id", None) for r in roles
     )
+
+
+class SalidTranslator(app_commands.Translator):
+    """Localizes the message context menu name (everything else is bilingual in its text)."""
+
+    async def translate(self, string, locale, context):
+        if str(string) == MENU_SUMMARIZE and str(locale.value).startswith("th"):
+            return t("menu_summarize", "th")
+        return None
 
 
 @dataclass
@@ -299,6 +316,7 @@ class SecretaryBot(discord.Client):
 
     async def setup_hook(self):
         self._register_commands()
+        await self.tree.set_translator(SalidTranslator())
         try:
             await self.tree.sync()  # global commands; Discord may take a while to show them
         except discord.HTTPException:
@@ -1043,6 +1061,10 @@ class SecretaryBot(discord.Client):
                 return False
             await message.reply(t("qa_off", lang), mention_author=False)
             return True
+        if not interjection and is_summarize_request(q):
+            target = await self._referenced_message(message)
+            if target is not None:  # "สรุป" as a reply: summarise the message it answers
+                return await self._reply_summary(message, guild, member, target, setting)
         history = await self._recent_chat(message)
         meeting = self.meetings.context_for(message.channel.id)
         if meeting:  # talking in a live meeting's chat: the spoken transcript is context too
@@ -1070,6 +1092,7 @@ class SecretaryBot(discord.Client):
                 memory=memory,
                 interjection=interjection,
                 **({"files": files, "actions": actions} if files else {}),
+                **self._web_kw(gid),
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         if interjection and is_no_reply(ans.text):
@@ -1092,6 +1115,60 @@ class SecretaryBot(discord.Client):
             if reaction:
                 with contextlib.suppress(discord.HTTPException):
                     await message.add_reaction(reaction)
+        self._note_answer(message, sent)
+        return True
+
+    def _web_kw(self, guild_id: int) -> dict:
+        """read_web (links + Google Search) for `ask`: only with the `web` feature on."""
+        if self.llm is not None and self.team.enabled(guild_id, "web"):
+            return {"web_client": self.llm}
+        return {}
+
+    async def _referenced_message(self, message) -> discord.Message | None:
+        """The message `message` is a reply to (None when it is not a reply or is gone)."""
+        ref = getattr(message, "reference", None)
+        if ref is None:
+            return None
+        found = getattr(ref, "resolved", None)
+        if found is None and getattr(ref, "message_id", None):
+            with contextlib.suppress(discord.HTTPException, AttributeError):
+                found = await message.channel.fetch_message(ref.message_id)
+        return found if getattr(found, "author", None) is not None else None
+
+    async def _summarize_message(self, target, guild, member, setting: str) -> str | None:
+        """Ask for a summary of one message: its text and links in the question, its attachments
+        as file parts (no receipt/deep-task actions, no chat memory). None: nothing to summarise."""
+        content = self._strip_mentions(getattr(target, "content", "") or "", target)
+        files = await self._file_inputs(target) if getattr(target, "attachments", None) else []
+        if not content and not files:
+            return None
+        lang = resolve_lang(setting, content)
+        q = message_summary_question(lang, target.author.display_name, content)
+        ans = await asyncio.to_thread(
+            ask,
+            self.s,
+            self.store,
+            q,
+            guild_id=guild.id,
+            is_exec=self.is_exec_member(member),
+            user_id=member.id,
+            language=setting,
+            **({"files": files} if files else {}),
+            **self._web_kw(guild.id),
+        )
+        logger.info("summarised a message in %.1fs", ans.seconds)
+        return ans.text
+
+    async def _reply_summary(self, message, guild, member, target, setting: str) -> bool:
+        async with message.channel.typing():
+            text = await self._summarize_message(target, guild, member, setting)
+        if text is None:
+            text = t("summary_nothing", resolve_lang(setting, message.content))
+        sent = None
+        for i, part in enumerate(chunks(text)):
+            sent = await (
+                message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
+            )
         self._note_answer(message, sent)
         return True
 
@@ -1317,6 +1394,40 @@ class SecretaryBot(discord.Client):
             self.tree.add_command(
                 app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
             )
+
+        async def summary_cb(
+            interaction: discord.Interaction,
+            period: str = "today",
+            channel: discord.TextChannel | None = None,
+            all_channels: bool = False,
+            topic: str | None = None,
+            private: bool = False,
+        ):
+            await self.handle_summary(interaction, period, channel, all_channels, topic, private)
+
+        summary_cb = app_commands.guild_only()(summary_cb)
+        summary_cb = app_commands.describe(
+            period=t("cmd_summary_period"),
+            channel=t("cmd_summary_channel"),
+            all_channels=t("cmd_summary_all"),
+            topic=t("cmd_summary_topic"),
+            private=t("cmd_summary_private"),
+        )(summary_cb)
+        summary_cb = app_commands.choices(
+            period=[app_commands.Choice(name=t(f"period_{p}"), value=p) for p in PERIODS]
+        )(summary_cb)
+        for name in SUMMARY_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_summary"), callback=summary_cb)
+            )
+
+        async def summarize_menu(interaction: discord.Interaction, message: discord.Message):
+            await self.handle_summarize_menu(interaction, message)
+
+        summarize_menu = app_commands.guild_only()(summarize_menu)
+        self.tree.add_command(
+            app_commands.ContextMenu(name=MENU_SUMMARIZE, callback=summarize_menu)
+        )
         for names, handler, desc in (
             (CANCEL_COMMANDS, self.handle_cancel, t("cmd_cancel")),
             (CHANNELS_COMMANDS, self.handle_channels, t("cmd_channels")),
@@ -1328,6 +1439,79 @@ class SecretaryBot(discord.Client):
                 self.tree.add_command(
                     app_commands.Command(name=name, description=desc, callback=cb)
                 )
+
+    async def handle_summary(
+        self,
+        interaction: discord.Interaction,
+        period: str = "today",
+        channel=None,
+        all_channels: bool = False,
+        topic: str | None = None,
+        private: bool = False,
+    ) -> None:
+        """/สรุป: summarise a period of chat memory through the normal ask. The channels the
+        model may read are computed for the invoker and for where the reply is posted (a private
+        reply: just the invoker's own access)."""
+        guild, user, here = interaction.guild, interaction.user, interaction.channel
+        await interaction.response.defer(ephemeral=bool(private))
+        await asyncio.to_thread(self.team.current, guild.id)
+        setting = self._lang_setting(interaction)
+        lang = self._interaction_lang(interaction)
+        send = partial(interaction.followup.send, ephemeral=bool(private))
+        if not (self.team.enabled(guild.id, "qa") and self.team.enabled(guild.id, "memory")):
+            await send(t("summary_unavailable", lang))
+            return
+        where = SimpleNamespace(guild=None if private else guild, channel=here)
+        memory = await self._memory_tools(where, guild, user)
+        target = channel or here
+        found = self._memory_channel(target)
+        if memory is None or (
+            not all_channels and (found is None or found[0] not in memory.allowed)
+        ):
+            await send(t("summary_no_access", lang))
+            return
+        q = summary_question(
+            lang,
+            period=period if period in PERIODS else "today",
+            today=self.s.now().date(),
+            tz=self.s.tz,
+            channel_name=None if all_channels else getattr(target, "name", None),
+            topic=topic,
+        )
+        ans = await asyncio.to_thread(
+            ask,
+            self.s,
+            self.store,
+            q,
+            guild_id=guild.id,
+            is_exec=self.is_exec_member(user),
+            user_id=user.id,
+            language=setting if setting != "auto" else lang,
+            memory=memory,
+            **self._web_kw(guild.id),
+        )
+        logger.info("summary command answered in %.1fs (%d rounds)", ans.seconds, ans.rounds)
+        for part in chunks(ans.text):
+            await send(part)
+
+    async def handle_summarize_menu(self, interaction: discord.Interaction, message) -> None:
+        """Message context menu "Summarize with Salid": summarise the right-clicked message."""
+        guild, user = interaction.guild, interaction.user
+        await interaction.response.defer(ephemeral=True)
+        await asyncio.to_thread(self.team.current, guild.id)
+        setting = self._lang_setting(interaction)
+        lang = self._interaction_lang(interaction)
+        send = partial(interaction.followup.send, ephemeral=True)
+        if not self.team.enabled(guild.id, "qa"):
+            await send(t("summary_unavailable", lang))
+            return
+        text = await self._summarize_message(
+            message, guild, user, setting if setting != "auto" else lang
+        )
+        if text is None:
+            text = t("summary_nothing", lang)
+        for part in chunks(text):
+            await send(part)
 
     @staticmethod
     def _command_callback(handler):

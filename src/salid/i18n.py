@@ -360,6 +360,56 @@ CATALOG: dict[str, dict[str, str]] = {
     "cmd_language_arg": _bi("ภาษาใหม่ (ไม่เลือก = ดูภาษาปัจจุบัน)", "New language (empty = view)"),
     "cmd_join": _bi("ให้สลิดเข้าห้องเสียงเพื่อจดบันทึกประชุม", "Salid joins your voice channel"),
     "cmd_leave": _bi("ให้สลิดออกจากห้องเสียงและสรุปการประชุม", "Salid leaves and summarizes"),
+    "cmd_summary": _bi("สรุปสิ่งที่คุยกันในห้อง", "Summarize what was discussed"),
+    "cmd_summary_period": _bi("ช่วงเวลา (ค่าเริ่มต้น วันนี้)", "Period (default today)"),
+    "cmd_summary_channel": _bi(
+        "ห้องที่จะสรุป (ค่าเริ่มต้น ห้องนี้)", "Channel to summarize (default this one)"
+    ),
+    "cmd_summary_all": _bi("ทุกห้องที่ฉันเห็น", "All channels I can see"),
+    "cmd_summary_topic": _bi("เรื่องที่อยากให้เน้น (ไม่บังคับ)", "Topic to focus on (optional)"),
+    "cmd_summary_private": _bi("เห็นคนเดียว", "Only visible to me"),
+    "period_today": _bi("วันนี้", "Today"),
+    "period_yesterday": _bi("เมื่อวาน", "Yesterday"),
+    "period_7d": _bi("7 วัน", "Last 7 days"),
+    "period_30d": _bi("30 วัน", "Last 30 days"),
+    "menu_summarize": {"th": "สรุปด้วยสลิด", "en": "Summarize with Salid"},
+    "summary_q_channel": {
+        "th": "สรุปสิ่งที่คุยกันใน #{channel} ช่วง {dates}: หัวข้อ, สิ่งที่ตัดสินใจ, ใครรับงานอะไร, "
+        "ตัวเลขสำคัญ, เรื่องที่ค้าง",
+        "en": "Summarize what was discussed in #{channel} for {dates}: topics, decisions made, "
+        "who took which task, key numbers, open items",
+    },
+    "summary_q_all": {
+        "th": "สรุปสิ่งที่คุยกันในทุกห้องที่ฉันเห็น ช่วง {dates} แยกตามห้อง: หัวข้อ, สิ่งที่ตัดสินใจ, "
+        "ใครรับงานอะไร, ตัวเลขสำคัญ, เรื่องที่ค้าง",
+        "en": "Summarize what was discussed in all the channels I can see for {dates}, per channel: "
+        "topics, decisions made, who took which task, key numbers, open items",
+    },
+    "summary_focus": {"th": " [เน้น: {topic}]", "en": " [focus: {topic}]"},
+    "summary_dates_one": {"th": "{start} (เขตเวลา {tz})", "en": "{start} (time zone {tz})"},
+    "summary_dates_range": {
+        "th": "{start} ถึง {end} (เขตเวลา {tz})",
+        "en": "{start} to {end} (time zone {tz})",
+    },
+    "summary_msg_q": {
+        "th": "สรุปข้อความนี้ของ {author}: หัวข้อ ประเด็นสำคัญ ตัวเลข และสิ่งที่ต้องทำต่อ "
+        "(ถ้ามีไฟล์แนบหรือลิงก์ ให้อ่านและสรุปด้วย อย่าบันทึกเป็นใบเสร็จ)",
+        "en": "Summarize this message from {author}: topic, key points, numbers and next steps "
+        "(read and summarize any attached files or links too; do not record anything as a receipt)",
+    },
+    "summary_msg_text": {"th": "ข้อความที่ต้องสรุป:\n{text}", "en": "Message to summarize:\n{text}"},
+    "summary_unavailable": {
+        "th": "สรุปไม่ได้ตอนนี้ เพราะการถามตอบหรือความจำของทีมถูกปิดอยู่ (เปิดได้ที่หน้าศูนย์บัญชาการ)",
+        "en": "I can't summarize right now: Q&A or team memory is switched off (turn it on in the command center).",
+    },
+    "summary_no_access": {
+        "th": "คุณไม่มีสิทธิ์เห็นห้องนั้น หรือสลิดไม่ได้จดห้องนั้นไว้ครับ",
+        "en": "You can't see that channel, or Salid isn't recording it.",
+    },
+    "summary_nothing": {
+        "th": "ไม่มีข้อความที่สรุปได้ครับ (ข้อความว่าง ไม่มีไฟล์หรือลิงก์)",
+        "en": "There is nothing to summarize (no text, files or links).",
+    },
     # ---------------------------------------------------------------- meeting
     "meet_announce": {
         "th": "สลิดเข้ามาฟังและจดบันทึกการประชุมครับ 🎙️ "

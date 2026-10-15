@@ -6,6 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import discord
 import pytest
 from conftest import ALICE, GUILD, OTHER_GUILD, FixedClockSettings
 
@@ -374,7 +375,7 @@ async def test_setup_command_allows_the_owner_and_admins(bot, world):
 
 def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
     bot._register_commands()
-    cmds = {c.name: c for c in bot.tree.get_commands()}
+    cmds = {c.name: c for c in bot.tree.get_commands(type=discord.AppCommandType.chat_input)}
     assert set(cmds) == {
         "ยกเลิก",
         "cancel",
@@ -392,6 +393,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "memory",
         "ห้อง",
         "channels",
+        "สรุป",
+        "summary",
     }
     assert all(c.guild_only for c in cmds.values())
 
