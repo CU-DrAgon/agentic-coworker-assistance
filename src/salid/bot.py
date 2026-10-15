@@ -388,6 +388,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         for guild in self.guilds:
             await self._sync_guild(guild)
         self._start_import()
+        await self.meetings.resume_all()  # rejoin meetings a restart cut off
 
     async def on_resumed(self):
         self._start_import()  # a gateway outage may have dropped events
@@ -850,9 +851,9 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
             logger.exception("could not track scheduled event")
 
     async def on_voice_state_update(self, member, before, after):
-        """Salid itself was disconnected (kicked, channel deleted): end that meeting."""
+        """Salid itself was disconnected (network, gateway, kicked): reconnect, else end."""
         if member == self.user and after.channel is None and before.channel is not None:
-            await self.meetings.end(before.channel.guild.id, "disconnected")
+            await self.meetings.on_disconnected(before.channel.guild.id)
 
     async def close(self):
         if self._tick_task is not None:

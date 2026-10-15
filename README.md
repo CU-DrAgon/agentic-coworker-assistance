@@ -272,6 +272,12 @@ draft, and the action runs only when the same call arrives again in a *later* me
   `SALID_GMAIL_CLIENT_ID`, `SALID_GMAIL_CLIENT_SECRET` and `SALID_GMAIL_SENDER` (the account's address). All four must
   be set, otherwise sending stays in log-only mode.
 
+**Staying in the meeting.** Salid leaves only on /ออกประชุม, /leave-meeting, a typed or spoken "ออกประชุม"/"leave",
+after `SALID_MEETING_LEAVE_EMPTY_MINUTES` (default 5) without humans in the channel (an auto-joined meeting nobody
+came to: `SALID_MEETING_EMPTY_MINUTES`, default 2), or at the 6 h cap (warned 10 min before). The active meeting is
+stored (`salid_active_meetings`); after a restart `on_ready` rejoins it (transcript reloaded from the memory log)
+or, if the channel is empty, posts the summary. An unexpected voice drop is retried 3 times before ending.
+
 **Spoken replies.** When called by name in a voice meeting, Salid also says a 1-2 sentence version of
 the answer out loud (Gemini TTS `SALID_TTS_MODEL`, default `gemini-2.5-flash-tts`, voice `SALID_TTS_VOICE`,
 default `Puck`); the full answer still goes to the chat. While Salid is speaking and for 1.5 s after,

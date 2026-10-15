@@ -559,7 +559,7 @@ async def test_auto_join_takes_notes_when_people_are_in_the_channel(w):
     await w.svc.tick()
     ((starter, kw),) = w.meetings.joins
     assert starter.voice.channel is w.room and kw["announce"] == "meet_announce_scheduled"
-    assert kw["empty_grace"] == 120.0 and kw["meeting_id"] == "m1"
+    assert kw["first_grace"] == 120.0 and kw["meeting_id"] == "m1"
     assert "สลิดเข้ามาจดประชุมตามนัดครับ" in t("meet_announce_scheduled", "th")
     got = w.store.get_meeting("m1")
     assert got["joined"] is True and got["attended"] == [10]

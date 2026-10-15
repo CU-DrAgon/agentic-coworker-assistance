@@ -17,12 +17,14 @@ from typing import Any, Protocol
 
 MEETINGS = "salid_meetings"
 EMAILS = "salid_emails"
+ACTIVE_MEETINGS = "salid_active_meetings"  # one record per guild while Salid is in a meeting
 
 
 class DocBackend(Protocol):
     def put(self, collection: str, doc_id: str, data: dict) -> None: ...
     def get(self, collection: str, doc_id: str) -> dict | None: ...
     def query(self, collection: str, guild_id: int | None = None) -> list[dict]: ...
+    def delete(self, collection: str, doc_id: str) -> None: ...
 
 
 class SqliteDocs:
@@ -83,6 +85,14 @@ class SqliteDocs:
             rows = self._conn().execute(sql, args).fetchall()
         return [json.loads(r[0]) for r in rows]
 
+    def delete(self, collection: str, doc_id: str) -> None:
+        with self._lock:
+            c = self._conn()
+            c.execute(
+                "DELETE FROM secretary_docs WHERE collection=? AND id=?", (collection, doc_id)
+            )
+            c.commit()
+
 
 class FirestoreDocs:
     def __init__(self, client: Any = None, project: str | None = None) -> None:
@@ -102,6 +112,9 @@ class FirestoreDocs:
     def get(self, collection: str, doc_id: str) -> dict | None:
         snap = self.client.collection(collection).document(doc_id).get()
         return snap.to_dict() if snap.exists else None
+
+    def delete(self, collection: str, doc_id: str) -> None:
+        self.client.collection(collection).document(doc_id).delete()
 
     def query(self, collection: str, guild_id: int | None = None) -> list[dict]:
         col = self.client.collection(collection)
@@ -162,6 +175,20 @@ class SecretaryStore:
             out.append(m)
         return sorted(out, key=lambda m: m.get("start_utc", ""))
 
+    # ---- active voice meetings (survive a bot restart; cleared on a normal end)
+    def put_active_meeting(self, rec: dict) -> dict:
+        self.db.put(ACTIVE_MEETINGS, str(rec["guild_id"]), rec)
+        return rec
+
+    def get_active_meeting(self, guild_id: int) -> dict | None:
+        return self.db.get(ACTIVE_MEETINGS, str(guild_id))
+
+    def list_active_meetings(self) -> list[dict]:
+        return self.db.query(ACTIVE_MEETINGS)
+
+    def clear_active_meeting(self, guild_id: int) -> None:
+        self.db.delete(ACTIVE_MEETINGS, str(guild_id))
+
     # ---- emails
     def put_email(self, e: dict) -> dict:
         self.db.put(EMAILS, e["id"], e)
@@ -188,6 +215,7 @@ def make_secretary_store(settings, ledger=None) -> SecretaryStore:
 
 
 __all__ = [
+    "ACTIVE_MEETINGS",
     "EMAILS",
     "MEETINGS",
     "SecretaryStore",

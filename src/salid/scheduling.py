@@ -712,7 +712,7 @@ class MeetingService:
             starter,
             lang=lang,
             announce="meet_announce_scheduled",
-            empty_grace=self.s.meeting_empty_minutes * 60.0,
+            first_grace=self.s.meeting_empty_minutes * 60.0,
             on_end=on_end,
             meeting_id=m["id"],
         )

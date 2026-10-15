@@ -25,7 +25,7 @@ import wave
 from array import array
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
@@ -60,8 +60,10 @@ PAD_GAP_S = 0.15  # shorter gaps inside a segment are filled with silence to kee
 MIN_RMS = 80  # int16 RMS below this is treated as silence/noise and not sent to the model
 TRANSCRIPT_KEEP_S = 3 * 3600
 TRANSCRIPT_MAX_LINES = 6000
-MEETING_MAX_S = 3 * 3600
-EMPTY_GRACE_S = 20.0  # everyone else left: end after this long
+MEETING_MAX_S = 6 * 3600
+MAX_WARN_S = 600.0  # warn in the text chat this long before the cap
+RECONNECT_DELAYS = (2.0, 5.0, 10.0)
+EMPTY_GRACE_S = 300.0  # no humans left: end after this long (settings override)
 CONTEXT_WINDOW_S = 5 * 60
 CONTEXT_MAX_CHARS = 6000
 SUMMARY_MAX_CHARS = 150_000
@@ -454,7 +456,13 @@ class MeetingSession:
     speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
     language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
     fallback_lang: str = "th"  # th / en: what fixed messages use when `language` is auto
-    empty_grace: float = EMPTY_GRACE_S  # nobody else in the channel: end after this long
+    empty_grace: float = EMPTY_GRACE_S  # no humans in the channel: end after this long
+    first_grace: float | None = None  # auto-join only: shorter wait while nobody has come yet
+    had_humans: bool = False
+    max_warned: bool = False
+    reconnecting: bool = False
+    started_at: datetime | None = None  # wall clock (UTC) start, persisted for restarts
+    starter: str = ""
     on_end: Any = None  # async callable(session), run after the summary was posted
     meeting_id: str | None = None  # the scheduled meeting this session takes notes for
     summary_text: str = ""
@@ -545,7 +553,8 @@ class MeetingManager:
         lang: str = "th",
         *,
         announce: str = "meet_announce",
-        empty_grace: float = EMPTY_GRACE_S,
+        empty_grace: float | None = None,
+        first_grace: float | None = None,
         on_end=None,
         meeting_id: str | None = None,
     ) -> str:
@@ -573,12 +582,16 @@ class MeetingManager:
             return t("meet_connect_failed", lang)
         finally:
             self._joining.discard(guild.id)
+        if empty_grace is None:
+            empty_grace = float(getattr(self.bot.s, "meeting_leave_empty_minutes", 5)) * 60.0
         loop = asyncio.get_running_loop()
         session = MeetingSession(
             guild_id=guild.id, voice_channel=channel, text_channel=channel,
             fallback_channel=fallback_channel, vc=vc, loop=loop, started=time.monotonic(),
             language=self.bot.team.channel_language(guild.id, channel.id), fallback_lang=lang,
-            empty_grace=empty_grace, on_end=on_end, meeting_id=meeting_id,
+            empty_grace=empty_grace, first_grace=first_grace, on_end=on_end,
+            meeting_id=meeting_id, started_at=self.bot.s.now().astimezone(UTC),
+            starter=str(getattr(member, "display_name", "") or ""),
         )  # fmt: skip
         self.sessions[guild.id] = session
         try:
@@ -594,9 +607,182 @@ class MeetingManager:
         ]
         session.tasks.append(asyncio.create_task(self._ticker(session)))
         self._start_live(session)
+        await self._persist(session, getattr(member, "id", 0))
         await self._post(session, t(announce, session.lang))
         logger.info("meeting started in guild %s channel %s", guild.id, channel.id)
         return t("meet_joined", lang, channel=channel.name)
+
+    # ---- persistence: a restart must not lose the meeting
+    @property
+    def _store(self):
+        return getattr(self.bot, "secretary_store", None)
+
+    async def _persist(self, s: MeetingSession, starter_id: int = 0) -> None:
+        """Remember the active meeting (so a restart can rejoin it). Never raises."""
+        store = self._store
+        if store is None:
+            return
+        rec = {
+            "guild_id": s.guild_id,
+            "voice_channel_id": s.voice_channel.id,
+            "text_channel_id": getattr(s.fallback_channel, "id", None),
+            "started_at": (s.started_at or self.bot.s.now()).isoformat(timespec="seconds"),
+            "language": s.language,
+            "fallback_lang": s.fallback_lang,
+            "meeting_id": s.meeting_id,
+            "starter": s.starter,
+            "starter_id": starter_id,
+            "empty_grace": s.empty_grace,
+            "first_grace": s.first_grace,
+        }
+        try:
+            await asyncio.to_thread(store.put_active_meeting, rec)
+        except Exception:
+            logger.warning("could not persist the active meeting", exc_info=True)
+
+    async def _unpersist(self, guild_id: int) -> None:
+        store = self._store
+        if store is None:
+            return
+        try:
+            await asyncio.to_thread(store.clear_active_meeting, guild_id)
+        except Exception:
+            logger.warning("could not clear the active meeting record", exc_info=True)
+
+    def _logged_lines(self, guild, voice_channel, since: datetime) -> list[tuple]:
+        """Voice lines of this meeting already logged to memory: (at, speaker, text)."""
+        mem = getattr(self.bot, "memory_store", None)
+        if mem is None:
+            return []
+        now = self.bot.s.now()
+        start = since.astimezone(now.tzinfo).date().isoformat()
+        msgs = mem.messages(
+            guild.id, [voice_channel.id], start, now.date().isoformat(),
+            channel_id=voice_channel.id, limit=2000, newest_first=False,
+        )  # fmt: skip
+        return [
+            (m.created_at, m.author_name, m.text)
+            for m in msgs
+            if m.kind == "voice" and m.created_at >= since
+        ]
+
+    async def resume_all(self) -> None:
+        """After a restart (on_ready): rejoin persisted meetings that still have people in them;
+        end the others properly. Safe to call again on a gateway re-ready."""
+        store = self._store
+        if store is None:
+            return
+        try:
+            records = await asyncio.to_thread(store.list_active_meetings)
+        except Exception:
+            logger.warning("could not list active meetings", exc_info=True)
+            return
+        for rec in records:
+            try:
+                await self._resume(rec)
+            except Exception:
+                logger.exception("could not resume meeting in guild %s", rec.get("guild_id"))
+
+    async def _resume(self, rec: dict) -> None:
+        gid = int(rec["guild_id"])
+        if gid in self.sessions or gid in self._joining:
+            return
+        guild = self.bot.get_guild(gid)
+        channel = guild.get_channel(int(rec["voice_channel_id"])) if guild else None
+        if guild is None or channel is None:
+            await self._unpersist(gid)
+            return
+        started_at = datetime.fromisoformat(rec["started_at"])
+        text_ch = guild.get_channel(rec["text_channel_id"]) if rec.get("text_channel_id") else None
+        humans = [m for m in channel.members if not getattr(m, "bot", False)]
+        elapsed = max(0.0, (self.bot.s.now() - started_at).total_seconds())
+        lang = rec.get("fallback_lang") or "th"
+        on_end = None
+        if rec.get("meeting_id") and getattr(self.bot, "scheduler", None) is not None:
+            mid = rec["meeting_id"]
+
+            async def on_end(session) -> None:
+                await self.bot.scheduler.on_voice_end(mid, session)
+
+        vc = None
+        if humans:
+            self._joining.add(gid)
+            try:
+                vc = await self._connect(channel)
+            except Exception:
+                logger.exception("could not rejoin voice channel %s", channel.id)
+            finally:
+                self._joining.discard(gid)
+            if vc is None:  # could not connect now: end it with what the log has
+                humans = []
+        session = MeetingSession(
+            guild_id=gid, voice_channel=channel, text_channel=channel, fallback_channel=text_ch,
+            vc=vc, loop=asyncio.get_running_loop(), started=time.monotonic() - elapsed,
+            language=rec.get("language") or "th", fallback_lang=lang,
+            empty_grace=float(rec.get("empty_grace") or EMPTY_GRACE_S),
+            first_grace=rec.get("first_grace"), on_end=on_end, meeting_id=rec.get("meeting_id"),
+            started_at=started_at, starter=rec.get("starter", ""), had_humans=True,
+        )  # fmt: skip
+        try:
+            for at, speaker, text in await asyncio.to_thread(
+                self._logged_lines, guild, channel, started_at
+            ):
+                session.transcript.add(at, speaker, text)
+        except Exception:
+            logger.warning("could not reload the logged meeting lines", exc_info=True)
+        self.sessions[gid] = session
+        if not humans:
+            await self.end(gid, "empty")
+            return
+        try:
+            vc.listen(MeetingSink(session))
+        except Exception:
+            logger.exception("could not start listening after rejoin")
+            await self.end(gid, "disconnected")
+            return
+        session.tasks = [
+            asyncio.create_task(self._worker(session)) for _ in range(TRANSCRIBE_WORKERS)
+        ]
+        session.tasks.append(asyncio.create_task(self._ticker(session)))
+        self._start_live(session)
+        await self._post(session, t("meet_rejoined", session.lang))
+        logger.info("meeting resumed in guild %s channel %s", gid, channel.id)
+
+    async def on_disconnected(self, guild_id: int) -> None:
+        """Salid's voice connection dropped unexpectedly (not /leave, not shutdown): retry with
+        backoff, then give up and end the meeting."""
+        s = self.sessions.get(guild_id)
+        if s is None or s.ending or s.reconnecting:
+            return
+        humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
+        if not humans:
+            await self.end(guild_id, "disconnected")
+            return
+        s.reconnecting = True
+        try:
+            for attempt, delay in enumerate(RECONNECT_DELAYS, 1):
+                await asyncio.sleep(delay)
+                if s.ending or self.sessions.get(guild_id) is not s:
+                    return
+                try:
+                    with contextlib.suppress(Exception):
+                        await s.vc.disconnect(force=True)
+                    vc = await self._connect(s.voice_channel)
+                    vc.listen(MeetingSink(s))
+                except Exception:
+                    logger.warning("voice reconnect %d failed", attempt, exc_info=True)
+                    continue
+                s.vc = vc
+                if s.live is not None and s.voice_mode == "live":
+                    with contextlib.suppress(Exception):
+                        s.live.stop_playback()
+                await self._post(s, t("meet_reconnected", s.lang))
+                return
+            await self._post(s, t("meet_reconnect_failed", s.lang))
+            s.reconnecting = False
+            await self.end(guild_id, "disconnected")
+        finally:
+            s.reconnecting = False
 
     def _start_live(self, session: MeetingSession) -> None:
         """Live voice mode: connect a Gemini Live session now (it takes ~2 s) so the first question
@@ -645,12 +831,20 @@ class MeetingManager:
                 if now - s.started > MEETING_MAX_S:
                     asyncio.create_task(self.end(s.guild_id, "timeout"))
                     return
+                if not s.max_warned and now - s.started > MEETING_MAX_S - MAX_WARN_S:
+                    s.max_warned = True
+                    await self._post(s, t("meet_max_warning", s.lang))
                 humans = [m for m in s.voice_channel.members if not m.bot]
+                grace = s.empty_grace
                 if humans:
                     s.empty_since = None
-                elif s.empty_since is None:
+                    s.had_humans = True
+                    continue
+                if not s.had_humans and s.first_grace is not None:
+                    grace = s.first_grace  # an auto-join nobody came to
+                if s.empty_since is None:
                     s.empty_since = now
-                elif now - s.empty_since > s.empty_grace:
+                elif now - s.empty_since > grace:
                     asyncio.create_task(self.end(s.guild_id, "empty"))
                     return
         except asyncio.CancelledError:
@@ -683,6 +877,10 @@ class MeetingManager:
         s.transcript.add(self.bot.s.now(), name, text)
         await self.bot.record_voice(s.voice_channel, seg.user_id, name, text, self.bot.s.now())
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
+        said = parse_wake(text)
+        if said and parse_meeting_command(said) == "leave":
+            asyncio.create_task(self.end(s.guild_id, "command"))  # "สลิด ออกประชุม"
+            return
         if s.voice_mode == "live":
             return  # the Live session hears the room itself and answers; this is only the record
         if self._is_echo(s, seg):
@@ -838,6 +1036,8 @@ class MeetingManager:
         s.ending = True
         self.sessions.pop(guild_id, None)
         logger.info("meeting ending in guild %s (%s)", guild_id, reason)
+        if reason != "shutdown":  # a restart keeps the record so the meeting is rejoined
+            await self._unpersist(guild_id)
         if s.live is not None:
             with contextlib.suppress(Exception):
                 await s.live.close()
@@ -891,5 +1091,20 @@ class MeetingManager:
         s.transcript.lines.clear()  # transcript is never persisted
 
     async def shutdown(self) -> None:
+        """The bot is stopping (deploy/restart): leave quietly. The meeting is NOT ended: its record
+        stays so on_ready rejoins it, and its transcript is in the memory log."""
         for gid in list(self.sessions):
-            await self.end(gid, "shutdown")
+            s = self.sessions.pop(gid, None)
+            if s is None:
+                continue
+            s.ending = True
+            if s.live is not None:
+                with contextlib.suppress(Exception):
+                    await s.live.close()
+            for task in s.tasks:
+                task.cancel()
+            _stop_playback(s.vc)
+            with contextlib.suppress(Exception):
+                s.vc.stop_listening()
+            with contextlib.suppress(Exception):
+                await s.vc.disconnect()

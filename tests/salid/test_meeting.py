@@ -204,7 +204,7 @@ class FakeVC:
     def stop_listening(self):
         self.listening = None
 
-    async def disconnect(self):
+    async def disconnect(self, force=False):
         self.disconnected = True
 
 
@@ -874,3 +874,163 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
     asyncio.run(go())
     assert seen["memory"] == "MEM" and seen["web_client"] == "W"
     assert posted == ["@u answer"] and spoken == ["answer"]
+
+
+# ------------------------------------------------------------------ persistence / rejoin / reconnect
+def _bot_guild(env, monkeypatch, text_ch=None):
+    env.guild.get_channel = lambda cid: env.chan if cid == env.chan.id else text_ch
+    monkeypatch.setattr(SecretaryBot, "get_guild", lambda self, gid: env.guild)
+
+
+async def test_active_meeting_is_persisted_and_cleared_on_a_normal_end(env):
+    store = env.bot.secretary_store
+    await start(env)
+    rec = store.get_active_meeting(1000)
+    assert rec["voice_channel_id"] == env.chan.id and rec["starter"] == "แอน"
+    assert rec["language"] and rec["started_at"] and "meeting_id" in rec
+    await env.mgr.end(1000, "command")
+    assert store.get_active_meeting(1000) is None
+
+
+async def test_shutdown_keeps_the_record_and_posts_no_summary(env):
+    s = await start(env)
+    sent = len(env.chan.sent)
+    await env.mgr.shutdown()
+    assert env.bot.secretary_store.get_active_meeting(1000) is not None
+    assert env.vc.disconnected and 1000 not in env.mgr.sessions and s.ending
+    assert len(env.chan.sent) == sent
+
+
+async def test_rejoin_on_ready_continues_the_meeting_with_logged_lines(env, monkeypatch):
+    s = await start(env)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "ส่งงานวันศุกร์")
+    await env.mgr.handle_segment(s, segment(10))
+    await env.bot.drain_memory()
+    await env.mgr.shutdown()  # the restart
+    env.chan.members = [make_member(env.guild, 10, "แอน", env.chan)]
+    env.chan.sent.clear()
+    env.vc.disconnected = False
+    _bot_guild(env, monkeypatch)
+    await env.mgr.resume_all()
+    new = env.mgr.sessions[1000]
+    assert new is not s and isinstance(env.vc.listening, mt.MeetingSink)
+    assert [ln.text for ln in new.transcript.lines] == ["ส่งงานวันศุกร์"]
+    assert env.chan.sent == ["สลิดกลับเข้ามาจดประชุมต่อแล้วครับ (หลุดไปครู่หนึ่ง)"]
+    assert env.bot.secretary_store.get_active_meeting(1000) is not None
+    await env.mgr.end(1000, "command")
+
+
+async def test_rejoin_with_an_empty_channel_ends_with_a_summary(env, monkeypatch):
+    s = await start(env)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "ตกลงตามนี้")
+    await env.mgr.handle_segment(s, segment(10))
+    await env.bot.drain_memory()
+    await env.mgr.shutdown()
+    env.chan.members = []  # everyone left while the bot was down
+    env.chan.sent.clear()
+    _bot_guild(env, monkeypatch)
+    monkeypatch.setattr(mt, "summarize_transcript", lambda c, m, text, lang: "สรุป: " + text)
+    await env.mgr.resume_all()
+    assert 1000 not in env.mgr.sessions
+    assert env.bot.secretary_store.get_active_meeting(1000) is None
+    assert any("ตกลงตามนี้" in m and "สรุป" in m for m in env.chan.sent)
+
+
+async def test_unexpected_disconnect_retries_then_continues(env, monkeypatch):
+    monkeypatch.setattr(mt, "RECONNECT_DELAYS", (0, 0, 0))
+    s = await start(env)
+    env.chan.members = [make_member(env.guild, 10, "แอน", env.chan)]
+    calls = []
+    new_vc = FakeVC()
+
+    async def flaky(channel):
+        calls.append(1)
+        if len(calls) < 3:
+            raise RuntimeError("voice down")
+        return new_vc
+
+    monkeypatch.setattr(env.mgr, "_connect", flaky)
+    await env.mgr.on_disconnected(1000)
+    assert len(calls) == 3 and s.vc is new_vc and isinstance(new_vc.listening, mt.MeetingSink)
+    assert t("meet_reconnected", "th") in env.chan.sent and 1000 in env.mgr.sessions
+    await env.mgr.end(1000)
+
+
+async def test_disconnect_gives_up_after_three_tries_and_announces(env, monkeypatch):
+    monkeypatch.setattr(mt, "RECONNECT_DELAYS", (0, 0, 0))
+    await start(env)
+    env.chan.members = [make_member(env.guild, 10, "แอน", env.chan)]
+    calls = []
+
+    async def dead(channel):
+        calls.append(1)
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(env.mgr, "_connect", dead)
+    await env.mgr.on_disconnected(1000)
+    assert len(calls) == 3 and 1000 not in env.mgr.sessions
+    assert t("meet_reconnect_failed", "th") in env.chan.sent
+    assert env.bot.secretary_store.get_active_meeting(1000) is None
+
+
+async def test_disconnect_with_nobody_left_just_ends(env):
+    await start(env)
+    env.chan.members = []
+    await env.mgr.on_disconnected(1000)
+    assert 1000 not in env.mgr.sessions
+
+
+async def _tick_once(env, s, monkeypatch):
+    monkeypatch.setattr(mt, "TICK_S", 0)
+    ends = []
+
+    async def fake_end(gid, reason="command"):
+        ends.append(reason)
+
+    monkeypatch.setattr(env.mgr, "end", fake_end)
+    task = asyncio.create_task(env.mgr._ticker(s))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    return ends
+
+
+async def test_manual_meeting_waits_five_minutes_after_humans_leave(env, monkeypatch):
+    s = await start(env)
+    assert s.empty_grace == 300.0
+    s.had_humans, s.empty_since = True, time.monotonic() - 120  # two minutes empty
+    env.chan.members = []
+    assert await _tick_once(env, s, monkeypatch) == []
+    s.empty_since = time.monotonic() - 301
+    assert await _tick_once(env, s, monkeypatch) == ["empty"]
+
+
+async def test_auto_join_nobody_came_uses_the_short_grace(env, monkeypatch):
+    a = make_member(env.guild, 10, "แอน", env.chan)
+    await env.mgr.join(a, first_grace=120.0)
+    s = env.mgr.sessions[1000]
+    env.chan.members = []
+    s.empty_since = time.monotonic() - 121
+    assert await _tick_once(env, s, monkeypatch) == ["empty"]
+    # once people were there, the long grace applies even for an auto-join
+    s.had_humans, s.empty_since = True, time.monotonic() - 121
+    assert await _tick_once(env, s, monkeypatch) == []
+
+
+async def test_max_time_warns_ten_minutes_before_the_cap(env, monkeypatch):
+    s = await start(env)
+    assert mt.MEETING_MAX_S == 6 * 3600
+    env.chan.members = [make_member(env.guild, 10, "แอน", env.chan)]
+    s.started = time.monotonic() - (mt.MEETING_MAX_S - 300)
+    assert await _tick_once(env, s, monkeypatch) == []
+    assert env.chan.sent.count(t("meet_max_warning", "th")) == 1
+    s.started = time.monotonic() - mt.MEETING_MAX_S - 1
+    assert await _tick_once(env, s, monkeypatch) == ["timeout"]
+
+
+async def test_spoken_leave_ends_the_meeting(env, monkeypatch):
+    s = await start(env)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด ออกประชุม")
+    await env.mgr.handle_segment(s, segment(10))
+    await asyncio.sleep(0.05)
+    assert 1000 not in env.mgr.sessions

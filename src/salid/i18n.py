@@ -501,7 +501,23 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "someone told Salid to leave",
     },
     "end_empty": {"th": "ทุกคนออกจากห้องแล้ว", "en": "everyone left the channel"},
-    "end_timeout": {"th": "ประชุมครบ 3 ชั่วโมง", "en": "the meeting reached 3 hours"},
+    "end_timeout": {"th": "ประชุมครบ 6 ชั่วโมง", "en": "the meeting reached 6 hours"},
+    "meet_rejoined": {
+        "th": "สลิดกลับเข้ามาจดประชุมต่อแล้วครับ (หลุดไปครู่หนึ่ง)",
+        "en": "Salid is back and taking notes again (it dropped out for a moment).",
+    },
+    "meet_reconnected": {
+        "th": "สลิดหลุดไปครู่หนึ่ง แต่กลับเข้าห้องและจดประชุมต่อแล้วครับ",
+        "en": "Salid dropped out for a moment but is back in the room and still taking notes.",
+    },
+    "meet_reconnect_failed": {
+        "th": "สลิดต่อเข้าห้องเสียงกลับไม่ได้ครับ ขอปิดการประชุมและสรุปให้ตอนนี้",
+        "en": "Salid could not reconnect to the voice channel, so it is ending the meeting now.",
+    },
+    "meet_max_warning": {
+        "th": "ประชุมใกล้ครบ 6 ชั่วโมงแล้ว สลิดจะออกและสรุปในอีก 10 นาทีครับ",
+        "en": "The meeting hits the 6-hour limit in 10 minutes; Salid will then leave and summarize.",
+    },
     "end_disconnected": {"th": "สลิดหลุดจากห้องเสียง", "en": "Salid was disconnected"},
     "end_shutdown": {"th": "สลิดกำลังปิดระบบ", "en": "Salid is shutting down"},
     # ---------------------------------------------------------------- digest

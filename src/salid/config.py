@@ -84,7 +84,9 @@ class Settings(BaseSettings):
     # Scheduled meetings (salid.scheduling)
     meeting_remind_minutes: int = 10  # reminder before the start (and again at the start)
     meeting_noshow_minutes: int = 5  # DM attendees missing from the voice channel after this
-    meeting_empty_minutes: int = 2  # an auto-joined meeting ends after this long with nobody in it
+    meeting_empty_minutes: int = 2  # an auto-joined meeting nobody ever came to ends after this
+    # A meeting where people were present ends only after this long with no humans in the channel.
+    meeting_leave_empty_minutes: int = 5
     # Email (salid.email_out): Gmail sends only when all three are set (refresh token = secret)
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
