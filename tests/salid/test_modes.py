@@ -6,6 +6,7 @@ import itertools
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import discord
 import pytest
 from conftest import GUILD, FixedClockSettings
 from test_bot_multitenant import ME, FakeChannel, FakeGuild, Msg, member, photo
@@ -598,7 +599,7 @@ async def test_explicit_call_mode_overrides_the_chat_channel_name(bot, world):
 
 def test_mode_command_has_five_choices_in_both_languages(bot):
     bot._register_commands()
-    cmds = {c.name: c for c in bot.tree.get_commands()}
+    cmds = {c.name: c for c in bot.tree.get_commands(type=discord.AppCommandType.chat_input)}
     for name in ("โหมด", "mode"):
         (param,) = cmds[name].parameters
         assert [c.value for c in param.choices] == list(MODES) and not param.required
@@ -868,7 +869,7 @@ async def test_interaction_language_for_auto_follows_the_discord_locale(bot, wor
 
 def test_language_command_has_three_choices_in_both_languages(bot):
     bot._register_commands()
-    cmds = {c.name: c for c in bot.tree.get_commands()}
+    cmds = {c.name: c for c in bot.tree.get_commands(type=discord.AppCommandType.chat_input)}
     for name in ("ภาษา", "language"):
         (param,) = cmds[name].parameters
         assert [c.value for c in param.choices] == ["th", "en", "auto"] and not param.required
@@ -880,7 +881,7 @@ def test_language_command_has_three_choices_in_both_languages(bot):
 
 def test_mode_choices_are_bilingual(bot):
     bot._register_commands()
-    cmds = {c.name: c for c in bot.tree.get_commands()}
+    cmds = {c.name: c for c in bot.tree.get_commands(type=discord.AppCommandType.chat_input)}
     labels = [c.name for c in cmds["mode"].parameters[0].choices]
     assert "🙋 เรียกแล้วคุย · Call" in labels and "💬 ตอบทุกข้อความ · Chat" in labels
     assert all(len(x) <= 100 for x in labels)
