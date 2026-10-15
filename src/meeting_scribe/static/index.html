@@ -55,13 +55,19 @@
   #summary li { margin-bottom: 4px; }
   .due { color: var(--muted); }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .salid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; align-items: start; }
+  .salid .mark { grid-row: span 3; width: 48px; height: 48px; border-radius: 12px; background: #5865f2; color: #fff;
+    display: grid; place-items: center; font-weight: 700; font-size: 1.3rem; }
+  .salid p { margin: 0; }
+  .salid ul { margin: 0; padding-left: 20px; color: var(--muted); }
+  .btn.discord { background: #5865f2; border-color: #5865f2; text-decoration: none; display: inline-block; }
   [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
   <h1>Meeting Scribe</h1>
-  <p class="tagline">Record a Google Meet, get a live Thai transcript, and a summary posted to Discord.</p>
+  <p class="tagline">Record a Google Meet, get a live Thai transcript, and a summary posted to Discord. <a href="/hub">Command center</a></p>
 
   <section class="card" id="setup" aria-labelledby="setup-h">
     <h2 id="setup-h">New meeting</h2>
@@ -105,6 +111,22 @@
     <div id="summary" aria-live="polite"></div>
     <div class="row" style="margin-top:16px">
       <button type="button" id="new-btn" class="secondary">Start a new meeting</button>
+    </div>
+  </section>
+  <section class="card" id="salid" aria-labelledby="salid-h">
+    <div class="salid">
+      <span class="mark" aria-hidden="true">ส</span>
+      <h2 id="salid-h" style="margin:0">Salid, your team's assistant in Discord</h2>
+      <p>Post a receipt photo and Salid records it. Executives ask about spending and get an answer in seconds.
+        Meeting summaries from this page arrive as Salid too.</p>
+      <ul>
+        <li>Click the button, pick your Discord server, then <strong>Authorize</strong>.</li>
+        <li>Nothing to install and no code to write.</li>
+      </ul>
+    </div>
+    <div class="row" style="margin-top:14px">
+      <a class="btn discord" id="salid-add" href="__SALID_INVITE_URL__" target="_blank" rel="noopener">Add Salid to Discord</a>
+      <span class="hint" id="salid-soon" hidden>Coming soon: the Discord app is being registered.</span>
     </div>
   </section>
 </main>
@@ -496,6 +518,12 @@ els.newBtn.addEventListener("click", () => {
 window.addEventListener("beforeunload", (e) => {
   if (st.recorder && st.recorder.state === "recording") { e.preventDefault(); e.returnValue = ""; }
 });
+</script>
+<script>
+(() => {
+  const add = document.getElementById("salid-add");
+  if (!add.getAttribute("href")) { add.hidden = true; document.getElementById("salid-soon").hidden = false; }
+})();
 </script>
 </body>
 </html>

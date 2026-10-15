@@ -30,6 +30,19 @@ class Settings(BaseSettings):
 
     discord_webhook_url: str = ""
 
+    # Public Discord application id of the Salid bot. Not a secret; it only builds the
+    # "Add Salid to Discord" link on the home page. Empty hides the link.
+    salid_discord_client_id: str = ""
+
+    # Salid hub (/hub). Empty client id = every /api/hub call fails closed.
+    # OAuth 2.0 Web client id (public, not a secret) used to verify Google ID tokens. Any
+    # verified Google account may sign in; it only sees guilds it administers.
+    hub_google_client_id: str = ""
+    # Optional "super admins" (comma-separated Google accounts) who see every guild.
+    hub_admin_emails: str = ""
+    # Firestore collection with one settings doc per Discord guild (shared with the bot).
+    salid_guild_collection: str = "salid_guilds"
+
 
 @lru_cache
 def get_settings() -> Settings:

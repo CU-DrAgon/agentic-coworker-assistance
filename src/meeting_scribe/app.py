@@ -8,11 +8,11 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from meeting_scribe import pipeline
+from meeting_scribe import hub, pipeline
 from meeting_scribe.config import get_settings
 from meeting_scribe.models import ChunkTranscript, Meeting, MeetingStatus
 
@@ -26,6 +26,7 @@ INDEX_HTML = Path(__file__).parent / "static" / "index.html"
 MAX_CHUNK_BYTES = 32 * 1024 * 1024  # Cloud Run's HTTP/1 request limit
 
 app = FastAPI(title="Meeting Scribe")
+app.include_router(hub.router)
 
 
 class CreateMeeting(BaseModel):
@@ -66,9 +67,26 @@ def _get_or_404(meeting_id: str) -> Meeting:
     return meeting
 
 
+# Bot permissions: View Channels, Send Messages, Embed Links, Attach Files,
+# Read Message History, Add Reactions, Manage Channels (creates #คุยกับน้องสลิด on join),
+# Connect (joins voice meetings to listen).
+SALID_PERMISSIONS = 1166416
+
+
+def salid_invite_url(client_id: str) -> str:
+    """Discord's standard "add bot to server" link; empty when no client id is configured."""
+    if not client_id.isdigit():
+        return ""
+    return (
+        "https://discord.com/oauth2/authorize?client_id="
+        f"{client_id}&scope=bot+applications.commands&permissions={SALID_PERMISSIONS}"
+    )
+
+
 @app.get("/", include_in_schema=False)
-def index() -> FileResponse:
-    return FileResponse(INDEX_HTML, media_type="text/html")
+def index() -> HTMLResponse:
+    url = salid_invite_url(get_settings().salid_discord_client_id)
+    return HTMLResponse(INDEX_HTML.read_text(encoding="utf-8").replace("__SALID_INVITE_URL__", url))
 
 
 @app.get("/health")  # Cloud Run's frontend reserves /healthz, so deployed checks must use /health

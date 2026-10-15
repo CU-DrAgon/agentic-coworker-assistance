@@ -1,0 +1,33 @@
+# Salid Discord bot (Cloud Run worker pool). Build with: docker build -f Dockerfile.salid .
+# Stage 1: Gemini CLI (external Node binary used by deep tasks), pinned.
+FROM node:22-bookworm-slim AS gemini
+RUN npm install -g --prefix /opt/gemini @google/gemini-cli@0.64.0 \
+    && npm cache clean --force
+
+FROM python:3.12-slim-bookworm
+
+# Voice meetings: libopus (decode Discord voice) and ffmpeg (16 kHz FLAC for transcription).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libopus0 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node runtime (same Debian release as the build stage, so shared libs match) + the CLI.
+COPY --from=gemini /usr/local/bin/node /usr/local/bin/node
+COPY --from=gemini /opt/gemini /opt/gemini
+COPY --from=ghcr.io/astral-sh/uv:0.10.11 /uv /usr/local/bin/uv
+
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1 PATH="/app/.venv/bin:$PATH"
+WORKDIR /app
+
+COPY pyproject.toml uv.lock README.md ./
+COPY src ./src
+RUN uv sync --frozen --no-dev --no-editable
+
+# Non-root user with a writable HOME (Gemini CLI writes ~/.gemini; deep_task also uses an
+# isolated temp HOME) and TMPDIR (/tmp is writable on Cloud Run).
+RUN useradd --system --uid 10001 --create-home --home-dir /home/app app
+USER app
+ENV HOME=/home/app TMPDIR=/tmp SALID_GEMINI_CLI_PATH=/opt/gemini/bin/gemini
+
+# No HTTP port: the bot only opens an outbound Discord gateway connection.
+CMD ["python", "-m", "salid"]

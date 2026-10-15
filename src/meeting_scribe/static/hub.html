@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>สลิด ศูนย์บัญชาการ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@500&amp;display=swap">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root {
+    --bg: #F3F4F7; --card: #fff; --ink: #171A21; --muted: #545B6E; --faint: #6A7183;
+    --line: #DCDFE8; --line-soft: #ECEEF3; --navy: #1D2140; --accent: #4752C4; --link: #3F49B8;
+    --ok-bg: #DDF3E8; --ok-ink: #0B6B45; --warn-bg: #FFF1D6; --warn-ink: #8A5A00;
+    --soon-bg: #ECEEF3; --err-bg: #FDE7E4; --err-ink: #A12315; --chip: #EEF0FB;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.5;
+    font-family: "IBM Plex Sans Thai", "Noto Sans Thai", Tahoma, sans-serif; }
+  a { color: var(--link); } a:hover { color: #2C3590; }
+  [hidden] { display: none !important; }
+  h1, h2 { margin: 0; }
+  button { font: inherit; cursor: pointer; }
+  .mark { width: 36px; height: 36px; border-radius: 10px; background: #5865F2; color: #fff;
+    display: grid; place-items: center; font-weight: 700; font-size: 18px; flex: none; }
+
+  /* login */
+  #login { min-height: 100vh; display: flex; flex-wrap: wrap; }
+  #login .pitch { flex: 1 1 420px; background: var(--navy); color: #EEF0FA; padding: 48px 28px;
+    display: flex; flex-direction: column; gap: 24px; }
+  #login .pitch h1 { font-size: 34px; line-height: 1.3; max-width: 520px; }
+  #login .pitch p { margin: 0; font-size: 17px; line-height: 1.7; color: #C5CAE8; max-width: 500px; }
+  #login .pitch li { list-style: none; display: flex; gap: 12px; align-items: baseline; font-size: 16px; }
+  #login .pitch ul { margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+  #login .pitch li span { font: 500 13px "IBM Plex Mono", monospace; color: #8E97E8; }
+  #login .panel { flex: 1 1 360px; display: grid; place-items: center; padding: 40px 16px; }
+  #login .box { width: 100%; max-width: 400px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
+  #login .box h2 { font-size: 24px; }
+  #login .box p { margin: 0; font-size: 15px; color: var(--muted); }
+  #gsi-button { min-height: 44px; display: flex; justify-content: center; }
+  .notice { padding: 10px 14px; border-radius: 10px; font-size: 14px; background: var(--warn-bg); color: var(--warn-ink); }
+  .notice.error { background: var(--err-bg); color: var(--err-ink); }
+
+  /* hub */
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 12px 16px;
+    background: var(--navy); color: #EEF0FA; }
+  header .brand { display: flex; align-items: center; gap: 10px; }
+  header .brand strong { font-size: 18px; } header .brand span { font-size: 14px; color: #A9B0DA; }
+  header .grow { flex: 1 1 auto; }
+  header .who { font-size: 14px; color: #C5CAE8; overflow-wrap: anywhere; }
+  header button { background: none; border: 0; color: #C5CAE8; font-size: 14px; text-decoration: underline; }
+  .layout { display: flex; flex-wrap: wrap; gap: 20px; padding: 20px 16px; max-width: 1360px; margin: 0 auto; }
+  nav { flex: 1 1 180px; max-width: 240px; display: flex; flex-direction: column; gap: 4px; }
+  nav a { padding: 9px 14px; border-radius: 8px; color: #3B4152; text-decoration: none; }
+  nav a:first-child { background: #E3E5F6; color: var(--navy); font-weight: 600; }
+  main { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+  main h1 { font-size: 26px; line-height: 1.3; }
+  section.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  section.card h2 { font-size: 19px; }
+  .cols { display: flex; flex-wrap: wrap; gap: 20px; }
+  .cols > section { flex: 1 1 340px; }
+  .channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+  .ch { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .ch.soon { border-style: dashed; border-color: #C3C8D6; }
+  .ch .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .ch p { margin: 0; font-size: 14px; color: var(--muted); }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--soon-bg); color: var(--muted); white-space: nowrap; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok-ink); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .feat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+  .feat .txt { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; }
+  .feat .txt span { font-size: 14px; color: var(--muted); }
+  .where { font: 500 13px "IBM Plex Mono", monospace; color: var(--link); background: var(--chip); padding: 4px 10px; border-radius: 8px; }
+  .switch { width: 52px; height: 30px; border-radius: 99px; border: 0; padding: 3px; background: #B9BECC;
+    display: flex; justify-content: flex-start; flex: none; }
+  .switch[aria-pressed="true"] { background: var(--accent); justify-content: flex-end; }
+  .switch:disabled { background: #D5D8E1; cursor: not-allowed; }
+  .switch i { width: 24px; height: 24px; border-radius: 50%; background: #fff; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 14px; }
+  label small { font-weight: 400; color: var(--faint); }
+  input[type=text], input[type=time] { min-height: 44px; padding: 0 12px; border: 1px solid #C9CDD9;
+    border-radius: 10px; font: inherit; font-size: 15px; width: 100%; }
+  .btn { min-height: 44px; padding: 0 22px; border-radius: 10px; border: 0; background: var(--accent);
+    color: #fff; font-weight: 600; font-size: 15px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+  .btn:disabled { opacity: .6; cursor: wait; }
+  .btn.discord { background: #5865F2; } .btn.discord:hover { color: #fff; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .hint { font-size: 13px; color: var(--faint); }
+  .chat { display: flex; flex-direction: column; gap: 10px; background: #F6F7FA; border-radius: 12px; padding: 14px; min-height: 80px; max-height: 420px; overflow-y: auto; }
+  .bubble { max-width: 88%; padding: 10px 14px; font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .bubble.me { align-self: flex-end; background: var(--accent); color: #fff; border-radius: 12px 12px 4px 12px; }
+  .bubble.bot { align-self: flex-start; background: #fff; border: 1px solid var(--line); border-radius: 12px 12px 12px 4px; }
+  .bubble.err { background: var(--err-bg); color: var(--err-ink); border-color: transparent; }
+  .act { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); align-items: start; }
+  .act time { font: 500 13px "IBM Plex Mono", monospace; color: var(--faint); padding-top: 2px; }
+  .act span.t { overflow-wrap: anywhere; font-size: 15px; }
+  .who-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+  .who-row span { font-size: 14px; color: var(--muted); }
+  .empty { color: var(--faint); font-size: 14px; padding: 6px 0; }
+  @media (max-width: 600px) { .act { grid-template-columns: 56px minmax(0, 1fr); } .act .pill { grid-column: 2; justify-self: start; } }
+  header select { min-height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid #4A5190;
+    background: #2A2F57; color: #fff; font: inherit; font-size: 15px; max-width: 260px; }
+  header .gicon { width: 28px; height: 28px; border-radius: 50%; flex: none; background: #4A5190; }
+  .checks { display: flex; flex-direction: column; gap: 2px; max-height: 190px; overflow-y: auto;
+    border: 1px solid #C9CDD9; border-radius: 10px; padding: 6px 8px; background: #fff; }
+  .checks label { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; font-size: 15px;
+    min-height: 32px; }
+  .checks input { width: 18px; height: 18px; flex: none; }
+  select.field { min-height: 44px; padding: 0 12px; border: 1px solid #C9CDD9; border-radius: 10px;
+    font: inherit; font-size: 15px; width: 100%; background: #fff; }
+  .notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
+  .empty-state { align-items: flex-start; gap: 18px; }
+  .btn.big { min-height: 56px; padding: 0 32px; font-size: 18px; border-radius: 14px; }
+  .steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<div id="login" hidden>
+  <section class="pitch">
+    <div style="display:flex;align-items:center;gap:12px"><span class="mark" aria-hidden="true">ส</span><strong style="font-size:22px">สลิด</strong></div>
+    <h1>เลขาของทีมคุณ ทำงานอยู่ในแชตที่ทีมใช้อยู่แล้ว</h1>
+    <p>เชื่อมต่อ Discord ครั้งเดียว แล้วเลือกว่าจะให้สลิดทำอะไรให้ทีมจากหน้านี้ ทุกอย่างทำงานบน Google Cloud</p>
+    <ul>
+      <li><span>01</span>รับรูปใบเสร็จ ทำบัญชีให้อัตโนมัติ</li>
+      <li><span>02</span>ผู้บริหารถามเรื่องค่าใช้จ่าย ได้คำตอบในไม่กี่วินาที</li>
+      <li><span>03</span>อัดประชุม Google Meet แล้วส่งสรุปเข้าห้องแชต</li>
+    </ul>
+  </section>
+  <section class="panel">
+    <div class="box">
+      <h2>เข้าสู่ระบบ</h2>
+      <p>ใช้บัญชี Google ของคุณ แล้วเลือกเซิร์ฟเวอร์ Discord ที่คุณดูแล</p>
+      <div id="gsi-button"></div>
+      <div class="notice error" id="login-msg" role="alert" hidden></div>
+      <div class="notice" id="not-configured" hidden>ระบบยังไม่ได้ตั้งค่าการเข้าสู่ระบบ (ต้องกำหนด HUB_GOOGLE_CLIENT_ID) กรุณาติดต่อผู้ดูแลระบบ</div>
+      <p style="font-size:13px;color:var(--faint)">ยังไม่มีเซิร์ฟเวอร์? เข้าสู่ระบบแล้วกด <strong>เพิ่ม Salid เข้า Discord</strong> ไม่ต้องติดตั้งหรือเขียนโค้ด</p>
+      <a href="/" style="font-size:14px">กลับหน้าอัดประชุม</a>
+    </div>
+  </section>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <div class="brand"><span class="mark" aria-hidden="true">ส</span><strong>สลิด</strong><span>ศูนย์บัญชาการ</span></div>
+    <div class="grow"></div>
+    <img class="gicon" id="gicon" alt="" hidden>
+    <select id="guild-switch" aria-label="เลือกเซิร์ฟเวอร์ Discord" hidden></select>
+    <span class="who" id="who"></span>
+    <button type="button" id="signout">ออกจากระบบ</button>
+  </header>
+  <div class="layout">
+    <nav aria-label="เมนู">
+      <a href="#channels">ภาพรวม</a>
+      <a href="#channels">ช่องทางแชต</a>
+      <a href="#skills">สลิดทำอะไรให้ทีม</a>
+      <a href="#command">สั่งสลิด</a>
+      <a href="#activity">กิจกรรมล่าสุด</a>
+      <a href="#people">ใครเห็นอะไร</a>
+    </nav>
+    <main>
+      <h1>สวัสดีครับ วันนี้ให้สลิดช่วยอะไรดี</h1>
+      <div class="notice error" id="app-msg" role="alert" hidden></div>
+      <div class="notice" id="link-msg" role="status" hidden></div>
+
+      <section class="card empty-state" id="no-guild" aria-labelledby="ng-h" hidden>
+        <h2 id="ng-h">ยังไม่มีเซิร์ฟเวอร์ที่เชื่อมกับบัญชีนี้</h2>
+        <a class="btn big discord" id="invite-big" href="#" target="_blank" rel="noopener" hidden>เพิ่ม Salid เข้า Discord</a>
+        <p id="invite-big-soon" class="hint" hidden>ยังไม่ได้ตั้งค่าแอป Discord (SALID_DISCORD_CLIENT_ID)</p>
+        <ol class="steps">
+          <li>เพิ่ม Salid เข้าเซิร์ฟเวอร์</li>
+          <li>พิมพ์ <strong>/ตั้งค่า</strong> ใน Discord แล้วกดลิงก์ที่ได้</li>
+        </ol>
+        <span class="hint">เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์เท่านั้นที่ขอลิงก์ได้ ลิงก์ใช้ได้ครั้งเดียวและหมดอายุใน 15 นาที</span>
+      </section>
+
+      <div id="guild-view" hidden>
+
+      <section class="card" id="channels" aria-labelledby="ch-h">
+        <h2 id="ch-h">ช่องทางที่เชื่อมต่อ</h2>
+        <div class="channels">
+          <div class="ch">
+            <div class="top"><strong>Discord</strong><span class="pill ok" id="guild-pill">พร้อมใช้</span></div>
+            <p id="guild-name">เซิร์ฟเวอร์ที่เชื่อมอยู่</p>
+            <a class="btn discord" id="invite" href="#" target="_blank" rel="noopener" hidden>เพิ่ม Salid เข้าเซิร์ฟเวอร์อื่น</a>
+            <p id="invite-soon" hidden>ยังไม่ได้ตั้งค่าแอป Discord (SALID_DISCORD_CLIENT_ID)</p>
+          </div>
+          <div class="ch">
+            <div class="top"><strong>Google Meet</strong><span class="pill ok">พร้อมใช้</span></div>
+            <p>อัดประชุมจากเบราว์เซอร์ แล้วส่งสรุปเข้า Discord</p>
+            <a href="/" style="font-weight:600">เริ่มอัดประชุม</a>
+          </div>
+          <div class="ch soon">
+            <div class="top"><strong>LINE</strong><span class="pill">เร็วๆ นี้</span></div>
+            <p>ใช้สลิดตัวเดิมผ่าน LINE กลุ่มของทีม</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card" id="skills" aria-labelledby="sk-h">
+        <h2 id="sk-h">สลิดทำอะไรให้ทีมนี้</h2>
+        <div id="features"></div>
+        <div class="fields">
+          <label>ห้องรับใบเสร็จเพิ่มเติม <div class="checks" id="receipt-ids"></div><small>ห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” รับใบเสร็จได้อยู่แล้วโดยไม่ต้องเลือก</small></label>
+          <label>ห้องถามสลิด <div class="checks" id="ask-ids"></div><small>ทุกข้อความในห้องนี้ถือเป็นคำถาม (ห้องอื่นแท็ก @Salid ได้)</small></label>
+          <label>ห้องสรุปรายวัน <select class="field" id="digest-id"></select></label>
+          <label>เวลาส่งสรุปรายวัน <input type="time" id="digest-time" value="18:00"><small>เวลาไทย (Asia/Bangkok)</small></label>
+          <label>ชื่อ role ผู้บริหาร <input type="text" id="exec-roles" placeholder="ผู้บริหาร, Executive"><small>คั่นด้วยจุลภาค เจ้าของและแอดมินของเซิร์ฟเวอร์เป็นผู้บริหารอยู่แล้ว</small></label>
+        </div>
+        <span class="hint" id="no-channels" hidden>สลิดยังไม่ได้ส่งรายชื่อห้องของเซิร์ฟเวอร์นี้มา ลองรอสักครู่แล้วโหลดหน้าใหม่</span>
+        <div class="row">
+          <button type="button" class="btn" id="save">บันทึกการตั้งค่า</button>
+          <span class="hint" id="save-msg" role="status" aria-live="polite"></span>
+        </div>
+        <span class="hint">สลิดอ่านการตั้งค่าใหม่ภายในประมาณ 1 นาที</span>
+      </section>
+
+      <section class="card" id="command" aria-labelledby="cm-h">
+        <h2 id="cm-h">สั่งสลิด</h2>
+        <div class="chat" id="chat" aria-live="polite"><div class="empty" id="chat-empty">ลองถาม เช่น "เดือนนี้ค่าวัตถุดิบเท่าไร ซื้อร้านไหนเยอะสุด"</div></div>
+        <form class="row" id="ask-form">
+          <label for="ask" style="position:absolute;width:1px;height:1px;overflow:hidden">พิมพ์คำถาม</label>
+          <input type="text" id="ask" maxlength="1000" placeholder="ถามหรือสั่งงาน เช่น สรุปบัญชีสัปดาห์นี้" style="flex:1 1 280px;width:auto" autocomplete="off">
+          <button type="submit" class="btn" id="ask-btn">ส่ง</button>
+        </form>
+        <span class="hint">คำตอบเดียวกับที่ได้จากการถามสลิดใน Discord ในฐานะผู้บริหาร (เห็นบัญชีทั้งเซิร์ฟเวอร์นี้) งานใหญ่หลายขั้นตอนสั่งผ่าน Discord</span>
+      </section>
+
+      <div class="cols">
+        <section class="card" id="activity" aria-labelledby="ac-h">
+          <h2 id="ac-h">กิจกรรมล่าสุด</h2>
+          <div id="activity-list"><div class="empty">กำลังโหลด...</div></div>
+        </section>
+        <section class="card" id="people" aria-labelledby="pp-h">
+          <h2 id="pp-h">ใครเห็นอะไร</h2>
+          <div class="who-row"><strong>ผู้บริหาร</strong><span>เจ้าของเซิร์ฟเวอร์ แอดมิน ผู้ที่จัดการเซิร์ฟเวอร์ได้ หรือผู้มี role ตามที่ตั้งไว้ด้านบน เห็นบัญชีทั้งเซิร์ฟเวอร์ ถามได้ทุกเรื่อง สั่งงานใหญ่ได้</span></div>
+          <div class="who-row"><strong>พนักงาน</strong><span>ส่งใบเสร็จได้ เห็นเฉพาะใบเสร็จที่ตัวเองส่ง</span></div>
+          <div class="who-row"><strong>แยกตามเซิร์ฟเวอร์</strong><span>ข้อมูลของแต่ละเซิร์ฟเวอร์แยกจากกันทั้งหมด เซิร์ฟเวอร์อื่นมองไม่เห็นบัญชีของคุณ</span></div>
+          <div class="who-row"><strong>ผู้ดูแลหน้านี้</strong><span>บัญชี Google ที่เชื่อมผ่านคำสั่ง /ตั้งค่า เห็นภาพรวมและถามสลิดได้เหมือนผู้บริหาร</span></div>
+        </section>
+      </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+
+<script>
+"use strict";
+const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
+const TOKEN_KEY = "salid_hub_token";
+const LINK_KEY = "salid_hub_link";
+const GUILD_KEY = "salid_hub_guild";
+const $ = (id) => document.getElementById(id);
+
+const FEATURES = [
+  { id: "receipts", name: "รับใบเสร็จและทำบัญชี", desc: "ส่งรูปใบเสร็จในห้อง สลิดอ่านยอดและบันทึกให้", where: "#ใบเสร็จ" },
+  { id: "qa", name: "ตอบคำถามเรื่องค่าใช้จ่าย", desc: "ถามสลิดใน Discord แล้วได้คำตอบจากบัญชีของทีม", where: "@Salid" },
+  { id: "meetings", name: "ส่งสรุปประชุมเข้าแชต", desc: "อัดประชุมจากหน้าเว็บ แล้วสลิดโพสต์สรุปและงานที่ต้องทำ เปิดไว้เสมอ", where: "#ประชุม", info: true },
+  { id: "voice_meetings", name: "ฟังประชุมในห้องเสียง", desc: "พิมพ์ /เข้าประชุม ให้สลิดเข้าห้องเสียง ถอดว่าใครพูดอะไร ตอบเมื่อถูกเรียก และสรุปตอนจบ", where: "/เข้าประชุม" },
+  { id: "digest", name: "สรุปรายวันให้ผู้บริหาร", desc: "ทุกวัน ยอดใช้จ่าย หมวด และรายการที่ต้องตรวจ", where: "#ผู้บริหาร" },
+  { id: "deep_tasks", name: "งานใหญ่หลายขั้น", desc: "ผู้บริหารสั่งงานวิเคราะห์ สลิดทำเบื้องหลังแล้วส่งรายงาน", where: "เฉพาะผู้บริหาร" },
+  { id: "followup", name: "ติดตามงานที่รับปาก", desc: "จดว่าใครรับปากอะไร แล้วเตือนก่อนถึงกำหนด", where: "เร็วๆ นี้", soon: true },
+];
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true };
+let guilds = [];
+let guildId = null;
+
+// Browser storage may be blocked: every access is wrapped, and the page works without it.
+function mem(op, key, v) {
+  try {
+    if (op === "get") return sessionStorage.getItem(key);
+    if (op === "set") sessionStorage.setItem(key, v);
+    else sessionStorage.removeItem(key);
+  } catch { /* storage blocked: values then live only in memory */ }
+  return null;
+}
+let token = mem("get", TOKEN_KEY);
+
+// A `/ตั้งค่า` link opens /hub?link=<code>. Take the code out of the address bar at once (it is a
+// one-time credential) and keep it until it has been redeemed after sign-in.
+let linkCode = null;
+try {
+  const params = new URLSearchParams(location.search);
+  if (params.has("link")) {
+    linkCode = params.get("link");
+    mem("set", LINK_KEY, linkCode);
+    history.replaceState(null, "", location.pathname);
+  }
+} catch { /* ignore */ }
+linkCode = linkCode || mem("get", LINK_KEY);
+
+function show(view) { $("login").hidden = view !== "login"; $("app").hidden = view !== "app"; }
+function note(el, msg) { el.textContent = msg || ""; el.hidden = !msg; }
+
+class AuthError extends Error {}
+class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { ...(opts.body ? { "Content-Type": "application/json" } : {}), Authorization: "Bearer " + token },
+  });
+  if (res.status === 401) throw new AuthError("expired");
+  if (res.status === 503) throw new AuthError("not_configured");
+  if (res.status === 403) throw new AuthError("forbidden");
+  if (!res.ok) {
+    let detail = "";
+    try { const j = await res.json(); detail = typeof j.detail === "string" ? j.detail : "ข้อมูลไม่ถูกต้อง"; } catch { /* ignore */ }
+    throw new ApiError(detail || "เกิดข้อผิดพลาด (" + res.status + ")", res.status);
+  }
+  return res.json();
+}
+const gapi = (suffix, opts) => api("/api/hub/guilds/" + guildId + suffix, opts);
+
+function toLogin(msg) {
+  token = null; mem("clear", TOKEN_KEY);
+  show("login");
+  note($("login-msg"), msg);
+  renderGoogleButton();
+}
+
+function onCredential(resp) {
+  token = resp.credential; mem("set", TOKEN_KEY, token);
+  start();
+}
+
+let gsiReady = false;
+function renderGoogleButton() {
+  if (!CLIENT_ID) { $("not-configured").hidden = false; $("gsi-button").hidden = true; return; }
+  if (!window.google || !google.accounts) { setTimeout(renderGoogleButton, 200); return; }
+  if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: onCredential }); gsiReady = true; }
+  google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signin_with", locale: "th", width: 300 });
+}
+
+// Returns true when `e` was an auth problem and has been handled. A 403 on a guild call only
+// means "not your guild" (the account itself is fine), so it does not sign the user out.
+function handleAuth(e, { guildCall = false } = {}) {
+  if (!(e instanceof AuthError)) return false;
+  if (e.message === "not_configured") { token = null; show("login"); $("not-configured").hidden = false; $("gsi-button").hidden = true; }
+  else if (e.message === "forbidden" && guildCall) note($("app-msg"), "บัญชีนี้ไม่มีสิทธิ์จัดการเซิร์ฟเวอร์นี้ พิมพ์ /ตั้งค่า ใน Discord เพื่อเชื่อมใหม่");
+  else if (e.message === "forbidden") toLogin("บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล ลองเข้าด้วยบัญชีอื่น");
+  else toLogin("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
+  return true;
+}
+
+// ---------- rendering ----------
+function renderFeatures() {
+  const box = $("features"); box.textContent = "";
+  for (const f of FEATURES) {
+    const on = f.info ? true : !f.soon && features[f.id];
+    const row = document.createElement("div"); row.className = "feat";
+    const txt = document.createElement("div"); txt.className = "txt";
+    const name = document.createElement("strong"); name.textContent = f.name;
+    const desc = document.createElement("span"); desc.textContent = f.desc;
+    txt.append(name, desc);
+    const where = document.createElement("span"); where.className = "where"; where.textContent = f.where;
+    const sw = document.createElement("button");
+    sw.type = "button"; sw.className = "switch"; sw.setAttribute("aria-pressed", String(!!on));
+    sw.setAttribute("aria-label", (on ? "ปิด " : "เปิด ") + f.name);
+    sw.disabled = !!(f.soon || f.info);
+    sw.append(document.createElement("i"));
+    sw.addEventListener("click", () => { features[f.id] = !features[f.id]; renderFeatures(); });
+    row.append(txt, where, sw); box.append(row);
+  }
+}
+
+// A checkbox list of the guild's text channels; ids that no longer exist stay visible so that
+// saving does not silently drop them.
+function renderChecks(box, channels, selected) {
+  box.textContent = "";
+  const known = new Set(channels.map((c) => c.id));
+  const all = [...channels, ...selected.filter((id) => !known.has(id)).map((id) => ({ id, name: id + " (ไม่พบห้องนี้แล้ว)" }))];
+  if (!all.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "ยังไม่มีห้อง"; box.append(e); return; }
+  for (const c of all) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = c.id; cb.checked = selected.includes(c.id);
+    const span = document.createElement("span"); span.textContent = "#" + c.name;
+    label.append(cb, span); box.append(label);
+  }
+}
+const checked = (box) => [...box.querySelectorAll("input:checked")].map((i) => i.value);
+
+function renderDigestSelect(channels, selected) {
+  const sel = $("digest-id"); sel.textContent = "";
+  const none = document.createElement("option"); none.value = ""; none.textContent = "ไม่ส่งสรุปรายวัน"; sel.append(none);
+  const known = new Set(channels.map((c) => c.id));
+  const all = [...channels, ...(selected && !known.has(selected) ? [{ id: selected, name: selected + " (ไม่พบห้องนี้แล้ว)" }] : [])];
+  for (const c of all) { const o = document.createElement("option"); o.value = c.id; o.textContent = "#" + c.name; sel.append(o); }
+  sel.value = selected || "";
+}
+
+function fillSettings(s) {
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, ...s.features };
+  const channels = s.channels || [];
+  renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
+  renderChecks($("ask-ids"), channels, s.ask_channel_ids);
+  renderDigestSelect(channels, s.digest_channel_id);
+  $("digest-time").value = s.digest_time || "18:00";
+  $("exec-roles").value = (s.exec_role_names || []).join(", ");
+  $("no-channels").hidden = channels.length > 0;
+  $("guild-name").textContent = s.guild_name || "";
+  $("guild-pill").textContent = s.active === false ? "สลิดออกจากเซิร์ฟเวอร์แล้ว" : "พร้อมใช้";
+  $("guild-pill").className = "pill " + (s.active === false ? "warn" : "ok");
+  renderFeatures();
+}
+
+const STATUS = { ok: ["บันทึกแล้ว", "ok"], review: ["รอตรวจ", "warn"], recording: ["กำลังอัด", ""], summarizing: ["กำลังสรุป", ""], done: ["สรุปแล้ว", "ok"], failed: ["ล้มเหลว", "warn"] };
+function fmtTime(iso) {
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", hour12: false })
+    : d.toLocaleDateString("th-TH", { day: "numeric", month: "short" });
+}
+function renderActivity(items) {
+  const box = $("activity-list"); box.textContent = "";
+  if (!items.length) { const e = document.createElement("div"); e.className = "empty"; e.textContent = "ยังไม่มีกิจกรรม"; box.append(e); return; }
+  for (const it of items) {
+    const row = document.createElement("div"); row.className = "act";
+    const t = document.createElement("time"); t.dateTime = it.at; t.textContent = fmtTime(it.at);
+    const text = document.createElement("span"); text.className = "t";
+    if (it.kind === "receipt") {
+      const amount = it.amount == null ? "ไม่ทราบยอด" : "฿" + it.amount.toLocaleString("th-TH", { maximumFractionDigits: 2 });
+      text.textContent = "ใบเสร็จ " + (it.title || "ไม่ทราบร้าน") + " " + amount;
+    } else {
+      text.textContent = "ประชุม \"" + it.title + "\"";
+    }
+    const [label, cls] = STATUS[it.status] || [it.status, ""];
+    const pill = document.createElement("span"); pill.className = "pill " + cls; pill.textContent = label;
+    row.append(t, text, pill); box.append(row);
+  }
+}
+
+function renderSwitcher() {
+  const sel = $("guild-switch"); sel.textContent = "";
+  for (const g of guilds) { const o = document.createElement("option"); o.value = g.id; o.textContent = g.name; sel.append(o); }
+  sel.hidden = !guilds.length;
+  if (guildId) sel.value = guildId;
+  const g = guilds.find((x) => x.id === guildId);
+  const icon = $("gicon");
+  icon.hidden = !(g && /^https:\/\//.test(g.icon_url));
+  if (!icon.hidden) icon.src = g.icon_url;
+}
+
+// ---------- actions ----------
+async function save() {
+  const btn = $("save"); btn.disabled = true; note($("save-msg"), "กำลังบันทึก...");
+  const body = {
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings },
+    receipt_channel_ids: checked($("receipt-ids")),
+    ask_channel_ids: checked($("ask-ids")),
+    digest_channel_id: $("digest-id").value,
+    digest_time: $("digest-time").value || "18:00",
+    exec_role_names: $("exec-roles").value.split(",").map((x) => x.trim()).filter(Boolean),
+  };
+  try {
+    fillSettings(await gapi("/settings", { method: "PUT", body: JSON.stringify(body) }));
+    note($("save-msg"), "บันทึกแล้ว");
+  } catch (e) {
+    if (!handleAuth(e, { guildCall: true })) note($("save-msg"), "บันทึกไม่สำเร็จ: " + e.message);
+  } finally { btn.disabled = false; }
+}
+
+function bubble(text, cls) {
+  $("chat-empty")?.remove();
+  const b = document.createElement("div"); b.className = "bubble " + cls; b.textContent = text;
+  $("chat").append(b); $("chat").scrollTop = $("chat").scrollHeight;
+  return b;
+}
+async function ask(ev) {
+  ev.preventDefault();
+  const q = $("ask").value.trim(); if (!q) return;
+  $("ask").value = ""; $("ask-btn").disabled = true;
+  bubble(q, "me"); const wait = bubble("สลิดกำลังคิด...", "bot");
+  try {
+    wait.textContent = (await gapi("/ask", { method: "POST", body: JSON.stringify({ question: q }) })).answer;
+  } catch (e) {
+    if (handleAuth(e, { guildCall: true })) return;
+    wait.textContent = "ตอบไม่ได้ในตอนนี้ ลองใหม่อีกครั้งครับ"; wait.classList.add("err");
+  } finally { $("ask-btn").disabled = false; }
+}
+
+async function loadGuild(id) {
+  guildId = id; mem("set", GUILD_KEY, id);
+  renderSwitcher();
+  $("chat").textContent = "";
+  const empty = document.createElement("div"); empty.className = "empty"; empty.id = "chat-empty";
+  empty.textContent = "ลองถาม เช่น \"เดือนนี้ค่าวัตถุดิบเท่าไร ซื้อร้านไหนเยอะสุด\""; $("chat").append(empty);
+  $("guild-view").hidden = false; $("no-guild").hidden = true;
+  note($("save-msg"), "");
+  try {
+    const [settings, activity] = await Promise.all([gapi("/settings"), gapi("/activity")]);
+    note($("app-msg"), "");
+    fillSettings(settings); renderActivity(activity);
+  } catch (e) {
+    if (!handleAuth(e, { guildCall: true })) note($("app-msg"), "โหลดข้อมูลไม่สำเร็จ: " + e.message);
+  }
+}
+
+// Redeem the one-time `/ตั้งค่า` code with the signed-in Google account. Returns the guild id
+// on success. An auth error keeps the code for after the next sign-in; any other outcome
+// consumes it, since a code is useless once it has been tried.
+async function redeemLink() {
+  const code = linkCode;
+  try {
+    const g = await api("/api/hub/link", { method: "POST", body: JSON.stringify({ code }) });
+    linkCode = null; mem("clear", LINK_KEY);
+    $("link-msg").className = "notice ok";
+    note($("link-msg"), "เชื่อมกับเซิร์ฟเวอร์ “" + g.name + "” เรียบร้อยแล้ว");
+    return g.id;
+  } catch (e) {
+    if (e instanceof AuthError) throw e;
+    linkCode = null; mem("clear", LINK_KEY);
+    $("link-msg").className = "notice error";
+    note($("link-msg"), "ลิงก์นี้ใช้ไม่ได้ (หมดอายุหรือถูกใช้ไปแล้ว) พิมพ์ /ตั้งค่า ใน Discord เพื่อขอลิงก์ใหม่");
+    return null;
+  }
+}
+
+async function start() {
+  try {
+    const me = await api("/api/hub/me");
+    note($("login-msg"), "");
+    $("who").textContent = me.email;
+    for (const [btn, soon] of [["invite", "invite-soon"], ["invite-big", "invite-big-soon"]]) {
+      $(btn).hidden = !me.invite_url; $(soon).hidden = !!me.invite_url;
+      if (me.invite_url) $(btn).href = me.invite_url;
+    }
+    show("app");
+    const linked = linkCode ? await redeemLink() : null;
+    guilds = await api("/api/hub/guilds");
+    const wanted = linked || mem("get", GUILD_KEY);
+    guildId = (guilds.find((g) => g.id === wanted) || guilds[0] || {}).id || null;
+    renderSwitcher();
+    if (!guildId) { $("guild-view").hidden = true; $("no-guild").hidden = false; return; }
+    await loadGuild(guildId);
+  } catch (e) {
+    if (!handleAuth(e)) { show("app"); note($("app-msg"), "โหลดข้อมูลไม่สำเร็จ: " + e.message); }
+  }
+}
+
+$("save").addEventListener("click", save);
+$("ask-form").addEventListener("submit", ask);
+$("guild-switch").addEventListener("change", (ev) => loadGuild(ev.target.value));
+$("signout").addEventListener("click", () => {
+  try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch { /* ignore */ }
+  toLogin("");
+});
+renderFeatures();
+if (token && CLIENT_ID) start(); else toLogin("");
+</script>
+</body>
+</html>

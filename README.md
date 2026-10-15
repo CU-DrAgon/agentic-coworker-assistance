@@ -99,6 +99,150 @@ Note: Cloud Run's frontend reserves `/healthz`, so use `/health` for deployed he
 
 You can also use **Upload a recording** to process an existing audio file instead.
 
+## สลิด / Salid — receipts & expense Q&A bot
+
+A second package, `src/salid/`, is a Discord bot. Staff post receipt photos or PDFs in a receipt
+channel; Gemini (Vertex AI) extracts vendor, date, totals and a category into a ledger, flags
+low-confidence or duplicate receipts, and replies in Thai. Executives ask questions in Thai
+("how much did we spend on ingredients this week?") and get answers from ledger tool calls, plus an
+optional daily digest. Non-executives only see their own receipts.
+
+**Multi-tenant.** Any Discord server (guild) can add Salid with the public invite link and gets its own
+isolated ledger and settings with no technical setup. The tenant key is the guild id: every receipt,
+dedupe check, Q&A tool, digest, deep-task export and hub view is scoped to one guild.
+
+Customer flow: (1) open the invite link (the hub's "เพิ่ม Salid เข้า Discord" button) and add Salid to the
+server; Salid posts a short Thai welcome. (2) Post receipt photos in a channel whose name contains
+`ใบเสร็จ` or `receipt`, or @mention Salid with an image/PDF in any channel: it works immediately.
+(3) Optional: a server owner / Administrator / Manage Server member types `/ตั้งค่า` (or `/setup`) and
+opens the private one-time link (valid 15 minutes) to manage the server in the hub after signing in with
+Google. Executives are the owner, members with Administrator or Manage Server, members with a role in the
+server's executive role names (default `ผู้บริหาร`, `Executive`) and `SALID_EXEC_USER_IDS`.
+
+- **Q&A runs on Google ADK**: an `LlmAgent` (Gemini on Vertex) with four ledger `FunctionTool`s that
+  are built per request around the asker's scope, so the model cannot widen it. At most 4 tool rounds.
+- **Storage**: `SALID_STORE=sqlite` (default, local dev) or `firestore` (collection
+  `SALID_FIRESTORE_COLLECTION`, default `salid_receipts`, doc id `{guild_id}_{sha256}`). Each query filters
+  `guild_id ==` server-side (automatic single-field index only, no composite index); the date range and
+  the rest are done in Python over that guild's receipts, which is fine at shop scale. Existing SQLite
+  ledgers are migrated on open (old rows become guild 0). Optionally archive the original receipt files to
+  Cloud Storage with `SALID_RECEIPT_BUCKET` (object prefix `salid-receipts/{guild_id}/`, the `gs://` URI
+  is saved on the record).
+- **Per-guild settings**: Firestore `salid_guilds/{guild_id}` (`SALID_GUILD_COLLECTION`): feature flags,
+  extra receipt/ask channels, digest channel and time, executive role names, `admin_emails`, and what the
+  bot syncs (name, icon, text channels, `installed_at`, `active`). The bot caches it ~60 s per guild;
+  a missing document means defaults (every feature on). With `SALID_STORE=sqlite` an in-memory copy is
+  used so local dev needs no Firestore. Env channel lists and `SALID_EXEC_ROLE_NAMES` still apply as
+  defaults. `/ตั้งค่า` writes a one-time doc in `salid_link_codes/{code}`.
+- **Deep tasks (executives only)**: send `งานใหญ่: <task>` or `/deep <task>`. Salid acknowledges at
+  once, exports the receipts the caller may see into a throwaway workspace and runs **Gemini CLI** headless
+  there (isolated HOME, minimal environment, file-only tools, timeout `SALID_DEEP_TASK_TIMEOUT`), then posts
+  the Thai report (attached as `report.md` when long) with seconds, tokens and the models actually used.
+  Gemini CLI is an external Node binary that `uv` does not install: set `SALID_GEMINI_CLI_PATH`, otherwise
+  deep tasks are disabled. Model pinning caveat: with Vertex, the CLI rewrites `gemini-3.5-flash` to
+  `gemini-3.8-flash`, so the default is `SALID_DEEP_TASK_MODEL=gemini-3-flash-preview`.
+
+The bot is prepared for a Cloud Run worker pool (see below) but not deployed.
+
+**Voice meetings (`/เข้าประชุม`, alias `/join`).** A member in a voice channel types `/เข้าประชุม` (or
+`@Salid เข้าประชุม`); Salid joins, announces itself in the channel's text chat, and transcribes every speaker by
+Discord name (per-user audio, so no diarization). Calling "สลิด ..." out loud gets a text answer in that chat, using
+the last ~5 minutes of transcript as context; the same transcript is context for text messages to Salid in that
+chat ("เมื่อกี้ตกลงอะไรกัน"). `/ออกประชุม` (`/leave`), everyone leaving, or 3 hours ends it with a Thai summary
+(decisions, action items with owners, open questions). Audio and transcript are kept in memory only, never stored.
+Needs the **Connect** permission, the voice-states intent (non-privileged), `libopus` + `ffmpeg` (in
+`Dockerfile.salid`) and `discord-ext-voice-recv` + `davey` (Discord's DAVE end-to-end encryption; see
+`src/salid/meeting.py`). Toggle: hub feature `voice_meetings`.
+
+Discord setup (once, by the operator):
+
+1. Create an application and bot at the Discord Developer Portal (name it **Salid**); copy the bot token.
+2. Enable the **Message Content** and **Server Members** privileged intents. The public invite link
+   (`salid_invite_url`: scopes `bot` + `applications.commands`, permissions 1166416) is built from
+   `SALID_DISCORD_CLIENT_ID` and shown on the home page and in the hub.
+3. Put `SALID_DISCORD_TOKEN` in `.env`. The slash commands are registered globally at startup (Discord can
+   take up to an hour to show new global commands).
+4. Optional local defaults, applied to every guild: `SALID_RECEIPT_CHANNEL_IDS`, `SALID_ASK_CHANNEL_IDS`,
+   `SALID_DIGEST_CHANNEL_ID`, `SALID_EXEC_USER_IDS`, `SALID_EXEC_ROLE_NAMES`. `SALID_HUB_URL` is the web
+   service the `/ตั้งค่า` link points to (defaults to the Cloud Run URL).
+
+Other keys: `SALID_DIGEST_TIME`, `SALID_STORE`, `SALID_DB_PATH`, `SALID_FIRESTORE_COLLECTION`,
+`SALID_RECEIPT_BUCKET`, `SALID_GEMINI_CLI_PATH`, `SALID_DEEP_TASK_TIMEOUT`, `SALID_DEEP_TASK_MODEL`,
+`SALID_GCP_PROJECT`, `SALID_GEMINI_LOCATION`, `SALID_GEMINI_MODEL`, `SALID_TZ` (see `.env.example`). All Salid variables carry the `SALID_` prefix so they
+never collide with Meeting Scribe's.
+
+```bash
+uv run python -m salid                                   # run the bot (needs ADC for Vertex AI)
+uv run python scripts/salid_seed_demo.py ./data/demo.db  # seed a demo ledger
+SALID_DB_PATH=./data/demo.db uv run python -m salid.cli ask "สรุปค่าใช้จ่ายสัปดาห์นี้" --as-exec
+uv run python -m salid.cli extract receipt.png           # run extraction on a local file
+SALID_GEMINI_CLI_PATH=/path/to/gemini SALID_DB_PATH=./data/demo.db \
+  uv run python -m salid.cli deep "วิเคราะห์ค่าใช้จ่ายเดือนนี้ แล้วเขียนรายงาน" --as-exec
+uv run pytest -m live -q                                 # one real Vertex call (skipped by default)
+```
+
+## Deploying Salid
+
+Salid runs as a Cloud Run **worker pool** (no HTTP port; it holds the Discord gateway connection).
+
+```bash
+export SALID_DISCORD_TOKEN=...            # from your shell, never from a command line or git
+scripts/deploy_salid.sh                   # dry run (default): prints every command, changes nothing
+scripts/deploy_salid.sh --apply           # really deploy
+scripts/deploy_salid.sh --configure-hub   # optional, separate: set hub env vars on meeting-scribe
+```
+
+The script is idempotent: it enables missing APIs, creates the `salid-bot` service account with least
+privilege (`datastore.user`, `aiplatform.user`, `logging.logWriter`, `secretmanager.secretAccessor` on
+the one secret, `storage.objectAdmin` on `SALID_RECEIPT_BUCKET` only if set), stores the token in the
+`salid-discord-token` secret via stdin (new version only if none exists, or with `--rotate-token`),
+builds `Dockerfile.salid` with Cloud Build (`cloudbuild.salid.yaml`) and deploys the pool with
+`SALID_STORE=firestore`. Optional defaults (`SALID_RECEIPT_CHANNEL_IDS`, `SALID_GUILD_COLLECTION`,
+`SALID_HUB_URL`, ...) are passed through from your environment. It never touches the existing Meeting Scribe resources, except the optional
+`--configure-hub` step, which only runs `gcloud run services update --update-env-vars` (needs
+`HUB_GOOGLE_CLIENT_ID`, `SALID_DISCORD_CLIENT_ID` and optionally `HUB_ADMIN_EMAILS` in your environment).
+
+**Cost.** One always-on instance (`--instances 1`: two would answer every Discord message twice),
+1 vCPU / 2 GiB. 2 GiB because the Gemini CLI (Node) runs beside the Python bot during deep tasks;
+1 vCPU because the bot is I/O bound. It bills around the clock (roughly tens of USD per month; check
+the Cloud Run pricing page for asia-southeast1).
+
+**Stop it** (keeps config and secret, stops billing for instances):
+`gcloud run worker-pools update salid-bot --region asia-southeast1 --instances 0`; restart with
+`--instances 1`. Remove it completely with `gcloud run worker-pools delete salid-bot --region asia-southeast1`.
+
+## Salid command center (`/hub`)
+
+A Thai web page in the same app and Cloud Run service, multi-guild. Anyone signs in with Google (any
+verified account); a guild switcher at the top lists the servers that account administers. Per server:
+the latest receipts, Salid expense Q&A as an executive, feature switches (receipts, Q&A, daily digest,
+deep tasks), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and
+the executive role names. A user with no server sees a big "เพิ่ม Salid เข้า Discord" button and the two
+steps: 1. add Salid to the server, 2. type `/ตั้งค่า` in Discord and open the link.
+
+How an account becomes a guild admin, with no OAuth secret and no bot token in the web service:
+`/ตั้งค่า` (owner / Administrator / Manage Server only) creates `salid_link_codes/{random 32 bytes}`
+(`guild_id`, Discord user, `expires_at` = now + 15 min, `used=false`) and replies *ephemerally* with
+`{SALID_HUB_URL}/hub?link=<code>`. After Google sign-in the page calls `POST /api/hub/link`; a Firestore
+transaction checks the code is unused and unexpired, marks it used and adds the verified email to the
+guild's `admin_emails`. The page removes `?link=` from the address bar immediately.
+
+API (Bearer Google ID token, verified against `HUB_GOOGLE_CLIENT_ID`; 503 when that is empty):
+`GET /api/hub/me`, `GET /api/hub/guilds`, `POST /api/hub/link`, and per guild
+`GET|PUT /api/hub/guilds/{id}/settings`, `GET .../activity`, `POST .../ask`, all 403 unless the email is in
+that guild's `admin_emails` (or is a super admin). `HUB_ADMIN_EMAILS` is now an optional comma-separated
+list of super admins who see every guild and the meeting items in activity (meetings are not per guild
+yet, so guild admins never see them). Saved channel ids must exist in the guild's synced channel list.
+
+One manual setup step: in Google Cloud Console (APIs & Services, Credentials) create an
+**OAuth 2.0 Client ID** of type *Web application*. Authorized JavaScript origins: the Cloud Run URL
+and `http://localhost:8080`. No redirect URI or client secret is needed. Then set
+`HUB_GOOGLE_CLIENT_ID` (the public client id). Optional: `SALID_DISCORD_CLIENT_ID` for the
+Add-to-Discord button, `HUB_ADMIN_EMAILS` for super admins. `SALID_GUILD_COLLECTION` (default
+`salid_guilds`) must match between the web service and the bot. The web service reads the same
+`SALID_STORE` settings as the bot, so set `SALID_STORE=firestore` there to see the real ledger.
+Deep tasks are Discord-only.
+
 ## Limitations
 
 - Desktop Chrome/Edge only; tab-audio capture is not available on mobile or Firefox/Safari.
