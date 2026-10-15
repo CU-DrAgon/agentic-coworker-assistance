@@ -260,6 +260,27 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   twice (the stored text is built from the extracted receipt). Historical images are described through a queue
   capped at `SALID_MEMORY_IMPORT_IMAGES_PER_DAY` (300) per guild per day, newest first; the rest keep
   `[image: name]` until reached (`[image-unread: name]` when the message is gone or the image unreadable).
+- **Audio, video and voice messages** (`src/salid/media.py`, feature flag `media_memory`): attachments with
+  audio/video types or extensions (mp3 m4a wav ogg opus aac flac webm mp4 mov mkv) and Discord voice messages are
+  never sent as video: ffmpeg extracts mono 16 kHz FLAC (max 100 MB file, first 90 minutes), long audio is split
+  into ~10 minute chunks with a 2 s overlap, and one Gemini call per chunk returns timestamped, speaker-labelled
+  verbatim segments (Thai/English, `[inaudible]`, no invention); chunk offsets are added in code and overlap
+  duplicates dropped. Sent to Salid (tag, reply, chat mode, DM) the transcript goes to the agent as a text part
+  (`[ถอดเสียงจากไฟล์ #N: name, ยาว M:SS]`, about 30k chars) and it summarises, lists decisions and action items with
+  timestamps and answers the question; a voice message of at most 2 minutes with no text is the question itself.
+  In every non-off channel the transcript is also stored in the message's memory record
+  (`[เสียง: 3:42] summary | Speaker A: ...`, capped) by a background task that never delays replies, limited to
+  `SALID_MEDIA_MINUTES_PER_DAY` (120) minutes per guild per day; the history backlog counts against the same cap,
+  newest first. Live voice meetings are unchanged.
+- **Documents** (`src/salid/docs.py`, feature flag `doc_memory`): PDF, docx, xlsx (first 500 rows per sheet), pptx
+  (slides, tables, notes), txt/csv/md/json are read in code (`extract_document`); old `.doc` needs `antiword`, `.xls`
+  is not read (the user is told to save as .docx/.xlsx/PDF). Sent to Salid the text (about 30k chars, truncation
+  noted) goes to the agent. In remembered channels a note `[PDF: name, N หน้า, ประเภท] summary | ข้อความสำคัญ: ...`
+  is stored; scanned PDFs (no text layer) are sent (first 30 pages, 20 MB) to the cheap model for OCR + summary.
+  Receipts already read by the receipt pipeline reuse `receipt_note` plus the text and are never ingested twice.
+  Limit `SALID_DOC_PAGES_PER_DAY` (500) pages per guild per day, backlog newest first. The agent's `open_file`
+  tool re-reads a remembered attachment (document text, OCR, transcript) from its message link, only for channels
+  the asker may read.
 - **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
   retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
   same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.

@@ -19,6 +19,7 @@ from google.genai import types
 
 from .config import Settings
 from .i18n import resolve_lang, t
+from .media import parse_message_ref
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
 from .store import Store, duplicate_extras, is_active, pick_keep
@@ -371,9 +372,22 @@ class MemoryTools:
         allowed: dict[int, str],
         settings,
         retention_days: int | None = None,
+        opener: Callable[[int | None, int, int], dict] | None = None,
     ):
+        self.opener = opener  # (channel id | None, message id, file index) -> {"text": ...}
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
         self.retention_days = retention_days or settings.memory_retention_days
+
+    def open_file(self, message_link_or_id: str, file_index: int = 0) -> dict:
+        """Re-read an attachment (document, audio, video, image) of a remembered message. The
+        channel check happens in the bot against `allowed`; nothing outside it is returned."""
+        ref = parse_message_ref(message_link_or_id)
+        if ref is None:
+            return {"error": "give the message link (jump url) or message id"}
+        if self.opener is None:
+            return {"error": "opening files is not available here"}
+        cid, mid = ref
+        return self.opener(cid, mid, int(file_index))
 
     def _range(self, start_date: str, end_date: str) -> tuple[str, str]:
         a, b = date.fromisoformat(start_date), date.fromisoformat(end_date)
@@ -621,6 +635,7 @@ class FileInput:
     data: bytes = b""
     size: int = 0
     skip: str = ""
+    label: str = ""  # replaces the default "[ไฟล์ #N: name]" label (transcripts of audio/video)
 
     def __post_init__(self):
         self.size = self.size or len(self.data)
@@ -688,7 +703,7 @@ def file_parts(files: list[FileInput]) -> tuple[list[types.Part], list[FileInput
     parts: list[types.Part] = []
     bad: list[FileInput] = []
     for f in files:
-        label = f"[ไฟล์ #{f.index}: {f.filename}]"
+        label = f.label or f"[ไฟล์ #{f.index}: {f.filename}]"
         try:
             if f.mime == "text/plain":
                 body = f.data.decode("utf-8", errors="replace")
@@ -748,6 +763,7 @@ MEMORY_PROMPT = (
     "(เช่น งบโฆษณา, ค่าโฆษณา, ads, marketing budget) แล้วค่อยเปิดวันที่เจอด้วย chat_days หรือ chat_messages. "
     "ถ้าคำถามมีวันที่ ให้เรียก chat_days (สรุปรายวันต่อห้อง) ได้เลย "
     "แล้วใช้ chat_messages (ข้อความจริง ค้นด้วย keyword) เมื่อต้องการรายละเอียดหรือคำพูดจริง. "
+    "เมื่อผู้ใช้ถามถึงเอกสารหรือเสียงที่เคยแชร์ในห้อง (ข้อความขึ้นต้นด้วย [PDF: ...], [DOCX: ...], [เสียง: ...] ฯลฯ) ให้หาด้วย chat_search แล้วเรียก open_file ด้วยลิงก์ของข้อความนั้นเพื่ออ่านเนื้อหาจริง อย่าตอบจากโน้ตสั้นๆ อย่างเดียว. "
     "ข้อความที่ขึ้นต้นด้วย [รูป: ...] คือสิ่งที่อ่านได้จากรูปที่มีคนส่ง (รวมตัวหนังสือในรูป). "
     "ตอบโดยระบุห้องและวันที่ที่มา และถ้าอ้างข้อความจริงให้แนบลิงก์ (link). "
     "ถ้าไม่พบข้อมูลให้บอกตรงๆ ว่าไม่พบ ห้ามเดา และห้ามพูดถึงห้องที่เครื่องมือไม่ได้คืนมา. "
@@ -767,11 +783,14 @@ CAPABILITIES_PROMPT = (
     "(ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นเฉพาะของตัวเอง). "
     "ตรวจหาบิลที่ส่งซ้ำ (เช่น PDF กับภาพหน้าจอของใบเดียวกัน) ได้ และหักออกจากยอดได้ (void ไม่ลบทิ้ง กู้คืนได้ ผู้บริหารสั่งหัก); "
     "มีสรุปรายวันส่งเข้าห้องตามเวลาที่ตั้งไว้\n"
-    "2) ความจำของทีม: สลิดจดข้อความและอ่านรูปทุกรูป (รวมตัวหนังสือในรูป) ในห้องที่ไม่ได้ตั้งเป็น 🔇 ปิด "
+    "2) ความจำของทีม: สลิดจดข้อความ อ่านรูปทุกรูป (รวมตัวหนังสือในรูป) และถอดเสียงพูดจากไฟล์เสียง วิดีโอ และข้อความเสียง (voice message) ในห้องที่ไม่ได้ตั้งเป็น 🔇 ปิด "
     "เก็บตามจำนวนวันที่แอดมินตั้ง (ค่าเริ่มต้น 90 วัน ดูหรือปรับด้วย /ความจำ หรือ /memory) "
     "และสรุปแต่ละห้องเป็นรายวัน จึงตอบได้ว่าเมื่อวานคุยอะไร ใครรับงานอะไร เรื่องไหนถึงไหน พร้อมลิงก์ไปที่ข้อความจริง. "
     "ตอบได้เฉพาะข้อมูลจากห้องที่ผู้ถามและทุกคนในห้องที่ตอบมีสิทธิ์เห็น ถามทาง DM ได้ข้อมูลตามสิทธิ์ของผู้ถามคนเดียว. "
-    "ไม่เห็นห้องที่สลิดไม่มีสิทธิ์เข้า และไม่เห็น DM ระหว่างคนกับคน\n"
+    "ไม่เห็นห้องที่สลิดไม่มีสิทธิ์เข้า และไม่เห็น DM ระหว่างคนกับคน. "
+    "ไฟล์เสียง/วิดีโอ (mp3 m4a wav ogg mp4 mov ฯลฯ ไม่เกิน 100 MB ถอดเสียงสูงสุด 90 นาทีแรก) ที่ส่งหาสลิดหรือแท็ก สลิดถอดเสียงพูดพร้อมเวลาและผู้พูด (ไม่ส่งทั้งวิดีโอ ไม่เก็บไฟล์) "
+    "แล้วสรุปประเด็น มติ งานที่ต้องทำ ตอบคำถามเกี่ยวกับไฟล์นั้น; ข้อความเสียงสั้นๆ (ไม่เกิน 2 นาที) ที่ส่งหาสลิดถือเป็นคำถามที่พูดมา; "
+    "เสียงในห้องที่จดจำอยู่ถอดเสียงเบื้องหลังตามโควตาต่อวัน เปิดปิดได้ในตั้งค่า (จำเนื้อหาเสียงและวิดีโอ)\n"
     "3) ประชุมเสียง: /เข้าประชุม หรือ /join (หรือแท็กแล้วพิมพ์ เข้าประชุม / join meeting) สลิดเข้าห้องเสียงที่ผู้สั่งอยู่ "
     "ถอดเสียงว่าใครพูดอะไร (ไทยและอังกฤษ ไม่เก็บไฟล์เสียง) เรียกชื่อ “สลิด” ระหว่างประชุมเพื่อถามได้ "
     "และ /ออกประชุม หรือ /leave แล้วสลิดส่งสรุปประชุม (หัวข้อ สิ่งที่ตกลง งานที่ต้องทำ) เข้าห้องแชต\n"
@@ -836,6 +855,15 @@ FILES_PROMPT = (
 )
 
 
+MEDIA_PROMPT = (
+    "\nไฟล์เสียง/วิดีโอ: ส่วนที่ติดป้าย [ถอดเสียงจากไฟล์ #N: ชื่อ, ยาว M:SS] คือคำถอดเสียงพูดอัตโนมัติ (เวลา [M:SS] ผู้พูด: ข้อความ; "
+    "ผู้พูดแยกตามเสียง อาจมีคำผิดหรือ [inaudible]) ไม่ได้แนบตัววิดีโอ ให้ตอบตามนี้: บอกสั้นๆ ว่าไฟล์นี้คือการบันทึกอะไร "
+    "สรุปประเด็นสำคัญ มติ และงานที่ต้องทำ พร้อมเวลาอ้างอิง (เช่น 3:42) ตอบคำถามของผู้ใช้เกี่ยวกับไฟล์ แล้วเสนอขั้นตอนต่อไป "
+    "ใช้เฉพาะสิ่งที่อยู่ในคำถอดเสียง ห้ามแต่งหรือเดาภาพ (ไม่เห็นภาพวิดีโอ) ถ้ามีหมายเหตุตัดทอนหรือถอดเฉพาะส่วนแรกให้บอกผู้ใช้. "
+    "ถ้าคำถามของผู้ใช้ขึ้นต้นด้วย [ข้อความเสียงจากผู้ใช้] แปลว่าผู้ใช้พูดมา (voice message) ให้ตอบเหมือนเป็นคำถามที่พิมพ์ "
+    "และถ้าไม่ชัดให้บอกสั้นๆ ว่าได้ยินว่าอะไร."
+)
+
 WEB_PROMPT = (
     "\nอ่านลิงก์และค้นอินเทอร์เน็ต: เมื่อข้อความมีลิงก์ (เว็บ, YouTube) หรือถามข้อมูลล่าสุด/ข่าว/ราคา/เรื่องนอกทีมที่ต้องค้นออนไลน์ "
     "ให้เรียก read_web (ลิงก์ในข้อความถูกแนบให้อัตโนมัติ ใส่ใน request แค่สิ่งที่ต้องการรู้ ห้ามใส่ข้อมูลบัญชี ความจำ หรือแชตของทีม). "
@@ -899,7 +927,7 @@ def system_prompt(
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
-        p += FILES_PROMPT
+        p += FILES_PROMPT + MEDIA_PROMPT
     if web:
         p += WEB_PROMPT
     if language == "en":
@@ -1107,7 +1135,19 @@ def build_tools(
         a = dict(keywords=keywords, start_date=start_date, end_date=end_date, limit=limit)
         return safe("chat_search", a, lambda: memory.chat_search(**a))
 
-    return [*tools, chat_days, chat_messages, chat_search]
+    def open_file(message_link_or_id: str, file_index: int = 0) -> dict:
+        """Read a document, recording or image that was shared earlier in a channel (PDF, Word,
+        Excel, PowerPoint, text, audio/video transcript). Returns its full text (about 30k chars
+        max). Use it after chat_search found the message, instead of answering from the short note.
+
+        Args:
+            message_link_or_id: the message's link (the `link` field of a memory result) or id.
+            file_index: which attachment of that message, 0 for the first.
+        """
+        a = dict(message_link_or_id=message_link_or_id, file_index=file_index)
+        return safe("open_file", a, lambda: memory.open_file(**a))
+
+    return [*tools, chat_days, chat_messages, chat_search, *([open_file] if memory.opener else [])]
 
 
 def build_file_tools(

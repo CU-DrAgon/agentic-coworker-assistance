@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     memory_import_guild_cap: int = 20000  # messages imported per guild per run
     memory_import_images_per_day: int = 300  # historical images described per guild per day
     memory_import_summaries_per_day: int = 200  # past-day summaries generated per guild per day
+    # Audio/video understanding (salid.media): minutes of unaddressed audio transcribed per guild/day.
+    media_minutes_per_day: int = 120
+    # Documents (salid.docs): pages of PDF/office/text files read into memory per guild/day.
+    doc_pages_per_day: int = 500
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).
     guild_collection: str = "salid_guilds"
     # Where `/ตั้งค่า` links point: the web service that serves /hub.
