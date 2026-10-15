@@ -66,6 +66,7 @@ def test_document_layout(gstore):
         "guild_name", "icon_url", "channels", "active", "installed_at", "features",
         "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "digest_time",
         "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
+        "channel_languages", "default_language",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
 
@@ -227,3 +228,49 @@ def test_second_admin_is_added_not_replaced(gstore):
     for email in ("a@x.com", "b@x.com", "a@x.com"):
         gstore.redeem_link_code(gstore.create_link_code(GUILD, 1, "u"), email)
     assert gstore.get(GUILD).admin_emails == ["a@x.com", "b@x.com"]
+
+
+def test_channel_languages_are_validated_and_bounded():
+    u = GuildSettingsUpdate(
+        channel_languages={"12": "en", "x": "th", "13": "bogus", " 14 ": "auto"},
+        default_language="zzz",
+    )
+    assert u.channel_languages == {"12": "en", "14": "auto"} and u.default_language == "th"
+    big = GuildSettingsUpdate(channel_languages={str(i): "en" for i in range(900)})
+    assert len(big.channel_languages) == gs.MAX_CHANNEL_LANGUAGES
+    assert GuildSettingsUpdate(default_language="auto").default_language == "auto"
+    assert GuildSettingsUpdate().default_language == "th"  # today's behaviour
+
+
+def test_set_channel_language_sets_and_removes_one_channel(gstore):
+    gstore.set_channel_language(GUILD, 5, "en")  # no document yet: created
+    gstore.set_channel_language(GUILD, 6, "auto")
+    assert gstore.get(GUILD).channel_languages == {"5": "en", "6": "auto"}
+    gstore.set_channel_language(GUILD, 5, None)
+    assert gstore.get(GUILD).channel_languages == {"6": "auto"}
+    with pytest.raises(ValueError):
+        gstore.set_channel_language(GUILD, 5, "fr")
+
+
+def test_save_settings_replaces_the_channel_language_map(gstore):
+    gstore.set_channel_language(GUILD, 5, "en")
+    gstore.save_settings(
+        GUILD,
+        GuildSettingsUpdate(channel_languages={"6": "th"}, default_language="en"),
+        "a@x.com",
+    )
+    g = gstore.get(GUILD)
+    assert g.channel_languages == {"6": "th"} and g.default_language == "en"
+
+
+def test_bot_cache_sees_a_language_change_at_once_and_resolves_override_then_default(gstore):
+    team = gs.BotGuildSettings(gstore, ttl=3600)
+    assert team.channel_language(GUILD, 5) == "th"  # nothing stored: today's default
+    gstore.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "a@x.com")
+    team._cache.clear()
+    assert team.channel_language(GUILD, 5) == "en"
+    team.set_channel_language(GUILD, 5, "auto")
+    assert team.channel_language(GUILD, 5) == "auto"  # override, no waiting for the TTL
+    assert team.channel_language(GUILD, 6) == "en"  # other channels follow the default
+    team.set_channel_language(GUILD, 5, None)
+    assert team.channel_language(GUILD, 5) == "en"

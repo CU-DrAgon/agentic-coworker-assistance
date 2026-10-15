@@ -7,6 +7,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
     default_mode         mode of channels with no entry above (default "call")
+    channel_languages    {channel id str: th|en|auto}, reply language override, see salid.i18n
+    default_language     reply language of channels with no entry above (default "th")
     digest_channel_id    str ("" = no daily digest)
     digest_time          "HH:MM"
     exec_role_names      list[str] roles that count as executives (default ผู้บริหาร, Executive)
@@ -42,6 +44,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from .i18n import DEFAULT_LANGUAGE, LANGS, resolve_language
 from .modes import DEFAULT_MODE, MODES, resolve_mode
 
 logger = logging.getLogger(__name__)
@@ -51,6 +54,7 @@ LINK_TTL = timedelta(minutes=15)
 FEATURES = ("receipts", "qa", "digest", "deep_tasks", "voice_meetings")
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
+MAX_CHANNEL_LANGUAGES = 500
 _ID = re.compile(r"^\d{1,25}$")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -90,6 +94,8 @@ class GuildSettingsUpdate(BaseModel):
     exec_role_names: list[str] = Field(default_factory=lambda: list(DEFAULT_EXEC_ROLES))
     channel_modes: dict[str, str] = Field(default_factory=dict)
     default_mode: str = DEFAULT_MODE
+    channel_languages: dict[str, str] = Field(default_factory=dict)
+    default_language: str = DEFAULT_LANGUAGE
 
     @field_validator("channel_modes", mode="before")
     @classmethod
@@ -104,6 +110,20 @@ class GuildSettingsUpdate(BaseModel):
     @classmethod
     def _default_mode(cls, v):
         return v if v in MODES else DEFAULT_MODE
+
+    @field_validator("channel_languages", mode="before")
+    @classmethod
+    def _languages(cls, v):
+        """Keep numeric channel ids with a known language; drop the rest, bounded like modes."""
+        if not isinstance(v, dict):
+            return {}
+        out = {str(k).strip(): m for k, m in v.items() if _ID.match(str(k).strip()) and m in LANGS}
+        return dict(list(out.items())[:MAX_CHANNEL_LANGUAGES])
+
+    @field_validator("default_language", mode="before")
+    @classmethod
+    def _default_language(cls, v):
+        return v if v in LANGS else DEFAULT_LANGUAGE
 
     @field_validator("receipt_channel_ids", "ask_channel_ids", mode="before")
     @classmethod
@@ -233,12 +253,13 @@ class GuildStore:
     ) -> GuildSettings:
         data = update.model_dump()
         modes = data.pop("channel_modes")
+        languages = data.pop("channel_languages")
         data["updated_by"] = updated_by
         data["updated_at"] = _now().isoformat(timespec="seconds")
         ref = self._ref(guild_id)
         ref.set(data, merge=True)
         # set(merge=True) would deep-merge the map and never remove a channel: replace it whole.
-        ref.update({"channel_modes": modes})
+        ref.update({"channel_modes": modes, "channel_languages": languages})
         return self.get(guild_id)
 
     def set_channel_mode(self, guild_id: int, channel_id: int, mode: str | None) -> None:
@@ -259,6 +280,28 @@ class GuildStore:
                 txn.set(ref, {"channel_modes": modes})
             else:  # update() replaces the whole map, so removals stick
                 txn.update(ref, {"channel_modes": modes})
+
+        self._in_transaction(run)
+
+    def set_channel_language(self, guild_id: int, channel_id: int, language: str | None) -> None:
+        """Set one channel's reply language (None removes the entry: the channel follows the
+        guild default). Same map-replace semantics as `set_channel_mode`."""
+        if language is not None and language not in LANGS:
+            raise ValueError(f"unknown language {language!r}")
+        ref, cid = self._ref(guild_id), str(channel_id)
+
+        def run(txn) -> None:
+            snap = ref.get(transaction=txn)
+            doc = snap.to_dict() if snap.exists else None
+            langs = dict((doc or {}).get("channel_languages") or {})
+            if language is None:
+                langs.pop(cid, None)
+            else:
+                langs[cid] = language
+            if doc is None:
+                txn.set(ref, {"channel_languages": langs})
+            else:
+                txn.update(ref, {"channel_languages": langs})
 
         self._in_transaction(run)
 
@@ -430,6 +473,22 @@ class BotGuildSettings:
         """Write one channel's mode and drop the cache so it applies at once."""
         try:
             self.store.set_channel_mode(guild_id, channel_id, mode)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def channel_language(self, guild_id: int, channel_id: int) -> str:
+        """The channel's reply-language setting: th, en or auto (override, else guild default)."""
+        g = self.current(guild_id)
+        return resolve_language(
+            channel_id,
+            channel_languages=g.channel_languages,
+            default_language=g.default_language,
+        )
+
+    def set_channel_language(self, guild_id: int, channel_id: int, language: str | None) -> None:
+        """Write one channel's language and drop the cache so it applies at once."""
+        try:
+            self.store.set_channel_language(guild_id, channel_id, language)
         finally:
             self._cache.pop(guild_id, None)
 

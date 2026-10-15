@@ -14,6 +14,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from .config import Settings
+from .i18n import resolve_lang, t
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -149,13 +150,35 @@ class LedgerTools:
             return {"error": str(e)}
 
 
-def system_prompt(settings: Settings, scoped: bool, now=None) -> str:
-    now = now or settings.now()
-    p = (
+PERSONA = {
+    "th": (
         "คุณชื่อ “สลิด” เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
         "นิสัยเป็นกันเอง สุภาพ อารมณ์ดี พูดภาษาไทยเป็นธรรมชาติ ลงท้ายด้วยคำว่าครับ "
         "ตอบตามภาษาที่ผู้ใช้พิมพ์มา และปรับความยาวตามคำถาม (คุยเล่นตอบสั้น งานที่ขอรายละเอียดตอบละเอียดได้)\n"
-        "คุยได้ทุกเรื่องเหมือนผู้ช่วย AI ทั่วไป: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
+    ),
+    "en": (
+        "Your name is “Salid” (สลิด). You are the shop's secretary and teammate in the team's "
+        "Discord chat. You are friendly, polite and upbeat. ALWAYS reply in English, even if the "
+        "user writes in Thai (keep Thai names, vendors and category names as they are). "
+        "Adjust the length to the question (short for small talk, detailed when the user asks "
+        "for detail)\n"
+    ),
+    "auto": (
+        "คุณชื่อ “สลิด” (Salid) เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
+        "นิสัยเป็นกันเอง สุภาพ อารมณ์ดี ตอบด้วยภาษาเดียวกับข้อความล่าสุดของผู้ใช้ "
+        "(reply in the same language as the user's latest message): ถ้าผู้ใช้พิมพ์ไทยให้ตอบไทยเป็นธรรมชาติ "
+        "ลงท้ายด้วยคำว่าครับ ถ้าพิมพ์อังกฤษให้ตอบเป็นอังกฤษ "
+        "และปรับความยาวตามคำถาม (คุยเล่นตอบสั้น งานที่ขอรายละเอียดตอบละเอียดได้)\n"
+    ),
+}
+
+
+def system_prompt(settings: Settings, scoped: bool, now=None, language: str = "th") -> str:
+    """`language`: th / en answer in that language; auto = the language of the user's message."""
+    now = now or settings.now()
+    p = (
+        PERSONA[language if language in PERSONA else "th"]
+        + "คุยได้ทุกเรื่องเหมือนผู้ช่วย AI ทั่วไป: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
         "ช่วยคิดไอเดีย ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
         "ถ้าเป็นข่าวหรือข้อมูลล่าสุดที่อาจไม่รู้ ให้บอกตรงๆ ว่าอาจไม่อัปเดต\n"
         "ความสามารถพิเศษคือดูแลใบเสร็จและบัญชีค่าใช้จ่ายของร้านผ่านเครื่องมือ\n"
@@ -167,6 +190,12 @@ def system_prompt(settings: Settings, scoped: bool, now=None) -> str:
     )
     if scoped:
         p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
+    if language == "en":
+        p += "\nLanguage: write your whole reply in English."
+    elif language == "auto":
+        p += (
+            "\nLanguage: reply in the same language as the user's latest message (Thai or English)."
+        )
     return p
 
 
@@ -270,10 +299,11 @@ def build_agent(
     now=None,
     model=None,
     on_model_call=None,
+    language: str = "th",
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
-    prompt = system_prompt(settings, scoped=scoped, now=now)
+    prompt = system_prompt(settings, scoped=scoped, now=now, language=language)
     model_calls = 0
 
     def before_model(callback_context, llm_request):
@@ -317,6 +347,7 @@ async def ask_async(
     history: str = "",
     now=None,
     model=None,
+    language: str = "th",
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -325,7 +356,12 @@ async def ask_async(
     calls: list[tuple[str, dict]] = []
     ledger = LedgerTools(store, guild_id, forced_submitter_id=None if is_exec else user_id)
     agent = build_agent(
-        settings, build_tools(ledger, calls), scoped=not is_exec, now=now, model=model
+        settings,
+        build_tools(ledger, calls),
+        scoped=not is_exec,
+        now=now,
+        model=model,
+        language=language,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -346,7 +382,7 @@ async def ask_async(
         elif event.is_final_response() and event.content and event.content.parts:
             text = "".join(p.text or "" for p in event.content.parts if not p.thought).strip()
     return Answer(
-        text or "ขออภัย ตอบไม่ได้ในตอนนี้ ลองถามใหม่อีกครั้งนะครับ",
+        text or t("qa_failed", resolve_lang(language, question)),
         rounds,
         time.monotonic() - started,
         calls,
@@ -364,6 +400,7 @@ def ask(
     history: str = "",
     now=None,
     model=None,
+    language: str = "th",
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -377,5 +414,6 @@ def ask(
             history=history,
             now=now,
             model=model,
+            language=language,
         )
     )

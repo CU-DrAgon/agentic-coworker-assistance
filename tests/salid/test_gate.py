@@ -64,3 +64,10 @@ def test_pick_no_or_unknown_id_or_errors_mean_none():
             is None
         )
     assert gate.pick_interjection(None, "m", HISTORY, ["2"], channel_id=1) is None
+
+
+def test_gate_prompts_describe_a_bilingual_assistant():
+    client = FakeClient([reply({"answer": True})])
+    en = GateLine("3", "Pat", "can you check the receipt from Makro?")
+    assert gate.addressed_to_salid(client, "m", HISTORY, en, channel_id=1) is True
+    assert "Thai or English" in client.models.calls[0][1]

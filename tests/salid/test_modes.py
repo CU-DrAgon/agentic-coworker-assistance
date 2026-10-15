@@ -3,6 +3,7 @@ sign-off, join-mode gating and budget, snooze, /โหมด. Discord objects ar
 model is replaced, nothing touches the network."""
 
 import itertools
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +14,14 @@ from salid import bot as botmod
 from salid.bot import SecretaryBot
 from salid.gate import is_join_candidate
 from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
-from salid.modes import CHAT_CHANNEL_NAME, MODES, parse_snooze_command, resolve_mode
+from salid.i18n import t
+from salid.modes import (
+    CHAT_CHANNEL_NAME,
+    MODES,
+    mode_label,
+    parse_snooze_command,
+    resolve_mode,
+)
 from salid.naming import mentions_name
 from salid.store import SQLiteStore
 
@@ -62,6 +70,11 @@ def test_name_detection_has_no_false_positives(text):
     "text, expected",
     [("เงียบก่อน", "snooze"), ("เงียบ", "snooze"), ("พักก่อนนะ", "snooze"),
      ("คุยได้แล้ว", "unsnooze"), ("กลับมาคุยได้", "unsnooze"),
+     ("be quiet", "snooze"), ("Quiet", "snooze"), ("shh", "snooze"), ("SHUSH please", "snooze"),
+     ("mute", "snooze"), ("hush", "snooze"), ("snooze", "snooze"), ("  be   quiet!! ", "snooze"),
+     ("you can talk", "unsnooze"), ("talk again", "unsnooze"), ("unmute", "unsnooze"),
+     ("Unsnooze", "unsnooze"), ("wake up", "unsnooze"), ("come back", "unsnooze"),
+     ("quietly tell me the total", None), ("how much did we mute", None),
      ("ยอดเท่าไร", None), ("", None), ("เงียบก่อน" + "ก" * 60, None)],
 )  # fmt: skip
 def test_parse_snooze_command(text, expected):
@@ -72,7 +85,12 @@ def test_parse_snooze_command(text, expected):
     "text, expected",
     [("เดือนนี้จ่ายไปเท่าไหร่", True), ("พรุ่งนี้ประชุมกี่โมง", True), ("ไปกินข้าวกัน", False),
      ("ok", False), ("ใครเบิกค่าน้ำมัน", True), ("นี่ใช่ไหม", True), ("สรุปให้หน่อย", True),
-     ("ฮ่าๆๆ", False), ("จ่าย 500 บาท", True), ("what?", True)],
+     ("ฮ่าๆๆ", False), ("จ่าย 500 บาท", True), ("what?", True),
+     ("what did we spend on ingredients", True), ("How much was the Makro receipt", True),
+     ("can someone check the budget", True), ("is there a summary of the meeting", True),
+     ("who reimbursed the taxi", True), ("Could we split the cost", True),
+     ("expenses look high", True), ("it was 500 baht", True), ("where is the invoice", True),
+     ("lunch at noon", False), ("thanks", False), ("scan it later", False)],
 )  # fmt: skip
 def test_join_free_filter(text, expected):
     assert is_join_candidate(text) is expected
@@ -102,6 +120,7 @@ class TMsg(Msg):
     def __init__(self, guild, channel, author, content="hi", attachments=(), mention=False):
         super().__init__(guild, channel, author, content, attachments, mention)
         self.id, self.reactions, self.role_mentions = next(_ids), [], []
+        self.created_at = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
         self.sent = []
         channel.log.append(self)
 
@@ -175,7 +194,8 @@ def set_mode(bot, channel_id, mode):
 
 
 def say(world, channel, content="hi", who=STAFF, **kw):
-    return TMsg(world.g, channel, member(world.g, who), content, **kw)
+    author = who if not isinstance(who, int) else member(world.g, who)
+    return TMsg(world.g, channel, author, content, **kw)
 
 
 async def send(bot, world, channel, content="hi", who=STAFF, **kw):
@@ -220,7 +240,7 @@ async def test_listen_still_accepts_meeting_commands_by_mention(bot, world, monk
     set_mode(bot, 10, "listen")
     joined = []
 
-    async def join(who, fallback_channel=None):
+    async def join(who, fallback_channel=None, lang="th"):
         joined.append(who.id)
         return "เข้าแล้ว"
 
@@ -471,7 +491,7 @@ async def test_join_mode_also_has_call_behaviour(bot, world):
 async def test_snooze_makes_the_channel_listen_for_an_hour(bot, world):
     ch = world.gen
     ack = await send(bot, world, ch, "<@999> เงียบก่อน", mention=True)
-    assert ack.replies == [botmod.SNOOZE_MESSAGE] and bot.calls == []
+    assert ack.replies == [t("snooze", "th")] and bot.calls == []
     m = await send(bot, world, ch, "ยอดเท่าไร", mention=True)
     named = await send(bot, world, ch, "สลิด ยอดเท่าไร")
     assert bot.calls == [] and m.reactions == ["👂"] and not named.reactions
@@ -490,11 +510,11 @@ async def test_unsnooze_brings_salid_back(bot, world):
     ch = world.gen
     await send(bot, world, ch, "<@999> เงียบก่อน", mention=True)
     back = await send(bot, world, ch, "<@999> คุยได้แล้ว", mention=True)
-    assert back.replies == [botmod.UNSNOOZE_MESSAGE]
+    assert back.replies == [t("unsnooze", "th")]
     await send(bot, world, ch, "สลิด ยอดเท่าไร")
     assert bot.calls == [("answer", "สลิด ยอดเท่าไร")]
     again = await send(bot, world, ch, "<@999> คุยได้แล้ว", mention=True)
-    assert again.replies == [botmod.NOT_SNOOZED_MESSAGE]
+    assert again.replies == [t("not_snoozed", "th")]
 
 
 async def test_snooze_stops_the_signoff_and_join_batches(bot, world):
@@ -530,13 +550,13 @@ async def test_mode_without_argument_shows_current_mode_and_help(bot, world):
     await bot.handle_mode(it, None)
     ((text, ephemeral),) = it.sent
     assert ephemeral and "🎧 ร่วมวง" in text.splitlines()[0]
-    assert all(label in text for label in botmod.MODE_LABELS.values())
+    assert all(mode_label(m, "th") in text for m in MODES)
 
 
 async def test_mode_change_is_refused_for_regular_members(bot, world):
     it = Interaction(world.g, member(world.g, STAFF, roles=["พนักงาน"]), world.gen)
     await bot.handle_mode(it, "join")
-    assert it.sent == [(botmod.MODE_DENIED_MESSAGE, True)]
+    assert it.sent == [(t("mode_denied", "th"), True)]
     assert bot._mode(world.gen, GUILD) == "call"
     assert bot.guilds_store.get(GUILD).channel_modes == {}
 
@@ -600,3 +620,292 @@ async def test_join_saves_chat_mode_for_a_created_channel(bot, world):
     world.g.create_text_channel = create_text_channel
     await bot.on_guild_join(world.g)
     assert bot.guilds_store.get(GUILD).channel_modes == {"60": "chat"}
+
+
+# ------------------------------------------------------------------ English commands and replies
+def manager(world):
+    return member(world.g, MANAGER, manage_guild=True)
+
+
+def set_lang(bot, channel_id, language):
+    bot.guilds_store.set_channel_language(GUILD, channel_id, language)
+    bot.team._cache.clear()
+
+
+async def test_english_snooze_and_unsnooze_by_mention(bot, world):
+    ch = world.gen
+    set_lang(bot, 10, "en")
+    ack = await send(bot, world, ch, "<@999> Be quiet!", mention=True)
+    assert ack.replies == [t("snooze", "en")] and "stay quiet" in ack.replies[0]
+    assert bot._is_snoozed(10)
+    back = await send(bot, world, ch, "<@999> you can talk", mention=True)
+    assert back.replies == [t("unsnooze", "en")] and not bot._is_snoozed(10)
+    again = await send(bot, world, ch, "<@999> unmute", mention=True)
+    assert again.replies == [t("not_snoozed", "en")]
+
+
+async def test_fixed_replies_are_thai_by_default_and_english_when_set(bot, world):
+    th = await send(
+        bot, world, world.gen, "<@999> shh", mention=True
+    )  # English words, Thai channel
+    assert th.replies == [t("snooze", "th")]
+    set_lang(bot, 12, "en")
+    en = await send(bot, world, world.named, "<@999> เงียบก่อน", mention=True)  # Thai words, English
+    assert en.replies == [t("snooze", "en")]
+
+
+async def test_auto_replies_follow_the_language_the_person_wrote_in(bot, world):
+    set_lang(bot, 10, "auto")
+    en = await send(bot, world, world.gen, "<@999> snooze", mention=True)
+    th = await send(bot, world, world.gen, "<@999> เงียบก่อน", mention=True)
+    assert en.replies == [t("snooze", "en")] and th.replies == [t("snooze", "th")]
+
+
+async def test_english_meeting_commands_by_mention(bot, world, monkeypatch):
+    seen = []
+
+    async def join(who, fallback_channel=None, lang="th"):
+        seen.append(("join", lang))
+        return "joined"
+
+    async def leave(who, lang="th"):
+        seen.append(("leave", lang))
+        return "left"
+
+    monkeypatch.setattr(bot.meetings, "join", join)
+    monkeypatch.setattr(bot.meetings, "leave", leave)
+    set_lang(bot, 10, "auto")
+    author = member(world.g, STAFF)
+    author.voice = object()
+    for text in ("join the meeting", "Come to the meeting", "JOIN", "leave meeting", "end meeting"):
+        m = TMsg(world.g, world.gen, author, f"<@999> {text}", mention=True)
+        await bot.on_message(m)
+        assert m.replies in (["joined"], ["left"]), text
+    assert seen == [("join", "en")] * 3 + [("leave", "en")] * 2
+    thai = TMsg(world.g, world.gen, author, "<@999> เข้าประชุม", mention=True)
+    await bot.on_message(thai)
+    assert seen[-1] == ("join", "th")  # Thai still works, and auto follows the Thai text
+
+
+async def test_greeting_and_signoff_follow_the_channel_language(bot, world, monkeypatch):
+    del bot._answer  # the real one: a bare mention greets
+    set_lang(bot, 10, "en")
+    m = await send(bot, world, world.gen, "<@999>", mention=True)
+    assert m.replies == [t("greeting", "en")] and "Salid here" in m.replies[0]
+    monkeypatch.setattr(
+        "salid.bot.ask", lambda *a, **kw: SimpleNamespace(text="ok", seconds=0, rounds=0)
+    )
+    await send(bot, world, world.gen, "<@999> how much?", mention=True)  # reply count reaches 2
+    bot.clock.advance(botmod.CONVERSATION_SECONDS + 1)
+    await bot.tick()
+    assert world.gen.sent == [t("signoff", "en")]
+
+
+async def test_answer_passes_the_language_setting_and_follows_it_for_fixed_text(
+    bot, world, monkeypatch
+):
+    seen = []
+    monkeypatch.setattr(
+        "salid.bot.ask",
+        lambda s, store, q, **kw: (
+            seen.append(kw["language"]) or SimpleNamespace(text="ok", seconds=0, rounds=0)
+        ),
+    )
+    del bot._answer
+    for ch, setting in ((world.gen, "th"), (world.named, "en"), (world.chat, "auto")):
+        set_lang(bot, ch.id, setting)
+        m = TMsg(world.g, ch, member(world.g, STAFF), "<@999> hello?", mention=True)
+        await bot._answer(m, world.g, m.author)
+    assert seen == ["th", "en", "auto"]
+    # features off: the refusal speaks the resolved language (auto + English text -> English)
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features=dict(qa=False)), "x")
+    bot.team._cache.clear()
+    set_lang(bot, 11, "auto")
+    m = TMsg(world.g, world.chat, member(world.g, STAFF), "hello?")
+    await bot._answer(m, world.g, m.author)
+    assert m.replies == [t("qa_off", "en")]
+    m = TMsg(world.g, world.chat, member(world.g, STAFF), "ยอดเท่าไร")
+    await bot._answer(m, world.g, m.author)
+    assert m.replies == [t("qa_off", "th")]
+
+
+async def test_direct_messages_use_auto(bot, world, monkeypatch):
+    author = member(world.g, STAFF)
+    other = FakeGuild(2000, "B")  # shares nobody with the author: the DM is refused
+    monkeypatch.setattr(SecretaryBot, "guilds", property(lambda s: [world.g, other]))
+    other.get_member = lambda uid: author
+    world.g.get_member = lambda uid: author  # two shared guilds
+    en = Msg(None, world.gen, author, "hello there")
+    th = Msg(None, world.gen, author, "สวัสดี")
+    for m in (en, th):
+        await bot.on_message(m)
+    assert en.replies == [t("dm", "en", mention="<@999>")]
+    assert th.replies == [t("dm", "th", mention="<@999>")]
+
+
+# ------------------------------------------------------------------ typed language commands
+@pytest.mark.parametrize(
+    "text, expected",
+    [("พูดภาษาอังกฤษ", "en"), ("speak English", "en"), ("English please", "en"),
+     ("พูดไทย", "th"), ("speak Thai", "th"), ("ภาษาไทย", "th"),
+     ("auto language", "auto"), ("ภาษาอัตโนมัติ", "auto")],
+)  # fmt: skip
+async def test_manager_changes_the_channel_language_by_mention(bot, world, text, expected):
+    set_lang(bot, 10, "en" if expected != "en" else "th")
+    m = await send(bot, world, world.gen, f"<@999> {text}", who=manager(world), mention=True)
+    assert bot.guilds_store.get(GUILD).channel_languages == {"10": expected}
+    assert bot.team.channel_language(GUILD, 10) == expected  # immediate, no cache wait
+    assert len(m.replies) == 1 and bot.calls == []  # a command, not a question
+    assert bot.team.channel_language(GUILD, 11) == "th"  # other channels untouched
+
+
+async def test_language_command_confirms_in_the_new_language(bot, world):
+    en = await send(bot, world, world.gen, "<@999> speak English", who=manager(world), mention=True)
+    assert en.replies == [t("lang_set", "en", label=t("lang_label_en", "en"))]
+    th = await send(bot, world, world.gen, "<@999> พูดไทย", who=manager(world), mention=True)
+    assert th.replies == [t("lang_set", "th", label=t("lang_label_th", "th"))]
+
+
+async def test_language_command_is_refused_for_regular_members(bot, world):
+    m = await send(bot, world, world.gen, "<@999> speak English", who=STAFF, mention=True)
+    assert m.replies == [t("lang_denied", "th")]  # refusal in the channel's (Thai) language
+    assert bot.guilds_store.get(GUILD).channel_languages == {}
+    set_lang(bot, 10, "en")
+    m = await send(bot, world, world.gen, "<@999> พูดไทย", who=STAFF, mention=True)
+    assert m.replies == [t("lang_denied", "en")] and "Only server admins" in m.replies[0]
+    assert bot.guilds_store.get(GUILD).channel_languages == {"10": "en"}
+
+
+async def test_executives_may_change_the_language_by_mention(bot, world):
+    await send(bot, world, world.gen, "<@999> speak English", who=EXEC, mention=True)
+    assert bot.team.channel_language(GUILD, 10) == "en"
+    boss = member(world.g, 7, roles=["Executive"])
+    await send(bot, world, world.gen, "<@999> speak Thai", who=boss, mention=True)
+    assert bot.team.channel_language(GUILD, 10) == "th"
+
+
+async def test_language_words_in_a_question_are_not_a_command(bot, world):
+    await send(
+        bot,
+        world,
+        world.gen,
+        "<@999> English is hard, how much did we spend?",
+        who=MANAGER,
+        mention=True,
+    )
+    assert bot.guilds_store.get(GUILD).channel_languages == {}
+    assert bot.calls == [("answer", "<@999> English is hard, how much did we spend?")]
+
+
+async def test_language_command_needs_a_mention(bot, world):
+    await send(bot, world, world.gen, "speak English", who=manager(world))
+    assert bot.guilds_store.get(GUILD).channel_languages == {}
+
+
+# ------------------------------------------------------------------ /ภาษา
+async def test_language_without_argument_shows_the_current_language(bot, world):
+    it = Interaction(world.g, member(world.g, STAFF), world.gen)
+    await bot.handle_language(it, None)
+    ((text, ephemeral),) = it.sent
+    assert ephemeral and text.startswith(t("lang_current", "th", label="ไทย"))
+    set_lang(bot, 10, "en")
+    it = Interaction(world.g, member(world.g, STAFF), world.gen)
+    await bot.handle_language(it, None)
+    assert it.sent[0][0].startswith("Salid's reply language in this channel right now: English")
+
+
+async def test_language_change_is_refused_for_regular_members(bot, world):
+    it = Interaction(world.g, member(world.g, STAFF, roles=["พนักงาน"]), world.gen)
+    await bot.handle_language(it, "en")
+    assert it.sent == [(t("lang_denied", "th"), True)]
+    assert bot.guilds_store.get(GUILD).channel_languages == {}
+
+
+async def test_language_change_by_manager_is_persisted_and_immediate(bot, world):
+    it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
+    await bot.handle_language(it, "en")
+    assert it.sent == [(t("lang_set", "en", label="English"), False)]
+    assert bot.guilds_store.get(GUILD).channel_languages == {"10": "en"}
+    assert bot.team.channel_language(GUILD, 10) == "en"
+    assert bot.team.channel_language(GUILD, 12) == "th"
+    ex = Interaction(world.g, member(world.g, EXEC), world.gen)
+    await bot.handle_language(ex, "auto")
+    assert bot.team.channel_language(GUILD, 10) == "auto"
+    await bot.handle_language(ex, "fr")  # not a choice
+    assert ex.sent[-1][1] is True  # an ephemeral failure notice, nothing saved
+    assert bot.team.channel_language(GUILD, 10) == "auto"
+
+
+async def test_default_language_of_the_guild_applies_until_a_channel_overrides(bot, world):
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
+    bot.team._cache.clear()
+    m = await send(bot, world, world.gen, "<@999> shh", mention=True)
+    assert m.replies == [t("snooze", "en")]
+    set_lang(bot, 12, "th")
+    m = await send(bot, world, world.named, "<@999> shh", mention=True)
+    assert m.replies == [t("snooze", "th")]
+
+
+async def test_interaction_language_for_auto_follows_the_discord_locale(bot, world):
+    set_lang(bot, 10, "auto")
+    it = Interaction(world.g, member(world.g, STAFF), world.gen)
+    assert bot._interaction_lang(it) == "th"  # unknown locale: today's default
+    it.locale = "en-US"
+    assert bot._interaction_lang(it) == "en"
+    it.locale = "th"
+    assert bot._interaction_lang(it) == "th"
+
+
+def test_language_command_has_three_choices_in_both_languages(bot):
+    bot._register_commands()
+    cmds = {c.name: c for c in bot.tree.get_commands()}
+    for name in ("ภาษา", "language"):
+        (param,) = cmds[name].parameters
+        assert [c.value for c in param.choices] == ["th", "en", "auto"] and not param.required
+        assert cmds[name].guild_only
+        assert all(len(c.description) <= 100 for c in cmds.values())
+    names = [c.name for c in cmds["language"].parameters[0].choices]
+    assert names == ["ไทย · Thai", "English", "อัตโนมัติ · Auto"]
+
+
+def test_mode_choices_are_bilingual(bot):
+    bot._register_commands()
+    cmds = {c.name: c for c in bot.tree.get_commands()}
+    labels = [c.name for c in cmds["mode"].parameters[0].choices]
+    assert "🙋 เรียกแล้วคุย · Call" in labels and "💬 ตอบทุกข้อความ · Chat" in labels
+    assert all(len(x) <= 100 for x in labels)
+
+
+async def test_mode_help_and_confirmation_in_english(bot, world):
+    set_lang(bot, 10, "en")
+    set_mode(bot, 10, "join")
+    it = Interaction(world.g, member(world.g, STAFF), world.gen)
+    await bot.handle_mode(it, None)
+    text = it.sent[0][0]
+    assert text.splitlines()[0] == "This channel's mode right now: 🎧 Join"
+    assert "💬 Chat — Replies to every message" in text and "ร่วมวง" not in text
+    it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
+    await bot.handle_mode(it, "chat")
+    assert it.sent == [("This channel is now set to 💬 Chat.", False)]
+
+
+def test_welcome_message_mentions_both_languages():
+    th = t("welcome", "th", mention="@S", chat="#c")
+    en = t("welcome", "en", mention="@S", chat="#c")
+    forms = ("/โหมด", "/mode", "/ภาษา", "/language", "/เข้าประชุม", "/join", "/ออกประชุม",
+             "/leave", "/ตั้งค่า", "/setup", "speak English")  # fmt: skip
+    for text in (th, en):
+        assert all(f in text for f in forms), text
+    assert "พูดภาษาอังกฤษ" in th and "พูดภาษาไทย" in en
+    assert "สวัสดีครับ" in th and "Hi, I'm" in en
+
+
+async def test_welcome_is_sent_in_the_guild_default_language(bot, world):
+    world.g.text_channels[:] = [world.gen]
+    world.g.system_channel = world.gen
+    world.g.me = SimpleNamespace(guild_permissions=SimpleNamespace(manage_channels=False))
+    world.g.me.permissions_for = lambda *_: None
+    world.gen.permissions_for = lambda _: SimpleNamespace(send_messages=True)
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
+    await bot.on_guild_join(world.g)
+    assert world.gen.sent and world.gen.sent[0].startswith("Hi, I'm")
