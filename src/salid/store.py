@@ -31,18 +31,28 @@ LOW_CONF = 0.7
 
 
 class Store(Protocol):
+    """Receipt ledger. The tenant is the Discord server: every read that returns or aggregates
+    receipts takes `guild_id` first, and dedupe (sha256, vendor+date+total) is per guild. Lookups
+    by receipt id or reply-message id are global (those ids are unique across guilds)."""
+
     def add_receipt(self, r: Receipt) -> Receipt: ...
-    def get_by_sha(self, sha256: str) -> Receipt | None: ...
+    def get_by_sha(self, guild_id: int, sha256: str) -> Receipt | None: ...
     def get(self, receipt_id: int) -> Receipt | None: ...
     def get_by_reply_message(self, message_id: int) -> Receipt | None: ...
     def set_reply_message(self, receipt_id: int, message_id: int) -> None: ...
     def update_receipt(self, receipt_id: int, fields: dict) -> Receipt: ...
     def find_possible_duplicate(self, r: Receipt) -> Receipt | None: ...
     def summarize(
-        self, start: str, end: str, group_by: str = "none", submitter_id: int | None = None
+        self,
+        guild_id: int,
+        start: str,
+        end: str,
+        group_by: str = "none",
+        submitter_id: int | None = None,
     ) -> dict: ...
     def list_receipts(
         self,
+        guild_id: int,
         start: str,
         end: str,
         category: str | None = None,
@@ -52,27 +62,39 @@ class Store(Protocol):
         submitter_id: int | None = None,
     ) -> list[Receipt]: ...
     def flagged(
-        self, start: str | None = None, end: str | None = None, submitter_id: int | None = None
+        self,
+        guild_id: int,
+        start: str | None = None,
+        end: str | None = None,
+        submitter_id: int | None = None,
     ) -> list[Receipt]: ...
     def all_receipts(
-        self, start: str, end: str, submitter_id: int | None = None, limit: int = 5000
+        self,
+        guild_id: int,
+        start: str,
+        end: str,
+        submitter_id: int | None = None,
+        limit: int = 5000,
     ) -> list[Receipt]: ...
-    def recent(self, limit: int = 20) -> list[Receipt]: ...
+    def recent(self, guild_id: int, limit: int = 20) -> list[Receipt]: ...
 
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS receipts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id INTEGER NOT NULL DEFAULT 0,
   submitter_id INTEGER NOT NULL, submitter_name TEXT NOT NULL,
   channel_id INTEGER, message_id INTEGER, reply_message_id INTEGER,
-  sha256 TEXT NOT NULL UNIQUE,
+  sha256 TEXT NOT NULL,
   vendor TEXT, receipt_date TEXT, effective_date TEXT NOT NULL, currency TEXT DEFAULT 'THB',
   subtotal REAL, vat REAL, total REAL, category TEXT, items TEXT, payment_method TEXT,
-  confidence REAL, notes TEXT, context TEXT, possible_duplicate_of INTEGER, created_at TEXT, original_uri TEXT
+  confidence REAL, notes TEXT, context TEXT, possible_duplicate_of INTEGER, created_at TEXT, original_uri TEXT,
+  UNIQUE (guild_id, sha256)
 );
 CREATE INDEX IF NOT EXISTS ix_date ON receipts(effective_date);
 CREATE INDEX IF NOT EXISTS ix_sub ON receipts(submitter_id);
 """
+GUILD_INDEX = "CREATE INDEX IF NOT EXISTS ix_guild_date ON receipts(guild_id, effective_date)"
 
 
 class SQLiteStore:
@@ -85,6 +107,21 @@ class SQLiteStore:
             cols = {row["name"] for row in c.execute("PRAGMA table_info(receipts)")}
             if "original_uri" not in cols:  # ledgers created before receipt archiving
                 c.execute("ALTER TABLE receipts ADD COLUMN original_uri TEXT")
+                cols.add("original_uri")
+            if "guild_id" not in cols:  # ledgers created before multi-tenancy
+                self._migrate_to_guilds(c, cols)
+            c.execute(GUILD_INDEX)
+
+    @staticmethod
+    def _migrate_to_guilds(c, old_cols: set[str]) -> None:
+        """Rebuild the table: `guild_id` (existing rows get 0) and UNIQUE(guild_id, sha256)
+        instead of a global UNIQUE(sha256), which SQLite cannot alter in place."""
+        c.executescript("DROP INDEX IF EXISTS ix_date; DROP INDEX IF EXISTS ix_sub;")
+        c.execute("ALTER TABLE receipts RENAME TO receipts_old")
+        c.executescript(SCHEMA)
+        shared = ",".join(sorted(old_cols))
+        c.execute(f"INSERT INTO receipts ({shared}) SELECT {shared} FROM receipts_old")
+        c.execute("DROP TABLE receipts_old")
 
     @contextmanager
     def _conn(self):
@@ -115,10 +152,12 @@ class SQLiteStore:
             rid = cur.lastrowid
         return self.get(rid)
 
-    def get_by_sha(self, sha256):
+    def get_by_sha(self, guild_id, sha256):
         with self._conn() as c:
             return self._row(
-                c.execute("SELECT * FROM receipts WHERE sha256=?", (sha256,)).fetchone()
+                c.execute(
+                    "SELECT * FROM receipts WHERE guild_id=? AND sha256=?", (guild_id, sha256)
+                ).fetchone()
             )
 
     def get(self, receipt_id):
@@ -157,16 +196,16 @@ class SQLiteStore:
             return None
         with self._conn() as c:
             row = c.execute(
-                "SELECT * FROM receipts WHERE lower(vendor)=lower(?) AND receipt_date=? AND total=? AND sha256<>? ORDER BY id LIMIT 1",
-                (r.vendor, r.receipt_date, r.total, r.sha256),
+                "SELECT * FROM receipts WHERE guild_id=? AND lower(vendor)=lower(?) AND receipt_date=? AND total=? AND sha256<>? ORDER BY id LIMIT 1",
+                (r.guild_id, r.vendor, r.receipt_date, r.total, r.sha256),
             ).fetchone()
         return self._row(row)
 
-    def summarize(self, start, end, group_by="none", submitter_id=None):
+    def summarize(self, guild_id, start, end, group_by="none", submitter_id=None):
         if group_by not in GROUPS:
             raise ValueError(f"bad group_by {group_by}")
         key = GROUPS[group_by]
-        where, p = "effective_date BETWEEN ? AND ?", [start, end]
+        where, p = "guild_id=? AND effective_date BETWEEN ? AND ?", [guild_id, start, end]
         if submitter_id is not None:
             where += " AND submitter_id=?"
             p.append(submitter_id)
@@ -188,6 +227,7 @@ class SQLiteStore:
 
     def list_receipts(
         self,
+        guild_id,
         start,
         end,
         category=None,
@@ -196,7 +236,7 @@ class SQLiteStore:
         limit=20,
         submitter_id=None,
     ):
-        where, p = ["effective_date BETWEEN ? AND ?"], [start, end]
+        where, p = ["guild_id=?", "effective_date BETWEEN ? AND ?"], [guild_id, start, end]
         if category:
             where.append("category=?")
             p.append(category)
@@ -216,10 +256,13 @@ class SQLiteStore:
             ).fetchall()
         return [self._row(r) for r in rows]
 
-    def flagged(self, start=None, end=None, submitter_id=None):
+    def flagged(self, guild_id, start=None, end=None, submitter_id=None):
         where, p = (
-            ["(confidence < ? OR total IS NULL OR possible_duplicate_of IS NOT NULL)"],
-            [LOW_CONF],
+            [
+                "guild_id=?",
+                "(confidence < ? OR total IS NULL OR possible_duplicate_of IS NOT NULL)",
+            ],
+            [guild_id, LOW_CONF],
         )
         if start and end:
             where.append("effective_date BETWEEN ? AND ?")
@@ -234,9 +277,9 @@ class SQLiteStore:
             ).fetchall()
         return [self._row(r) for r in rows]
 
-    def all_receipts(self, start, end, submitter_id=None, limit=5000):
+    def all_receipts(self, guild_id, start, end, submitter_id=None, limit=5000):
         """Unpaged export in date order (used by deep tasks); `limit` is a safety cap."""
-        where, p = ["effective_date BETWEEN ? AND ?"], [start, end]
+        where, p = ["guild_id=?", "effective_date BETWEEN ? AND ?"], [guild_id, start, end]
         if submitter_id is not None:
             where.append("submitter_id=?")
             p.append(submitter_id)
@@ -247,11 +290,12 @@ class SQLiteStore:
             ).fetchall()
         return [self._row(r) for r in rows]
 
-    def recent(self, limit=20):
+    def recent(self, guild_id, limit=20):
         """Newest receipts first (by id); used by the hub activity feed."""
         with self._conn() as c:
             rows = c.execute(
-                "SELECT * FROM receipts ORDER BY id DESC LIMIT ?", (max(1, min(int(limit), 100)),)
+                "SELECT * FROM receipts WHERE guild_id=? ORDER BY id DESC LIMIT ?",
+                (guild_id, max(1, min(int(limit), 100))),
             ).fetchall()
         return [self._row(r) for r in rows]
 

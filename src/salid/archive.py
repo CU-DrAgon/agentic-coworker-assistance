@@ -19,7 +19,7 @@ EXT_BY_MIME = {
 
 
 class ReceiptArchive:
-    """Stores original bytes at `gs://{bucket}/{prefix}{sha256}.{ext}` (content-addressed)."""
+    """Stores original bytes at `gs://{bucket}/{prefix}{guild_id}/{sha256}.{ext}` (per guild)."""
 
     def __init__(
         self, bucket: str, prefix: str = "salid-receipts/", client: Any = None, project=None
@@ -36,11 +36,11 @@ class ReceiptArchive:
             self._client = storage.Client(project=self._project)
         return self._client
 
-    def object_name(self, sha256: str, mime: str) -> str:
-        return f"{self.prefix}{sha256}.{EXT_BY_MIME.get(mime, 'bin')}"
+    def object_name(self, guild_id: int, sha256: str, mime: str) -> str:
+        return f"{self.prefix}{guild_id}/{sha256}.{EXT_BY_MIME.get(mime, 'bin')}"
 
-    def save(self, sha256: str, data: bytes, mime: str) -> str:
-        name = self.object_name(sha256, mime)
+    def save(self, guild_id: int, sha256: str, data: bytes, mime: str) -> str:
+        name = self.object_name(guild_id, sha256, mime)
         self.client.bucket(self.bucket_name).blob(name).upload_from_string(data, content_type=mime)
         return f"gs://{self.bucket_name}/{name}"
 

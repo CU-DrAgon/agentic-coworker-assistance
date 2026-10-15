@@ -1,4 +1,4 @@
-from conftest import ALICE, FakeClient, json_resp
+from conftest import ALICE, GUILD, FakeClient, json_resp
 
 from salid.extract import apply_correction, ingest_attachment, parse_correction_simple
 from salid.store import SQLiteStore
@@ -21,6 +21,7 @@ EX = {
 
 def ingest(store, settings, client, data=b"img1", **kw):
     args = dict(
+        guild_id=GUILD,
         data=data,
         filename="a.jpg",
         content_type="image/jpeg",
@@ -61,7 +62,7 @@ def test_non_receipt_ignored_and_not_stored(store, settings):
     assert (
         r.status == "ignored"
         and r.reply is None
-        and store.summarize("2000-01-01", "2100-01-01")["count"] == 0
+        and store.summarize(GUILD, "2000-01-01", "2100-01-01")["count"] == 0
     )
 
 
@@ -77,14 +78,14 @@ def test_sha_dedupe_skips_gemini(store, settings):
     c = FakeClient([])  # would raise if Gemini were called
     r = ingest(store, settings, c)
     assert r.status == "duplicate" and "เคยบันทึก" in r.reply and not c.models.calls
-    assert store.summarize("2000-01-01", "2100-01-01")["count"] == 1
+    assert store.summarize(GUILD, "2000-01-01", "2100-01-01")["count"] == 1
 
 
 def test_likely_duplicate_flagged(store, settings):
     ingest(store, settings, FakeClient([json_resp(EX)]), data=b"one")
     r = ingest(store, settings, FakeClient([json_resp(EX)]), data=b"two")
     assert r.status == "created" and r.receipt.possible_duplicate_of and "อาจซ้ำ" in r.reply
-    assert len(store.flagged()) == 1
+    assert len(store.flagged(GUILD)) == 1
 
 
 def test_missing_date_uses_submission_date(store, settings):
@@ -115,7 +116,7 @@ def test_apply_correction_updates_and_clears_flag(store, settings):
     msg = apply_correction(store, None, settings, r, "ยอดจริง 450")
     got = store.get(r.id)
     assert got.total == 450 and got.confidence == 1.0 and "฿450" in msg
-    assert store.summarize("2026-10-01", "2026-10-31")["total"] == 450
+    assert store.summarize(GUILD, "2026-10-01", "2026-10-31")["total"] == 450
     apply_correction(store, None, settings, r, "วันที่ 2026-09-30")
     assert store.get(r.id).effective_date == "2026-09-30"
 
@@ -139,6 +140,6 @@ def test_reply_message_lookup(store, settings):
 
 
 def test_recent_returns_newest_first_and_respects_limit(seeded):
-    assert [r.id for r in seeded.recent(3)] == [5, 4, 3]
-    assert len(seeded.recent()) == 5
-    assert len(seeded.recent(0)) == 1  # limit is clamped to at least 1
+    assert [r.id for r in seeded.recent(GUILD, 3)] == [5, 4, 3]
+    assert len(seeded.recent(GUILD)) == 5
+    assert len(seeded.recent(GUILD, 0)) == 1  # limit is clamped to at least 1

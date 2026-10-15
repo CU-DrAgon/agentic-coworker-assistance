@@ -12,6 +12,7 @@ from salid.models import Receipt
 from salid.store import SQLiteStore
 
 EXEC_ID, ALICE, BOB = 1, 100, 200
+GUILD, OTHER_GUILD = 1000, 2000  # two tenants
 
 
 class FakeClient:
@@ -93,9 +94,12 @@ def store(request, tmp_path):
     return OfflineFirestoreStore()
 
 
-def mk(store, n, uid, name, vendor, day, total, cat="วัตถุดิบ", conf=0.9, sha=None, dup=None):
+def mk(
+    store, n, uid, name, vendor, day, total, cat="วัตถุดิบ", conf=0.9, sha=None, dup=None, guild=GUILD
+):
     return store.add_receipt(
         Receipt(
+            guild_id=guild,
             submitter_id=uid,
             submitter_name=name,
             sha256=sha or f"sha{n}",

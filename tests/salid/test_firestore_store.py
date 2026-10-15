@@ -1,7 +1,7 @@
 """FirestoreStore-specific behaviour (the shared Store contract runs via the `store` fixture)."""
 
 import pytest
-from conftest import ALICE, FakeClient, json_resp, mk
+from conftest import ALICE, GUILD, FakeClient, json_resp, mk
 from fake_firestore import OfflineFirestoreStore
 from test_salid_store_extract import EX, ingest
 
@@ -18,7 +18,7 @@ def fs():
 
 def test_layout_doc_id_is_sha_and_effective_date_is_iso(fs):
     r = mk(fs, 1, ALICE, "Alice", "Makro", "2026-10-01", 100.0, sha="abc123")
-    doc = fs.client.collection("salid_receipts").docs["abc123"]
+    doc = fs.client.collection("salid_receipts").docs[f"{GUILD}_abc123"]
     assert doc["id"] == r.id == 1 and doc["effective_date"] == "2026-10-01"
     assert set(fs.client.cols) == {"salid_receipts"}  # nothing outside the configured collection
 
@@ -33,15 +33,16 @@ def test_duplicate_sha_rejected_atomically(fs):
     mk(fs, 1, ALICE, "Alice", "Makro", "2026-10-01", 100.0, sha="same")
     with pytest.raises(ValueError):
         mk(fs, 2, ALICE, "Alice", "Makro", "2026-10-01", 100.0, sha="same")
-    assert fs.summarize("2026-01-01", "2026-12-31")["count"] == 1
+    assert fs.summarize(GUILD, "2026-01-01", "2026-12-31")["count"] == 1
 
 
 def test_no_query_needs_a_composite_index(seeded_fs):
     """Server-side filters are only ever on ONE field (range on effective_date, or one equality)."""
     s = seeded_fs
     s.client.queries.clear()
-    s.summarize("2026-10-01", "2026-10-31", "category", submitter_id=ALICE)
+    s.summarize(GUILD, "2026-10-01", "2026-10-31", "category", submitter_id=ALICE)
     s.list_receipts(
+        GUILD,
         "2026-10-01",
         "2026-10-31",
         category="วัตถุดิบ",
@@ -49,8 +50,8 @@ def test_no_query_needs_a_composite_index(seeded_fs):
         submitter="Al",
         submitter_id=ALICE,
     )
-    s.flagged("2026-10-01", "2026-10-31", ALICE)
-    s.flagged()
+    s.flagged(GUILD, "2026-10-01", "2026-10-31", ALICE)
+    s.flagged(GUILD)
     s.get(1)
     s.find_possible_duplicate(s.get(1).model_copy(update={"sha256": "zz"}))
     for filters in s.client.queries:
@@ -119,8 +120,8 @@ def test_archive_saves_uri_on_record(settings, fs):
     arch = ReceiptArchive("bkt", "salid-receipts", client=cli)
     res = ingest(fs, settings, FakeClient([json_resp(EX)]), archive=arch)
     uri = res.receipt.original_uri
-    assert uri == f"gs://bkt/salid-receipts/{res.receipt.sha256}.jpg"
-    assert cli.objects[("bkt", f"salid-receipts/{res.receipt.sha256}.jpg")] == (
+    assert uri == f"gs://bkt/salid-receipts/{GUILD}/{res.receipt.sha256}.jpg"
+    assert cli.objects[("bkt", f"salid-receipts/{GUILD}/{res.receipt.sha256}.jpg")] == (
         b"img1",
         "image/jpeg",
     )

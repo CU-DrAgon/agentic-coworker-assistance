@@ -2,22 +2,28 @@
 
 Layout (all in the project's `(default)` database, nothing else is touched):
 
-* `{collection}/{sha256}`     one receipt per document; the doc id is the file's SHA-256, so a
-                              re-upload is rejected atomically (`create()` raises AlreadyExists).
+* `{collection}/{guild_id}_{sha256}`
+                              one receipt per document; the doc id is the guild plus the file's
+                              SHA-256, so a re-upload in the same guild is rejected atomically
+                              (`create()` raises AlreadyExists) while another guild may store the
+                              same file.
 * `{collection}_meta/counter` `{last_id: n}`: allocates the small integer ids shown to users
                               ("#12") inside a transaction.
 
 Receipt fields are stored as-is; `effective_date` is an ISO `YYYY-MM-DD` string so lexicographic
 range queries work.
 
-Scale note: Firestore does the date-range filter server-side (one field, so only the automatic
-single-field index is needed). Everything else (submitter scope, category, vendor, grouping,
-sums) is done in Python over that result. That is fine at shop scale (tens of receipts per day,
-a few thousand per year) but loads every receipt in the range into memory; revisit with
-server-side aggregation queries if a ledger grows far beyond that. `flagged()` without a date
-range scans the whole collection for the same reason.
+Tenancy: every receipt carries `guild_id` (int) and every query starts with the equality filter
+`guild_id == X`, so one server's data is never read for another.
 
-No composite indexes are required: every query has at most one range/equality filter.
+Scale note: Firestore does only that guild filter server-side (one field, so only the automatic
+single-field index is needed). Everything else (date range, submitter scope, category, vendor,
+grouping, sums) is done in Python over the guild's receipts. That is fine at shop scale (tens of
+receipts per day, a few thousand per year) but loads the guild's whole ledger into memory; if one
+ledger grows far beyond that, add the composite index (guild_id, effective_date) and push the
+range filter into the query.
+
+No composite indexes are required: every query has a single equality filter.
 """
 
 from __future__ import annotations
@@ -85,6 +91,9 @@ class FirestoreStore:
     def _where(self, field: str, op: str, value: Any) -> Any:
         return self._col.where(filter=FieldFilter(field, op, value))
 
+    def _guild(self, guild_id: int) -> Any:
+        return self._where("guild_id", "==", guild_id)
+
     def _snap_by(self, field: str, value: Any) -> Any:
         for snap in self._where(field, "==", value).limit(1).stream():
             return snap
@@ -94,12 +103,12 @@ class FirestoreStore:
     def _receipt(snap) -> Receipt | None:
         return Receipt(**snap.to_dict()) if snap is not None else None
 
-    def _in_range(self, start: str, end: str, submitter_id: int | None) -> list[Receipt]:
-        q = self._where("effective_date", ">=", start).where(
-            filter=FieldFilter("effective_date", "<=", end)
-        )
-        rows = [Receipt(**s.to_dict()) for s in q.stream()]
-        if submitter_id is not None:  # client-side: avoids a composite index
+    def _in_range(
+        self, guild_id: int, start: str, end: str, submitter_id: int | None
+    ) -> list[Receipt]:
+        rows = [Receipt(**s.to_dict()) for s in self._guild(guild_id).stream()]
+        rows = [r for r in rows if start <= r.effective_date <= end]  # client-side: no index
+        if submitter_id is not None:
             rows = [r for r in rows if r.submitter_id == submitter_id]
         return rows
 
@@ -108,7 +117,7 @@ class FirestoreStore:
         rid = self._next_id()
         data = r.model_copy(update={"id": rid}).model_dump()
         try:
-            self._col.document(r.sha256).create(data)
+            self._col.document(f"{r.guild_id}_{r.sha256}").create(data)
         except AlreadyExists as e:
             raise ValueError(f"receipt with sha256 {r.sha256} already exists") from e
         return Receipt(**data)
@@ -133,8 +142,8 @@ class FirestoreStore:
             snap.reference.update({"reply_message_id": message_id})
 
     # ------------------------------------------------------------ point reads
-    def get_by_sha(self, sha256: str) -> Receipt | None:
-        snap = self._col.document(sha256).get()
+    def get_by_sha(self, guild_id: int, sha256: str) -> Receipt | None:
+        snap = self._col.document(f"{guild_id}_{sha256}").get()
         return Receipt(**snap.to_dict()) if snap.exists else None
 
     def get(self, receipt_id: int) -> Receipt | None:
@@ -146,14 +155,12 @@ class FirestoreStore:
     def find_possible_duplicate(self, r: Receipt) -> Receipt | None:
         if not (r.vendor and r.receipt_date and r.total is not None):
             return None
-        same_day = (
-            Receipt(**s.to_dict())
-            for s in self._where("receipt_date", "==", r.receipt_date).stream()
-        )
+        same_day = (Receipt(**s.to_dict()) for s in self._guild(r.guild_id).stream())
         hits = [
             x
             for x in same_day
-            if x.sha256 != r.sha256
+            if x.receipt_date == r.receipt_date
+            and x.sha256 != r.sha256
             and x.total == r.total
             and (x.vendor or "").casefold() == r.vendor.casefold()
         ]
@@ -161,12 +168,17 @@ class FirestoreStore:
 
     # ------------------------------------------------------------ range reads
     def summarize(
-        self, start: str, end: str, group_by: str = "none", submitter_id: int | None = None
+        self,
+        guild_id: int,
+        start: str,
+        end: str,
+        group_by: str = "none",
+        submitter_id: int | None = None,
     ) -> dict:
         if group_by not in GROUPS:
             raise ValueError(f"bad group_by {group_by}")
         acc: dict[str, list[float]] = {}
-        for r in self._in_range(start, end, submitter_id):
+        for r in self._in_range(guild_id, start, end, submitter_id):
             g = acc.setdefault(_group_key(r, group_by), [0.0, 0])
             g[0] += r.total or 0.0
             g[1] += 1
@@ -183,6 +195,7 @@ class FirestoreStore:
 
     def list_receipts(
         self,
+        guild_id: int,
         start: str,
         end: str,
         category: str | None = None,
@@ -191,7 +204,7 @@ class FirestoreStore:
         limit: int = 20,
         submitter_id: int | None = None,
     ) -> list[Receipt]:
-        rows = self._in_range(start, end, submitter_id)
+        rows = self._in_range(guild_id, start, end, submitter_id)
         if category:
             rows = [r for r in rows if r.category == category]
         if vendor_contains:
@@ -202,14 +215,16 @@ class FirestoreStore:
         return rows[: max(1, min(int(limit), 100))]
 
     def flagged(
-        self, start: str | None = None, end: str | None = None, submitter_id: int | None = None
+        self,
+        guild_id: int,
+        start: str | None = None,
+        end: str | None = None,
+        submitter_id: int | None = None,
     ) -> list[Receipt]:
         if start and end:
-            rows = self._in_range(start, end, submitter_id)
-        else:  # whole-collection scan, see the scale note in the module docstring
-            rows = [Receipt(**s.to_dict()) for s in self._col.stream()]
-            if submitter_id is not None:
-                rows = [r for r in rows if r.submitter_id == submitter_id]
+            rows = self._in_range(guild_id, start, end, submitter_id)
+        else:  # the guild's whole ledger, see the scale note in the module docstring
+            rows = self._in_range(guild_id, "", "\uffff", submitter_id)
         rows = [
             r
             for r in rows
@@ -219,14 +234,19 @@ class FirestoreStore:
         return rows[:50]
 
     def all_receipts(
-        self, start: str, end: str, submitter_id: int | None = None, limit: int = 5000
+        self,
+        guild_id: int,
+        start: str,
+        end: str,
+        submitter_id: int | None = None,
+        limit: int = 5000,
     ) -> list[Receipt]:
-        rows = self._in_range(start, end, submitter_id)
+        rows = self._in_range(guild_id, start, end, submitter_id)
         rows.sort(key=lambda r: (r.effective_date, r.id or 0))
         return rows[:limit]
 
-    def recent(self, limit: int = 20) -> list[Receipt]:
-        """Newest receipts first (by id). Scans the collection, see the scale note above."""
-        rows = [Receipt(**s.to_dict()) for s in self._col.stream()]
+    def recent(self, guild_id: int, limit: int = 20) -> list[Receipt]:
+        """Newest receipts first (by id). Reads the guild's ledger, see the scale note above."""
+        rows = [Receipt(**s.to_dict()) for s in self._guild(guild_id).stream()]
         rows.sort(key=lambda r: r.id or 0, reverse=True)
         return rows[: max(1, min(int(limit), 100))]

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import ALICE, EXEC_ID
+from conftest import ALICE, EXEC_ID, GUILD
 
 from salid.cli import main as cli_main
 from salid.config import Settings
@@ -70,13 +70,13 @@ def ds(settings):
 
 def test_disabled_without_binary_path(seeded, settings):
     with pytest.raises(DeepTaskError, match="SALID_GEMINI_CLI_PATH") as e:
-        run_deep_task(settings, seeded, "x")
+        run_deep_task(settings, seeded, "x", guild_id=GUILD)
     assert str(e.value) == DISABLED_MESSAGE
 
 
 def test_run_returns_report_stats_and_cleans_up(seeded, ds):
     fake = FakeRun()
-    r = run_deep_task(ds, seeded, "วิเคราะห์ค่าใช้จ่ายเดือนนี้", runner=fake)
+    r = run_deep_task(ds, seeded, "วิเคราะห์ค่าใช้จ่ายเดือนนี้", guild_id=GUILD, runner=fake)
     assert r.report.startswith("# รายงาน") and r.text == r.report
     assert r.tokens == 1234 and r.models == {
         "gemini-3-flash-preview": {"requests": 5, "tokens": 1234}
@@ -90,9 +90,9 @@ def test_run_returns_report_stats_and_cleans_up(seeded, ds):
 
 def test_exec_export_has_everything_and_user_export_is_scoped(seeded, ds):
     f1, f2 = FakeRun(), FakeRun()
-    run_deep_task(ds, seeded, "t", runner=f1)
+    run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=f1)
     assert "Bob" in f1.seen["csv"] and f1.seen["agg"]["overall"]["total"] == 13370.5
-    run_deep_task(ds, seeded, "t", submitter_id=ALICE, runner=f2)
+    run_deep_task(ds, seeded, "t", guild_id=GUILD, submitter_id=ALICE, runner=f2)
     assert "Bob" not in f2.seen["csv"] and "Makro" in f2.seen["csv"]
     assert f2.seen["agg"]["overall"] == {"total": 1250.5, "count": 2}
     assert "Bob" not in json.dumps(f2.seen["agg"], ensure_ascii=False)
@@ -100,7 +100,7 @@ def test_exec_export_has_everything_and_user_export_is_scoped(seeded, ds):
 
 def test_export_excludes_internal_identifiers(seeded, ds):
     f = FakeRun()
-    run_deep_task(ds, seeded, "t", runner=f)
+    run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=f)
     header = f.seen["csv"].splitlines()[0]
     assert "sha256" not in header and "message" not in header and "channel" not in header
     assert "original_uri" not in header
@@ -110,7 +110,7 @@ def test_env_is_minimal_and_isolated(seeded, ds, monkeypatch):
     for k in ("SALID_DISCORD_TOKEN", "GH_TOKEN", "DISCORD_WEBHOOK_URL", "SALID_DB_PATH"):
         monkeypatch.setenv(k, "SECRET-VALUE")
     f = FakeRun()
-    run_deep_task(ds, seeded, "t", runner=f)
+    run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=f)
     env = f.seen["env"]
     assert "SECRET-VALUE" not in json.dumps(env)
     assert not any(k.startswith("SALID_") or k in {"GH_TOKEN"} for k in env)
@@ -132,7 +132,7 @@ def test_command_pins_model_and_blocks_shell(ds):
 
 def test_settings_pin_every_alias_and_remove_shell_tools(seeded, ds):
     f = FakeRun()
-    run_deep_task(ds, seeded, "t", runner=f)
+    run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=f)
     cfg = f.seen["settings"]
     assert cfg == build_cli_settings("gemini-3-flash-preview")
     assert cfg["model"]["name"] == "gemini-3-flash-preview" and cfg["model"]["disableLoopDetection"]
@@ -147,12 +147,12 @@ def test_settings_pin_every_alias_and_remove_shell_tools(seeded, ds):
 
 def test_unpinned_model_is_flagged(seeded, ds):
     out = {**GOOD, "stats": {"models": {"gemini-3.8-flash": {"api": {}, "tokens": {"total": 9}}}}}
-    r = run_deep_task(ds, seeded, "t", runner=FakeRun(stdout=json.dumps(out)))
+    r = run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=FakeRun(stdout=json.dumps(out)))
     assert not r.pinned_ok and r.tokens == 9
 
 
 def test_falls_back_to_response_text_without_report(seeded, ds):
-    r = run_deep_task(ds, seeded, "t", runner=FakeRun(report=None))
+    r = run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=FakeRun(report=None))
     assert r.report is None and r.text == "เสร็จแล้ว"
 
 
@@ -164,22 +164,28 @@ def test_symlinked_report_is_ignored(seeded, ds):
             (Path(cwd) / "report.md").symlink_to("/etc/hostname")
             return out
 
-    r = run_deep_task(ds, seeded, "t", runner=Evil())
+    r = run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=Evil())
     assert r.report is None and r.text == "เสร็จแล้ว"
 
 
 def test_output_with_noise_and_errors(seeded, ds):
     assert parse_cli_output("warn: x\n" + json.dumps(GOOD) + "\n")["session_id"] == "s1"
     with pytest.raises(DeepTaskError):
-        run_deep_task(ds, seeded, "t", runner=FakeRun(stdout="not json", rc=1))
+        run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=FakeRun(stdout="not json", rc=1))
     with pytest.raises(DeepTaskError):
-        run_deep_task(ds, seeded, "t", runner=FakeRun(stdout=json.dumps({"error": {"m": "x"}})))
+        run_deep_task(
+            ds,
+            seeded,
+            "t",
+            guild_id=GUILD,
+            runner=FakeRun(stdout=json.dumps({"error": {"m": "x"}})),
+        )
 
 
 def test_timeout_propagates_and_still_cleans_up(seeded, ds):
     f = FakeRun(boom=DeepTaskError("งานใหญ่ใช้เวลานานเกิน 77 วินาที จึงยกเลิก"))
     with pytest.raises(DeepTaskError, match="นานเกิน"):
-        run_deep_task(ds, seeded, "t", runner=f)
+        run_deep_task(ds, seeded, "t", guild_id=GUILD, runner=f)
 
 
 def test_cli_deep_refuses_non_exec(capsys):
@@ -245,16 +251,16 @@ async def test_bot_refuses_non_exec_and_runs_no_task(bot, monkeypatch):
     called = []
     monkeypatch.setattr("salid.bot.run_deep_task", lambda *a, **k: called.append(1))
     m = FakeMessage()
-    await bot._deep(m, "ทำรายงาน", is_exec=False)
+    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=False)
     assert "เฉพาะผู้บริหาร" in m.replies[0][0] and not called and not bot._deep_tasks
 
 
 async def test_bot_disabled_and_usage(bot):
     m = FakeMessage()
-    await bot._deep(m, "", is_exec=True)
+    await bot._deep(m, GUILD, "", is_exec=True)
     assert "บอกโจทย์" in m.replies[0][0]
     bot.s = bot.s.model_copy(update={"gemini_cli_path": ""})
-    await bot._deep(m, "x", is_exec=True)
+    await bot._deep(m, GUILD, "x", is_exec=True)
     assert "SALID_GEMINI_CLI_PATH" in m.replies[1][0]
 
 
@@ -269,7 +275,7 @@ async def test_bot_acks_then_posts_result_in_background(bot, monkeypatch):
 
     monkeypatch.setattr("salid.bot.run_deep_task", fake_run)
     m = FakeMessage()
-    await bot._deep(m, "ทำรายงาน", is_exec=True)
+    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=True)
     assert "รับงานแล้ว" in m.replies[0][0] and not m.replies[1:]  # ack first
     await asyncio.gather(*bot._deep_tasks)
     assert "# ผล" in m.replies[1][0] and "tokens 10" in m.replies[1][0]
@@ -287,8 +293,8 @@ async def test_bot_rejects_second_concurrent_task_and_reports_failure(bot, monke
 
     monkeypatch.setattr("salid.bot.run_deep_task", slow)
     m1, m2 = FakeMessage(), FakeMessage()
-    await bot._deep(m1, "a", is_exec=True)
-    await bot._deep(m2, "b", is_exec=True)
+    await bot._deep(m1, GUILD, "a", is_exec=True)
+    await bot._deep(m2, GUILD, "b", is_exec=True)
     assert "กำลังทำงานใหญ่" in m2.replies[0][0]
     release.set()
     await asyncio.gather(*bot._deep_tasks)

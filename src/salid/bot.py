@@ -4,9 +4,11 @@ import asyncio
 import contextlib
 import io
 import logging
-from datetime import datetime, timedelta
+import time
+from datetime import date, datetime
 
 import discord
+from discord import app_commands
 
 from .archive import make_archive
 from .config import Settings
@@ -23,15 +25,37 @@ from .deep_task import (
     run_deep_task,
 )
 from .digest import build_daily_digest
-from .extract import apply_correction, ingest_attachment
+from .extract import apply_correction, guess_mime, ingest_attachment
+from .guild_settings import BotGuildSettings, GuildStore, make_guild_store
 from .qa import ask
 from .store import Store
-from .team_settings import BotTeamSettings, make_bot_team_settings
 
 logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
+SYNC_MIN_INTERVAL_S = 30.0  # channel-list writes per guild are batched to one per interval
+MAX_SYNCED_CHANNELS = 500
+RECEIPT_CHANNEL_HINTS = (
+    "ใบเสร็จ",
+    "receipt",
+)  # a channel whose name has one of these takes receipts
 QA_OFF_MESSAGE = "ตอนนี้ปิดการถามตอบอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
 DEEP_OFF_MESSAGE = "ตอนนี้ปิดงานใหญ่อยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
+DM_MESSAGE = "สลิดแยกข้อมูลของแต่ละเซิร์ฟเวอร์ครับ รบกวนแท็ก {mention} ถามในห้องแชตของเซิร์ฟเวอร์ที่ต้องการนะครับ"
+WELCOME_MESSAGE = (
+    "สวัสดีครับ ผม “สลิด” เลขาที่ช่วยทำบัญชีจากใบเสร็จ 📒\n"
+    "• ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” "
+    "หรือแท็ก {mention} พร้อมรูป (ห้องไหนก็ได้) ผมจะอ่านยอดและบันทึกให้เอง\n"
+    "• ผู้บริหารถามเรื่องค่าใช้จ่ายได้โดยแท็ก {mention} แล้วพิมพ์คำถาม\n"
+    "• ผู้ดูแลพิมพ์ /ตั้งค่า เพื่อเชื่อมกับศูนย์บัญชาการ (หน้าเว็บสำหรับตั้งค่า)"
+)
+SETUP_DENIED_MESSAGE = "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ครับ"
+SETUP_MESSAGE = (
+    "ลิงก์เชื่อม {name} กับศูนย์บัญชาการของสลิด 🔗\n{url}\n"
+    "เปิดลิงก์แล้วเข้าสู่ระบบด้วยบัญชี Google ของคุณ ลิงก์ใช้ได้ครั้งเดียวและหมดอายุใน 15 นาที "
+    "อย่าส่งต่อให้คนอื่นครับ"
+)
+SETUP_FAILED_MESSAGE = "สร้างลิงก์ไม่สำเร็จ ลองพิมพ์ /ตั้งค่า อีกครั้งภายหลังครับ"
+SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
 
 
 def chunks(text: str, n: int = 1900):
@@ -40,68 +64,183 @@ def chunks(text: str, n: int = 1900):
         text = text[n:]
 
 
+def is_receipt_channel_name(name: str | None) -> bool:
+    low = (name or "").casefold()
+    return any(h in low for h in RECEIPT_CHANNEL_HINTS)
+
+
+def has_receipt_file(message) -> bool:
+    return any(guess_mime(a.filename, a.content_type) for a in message.attachments)
+
+
+def can_manage_guild(member) -> bool:
+    """Owner, Administrator or Manage Server: may link the hub and counts as an executive."""
+    perms = member.guild_permissions
+    return member.guild.owner_id == member.id or perms.administrator or perms.manage_guild
+
+
 class SecretaryBot(discord.Client):
-    def __init__(self, settings: Settings, store: Store, llm, team: BotTeamSettings | None = None):
+    def __init__(
+        self, settings: Settings, store: Store, llm, guilds: GuildStore | None = None
+    ) -> None:
         intents = discord.Intents(
             guilds=True, messages=True, message_content=True, members=True, dm_messages=True
         )
         super().__init__(intents=intents)
         self.s, self.store, self.llm = settings, store, llm
-        # Hub toggles and channel ids (Firestore only; all on when unavailable).
-        self.team = team or make_bot_team_settings(settings)
+        # Per-guild settings document (Firestore, or in memory for local dev).
+        self.guilds_store = guilds or make_guild_store(settings)
+        self.team = BotGuildSettings(self.guilds_store)
         self.archive = make_archive(settings)
+        self.tree = app_commands.CommandTree(self)
         self._digest_task: asyncio.Task | None = None
+        self._digest_sent: dict[int, date] = {}
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
+        self._sync_last: dict[int, float] = {}
+        self._sync_pending: dict[int, asyncio.Task] = {}
 
     async def setup_hook(self):
+        self._register_commands()
+        try:
+            await self.tree.sync()  # global commands; Discord may take a while to show them
+        except discord.HTTPException:
+            logger.exception("could not sync slash commands")
         self._digest_task = asyncio.create_task(self._digest_loop())
 
     async def on_ready(self):
-        logger.info("logged in as %s", self.user)
+        logger.info("logged in as %s in %d guilds", self.user, len(self.guilds))
+        for guild in self.guilds:
+            await self._sync_guild(guild)
+
+    # ------------------------------------------------------------- guild lifecycle
+    @staticmethod
+    def _guild_snapshot(guild: discord.Guild) -> dict:
+        return {
+            "name": guild.name,
+            "icon_url": guild.icon.url if guild.icon else "",
+            "channels": [{"id": str(c.id), "name": c.name} for c in guild.text_channels][
+                :MAX_SYNCED_CHANNELS
+            ],
+        }
+
+    async def _sync_guild(self, guild: discord.Guild, *, installed: bool = False) -> None:
+        """Write the guild's name, icon and text channels (hub-managed fields are untouched)."""
+        self._sync_last[guild.id] = time.monotonic()
+        try:
+            await asyncio.to_thread(
+                self.guilds_store.upsert_guild,
+                guild.id,
+                active=True,
+                installed=installed,
+                **self._guild_snapshot(guild),
+            )
+        except Exception:
+            logger.exception("could not sync guild %s", guild.id)
+
+    def _request_sync(self, guild: discord.Guild) -> None:
+        """Throttled resync for channel events: at most one write per interval, always ending
+        with the latest state (a burst of changes schedules one trailing sync)."""
+        if guild.id in self._sync_pending:
+            return
+        wait = max(0.0, SYNC_MIN_INTERVAL_S - (time.monotonic() - self._sync_last.get(guild.id, 0)))
+
+        async def later():
+            try:
+                await asyncio.sleep(wait)
+                self._sync_pending.pop(guild.id, None)
+                await self._sync_guild(guild)
+            finally:
+                self._sync_pending.pop(guild.id, None)
+
+        self._sync_pending[guild.id] = asyncio.create_task(later())
+
+    async def on_guild_join(self, guild: discord.Guild):
+        logger.info("joined guild %s", guild.id)
+        await self._sync_guild(guild, installed=True)
+        target = guild.system_channel
+        if target is None or not target.permissions_for(guild.me).send_messages:
+            target = next(
+                (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), None
+            )
+        if target is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await target.send(WELCOME_MESSAGE.format(mention=self.user.mention))
+
+    async def on_guild_remove(self, guild: discord.Guild):
+        logger.info("removed from guild %s", guild.id)
+        try:
+            await asyncio.to_thread(self.guilds_store.set_active, guild.id, False)
+        except Exception:
+            logger.exception("could not mark guild %s inactive", guild.id)
+
+    async def on_guild_channel_create(self, channel):
+        self._request_sync(channel.guild)
+
+    async def on_guild_channel_update(self, before, after):
+        if before.name != after.name:
+            self._request_sync(after.guild)
+
+    async def on_guild_channel_delete(self, channel):
+        self._request_sync(channel.guild)
 
     # ------------------------------------------------------------- permissions
-    def role_names_for(self, message: discord.Message) -> list[str]:
-        if isinstance(message.author, discord.Member):
-            return [r.name for r in message.author.roles]
-        names: list[str] = []  # DM: look the user up in shared guilds
-        for g in self.guilds:
-            m = g.get_member(message.author.id)
-            if m:
-                names += [r.name for r in m.roles]
-        return names
-
-    def is_exec(self, message: discord.Message) -> bool:
-        return self.s.is_exec(message.author.id, self.role_names_for(message))
+    def is_exec_member(self, member: discord.Member) -> bool:
+        """Executives: env user ids, the guild owner, Administrator / Manage Server, or a role named
+        in the guild's exec_role_names. Everyone else only sees their own receipts."""
+        if member.id in self.s.exec_user_ids or can_manage_guild(member):
+            return True
+        names = self.team.exec_role_names(member.guild.id, self.s.exec_role_names)
+        return bool(names & {r.name for r in member.roles})
 
     # ------------------------------------------------------------- routing
     async def on_message(self, message: discord.Message):
         if message.author.bot or message.author == self.user:
             return
         try:
-            await asyncio.to_thread(self.team.current)  # refresh the cache off the event loop
-            receipts_on = self.team.enabled("receipts")
+            if message.guild is None:
+                await self._direct_message(message)
+                return
+            gid = message.guild.id
+            await asyncio.to_thread(self.team.current, gid)  # refresh the cache off the loop
+            receipts_on = self.team.enabled(gid, "receipts")
             if receipts_on and await self._maybe_correction(message):
                 return
-            receipt_ids = self.team.receipt_channel_ids(self.s.receipt_channel_ids)
-            if message.channel.id in receipt_ids and message.attachments:
+            mentioned = self.user is not None and self.user in message.mentions
+            receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
+            is_receipt_post = message.attachments and (
+                message.channel.id in receipt_ids
+                or is_receipt_channel_name(getattr(message.channel, "name", ""))
+                or (mentioned and has_receipt_file(message))
+            )
+            if is_receipt_post:
                 if receipts_on:
                     await self._intake(message)
                 return
-            mentioned = self.user is not None and self.user in message.mentions
-            ask_ids = self.team.ask_channel_ids(self.s.ask_channel_ids)
-            if message.guild is None or mentioned or message.channel.id in ask_ids:
-                await self._answer(message)
+            ask_ids = self.team.ask_channel_ids(gid, self.s.ask_channel_ids)
+            if mentioned or message.channel.id in ask_ids:
+                await self._answer(message, message.guild, message.author)
         except Exception:
             logger.exception("handler failed")
+
+    async def _direct_message(self, message: discord.Message):
+        """DMs have no guild: answer only when the asker shares exactly one guild with Salid."""
+        shared = [(g, g.get_member(message.author.id)) for g in self.guilds]
+        shared = [(g, m) for g, m in shared if m is not None]
+        if len(shared) != 1:
+            await message.reply(DM_MESSAGE.format(mention=self.user.mention), mention_author=False)
+            return
+        guild, member = shared[0]
+        await asyncio.to_thread(self.team.current, guild.id)
+        await self._answer(message, guild, member)
 
     async def _maybe_correction(self, message: discord.Message) -> bool:
         ref = message.reference
         if not ref or not ref.message_id or not message.content.strip():
             return False
         receipt = self.store.get_by_reply_message(ref.message_id)
-        if not receipt:
+        if not receipt or receipt.guild_id != message.guild.id:
             return False
-        if message.author.id != receipt.submitter_id and not self.is_exec(message):
+        if message.author.id != receipt.submitter_id and not self.is_exec_member(message.author):
             await message.reply("แก้ไขได้เฉพาะผู้ส่งใบเสร็จหรือผู้บริหารเท่านั้น", mention_author=False)
             return True
         async with message.channel.typing():
@@ -123,6 +262,7 @@ class SecretaryBot(discord.Client):
                     self.store,
                     self.llm,
                     self.s,
+                    guild_id=message.guild.id,
                     data=data,
                     filename=att.filename,
                     content_type=att.content_type,
@@ -142,27 +282,34 @@ class SecretaryBot(discord.Client):
             if res.status == "created":
                 self.store.set_reply_message(res.receipt.id, sent.id)
 
-    async def _answer(self, message: discord.Message):
+    async def _answer(self, message: discord.Message, guild: discord.Guild, member):
         q = message.content
         if self.user:
             q = q.replace(f"<@{self.user.id}>", "").replace(f"<@!{self.user.id}>", "")
         q = q.strip()
         if not q:
             return
-        is_exec = self.is_exec(message)
+        gid = guild.id
+        is_exec = self.is_exec_member(member)
         task = parse_deep_trigger(q)
         if task is not None:
-            if self.team.enabled("deep_tasks"):
-                await self._deep(message, task, is_exec)
+            if self.team.enabled(gid, "deep_tasks"):
+                await self._deep(message, gid, task, is_exec)
             else:
                 await message.reply(DEEP_OFF_MESSAGE, mention_author=False)
             return
-        if not self.team.enabled("qa"):
+        if not self.team.enabled(gid, "qa"):
             await message.reply(QA_OFF_MESSAGE, mention_author=False)
             return
         async with message.channel.typing():
             ans = await asyncio.to_thread(
-                ask, self.s, self.store, q, is_exec=is_exec, user_id=message.author.id
+                ask,
+                self.s,
+                self.store,
+                q,
+                guild_id=gid,
+                is_exec=is_exec,
+                user_id=message.author.id,
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         for i, part in enumerate(chunks(ans.text)):
@@ -170,7 +317,7 @@ class SecretaryBot(discord.Client):
                 message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
             )
 
-    async def _deep(self, message: discord.Message, task: str, is_exec: bool):
+    async def _deep(self, message: discord.Message, guild_id: int, task: str, is_exec: bool):
         """Executives only. Acknowledge at once, run Gemini CLI in the background, post the result."""
         if not is_exec:
             await message.reply(NOT_EXEC_MESSAGE, mention_author=False)
@@ -182,13 +329,15 @@ class SecretaryBot(discord.Client):
             await message.reply(BUSY_MESSAGE, mention_author=False)
         else:
             await message.reply(ACK_MESSAGE, mention_author=False)
-            t = asyncio.create_task(self._run_deep(message, task))
+            t = asyncio.create_task(self._run_deep(message, guild_id, task))
             self._deep_tasks.add(t)
             t.add_done_callback(self._deep_tasks.discard)
 
-    async def _run_deep(self, message: discord.Message, task: str):
+    async def _run_deep(self, message: discord.Message, guild_id: int, task: str):
         try:
-            res = await asyncio.to_thread(run_deep_task, self.s, self.store, task)
+            res = await asyncio.to_thread(
+                run_deep_task, self.s, self.store, task, guild_id=guild_id
+            )
         except DeepTaskError as e:
             await message.channel.send(f"❌ {e}")
             return
@@ -206,28 +355,71 @@ class SecretaryBot(discord.Client):
         file = discord.File(io.BytesIO(attachment), filename=REPORT_NAME) if attachment else None
         await message.reply(text, file=file, mention_author=False)
 
+    # ------------------------------------------------------------- slash commands
+    def _register_commands(self) -> None:
+        async def setup(interaction: discord.Interaction):
+            await self.handle_setup(interaction)
+
+        setup = app_commands.guild_only()(setup)
+        setup = app_commands.default_permissions(manage_guild=True)(setup)
+        for name in SETUP_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name,
+                    description="เชื่อมเซิร์ฟเวอร์นี้กับศูนย์บัญชาการของสลิด (ผู้ดูแลเท่านั้น)",
+                    callback=setup,
+                )
+            )
+
+    async def handle_setup(self, interaction: discord.Interaction) -> None:
+        """/ตั้งค่า: DM-style ephemeral reply with a one-time link to the hub for this guild."""
+        guild, user = interaction.guild, interaction.user
+        if guild is None or not hasattr(user, "guild_permissions") or not can_manage_guild(user):
+            await interaction.response.send_message(SETUP_DENIED_MESSAGE, ephemeral=True)
+            return
+        try:
+            code = await asyncio.to_thread(
+                self.guilds_store.create_link_code, guild.id, user.id, str(user)
+            )
+        except Exception:
+            logger.exception("could not create a link code")
+            await interaction.response.send_message(SETUP_FAILED_MESSAGE, ephemeral=True)
+            return
+        url = f"{self.s.hub_url.rstrip('/')}/hub?link={code}"
+        await interaction.response.send_message(
+            SETUP_MESSAGE.format(name=guild.name, url=url), ephemeral=True
+        )
+
     # ------------------------------------------------------------- digest
-    def next_digest_at(self, now: datetime) -> datetime:
-        hh, mm = (int(x) for x in self.team.digest_time(self.s.digest_time).split(":"))
-        t = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        return t if t > now else t + timedelta(days=1)
+    def due_digests(self, now: datetime) -> list[tuple[discord.Guild, discord.abc.Messageable]]:
+        """Guilds whose daily digest is due this minute (and not yet sent today)."""
+        due = []
+        for guild in self.guilds:
+            gid = guild.id
+            if self._digest_sent.get(gid) == now.date() or not self.team.enabled(gid, "digest"):
+                continue
+            channel_id = self.team.digest_channel_id(gid, self.s.digest_channel_id)
+            channel = guild.get_channel(channel_id) if channel_id else None
+            if channel is None:  # no digest channel (or not in this guild): skip the guild
+                continue
+            if now.strftime("%H:%M") == self.team.digest_time(gid, self.s.digest_time):
+                due.append((guild, channel))
+        return due
+
+    async def _send_digests(self, now: datetime) -> None:
+        for guild, channel in self.due_digests(now):
+            self._digest_sent[guild.id] = now.date()
+            try:
+                text = await asyncio.to_thread(build_daily_digest, self.store, guild.id, now.date())
+                for part in chunks(text):
+                    await channel.send(part)
+            except Exception:
+                logger.exception("digest for guild %s failed", guild.id)
 
     async def _digest_loop(self):
         await self.wait_until_ready()
         while not self.is_closed():
-            now = self.s.now()
-            await asyncio.to_thread(self.team.current)
-            nxt = self.next_digest_at(now)
-            wait = (nxt - now).total_seconds()
-            if wait > 60:  # wake up every minute so hub changes to the time apply promptly
-                await asyncio.sleep(60)
-                continue
-            await asyncio.sleep(wait)
-            channel_id = self.team.digest_channel_id(self.s.digest_channel_id)
-            if channel_id and self.team.enabled("digest"):
-                ch = self.get_channel(channel_id)
-                if ch:
-                    text = await asyncio.to_thread(build_daily_digest, self.store, nxt.date())
-                    for part in chunks(text):
-                        await ch.send(part)
-            await asyncio.sleep(1)
+            for guild in self.guilds:  # refresh the caches off the event loop
+                await asyncio.to_thread(self.team.current, guild.id)
+            await self._send_digests(self.s.now())
+            await asyncio.sleep(20)  # < 1 minute, so the HH:MM match is never skipped

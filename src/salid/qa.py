@@ -32,11 +32,13 @@ def baht(x: float) -> str:
 
 
 class LedgerTools:
-    """Tools the model may call. All arithmetic happens here (SQL). `forced_submitter_id` is injected into every
-    query and is NOT part of any tool schema, so the model cannot widen the scope."""
+    """Tools the model may call. All arithmetic happens here (SQL). `guild_id` (the tenant) and
+    `forced_submitter_id` are injected into every query and are NOT part of any tool schema, so the
+    model cannot widen the scope."""
 
-    def __init__(self, store: Store, forced_submitter_id: int | None = None):
+    def __init__(self, store: Store, guild_id: int, forced_submitter_id: int | None = None):
         self.store = store
+        self.guild_id = guild_id
         self.forced = forced_submitter_id
 
     def _fmt_summary(self, s: dict) -> dict:
@@ -47,7 +49,9 @@ class LedgerTools:
 
     def spending_summary(self, start_date: str, end_date: str, group_by: str = "none") -> dict:
         return self._fmt_summary(
-            self.store.summarize(start_date, end_date, group_by, submitter_id=self.forced)
+            self.store.summarize(
+                self.guild_id, start_date, end_date, group_by, submitter_id=self.forced
+            )
         )
 
     def list_receipts(
@@ -60,6 +64,7 @@ class LedgerTools:
         limit: int = 20,
     ) -> dict:
         rows = self.store.list_receipts(
+            self.guild_id,
             start_date,
             end_date,
             category,
@@ -73,8 +78,8 @@ class LedgerTools:
     def compare_periods(
         self, a_start: str, a_end: str, b_start: str, b_end: str, group_by: str = "none"
     ) -> dict:
-        a = self.store.summarize(a_start, a_end, group_by, submitter_id=self.forced)
-        b = self.store.summarize(b_start, b_end, group_by, submitter_id=self.forced)
+        a = self.store.summarize(self.guild_id, a_start, a_end, group_by, submitter_id=self.forced)
+        b = self.store.summarize(self.guild_id, b_start, b_end, group_by, submitter_id=self.forced)
         am, bm = (
             {g["key"]: g["total"] for g in a["groups"]},
             {g["key"]: g["total"] for g in b["groups"]},
@@ -112,7 +117,7 @@ class LedgerTools:
         }
 
     def flagged_receipts(self) -> dict:
-        rows = self.store.flagged(submitter_id=self.forced)
+        rows = self.store.flagged(self.guild_id, submitter_id=self.forced)
         return {"count": len(rows), "receipts": [self._r(r) for r in rows]}
 
     @staticmethod
@@ -300,17 +305,18 @@ async def ask_async(
     store: Store,
     question: str,
     *,
+    guild_id: int,
     is_exec: bool,
     user_id: int,
     now=None,
     model=None,
 ) -> Answer:
     """Answer a question with an ADK agent. Scope is decided here in code, before any data
-    reaches the model: tools are built per request around a LedgerTools whose
-    `forced_submitter_id` is the asker for non-executives."""
+    reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
+    whose `forced_submitter_id` is the asker for non-executives."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
-    ledger = LedgerTools(store, forced_submitter_id=None if is_exec else user_id)
+    ledger = LedgerTools(store, guild_id, forced_submitter_id=None if is_exec else user_id)
     agent = build_agent(
         settings, build_tools(ledger, calls), scoped=not is_exec, now=now, model=model
     )
@@ -344,6 +350,7 @@ def ask(
     store: Store,
     question: str,
     *,
+    guild_id: int,
     is_exec: bool,
     user_id: int,
     now=None,
@@ -351,5 +358,14 @@ def ask(
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
-        ask_async(settings, store, question, is_exec=is_exec, user_id=user_id, now=now, model=model)
+        ask_async(
+            settings,
+            store,
+            question,
+            guild_id=guild_id,
+            is_exec=is_exec,
+            user_id=user_id,
+            now=now,
+            model=model,
+        )
     )

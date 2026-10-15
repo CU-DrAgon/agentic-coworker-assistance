@@ -1,13 +1,13 @@
 import json
 
-from conftest import ALICE, BOB, EXEC_ID, fc_resp, scripted, text_resp
+from conftest import ALICE, BOB, EXEC_ID, GUILD, fc_resp, scripted, text_resp
 
 from salid.digest import build_daily_digest
 from salid.qa import MAX_ROUNDS, LedgerTools, ask
 
 
 def test_aggregation_math(seeded):
-    t = LedgerTools(seeded)
+    t = LedgerTools(seeded, GUILD)
     s = t.spending_summary("2026-10-01", "2026-10-31", "category")
     assert s["total"] == 10370.5 and s["count"] == 4
     assert {g["key"]: g["total"] for g in s["groups"]} == {"วัตถุดิบ": 10120.0, "ค่าเดินทาง": 250.5}
@@ -24,7 +24,7 @@ def test_aggregation_math(seeded):
 
 
 def test_compare_periods(seeded):
-    c = LedgerTools(seeded).compare_periods(
+    c = LedgerTools(seeded, GUILD).compare_periods(
         "2026-10-01", "2026-10-31", "2026-09-01", "2026-09-30", "category"
     )
     assert c["overall"]["diff"] == 7370.5 and c["overall"]["pct_change_vs_b"] == 245.7
@@ -33,7 +33,7 @@ def test_compare_periods(seeded):
 
 
 def test_list_and_flagged(seeded):
-    t = LedgerTools(seeded)
+    t = LedgerTools(seeded, GUILD)
     assert t.list_receipts("2026-10-01", "2026-10-31", vendor_contains="mak")["count"] == 2
     assert (
         t.list_receipts("2026-10-01", "2026-10-31", category="ค่าเดินทาง")["receipts"][0]["vendor"]
@@ -44,7 +44,7 @@ def test_list_and_flagged(seeded):
 
 
 def test_non_exec_scoped_in_every_tool(seeded):
-    t = LedgerTools(seeded, forced_submitter_id=ALICE)
+    t = LedgerTools(seeded, GUILD, forced_submitter_id=ALICE)
     assert t.spending_summary("2026-01-01", "2026-12-31")["total"] == 1250.5
     assert t.spending_summary("2026-01-01", "2026-12-31", "submitter")["groups"] == [
         {"key": "Alice", "total": 1250.5, "count": 2, "total_fmt": "฿1,250.50"}
@@ -60,7 +60,7 @@ def test_non_exec_scoped_in_every_tool(seeded):
 
 
 def test_model_cannot_override_scope(seeded):
-    t = LedgerTools(seeded, forced_submitter_id=ALICE)
+    t = LedgerTools(seeded, GUILD, forced_submitter_id=ALICE)
     r = t.call(
         "spending_summary",
         {
@@ -110,7 +110,9 @@ def test_non_exec_cannot_see_others_even_if_model_asks_for_everything(seeded, se
         ),
         text_resp("ok"),
     )
-    a = ask(settings, seeded, "ใครเบิกเยอะสุด", is_exec=False, user_id=ALICE, model=llm)
+    a = ask(
+        settings, seeded, "ใครเบิกเยอะสุด", guild_id=GUILD, is_exec=False, user_id=ALICE, model=llm
+    )
     blob = _tool_results(llm)
     assert a.text == "ok" and len(a.tool_calls) == 5
     assert "Alice" in blob and "1250.5" in blob
@@ -129,7 +131,9 @@ def test_non_exec_cannot_see_others_even_if_model_asks_for_everything(seeded, se
 
 def test_exec_sees_everything(seeded, settings):
     llm = scripted(fc_resp(("spending_summary", EVERYTHING)), text_resp("รวม ฿13,370.50"))
-    a = ask(settings, seeded, "ทั้งหมดเท่าไร", is_exec=True, user_id=EXEC_ID, model=llm)
+    a = ask(
+        settings, seeded, "ทั้งหมดเท่าไร", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm
+    )
     assert a.text == "รวม ฿13,370.50" and a.rounds == 1 and a.tool_calls[0][0] == "spending_summary"
     assert "13370.5" in _tool_results(llm)
     assert "ไม่ใช่ผู้บริหาร" not in llm.requests[0].config.system_instruction
@@ -137,7 +141,7 @@ def test_exec_sees_everything(seeded, settings):
 
 def test_tools_are_the_four_ledger_tools(seeded, settings):
     llm = scripted(text_resp("ok"))
-    ask(settings, seeded, "x", is_exec=True, user_id=EXEC_ID, model=llm)
+    ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
     names = {d.name for t in llm.requests[0].config.tools for d in t.function_declarations}
     assert names == {"spending_summary", "list_receipts", "compare_periods", "flagged_receipts"}
 
@@ -146,13 +150,13 @@ def test_bad_tool_args_return_error_to_model(seeded, settings):
     llm = scripted(
         fc_resp(("spending_summary", {**EVERYTHING, "group_by": "nonsense"})), text_resp("ขออภัย")
     )
-    a = ask(settings, seeded, "x", is_exec=True, user_id=EXEC_ID, model=llm)
+    a = ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
     assert a.text == "ขออภัย" and "bad group_by" in _tool_results(llm)
 
 
 def test_round_cap(seeded, settings):
     llm = scripted(*[fc_resp(("flagged_receipts", {}))] * MAX_ROUNDS, text_resp("สรุป"))
-    a = ask(settings, seeded, "x", is_exec=True, user_id=EXEC_ID, model=llm)
+    a = ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
     assert a.rounds == MAX_ROUNDS and a.text == "สรุป"
     assert len(llm.requests) == MAX_ROUNDS + 1
     assert not llm.requests[-1].config.tools  # the final call has no tools
@@ -160,11 +164,11 @@ def test_round_cap(seeded, settings):
 
 def test_digest(seeded):
     seeded_day = "2026-10-05"
-    d = build_daily_digest(seeded, seeded_day)
+    d = build_daily_digest(seeded, GUILD, seeded_day)
     assert "฿9,250.5" in d and "Makro" in d and "วัตถุดิบ" in d and "ค่าเดินทาง" in d
-    d2 = build_daily_digest(seeded, "2026-10-14")
+    d2 = build_daily_digest(seeded, GUILD, "2026-10-14")
     assert "Ice Co" in d2 and "ต้องตรวจสอบ" in d2
-    assert "ไม่มีใบเสร็จ" in build_daily_digest(seeded, "2026-01-01")
+    assert "ไม่มีใบเสร็จ" in build_daily_digest(seeded, GUILD, "2026-01-01")
 
 
 def test_digest_top3(store):
@@ -172,7 +176,7 @@ def test_digest_top3(store):
 
     for i, (v, t) in enumerate([("A", 1), ("B", 5), ("C", 3), ("D", 4)]):
         mk(store, i, 1, "x", v, "2026-10-01", t)
-    d = build_daily_digest(store, "2026-10-01")
+    d = build_daily_digest(store, GUILD, "2026-10-01")
     assert "1. B" in d and "2. D" in d and "3. C" in d and "A:" not in d.split("3 อันดับ")[1]
 
 

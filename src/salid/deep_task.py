@@ -175,10 +175,15 @@ TASK_TEMPLATE = """# งานจากผู้บริหาร (สลิด
 
 
 def prepare_workspace(
-    ws: Path, store: Store, settings: Settings, task: str, submitter_id: int | None = None
+    ws: Path,
+    store: Store,
+    settings: Settings,
+    task: str,
+    guild_id: int,
+    submitter_id: int | None = None,
 ) -> int:
     """Write receipts.csv, aggregates.json and TASK.md into `ws`. Returns the receipt count."""
-    rows = store.all_receipts("0000-01-01", "9999-12-31", submitter_id=submitter_id)
+    rows = store.all_receipts(guild_id, "0000-01-01", "9999-12-31", submitter_id=submitter_id)
     with (ws / "receipts.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         w.writeheader()
@@ -333,10 +338,12 @@ def run_deep_task(
     store: Store,
     task: str,
     *,
+    guild_id: int,
     submitter_id: int | None = None,
     runner=_run,
 ) -> DeepResult:
-    """Run one deep task. `submitter_id` scopes the exported data (None = everything: execs only).
+    """Run one deep task on `guild_id`'s ledger only. `submitter_id` narrows the exported data
+    further (None = the whole guild: execs only).
 
     `runner(cmd, env, cwd, timeout) -> (returncode, stdout, stderr)` is injectable for tests.
     """
@@ -351,7 +358,7 @@ def run_deep_task(
         (home / ".gemini" / "settings.json").write_text(
             json.dumps(build_cli_settings(settings.deep_task_model)), encoding="utf-8"
         )
-        prepare_workspace(ws, store, settings, task, submitter_id)
+        prepare_workspace(ws, store, settings, task, guild_id, submitter_id)
         rc, out, err = runner(
             build_command(settings), build_env(settings, home), ws, settings.deep_task_timeout
         )

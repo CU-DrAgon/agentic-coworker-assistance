@@ -1,0 +1,388 @@
+"""Per-guild (Discord server) Salid settings, written by the bot and edited in the web hub.
+
+One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
+
+    features             {receipts, qa, digest, deep_tasks}: bool, all default true
+    receipt_channel_ids  list[str] extra channels where every attachment is a receipt
+    ask_channel_ids      list[str] channels where every message is a question
+    digest_channel_id    str ("" = no daily digest)
+    digest_time          "HH:MM"
+    exec_role_names      list[str] roles that count as executives (default ผู้บริหาร, Executive)
+    admin_emails         list[str] lowercase Google accounts allowed to manage this guild in the hub
+    guild_name, icon_url, installed_at, active   written by the bot (join / leave / resync)
+    channels             list[{id, name}] text channels, synced by the bot (feeds the hub dropdowns)
+    updated_by, updated_at
+
+and one short-lived document per `/ตั้งค่า` link, `salid_link_codes/{code}`:
+`{guild_id, discord_user_id, discord_user_name, created_at, expires_at, used}`.
+The code is a 32-byte URL-safe random string; redeeming it (hub, after Google sign-in) is a
+Firestore transaction that marks it used and adds the verified email to `admin_emails`. That is
+how a Discord admin proves control of a guild to the hub with no OAuth secret.
+
+The bot reads settings through `BotGuildSettings` (60 s cache per guild, fails open: a missing
+document or a read error means defaults, i.e. every feature on). With `SALID_STORE=sqlite`
+(local dev) the same API runs on an in-memory store, so nothing needs Firestore.
+
+Channel rule: channel ids listed in the document are *added* to the env lists
+(`SALID_RECEIPT_CHANNEL_IDS` / `SALID_ASK_CHANNEL_IDS`); `digest_channel_id` and, once the hub has
+saved the document, `digest_time` and `exec_role_names` *override* the env values.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import secrets
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
+
+TTL_S = 60.0
+LINK_TTL = timedelta(minutes=15)
+FEATURES = ("receipts", "qa", "digest", "deep_tasks")
+DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
+_ID = re.compile(r"^\d{1,25}$")
+_TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+class Features(BaseModel):
+    receipts: bool = True
+    qa: bool = True
+    digest: bool = True
+    deep_tasks: bool = True
+
+
+class Channel(BaseModel):
+    id: str
+    name: str
+
+
+def _clean_ids(v) -> list[str]:
+    out = [str(x).strip() for x in (v or []) if str(x).strip()]
+    if any(not _ID.match(x) for x in out):
+        raise ValueError("channel ids must be numeric")
+    return list(dict.fromkeys(out))
+
+
+class GuildSettingsUpdate(BaseModel):
+    """What the hub may change. Everything else in the document is owned by the bot."""
+
+    features: Features = Field(default_factory=Features)
+    receipt_channel_ids: list[str] = Field(default_factory=list, max_length=50)
+    ask_channel_ids: list[str] = Field(default_factory=list, max_length=50)
+    digest_channel_id: str = ""
+    digest_time: str = "18:00"
+    exec_role_names: list[str] = Field(default_factory=lambda: list(DEFAULT_EXEC_ROLES))
+
+    @field_validator("receipt_channel_ids", "ask_channel_ids", mode="before")
+    @classmethod
+    def _ids(cls, v):
+        return _clean_ids(v)
+
+    @field_validator("digest_channel_id", mode="before")
+    @classmethod
+    def _digest_id(cls, v):
+        v = "" if v is None else str(v).strip()
+        if v and not _ID.match(v):
+            raise ValueError("digest_channel_id must be numeric")
+        return v
+
+    @field_validator("digest_time")
+    @classmethod
+    def _time(cls, v):
+        if not _TIME.match(v):
+            raise ValueError("digest_time must be HH:MM")
+        return v
+
+    @field_validator("exec_role_names", mode="before")
+    @classmethod
+    def _roles(cls, v):
+        out = [str(x).strip() for x in (v or []) if str(x).strip()]
+        if len(out) > 20 or any(len(x) > 100 for x in out):
+            raise ValueError("too many or too long role names")
+        return list(dict.fromkeys(out))
+
+
+class GuildSettings(GuildSettingsUpdate):
+    """A full guild document (what the hub reads). Missing document = these defaults."""
+
+    admin_emails: list[str] = Field(default_factory=list)
+    guild_name: str = ""
+    icon_url: str = ""
+    channels: list[Channel] = Field(default_factory=list)
+    installed_at: str = ""
+    active: bool = True
+    updated_by: str = ""
+    updated_at: str = ""
+
+
+class LinkError(Exception):
+    """The link code is unknown, expired or already used."""
+
+
+class GuildStore:
+    """Firestore access for guild documents and link codes. The client is created lazily."""
+
+    def __init__(
+        self,
+        client: Any = None,
+        collection: str = "salid_guilds",
+        link_collection: str = "salid_link_codes",
+        project: str | None = None,
+    ) -> None:
+        self._client, self._project = client, project
+        self.collection, self.link_collection = collection, link_collection
+
+    @property
+    def client(self) -> Any:
+        if self._client is None:
+            from google.cloud import firestore
+
+            self._client = firestore.Client(project=self._project)
+        return self._client
+
+    def _ref(self, guild_id: int | str) -> Any:
+        return self.client.collection(self.collection).document(str(guild_id))
+
+    def _in_transaction(self, fn):
+        from google.cloud import firestore
+
+        return firestore.transactional(fn)(self.client.transaction())
+
+    # ------------------------------------------------------------ reads
+    def find(self, guild_id: int) -> GuildSettings | None:
+        snap = self._ref(guild_id).get()
+        return GuildSettings.model_validate(snap.to_dict() or {}) if snap.exists else None
+
+    def get(self, guild_id: int) -> GuildSettings:
+        """The stored settings, or defaults when the guild has no document."""
+        return self.find(guild_id) or GuildSettings()
+
+    def list_guilds(self, email: str | None = None) -> list[tuple[int, GuildSettings]]:
+        """Guilds `email` administers (all guilds when email is None, for super admins)."""
+        from google.cloud.firestore_v1.base_query import FieldFilter
+
+        col = self.client.collection(self.collection)
+        q = (
+            col
+            if email is None
+            else col.where(filter=FieldFilter("admin_emails", "array_contains", email.lower()))
+        )
+        out = [(int(s.id), GuildSettings.model_validate(s.to_dict() or {})) for s in q.stream()]
+        return sorted(out, key=lambda t: (t[1].guild_name.casefold(), t[0]))
+
+    # ------------------------------------------------------------ bot writes
+    def upsert_guild(
+        self,
+        guild_id: int,
+        *,
+        name: str,
+        icon_url: str,
+        channels: list[dict],
+        active: bool = True,
+        installed: bool = False,
+    ) -> None:
+        """Merge what the bot knows about the guild; never touches hub-managed fields."""
+        data: dict[str, Any] = {
+            "guild_name": name,
+            "icon_url": icon_url,
+            "channels": channels,
+            "active": active,
+        }
+        if installed:
+            data["installed_at"] = _now().isoformat(timespec="seconds")
+        self._ref(guild_id).set(data, merge=True)
+
+    def set_active(self, guild_id: int, active: bool) -> None:
+        self._ref(guild_id).set({"active": active}, merge=True)
+
+    # ------------------------------------------------------------ hub writes
+    def save_settings(
+        self, guild_id: int, update: GuildSettingsUpdate, updated_by: str
+    ) -> GuildSettings:
+        data = update.model_dump()
+        data["updated_by"] = updated_by
+        data["updated_at"] = _now().isoformat(timespec="seconds")
+        self._ref(guild_id).set(data, merge=True)
+        return self.get(guild_id)
+
+    # ------------------------------------------------------------ link codes
+    def create_link_code(self, guild_id: int, user_id: int, user_name: str) -> str:
+        code = secrets.token_urlsafe(32)
+        now = _now()
+        self.client.collection(self.link_collection).document(code).set(
+            {
+                "guild_id": guild_id,
+                "discord_user_id": user_id,
+                "discord_user_name": user_name,
+                "created_at": now.isoformat(timespec="seconds"),
+                "expires_at": (now + LINK_TTL).isoformat(timespec="seconds"),
+                "used": False,
+            }
+        )
+        return code
+
+    def redeem_link_code(self, code: str, email: str) -> tuple[int, GuildSettings]:
+        """Atomically consume `code` and make `email` an admin of its guild.
+
+        Raises LinkError when the code is unknown, used or expired. Runs in one Firestore
+        transaction, so two people racing for the same code cannot both win.
+        """
+        email = email.lower()
+        code_ref = self.client.collection(self.link_collection).document(code)
+
+        def run(txn) -> int:
+            snap = code_ref.get(transaction=txn)
+            info = snap.to_dict() if snap.exists else None
+            if not info or info.get("used"):
+                raise LinkError("code unknown or already used")
+            if datetime.fromisoformat(info["expires_at"]) <= _now():
+                raise LinkError("code expired")
+            gid = int(info["guild_id"])
+            guild_ref = self._ref(gid)
+            gsnap = guild_ref.get(transaction=txn)
+            admins = list((gsnap.to_dict() or {}).get("admin_emails", [])) if gsnap.exists else []
+            if email not in admins:
+                admins.append(email)
+            txn.update(code_ref, {"used": True, "used_by": email, "used_at": _now().isoformat()})
+            txn.set(guild_ref, {"admin_emails": admins}, merge=True)
+            return gid
+
+        gid = self._in_transaction(run)
+        return gid, self.get(gid)
+
+
+class MemoryFirestore:
+    """Minimal in-memory stand-in for the Firestore calls `GuildStore` makes (local dev, tests).
+
+    Supports collection().document().get/set(merge)/update and a collection stream() with an
+    optional array_contains filter.
+    """
+
+    class _Snap:
+        def __init__(self, doc_id: str, data: dict | None):
+            self.id, self._data = doc_id, data
+
+        @property
+        def exists(self) -> bool:
+            return self._data is not None
+
+        def to_dict(self):
+            return None if self._data is None else dict(self._data)
+
+    class _Ref:
+        def __init__(self, docs: dict, doc_id: str):
+            self.docs, self.id = docs, doc_id
+
+        def get(self, **_):
+            return MemoryFirestore._Snap(self.id, self.docs.get(self.id))
+
+        def set(self, data, merge: bool = False):
+            self.docs[self.id] = {**self.docs.get(self.id, {}), **data} if merge else dict(data)
+
+        def update(self, fields):
+            self.docs[self.id].update(fields)
+
+    class _Col:
+        def __init__(self, docs: dict, filters=()):
+            self.docs, self.filters = docs, tuple(filters)
+
+        def document(self, doc_id: str):
+            return MemoryFirestore._Ref(self.docs, doc_id)
+
+        def where(self, *, filter):
+            return MemoryFirestore._Col(self.docs, (*self.filters, filter))
+
+        def stream(self):
+            return iter(
+                MemoryFirestore._Snap(i, d)
+                for i, d in list(self.docs.items())
+                if all(f.value in d.get(f.field_path, []) for f in self.filters)
+            )
+
+    class _Txn:
+        def update(self, ref, fields):
+            ref.update(fields)
+
+        def set(self, ref, data, merge: bool = False):
+            ref.set(data, merge=merge)
+
+    def __init__(self) -> None:
+        self.cols: dict[str, dict] = {}
+        self.lock = threading.Lock()
+
+    def collection(self, name: str):
+        return MemoryFirestore._Col(self.cols.setdefault(name, {}))
+
+
+class MemoryGuildStore(GuildStore):
+    """`GuildStore` on `MemoryFirestore`: SALID_STORE=sqlite (local dev) and offline tests."""
+
+    def __init__(self, **kw) -> None:
+        super().__init__(client=MemoryFirestore(), **kw)
+
+    def _in_transaction(self, fn):
+        with self.client.lock:
+            return fn(MemoryFirestore._Txn())
+
+
+class BotGuildSettings:
+    """What the bot consults, per guild. Cached for `ttl` seconds and fails open."""
+
+    def __init__(self, store: GuildStore, ttl: float = TTL_S, clock=time.monotonic):
+        self.store, self._ttl, self._clock = store, ttl, clock
+        self._cache: dict[int, tuple[float, GuildSettings]] = {}
+
+    def current(self, guild_id: int) -> GuildSettings:
+        now = self._clock()
+        hit = self._cache.get(guild_id)
+        if hit is None or now - hit[0] >= self._ttl:
+            try:
+                value = self.store.get(guild_id)
+            except Exception:
+                logger.warning(
+                    "could not read settings of guild %s; keeping previous/defaults",
+                    guild_id,
+                    exc_info=True,
+                )
+                value = hit[1] if hit else GuildSettings()
+            hit = self._cache[guild_id] = (now, value)
+        return hit[1]
+
+    def enabled(self, guild_id: int, feature: str) -> bool:
+        return bool(getattr(self.current(guild_id).features, feature))
+
+    def receipt_channel_ids(self, guild_id: int, env_ids: set[int]) -> set[int]:
+        return env_ids | {int(x) for x in self.current(guild_id).receipt_channel_ids}
+
+    def ask_channel_ids(self, guild_id: int, env_ids: set[int]) -> set[int]:
+        return env_ids | {int(x) for x in self.current(guild_id).ask_channel_ids}
+
+    def digest_channel_id(self, guild_id: int, env_id: int | None) -> int | None:
+        v = self.current(guild_id).digest_channel_id
+        return int(v) if v else env_id
+
+    def digest_time(self, guild_id: int, env_time: str) -> str:
+        g = self.current(guild_id)
+        # Defaults apply until the hub has saved the document (every save sets updated_at).
+        return g.digest_time if g.updated_at else env_time
+
+    def exec_role_names(self, guild_id: int, env_names: set[str]) -> set[str]:
+        g = self.current(guild_id)
+        return set(g.exec_role_names) if g.updated_at else set(env_names)
+
+
+def make_guild_store(settings) -> GuildStore:
+    """Firestore only when SALID_STORE=firestore; otherwise an in-memory store."""
+    if settings.store != "firestore":
+        return MemoryGuildStore(collection=settings.guild_collection)
+    return GuildStore(collection=settings.guild_collection, project=settings.gcp_project)

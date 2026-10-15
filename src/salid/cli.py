@@ -1,4 +1,7 @@
-"""Salid offline testing: extract <file>, ask "<q>" --as-exec|--as-user ID, deep "<task>" --as-exec, digest [date]."""
+"""Salid offline testing: extract <file>, ask "<q>" --as-exec|--as-user ID, deep "<task>" --as-exec, digest [date].
+
+`ask`, `deep` and `digest` work on one guild's ledger: pass `--guild ID` (default 0, the local
+dev / pre-multitenant ledger)."""
 
 from __future__ import annotations
 
@@ -23,16 +26,19 @@ def main(argv=None) -> None:
     e.add_argument("--note", default="")
     a = sub.add_parser("ask")
     a.add_argument("question")
+    a.add_argument("--guild", type=int, default=0, metavar="ID")
     g = a.add_mutually_exclusive_group(required=True)
     g.add_argument("--as-exec", action="store_true")
     g.add_argument("--as-user", type=int, metavar="ID")
     dp = sub.add_parser("deep", help="multi-step task via Gemini CLI (executives only)")
     dp.add_argument("task")
+    dp.add_argument("--guild", type=int, default=0, metavar="ID")
     g2 = dp.add_mutually_exclusive_group(required=True)
     g2.add_argument("--as-exec", action="store_true")
     g2.add_argument("--as-user", type=int, metavar="ID")
     d = sub.add_parser("digest")
     d.add_argument("date", nargs="?")
+    d.add_argument("--guild", type=int, default=0, metavar="ID")
     args = ap.parse_args(argv)
     s = Settings.from_env()
 
@@ -45,7 +51,14 @@ def main(argv=None) -> None:
             )
         )
     elif args.cmd == "ask":
-        ans = ask(s, make_store(s), args.question, is_exec=args.as_exec, user_id=args.as_user or 0)
+        ans = ask(
+            s,
+            make_store(s),
+            args.question,
+            guild_id=args.guild,
+            is_exec=args.as_exec,
+            user_id=args.as_user or 0,
+        )
         print(ans.text)
         print(f"\n[{ans.seconds:.1f}s, {ans.rounds} tool rounds, calls={ans.tool_calls}]")
     elif args.cmd == "deep":
@@ -53,7 +66,7 @@ def main(argv=None) -> None:
             print(NOT_EXEC_MESSAGE)
             return
         try:
-            res = run_deep_task(s, make_store(s), args.task)
+            res = run_deep_task(s, make_store(s), args.task, guild_id=args.guild)
         except DeepTaskError as e:
             print(e)
             raise SystemExit(1) from None
@@ -61,7 +74,7 @@ def main(argv=None) -> None:
         print(f"\n[{format_stats(res)}; pinned_ok={res.pinned_ok}]")
     elif args.cmd == "digest":
         day = date.fromisoformat(args.date) if args.date else s.today()
-        print(build_daily_digest(make_store(s), day))
+        print(build_daily_digest(make_store(s), args.guild, day))
 
 
 if __name__ == "__main__":

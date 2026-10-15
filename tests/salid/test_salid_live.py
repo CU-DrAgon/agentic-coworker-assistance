@@ -9,6 +9,7 @@ from salid.extract import extract_receipt
 from salid.llm import make_client
 
 pytestmark = pytest.mark.live
+GUILD = 1000
 
 
 def make_receipt_png() -> bytes:
@@ -77,7 +78,7 @@ def test_live_firestore_store_and_gcs_archive():
         def mk(n, uid, name, vendor, day, total, conf=0.9):
             return store.add_receipt(
                 Receipt(
-                    submitter_id=uid, submitter_name=name, sha256=f"{token}-{n}", vendor=vendor,
+                    guild_id=GUILD, submitter_id=uid, submitter_name=name, sha256=f"{token}-{n}", vendor=vendor,
                     receipt_date=day, effective_date=day, total=total, category="วัตถุดิบ",
                     confidence=conf, created_at=day,
                 )
@@ -87,12 +88,14 @@ def test_live_firestore_store_and_gcs_archive():
         b = mk(2, 200, "Bob", "Makro", "2026-10-05", 9000.0)
         c = mk(3, 200, "Bob", "Ice", "2026-10-14", 120.0, conf=0.4)
         assert (a.id, b.id, c.id) == (1, 2, 3)  # transactional counter
-        assert store.get_by_sha(f"{token}-2").id == 2 and store.get(3).vendor == "Ice"
+        assert store.get_by_sha(GUILD, f"{token}-2").id == 2 and store.get(3).vendor == "Ice"
         with pytest.raises(ValueError):
             mk(2, 200, "Bob", "Makro", "2026-10-05", 9000.0)  # same sha -> rejected
-        assert store.summarize("2026-10-01", "2026-10-31")["total"] == 10120.0
-        assert store.summarize("2026-10-01", "2026-10-31", submitter_id=100)["total"] == 1000.0
-        assert [r.vendor for r in store.flagged()] == ["Ice"]
+        assert store.summarize(GUILD, "2026-10-01", "2026-10-31")["total"] == 10120.0
+        assert (
+            store.summarize(GUILD, "2026-10-01", "2026-10-31", submitter_id=100)["total"] == 1000.0
+        )
+        assert [r.vendor for r in store.flagged(GUILD)] == ["Ice"]
         assert store.find_possible_duplicate(a.model_copy(update={"sha256": "x"})).id == 1
         store.set_reply_message(1, 42)
         assert store.get_by_reply_message(42).id == 1

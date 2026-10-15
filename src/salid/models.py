@@ -35,6 +35,7 @@ class ReceiptExtraction(BaseModel):
 
 class Receipt(BaseModel):
     id: int | None = None
+    guild_id: int = 0  # tenant: the Discord server this receipt belongs to (0 = pre-multitenant)
     submitter_id: int
     submitter_name: str
     channel_id: int = 0

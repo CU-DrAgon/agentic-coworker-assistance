@@ -120,6 +120,7 @@ def ingest_attachment(
     client,
     settings: Settings,
     *,
+    guild_id: int,
     data: bytes,
     filename: str,
     content_type: str | None,
@@ -134,7 +135,7 @@ def ingest_attachment(
     if not mime:
         return IngestResult("ignored")
     sha = sha256_hex(data)
-    existing = store.get_by_sha(sha)
+    existing = store.get_by_sha(guild_id, sha)
     if existing:
         return IngestResult(
             "duplicate",
@@ -147,6 +148,7 @@ def ingest_attachment(
         return IngestResult("ignored")
     now = settings.now()
     r = Receipt(
+        guild_id=guild_id,
         submitter_id=submitter_id,
         submitter_name=submitter_name,
         channel_id=channel_id,
@@ -169,7 +171,7 @@ def ingest_attachment(
     )
     if archive is not None:  # best effort: a storage outage must not lose the receipt
         try:
-            r.original_uri = archive.save(sha, data, mime)
+            r.original_uri = archive.save(guild_id, sha, data, mime)
         except Exception:
             logger.exception("receipt archive upload failed (receipt still saved)")
     dup = store.find_possible_duplicate(r)
