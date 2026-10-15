@@ -195,6 +195,13 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     await bot._answer(m, world.b, m.author)
     mem = seen[0].pop("memory")  # no read permissions in the fakes: only the channel itself
     assert (mem.guild_id, mem.allowed) == (OTHER_GUILD, {21: "chat"})
+    sec = seen[0].pop("secretary")  # bound to the message's guild and author, not model input
+    assert (sec.guild_id, sec.author_id, sec.is_exec, sec.can_email) == (
+        OTHER_GUILD,
+        STAFF,
+        False,
+        False,
+    )
     assert seen == [
         {
             "guild_id": OTHER_GUILD,
@@ -382,9 +389,9 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "ตั้งค่า",
         "setup",
         "เข้าประชุม",
-        "join",
+        "join-meeting",
         "ออกประชุม",
-        "leave",
+        "leave-meeting",
         "โหมด",
         "mode",
         "ภาษา",

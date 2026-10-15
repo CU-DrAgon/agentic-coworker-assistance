@@ -21,6 +21,7 @@ from .config import Settings
 from .i18n import resolve_lang, t
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
+from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
 from .web_read import make_read_web
 
@@ -773,9 +774,9 @@ CAPABILITIES_PROMPT = (
     "และสรุปแต่ละห้องเป็นรายวัน จึงตอบได้ว่าเมื่อวานคุยอะไร ใครรับงานอะไร เรื่องไหนถึงไหน พร้อมลิงก์ไปที่ข้อความจริง. "
     "ตอบได้เฉพาะข้อมูลจากห้องที่ผู้ถามและทุกคนในห้องที่ตอบมีสิทธิ์เห็น ถามทาง DM ได้ข้อมูลตามสิทธิ์ของผู้ถามคนเดียว. "
     "ไม่เห็นห้องที่สลิดไม่มีสิทธิ์เข้า และไม่เห็น DM ระหว่างคนกับคน\n"
-    "3) ประชุมเสียง: /เข้าประชุม หรือ /join (หรือแท็กแล้วพิมพ์ เข้าประชุม / join meeting) สลิดเข้าห้องเสียงที่ผู้สั่งอยู่ "
+    "3) ประชุมเสียง: /เข้าประชุม หรือ /join-meeting (หรือแท็กแล้วพิมพ์ เข้าประชุม / join meeting) สลิดเข้าห้องเสียงที่ผู้สั่งอยู่ "
     "ถอดเสียงว่าใครพูดอะไร (ไทยและอังกฤษ ไม่เก็บไฟล์เสียง) เรียกชื่อ “สลิด” ระหว่างประชุมเพื่อถามได้ "
-    "และ /ออกประชุม หรือ /leave แล้วสลิดส่งสรุปประชุม (หัวข้อ สิ่งที่ตกลง งานที่ต้องทำ) เข้าห้องแชต\n"
+    "และ /ออกประชุม หรือ /leave-meeting แล้วสลิดส่งสรุปประชุม (หัวข้อ สิ่งที่ตกลง งานที่ต้องทำ) เข้าห้องแชต\n"
     "4) โหมดของแต่ละห้อง (/โหมด หรือ /mode, แอดมินหรือผู้บริหารเปลี่ยนได้): "
     "🔇 ปิด = ไม่ยุ่งและไม่จด, 👂 ฟังเงียบ = จดจำแต่ไม่พูดเอง ตอบเมื่อถูกแท็ก, "
     "🙋 เรียกแล้วคุย (ค่าเริ่มต้น) = ตอบเมื่อแท็กหรือเรียกชื่อ แล้วคุยต่อได้ 3 นาทีโดยไม่ต้องแท็ก, "
@@ -801,6 +802,14 @@ CAPABILITIES_PROMPT = (
     "11) สรุปแชต: /สรุป หรือ /summary เลือกช่วง (วันนี้ เมื่อวาน 7 วัน 30 วัน) ห้อง หรือทุกห้องที่ผู้สั่งเห็น พร้อมหัวข้อที่เน้น "
     "(ตามสิทธิ์การเห็นห้อง); ตอบกลับข้อความไหนด้วยคำว่า “สรุป” / “summarize” (พร้อมแท็กหรือเรียกชื่อสลิด) หรือคลิกขวาที่ข้อความแล้วเลือก "
     "“สรุปด้วยสลิด” (Summarize with Salid) เพื่อสรุปข้อความนั้น รวมไฟล์แนบและลิงก์\n"
+    "12) นัดประชุมและนัดหมาย: บอกสลิดว่าจะนัดใคร เมื่อไร (เช่น “นัดประชุมกับคุณเอ พรุ่งนี้บ่ายสอง”) "
+    "สลิดสรุปให้ดูแล้วสร้างกิจกรรมนัดใน Discord หลังผู้ใช้ยืนยัน ส่ง DM เชิญ เตือนก่อนเริ่ม 10 นาทีและตอนเริ่ม พร้อมลิงก์เข้าห้อง "
+    "ทักคนที่ยังไม่เข้า (ห้องเสียง) และเข้ามาจดประชุมให้ตามนัด; ใช้ลิงก์ Google Meet/Zoom/Teams ได้ ดู ยกเลิก หรือเลื่อนนัดได้ "
+    "(ต้องให้บอตมีสิทธิ์ Manage Events)\n"
+    "13) เอกสารเป็น PDF: ขอรายงานค่าใช้จ่าย รายการใบเสร็จ หรือรายงานการประชุมเป็นไฟล์ PDF สลิดแนบไฟล์ให้ในแชต "
+    "(ผู้บริหารได้ข้อมูลทั้งทีม คนอื่นได้เฉพาะของตัวเอง ยอดแยกตามสกุลเงิน)\n"
+    "14) อีเมล: ผู้บริหารหรือผู้จัดการให้สลิดร่างอีเมล (แนบ PDF ได้) สลิดแสดงร่างให้ดูก่อนและส่งเฉพาะหลังยืนยัน "
+    "ถ้ายังไม่ได้ตั้งค่าบัญชี Gmail สลิดจะบันทึกร่างไว้และบอกว่ายังส่งจริงไม่ได้\n"
     "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
     "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
 )
@@ -853,6 +862,22 @@ ROUNDS_EXHAUSTED = (
     "และบอกสั้นๆ ว่าส่วนไหนยังทำไม่ได้ ผู้ใช้ถามต่อเพื่อให้ทำส่วนที่เหลือได้"
 )
 
+SECRETARY_PROMPT = (
+    "\nงานเลขา (เครื่องมือ schedule_meeting, list_meetings, cancel_meeting, reschedule_meeting, "
+    "make_report_pdf, draft_email, send_email ถ้ามีให้ใช้): "
+    "การกระทำที่มีผลกับคนอื่นต้องได้รับการยืนยันเสมอ. "
+    "นัดประชุม: แปลงเวลาที่ผู้ใช้พูด (เช่น พรุ่งนี้บ่ายสอง) เป็น ISO 8601 ตามวันที่และเขตเวลาข้างต้น แล้วเรียก schedule_meeting; "
+    "ครั้งแรกจะได้ needs_confirmation ให้แสดงชื่อนัด วัน-เวลาพร้อมวันในสัปดาห์ ผู้เข้าร่วม (แท็กด้วย mention ที่เครื่องมือให้) และห้อง/ลิงก์ แล้วถามยืนยัน "
+    "ห้ามบอกว่านัดแล้วจนกว่าสถานะเป็น created; เรียกซ้ำด้วยอาร์กิวเมนต์เดียวกันทุกตัวหลังผู้ใช้ยืนยันในข้อความถัดมาเท่านั้น. "
+    "ถ้าไม่รู้เวลาหรือผู้เข้าร่วมให้ถามสั้นๆ ก่อน ห้ามเดาชื่อคน (unresolved_attendees = ถามว่าหมายถึงใคร). "
+    "ถ้าผู้ใช้ให้ลิงก์ Google Meet/Zoom/Teams ใส่ใน link. ถ้าได้ error missing_permission ให้บอกวิธีให้สิทธิ์ตาม how_to_grant. "
+    "ยกเลิก/เลื่อนนัด: เรียก list_meetings หา event_id ก่อน แล้วขอยืนยันแบบเดียวกัน. "
+    "เอกสาร PDF: เรียก make_report_pdf ด้วยช่วงวันที่ที่ถูกต้อง ไฟล์จะแนบกับคำตอบเอง ให้บอกสั้นๆ ว่ามีอะไรในไฟล์และยอดตามสกุลเงิน (อย่าบวกต่างสกุล). "
+    "อีเมล: draft_email แล้วแสดงร่างฉบับเต็ม (ถึง สำเนา หัวเรื่อง เนื้อหา ไฟล์แนบ) ให้ผู้ใช้ตรวจ ห้ามบอกว่าส่งแล้ว; "
+    "เรียก send_email ได้เฉพาะหลังผู้ใช้ยืนยันร่างนั้นในข้อความถัดมา. ถ้าได้ not_configured ให้บอกว่ายังไม่ได้ตั้งค่าการส่งอีเมล (บันทึกร่างไว้แล้ว); "
+    "rate_limited = ส่งครบโควตาต่อวันแล้ว. คนที่ไม่ใช่ผู้บริหาร/ผู้จัดการส่งอีเมลไม่ได้ (not_allowed)."
+)
+
 NO_REPLY = "NO_REPLY"
 INTERJECTION_PROMPT = (
     "\nYou were not asked directly. If the tools return nothing relevant or you have nothing "
@@ -876,6 +901,7 @@ def system_prompt(
     interjection: bool = False,
     files: bool = False,
     web: bool = False,
+    secretary: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message."""
     now = now or settings.now()
@@ -903,6 +929,8 @@ def system_prompt(
         p += FILES_PROMPT
     if web:
         p += WEB_PROMPT
+    if secretary:
+        p += SECRETARY_PROMPT
     if language == "en":
         p += "\nLanguage: write your whole reply in English."
     elif language == "auto":
@@ -919,6 +947,9 @@ class Answer:
     seconds: float
     tool_calls: list[tuple[str, dict]]
     receipts: list[tuple[int, str | None]] = field(default_factory=list)  # (id, reaction) created
+    attachments: list[tuple[str, bytes]] = field(
+        default_factory=list
+    )  # PDFs to upload (name, data)
 
 
 def build_tools(
@@ -1205,6 +1236,7 @@ def build_agent(
     interjection: bool = False,
     files: bool = False,
     web: bool = False,
+    secretary: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1217,6 +1249,7 @@ def build_agent(
         interjection=interjection,
         files=files,
         web=web,
+        secretary=secretary,
     )
     model_calls = 0
 
@@ -1268,6 +1301,7 @@ async def ask_async(
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
     web_client=None,
+    secretary: SecretaryContext | None = None,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -1294,6 +1328,12 @@ async def ask_async(
         tools += build_file_tools(usable, actions, calls, created)
     if web_client is not None:
         tools.append(make_read_web(web_client, settings.gemini_model, question, calls))
+    if secretary is not None:
+        secretary.ledger = ledger  # receipt scoping for the PDFs comes from the asker's ledger
+    secretary_tools = (
+        build_secretary_tools(SecretaryTools(secretary), calls) if secretary is not None else []
+    )
+    tools += secretary_tools
     agent = build_agent(
         settings,
         tools,
@@ -1305,6 +1345,7 @@ async def ask_async(
         interjection=interjection,
         files=bool(usable or skipped),
         web=web_client is not None,
+        secretary=bool(secretary_tools),
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -1341,6 +1382,7 @@ async def ask_async(
         time.monotonic() - started,
         calls,
         created,
+        list(secretary.attachments) if secretary is not None else [],
     )
 
 
@@ -1361,6 +1403,7 @@ def ask(
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
     web_client=None,
+    secretary: SecretaryContext | None = None,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1380,5 +1423,6 @@ def ask(
             files=files,
             actions=actions,
             web_client=web_client,
+            secretary=secretary,
         )
     )

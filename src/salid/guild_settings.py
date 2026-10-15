@@ -2,7 +2,7 @@
 
 One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
 
-    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web}: bool, all default true
+    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web, documents, scheduling, email}: bool, all default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -63,6 +63,9 @@ FEATURES = (
     "memory",
     "image_memory",
     "web",
+    "documents",
+    "scheduling",
+    "email",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -106,6 +109,9 @@ class Features(BaseModel):
     memory: bool = True
     image_memory: bool = True  # describe images into the memory log (needs `memory`)
     web: bool = True  # read links and search the internet (read_web tool)
+    documents: bool = True  # make_report_pdf: accounting documents as PDF
+    scheduling: bool = True  # schedule_meeting & co: Discord Scheduled Events + reminders
+    email: bool = True  # draft_email / send_email (still needs confirmation and a role)
 
 
 class Channel(BaseModel):
@@ -207,6 +213,8 @@ class GuildSettings(GuildSettingsUpdate):
     """A full guild document (what the hub reads). Missing document = these defaults."""
 
     admin_emails: list[str] = Field(default_factory=list)
+    # Role names (besides executives and Manage Server) allowed to send email; edited in Firestore.
+    email_senders: list[str] = Field(default_factory=list)
     guild_name: str = ""
     icon_url: str = ""
     channels: list[Channel] = Field(default_factory=list)

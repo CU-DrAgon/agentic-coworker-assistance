@@ -154,7 +154,7 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   meeting`; `ออกประชุม` / `leave`, `leave the meeting`, `end meeting`, `stop meeting`; `เงียบก่อน` / `be quiet`,
   `quiet`, `shh`, `shush`, `mute`, `hush`, `snooze`; `คุยได้แล้ว` / `you can talk`, `talk again`, `unmute`,
   `unsnooze`, `wake up`, `come back`. Slash commands have Thai names with English aliases (`/โหมด` `/mode`,
-  `/ภาษา` `/language`, `/เข้าประชุม` `/join`, `/ออกประชุม` `/leave`, `/ตั้งค่า` `/setup`). The name is recognised in
+  `/ภาษา` `/language`, `/เข้าประชุม` `/join-meeting`, `/ออกประชุม` `/leave-meeting`, `/ตั้งค่า` `/setup`). The name is recognised in
   Latin letters too ("hey salid, what did we spend?").
 - **Deleting and cancelling.** Reply to one of Salid's messages with just `ลบ` / `ลบข้อความ` / `ยกเลิกข้อความ` /
   `เอาออก` / `delete` / `remove` / `unsend` and Salid deletes it (all chunks of a long answer, tracked for about
@@ -212,15 +212,51 @@ server's executive role names (default `ผู้บริหาร`, `Executive
 
 The bot is prepared for a Cloud Run worker pool (see below) but not deployed.
 
-**Voice meetings (`/เข้าประชุม`, alias `/join`).** A member in a voice channel types `/เข้าประชุม` (or
+**Voice meetings (`/เข้าประชุม`, alias `/join-meeting`).** A member in a voice channel types `/เข้าประชุม` (or
 `@Salid เข้าประชุม`); Salid joins, announces itself in the channel's text chat, and transcribes every speaker by
 Discord name (per-user audio, so no diarization). Calling "สลิด ..." out loud gets a text answer in that chat, using
 the last ~5 minutes of transcript as context; the same transcript is context for text messages to Salid in that
-chat ("เมื่อกี้ตกลงอะไรกัน"). `/ออกประชุม` (`/leave`), everyone leaving, or 3 hours ends it with a Thai summary
+chat ("เมื่อกี้ตกลงอะไรกัน"). `/ออกประชุม` (`/leave-meeting`), everyone leaving, or 3 hours ends it with a Thai summary
 (decisions, action items with owners, open questions). Audio and transcript are kept in memory only, never stored.
 Needs the **Connect** permission, the voice-states intent (non-privileged), `libopus` + `ffmpeg` (in
 `Dockerfile.salid`) and `discord-ext-voice-recv` + `davey` (Discord's DAVE end-to-end encryption; see
 `src/salid/meeting.py`). Toggle: hub feature `voice_meetings`.
+
+**Secretary: meetings, PDFs, email.** Salid acts on its own judgement but asks before anything outward-facing:
+the first call of `schedule_meeting`, `cancel_meeting`, `reschedule_meeting` or `send_email` only shows a proposal /
+draft, and the action runs only when the same call arrives again in a *later* message (enforced in code in
+`src/salid/secretary.py`, not only in the prompt). Hub features: `scheduling`, `documents`, `email`.
+
+- *Scheduling* (`src/salid/scheduling.py`): "นัดประชุมกับคุณเอ วันจันทร์บ่ายสอง" creates a Discord Scheduled Event
+  (voice-channel event, or an external event with a Google Meet / Zoom / Teams / any URL as its location). Needs the
+  **Create Events** and **Manage Events** permissions (invite permissions integer 17600777145424); without them Salid
+  explains how to grant them. Attendees get a DM invite. Meetings live in `salid_meetings` (SQLite or Firestore).
+  Reminders (`SALID_MEETING_REMIND_MINUTES`, default 10) go out before the start and at the start, in the meeting's
+  text channel and by DM, with a one-click link (voice channel URL or the meeting link). For voice meetings, attendees
+  missing `SALID_MEETING_NOSHOW_MINUTES` (default 5) after the start get a friendly DM nudge; when `voice_meetings` is
+  on Salid joins to take notes and leaves after `SALID_MEETING_EMPTY_MINUTES` (default 2) of an empty channel; the
+  summary is linked to the meeting. An attendee who replies to a reminder/nudge DM ("ติดลูกค้า", "ไปช้า 10 นาที") has
+  the reason recorded and relayed to the meeting's channel, and it appears in the attendance line after the meeting.
+  Events people create directly in Discord are tracked too (interested members are reminded). Calendar access is
+  behind `CalendarBackend`; only the Discord implementation exists (Google Calendar could be added).
+- *PDF documents* (`src/salid/pdf_report.py`): `make_report_pdf` builds expense summaries, receipt lists, meeting
+  minutes and custom documents with fpdf2 + uharfbuzz text shaping (Thai tone marks render correctly). Totals are per
+  currency, void receipts are excluded, executives see everyone and others only their own receipts. The font is the
+  first Thai-capable file found among `SALID_PDF_FONT`, `src/salid/fonts/` (drop Sarabun-Regular/Bold.ttf there to
+  bundle it) and the system TLWG fonts (`fonts-thai-tlwg`, installed in `Dockerfile.salid`); with no Thai font a Latin
+  fallback is used and a warning is logged.
+- *Email* (`src/salid/email_out.py`): executives, managers (Manage Server) and roles listed in the guild document's
+  `email_senders` may have Salid draft and send email (max 20 per guild per day, addresses validated, a PDF made in
+  the conversation can be attached). Every draft and send is stored in `salid_emails` with who confirmed it. Without
+  Gmail configured the default `LogOnlySender` only records the email and Salid says sending is not set up.
+
+  Configure Gmail sending (instructions only, nothing is sent until you do this): create a dedicated Google account
+  for Salid; in Google Cloud Console enable the Gmail API, configure the OAuth consent screen and create an OAuth
+  client (type *Desktop app*); authorise that account once with the scope
+  `https://www.googleapis.com/auth/gmail.send` (for example with the OAuth Playground using your own client) to get a
+  refresh token; store it in Secret Manager and expose it to the worker as `SALID_GMAIL_REFRESH_TOKEN`, together with
+  `SALID_GMAIL_CLIENT_ID`, `SALID_GMAIL_CLIENT_SECRET` and `SALID_GMAIL_SENDER` (the account's address). All four must
+  be set, otherwise sending stays in log-only mode.
 
 **Team memory (องค์ความรู้).** Salid remembers what is said in the channels whose mode is not `off`, so it can
 answer "what did we discuss yesterday?", "where is customer X's job?" or "who owns the ad budget?" without
@@ -274,7 +310,7 @@ Discord setup (once, by the operator):
 
 1. Create an application and bot at the Discord Developer Portal (name it **Salid**); copy the bot token.
 2. Enable the **Message Content** and **Server Members** privileged intents. The public invite link
-   (`salid_invite_url`: scopes `bot` + `applications.commands`, permissions 1166416) is built from
+   (`salid_invite_url`: scopes `bot` + `applications.commands`, permissions 17600777145424, which adds Create Events and Manage Events for scheduling) is built from
    `SALID_DISCORD_CLIENT_ID` and shown on the home page and in the hub.
 3. Put `SALID_DISCORD_TOKEN` in `.env`. The slash commands are registered globally at startup (Discord can
    take up to an hour to show new global commands).

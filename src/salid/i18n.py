@@ -115,7 +115,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "หรือแท็ก {mention} พร้อมรูป ผมจะอ่านยอดและบันทึกให้เอง\n"
         "• คุยได้ทั้งไทยและอังกฤษ พิมพ์ /ภาษา หรือ /language เพื่อเลือกภาษาที่ผมตอบ "
         "(หรือแท็กแล้วพิมพ์ “พูดภาษาอังกฤษ” / “speak English”)\n"
-        "• สั่งเข้าห้องประชุมเสียงด้วย /เข้าประชุม หรือ /join และให้ออกด้วย /ออกประชุม หรือ /leave "
+        "• สั่งเข้าห้องประชุมเสียงด้วย /เข้าประชุม หรือ /join-meeting และให้ออกด้วย /ออกประชุม หรือ /leave-meeting "
         "(หรือแท็กแล้วพิมพ์ “เข้าประชุม” / “join”)\n"
         "• ผมจำข้อความในห้องที่เปิดโหมดไว้ {days} วัน เพื่อตอบว่าเมื่อวานคุยอะไร งานถึงไหน "
         "และเปิดเผยเฉพาะกับคนที่เห็นห้องนั้น (ไม่อยากให้จำ ตั้งห้องเป็น 🔇 ปิด ด้วย /โหมด)\n"
@@ -128,7 +128,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "{mention} with the photo, and I will read the total and record it.\n"
         "• I speak Thai and English. Type /language or /ภาษา to choose my reply language "
         "(or tag me and say “speak English” / “พูดภาษาไทย”).\n"
-        "• Ask me to join a voice meeting with /join or /เข้าประชุม and to leave with /leave or "
+        "• Ask me to join a voice meeting with /join-meeting or /เข้าประชุม and to leave with /leave-meeting or "
         "/ออกประชุม (or tag me and say “join” / “leave”).\n"
         "• I remember messages in channels that are not switched off for {days} days, to answer "
         "things like “what did we discuss yesterday?”, and only share them with people who can "
@@ -417,7 +417,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "เรียก “สลิด” แล้วถามได้เลย หรือพิมพ์ /ออกประชุม เพื่อสรุปและให้ผมออก",
         "en": "Salid has joined to listen and take meeting notes 🎙️ "
         "(kept as text in memory only, no audio is recorded). "
-        "Say “Salid” and ask away, or type /leave to get the summary and let me go.",
+        "Say “Salid” and ask away, or type /leave-meeting to get the summary and let me go.",
     },
     "meet_not_in_voice": {
         "th": "ต้องเข้าห้องเสียง (Voice Channel) ก่อน แล้วค่อยเรียกสลิดเข้าประชุมนะครับ",
@@ -425,7 +425,7 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "meet_already": {
         "th": "สลิดกำลังอยู่ในการประชุมของเซิร์ฟเวอร์นี้แล้วครับ ({channel}) พิมพ์ /ออกประชุม เพื่อจบก่อนนะครับ",
-        "en": "Salid is already in a meeting on this server ({channel}). Type /leave to end it first.",
+        "en": "Salid is already in a meeting on this server ({channel}). Type /leave-meeting to end it first.",
     },
     "meet_joining": {"th": "กำลังเข้า", "en": "joining now"},
     "meet_none": {
@@ -649,5 +649,185 @@ CATALOG: dict[str, dict[str, str]] = {
     "deep_report_lang_auto": {
         "th": "ด้วยภาษาเดียวกับที่เขียนโจทย์ (ไทยหรืออังกฤษ)",
         "en": "ด้วยภาษาเดียวกับที่เขียนโจทย์ (ไทยหรืออังกฤษ)",
+    },
+    "pdf_generated": {
+        "th": "สร้างเมื่อ {at}",
+        "en": "Generated {at}",
+    },
+    "pdf_page": {
+        "th": "หน้า {n}/{total}",
+        "en": "Page {n}/{total}",
+    },
+    "pdf_title_expense_summary": {
+        "th": "สรุปค่าใช้จ่าย",
+        "en": "Expense summary",
+    },
+    "pdf_title_receipt_list": {
+        "th": "รายการใบเสร็จ",
+        "en": "Receipt list",
+    },
+    "pdf_title_meeting_minutes": {
+        "th": "รายงานการประชุม",
+        "en": "Meeting minutes",
+    },
+    "pdf_title_custom": {
+        "th": "เอกสาร",
+        "en": "Document",
+    },
+    "pdf_period": {
+        "th": "ช่วงเวลา: {start} ถึง {end}",
+        "en": "Period: {start} to {end}",
+    },
+    "pdf_scope_own": {
+        "th": "แสดงเฉพาะใบเสร็จของ {name}",
+        "en": "Showing only receipts submitted by {name}",
+    },
+    "pdf_totals": {
+        "th": "ยอดรวมแยกตามสกุลเงิน",
+        "en": "Totals by currency",
+    },
+    "pdf_currency": {
+        "th": "สกุลเงิน",
+        "en": "Currency",
+    },
+    "pdf_amount": {
+        "th": "จำนวนเงิน",
+        "en": "Amount",
+    },
+    "pdf_no_fx": {
+        "th": "ไม่รวมต่างสกุลเงินเข้าด้วยกันและไม่แปลงอัตราแลกเปลี่ยน",
+        "en": "Currencies are never added together and no exchange rate is applied.",
+    },
+    "pdf_by_category": {
+        "th": "แยกตามหมวด",
+        "en": "By category",
+    },
+    "pdf_by_submitter": {
+        "th": "แยกตามผู้ส่ง",
+        "en": "By submitter",
+    },
+    "pdf_name": {
+        "th": "ชื่อ",
+        "en": "Name",
+    },
+    "pdf_receipts": {
+        "th": "รายการใบเสร็จ ({n} ใบ)",
+        "en": "Receipts ({n})",
+    },
+    "pdf_date": {
+        "th": "วันที่",
+        "en": "Date",
+    },
+    "pdf_vendor": {
+        "th": "ร้านค้า",
+        "en": "Vendor",
+    },
+    "pdf_category": {
+        "th": "หมวด",
+        "en": "Category",
+    },
+    "pdf_cur": {
+        "th": "สกุล",
+        "en": "Cur.",
+    },
+    "pdf_flags": {
+        "th": "หมายเหตุ",
+        "en": "Flags",
+    },
+    "pdf_flag_low": {
+        "th": "ความมั่นใจต่ำ",
+        "en": "low confidence",
+    },
+    "pdf_flag_dup": {
+        "th": "อาจซ้ำกับ #{id}",
+        "en": "possible duplicate of #{id}",
+    },
+    "pdf_total_line": {
+        "th": "รวม: {total}",
+        "en": "Total: {total}",
+    },
+    "pdf_void_note": {
+        "th": "ไม่รวมใบเสร็จที่ถูกหักออก (void) {n} ใบ",
+        "en": "Excludes {n} voided receipt(s).",
+    },
+    "pdf_when": {
+        "th": "เวลา: {when}",
+        "en": "When: {when}",
+    },
+    "pdf_attendees": {
+        "th": "ผู้เข้าร่วม: {names}",
+        "en": "Attendees: {names}",
+    },
+    "pdf_attendance": {
+        "th": "การเข้าร่วมและเหตุผลที่ไม่เข้า",
+        "en": "Attendance and absence reasons",
+    },
+    "pdf_summary": {
+        "th": "สรุปการประชุม",
+        "en": "Summary",
+    },
+    "pdf_no_summary": {
+        "th": "(ยังไม่มีสรุป)",
+        "en": "(no summary yet)",
+    },
+    "sched_invite_dm": {
+        "th": "สวัสดีครับ มีนัดประชุมใหม่ในเซิร์ฟเวอร์ {guild} จาก {by}\n📅 {title}\n🕑 {when}\n🔗 {link}",
+        "en": "Hi! You are invited to a meeting on {guild} by {by}\n📅 {title}\n🕑 {when}\n🔗 {link}",
+    },
+    "sched_cancelled_dm": {
+        "th": "การประชุม “{title}” ถูกยกเลิกแล้วครับ",
+        "en": "The meeting “{title}” has been cancelled.",
+    },
+    "sched_moved_dm": {
+        "th": "การประชุม “{title}” เลื่อนเวลาเป็น {when}\n🔗 {link}",
+        "en": "The meeting “{title}” was moved to {when}\n🔗 {link}",
+    },
+    "sched_remind_pre": {
+        "th": "⏰ อีก {mins} นาทีถึงการประชุม “{title}” ({when})\nเข้าร่วม: {link}",
+        "en": "⏰ “{title}” starts in {mins} minutes ({when})\nJoin: {link}",
+    },
+    "sched_remind_start": {
+        "th": "🔔 การประชุม “{title}” เริ่มแล้วครับ\nเข้าร่วม: {link}",
+        "en": "🔔 “{title}” is starting now\nJoin: {link}",
+    },
+    "sched_reply_if_stuck": {
+        "th": "ถ้าเข้าไม่ได้ ตอบกลับสลิดได้เลยครับ",
+        "en": "If you can't join, just reply to me.",
+    },
+    "sched_nudge_dm": {
+        "th": "การประชุม “{title}” เริ่มแล้วครับ มีปัญหาอะไรหรือเปล่า? ถ้าหาลิงก์ไม่เจอ กดเข้าตรงนี้ได้เลย: {link}\nถ้าเข้าไม่ได้ ตอบกลับสลิดได้เลยครับ",
+        "en": "“{title}” has started. Is something wrong? If you can't find the link, join here: {link}\nIf you can't make it, just reply to me.",
+    },
+    "sched_attended": {
+        "th": "✅ เข้าร่วม: {names}",
+        "en": "✅ Attended: {names}",
+    },
+    "sched_absent": {
+        "th": "🚫 ไม่ได้เข้า: {names}",
+        "en": "🚫 Absent: {names}",
+    },
+    "sched_summary_link": {
+        "th": "📝 สรุปการประชุม: {url}",
+        "en": "📝 Meeting summary: {url}",
+    },
+    "sched_absence_note": {
+        "th": "{name} แจ้งว่า: {reason} (การประชุม “{title}”)",
+        "en": "{name} says: {reason} (meeting “{title}”)",
+    },
+    "sched_absence_ack": {
+        "th": "รับทราบครับ แจ้งผู้จัดการประชุม “{title}” แล้ว",
+        "en": "Got it, I let the organiser of “{title}” know.",
+    },
+    "sched_perm_help": {
+        "th": "สลิดยังไม่มีสิทธิ์สร้างกิจกรรม ให้แอดมินเปิดสิทธิ์ Manage Events และ Create Events ให้บอต: ตั้งค่าเซิร์ฟเวอร์ > บทบาท > บทบาทของสลิด > เปิด “จัดการกิจกรรม” และ “สร้างกิจกรรม” (หรือเชิญบอตใหม่ด้วยลิงก์ล่าสุด)",
+        "en": "Salid is missing the permission to create events. An admin should grant the bot Manage Events and Create Events: Server Settings > Roles > Salid's role > enable “Manage Events” and “Create Events” (or re-invite the bot with the latest invite link).",
+    },
+    "email_not_configured": {
+        "th": "ยังไม่ได้ตั้งค่าการส่งอีเมล (บันทึกร่างไว้แล้ว แต่ยังไม่ได้ส่งจริง)",
+        "en": "Email sending is not configured yet (the draft was recorded but nothing was sent).",
+    },
+    "meet_announce_scheduled": {
+        "th": "สลิดเข้ามาจดประชุมตามนัดครับ 🎙️ (เก็บเป็นข้อความในความจำเท่านั้น ไม่บันทึกเสียง)",
+        "en": "Salid has joined to take notes for the scheduled meeting 🎙️ (kept as text only, no audio is recorded).",
     },
 }

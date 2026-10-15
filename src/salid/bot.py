@@ -28,6 +28,7 @@ from .deep_task import (
     run_deep_task,
 )
 from .digest import build_daily_digest
+from .email_out import make_sender
 from .extract import (
     apply_correction,
     apply_void_command,
@@ -80,6 +81,9 @@ from .modes import (
 from .naming import command_text, mentions_name
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .receipt_forward import forward_receipt
+from .scheduling import DiscordCalendar, MeetingService
+from .secretary import SecretaryContext, SecretaryState
+from .secretary_store import SecretaryStore, make_secretary_store
 from .store import Store
 from .summary import (
     PERIODS,
@@ -111,6 +115,7 @@ MAX_JOIN_CANDIDATES = 5
 INTERJECT_SAME_USER_COOLDOWN = 600  # join mode: no second unprompted answer to one person
 SNOOZE_SECONDS = 3600
 TICK_SECONDS = 5.0
+SCHEDULER_TICK_SECONDS = 15.0  # how often meeting reminders are checked
 MEMORY_TICK_SECONDS = 30.0  # how often the memory scheduler looks for due summary updates
 MEMORY_QUEUE_MAX = 20000
 IMPORT_PAGE_SLEEP_S = 1.0  # pause between history pages (discord.py also rate-limits)
@@ -130,8 +135,8 @@ HISTORY_CHARS = 8000  # oldest lines are dropped first
 HISTORY_LINE_CHARS = 500
 CHANNELS_COMMANDS = ("ห้อง", "channels")
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
-JOIN_COMMANDS = ("เข้าประชุม", "join")
-LEAVE_COMMANDS = ("ออกประชุม", "leave")
+JOIN_COMMANDS = ("เข้าประชุม", "join-meeting")
+LEAVE_COMMANDS = ("ออกประชุม", "leave-meeting")
 CANCEL_COMMANDS = ("ยกเลิก", "cancel")
 SUMMARY_COMMANDS = ("สรุป", "summary")
 MENU_SUMMARIZE = "Summarize with Salid"  # context menu; Thai name via SalidTranslator
@@ -229,6 +234,7 @@ class SecretaryBot(discord.Client):
         guilds: GuildStore | None = None,
         clock=time.monotonic,
         memory: MemoryStore | None = None,
+        secretary_store: SecretaryStore | None = None,
     ) -> None:
         intents = discord.Intents(
             guilds=True,
@@ -237,6 +243,7 @@ class SecretaryBot(discord.Client):
             members=True,
             dm_messages=True,
             voice_states=True,
+            guild_scheduled_events=True,
         )
         super().__init__(intents=intents)
         self.s, self.store, self.llm = settings, store, llm
@@ -261,6 +268,19 @@ class SecretaryBot(discord.Client):
         self._sync_last: dict[int, float] = {}
         self._sync_pending: dict[int, asyncio.Task] = {}
         self.meetings = MeetingManager(self)
+        # Secretary: scheduled meetings, PDFs, email (see salid.secretary / scheduling / email_out)
+        self.secretary_store = secretary_store or make_secretary_store(settings, store)
+        self.secretary_state = SecretaryState()
+        self.email_sender = make_sender(settings)
+        self.scheduler = MeetingService(
+            self.secretary_store,
+            DiscordCalendar(),
+            settings,
+            self.team,
+            self.meetings,
+            self.get_guild,
+        )
+        self._sched_last = float("-inf")
         # Organisational memory: raw log + day summaries (see salid.memory).
         self.memory_store = memory or self._default_memory_store(settings, store)
         self.memory = MemoryService(
@@ -750,6 +770,23 @@ class SecretaryBot(discord.Client):
         await message.reply(reply, mention_author=False)
         return True
 
+    async def on_scheduled_event_create(self, event) -> None:
+        """Somebody made a Discord event: track it (reminders, no-show logic for voice events)."""
+        await self._sched_event(self.scheduler.track_discord_event, event)
+
+    async def on_scheduled_event_update(self, before, after) -> None:
+        await self._sched_event(self.scheduler.update_discord_event, after)
+
+    async def on_scheduled_event_delete(self, event) -> None:
+        await self._sched_event(self.scheduler.delete_discord_event, event)
+
+    @staticmethod
+    async def _sched_event(fn, event) -> None:
+        try:
+            await fn(event)
+        except Exception:
+            logger.exception("could not track scheduled event")
+
     async def on_voice_state_update(self, member, before, after):
         """Salid itself was disconnected (kicked, channel deleted): end that meeting."""
         if member == self.user and after.channel is None and before.channel is not None:
@@ -774,6 +811,10 @@ class SecretaryBot(discord.Client):
             return
         guild, member = shared[0]
         await asyncio.to_thread(self.team.current, guild.id)
+        ack = await self.scheduler.handle_dm_reply(message.author.id, message.content)
+        if ack:  # the reason an attendee gave after a meeting reminder / no-show nudge
+            await message.reply(ack, mention_author=False)
+            return
         await self._answer(message, guild, member)
 
     async def _maybe_correction(self, message: discord.Message) -> bool:
@@ -1113,6 +1154,9 @@ class SecretaryBot(discord.Client):
             actions = self._file_actions(
                 message, guild, member, is_exec, setting, asyncio.get_running_loop(), forwards
             )
+        secretary = (
+            None if interjection else self._secretary(message, guild, member, is_exec, setting)
+        )
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -1128,6 +1172,7 @@ class SecretaryBot(discord.Client):
                 interjection=interjection,
                 **({"files": files, "actions": actions} if files else {}),
                 **self._web_kw(gid),
+                **({"secretary": secretary} if secretary is not None else {}),
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
         if interjection and is_no_reply(ans.text):
@@ -1135,9 +1180,16 @@ class SecretaryBot(discord.Client):
             return False
         sent = first = None
         sent_ids: list[int] = []
+        uploads = [
+            discord.File(io.BytesIO(data), filename=name)
+            for name, data in list(getattr(ans, "attachments", ()))[:10]
+        ]
         for i, part in enumerate(chunks(ans.text)):
+            extra = {"files": uploads} if i == 0 and uploads else {}
             sent = await (
-                message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
+                message.reply(part, mention_author=False, **extra)
+                if i == 0
+                else message.channel.send(part)
             )
             first = first or sent
             if getattr(sent, "id", None) is not None:
@@ -1163,6 +1215,37 @@ class SecretaryBot(discord.Client):
                 )
         self._note_answer(message, sent)
         return True
+
+    def _secretary(self, message, guild, member, is_exec: bool, setting: str):
+        """The secretary tools' bindings for this message (guild, author and channel are fixed
+        here, never model input). Discord work is marshalled onto this loop."""
+        gid = guild.id
+        on = {f: self.team.enabled(gid, f) for f in ("scheduling", "documents", "email")}
+        if not any(on.values()):
+            return None
+        loop = asyncio.get_running_loop()
+        senders = set(self.team.current(gid).email_senders)
+        can_email = is_exec or bool(senders & {r.name for r in member.roles})
+        lang = self._lang(message)
+        return SecretaryContext(
+            settings=self.s,
+            guild_id=gid,
+            guild_name=getattr(guild, "name", ""),
+            author_id=member.id,
+            author_name=member.display_name,
+            is_exec=is_exec,
+            can_email=can_email,
+            lang=lang,
+            text_channel_id=message.channel.id if message.guild is not None else None,
+            store=self.secretary_store,
+            state=self.secretary_state,
+            run=lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=60),
+            service=self.scheduler,
+            sender=self.email_sender,
+            documents=on["documents"],
+            scheduling=on["scheduling"],
+            email=on["email"],
+        )
 
     def _web_kw(self, guild_id: int) -> dict:
         """read_web (links + Google Search) for `ask`: only with the `web` feature on."""
@@ -1788,6 +1871,15 @@ class SecretaryBot(discord.Client):
         await self._signoff_due()
         await self._join_due()
         await self._memory_due()
+        await self._scheduler_due()
+
+    async def _scheduler_due(self) -> None:
+        """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""
+        now = self._clock()
+        if not self.guilds or now - self._sched_last < SCHEDULER_TICK_SECONDS:
+            return
+        self._sched_last = now
+        await self.scheduler.tick()
 
     async def _signoff_due(self) -> None:
         """Conversations whose window ran out: one short sign-off (or a 👋 reaction after a
