@@ -52,6 +52,21 @@ def test_max_channels_evicts_the_least_recent():
     assert r.history(1, 5) is None and r.history(3, 5) is not None
 
 
+def test_add_skips_a_message_already_buffered():
+    r = RecentMessages()
+    r.prime(10, [msg(6), msg(5)])
+    r.add(msg(6))  # the gateway event arrives after the history read that already had it
+    assert [s.id for s in r.history(10, 10)] == [6, 5]
+
+
+def test_reset_forgets_content_so_messages_deleted_during_a_reconnect_do_not_linger():
+    r = RecentMessages()
+    r.prime(10, [msg(1, text="secret")])
+    r.reset()
+    r.prime(10, [])  # the re-read after the reconnect: the message was deleted meanwhile
+    assert r.history(10, 5) == []
+
+
 async def test_bot_reads_history_once_then_from_the_buffer(bot, world):
     calls = []
     original = world.gen.history

@@ -1886,20 +1886,31 @@ class SecretaryBot(discord.Client):
         allowed = allowed_channel_ids(access, member.id, answering_channel_id)
         return {a.channel_id: a.name for a in access if a.channel_id in allowed}
 
+    def _answering_id(self, channel) -> int:
+        """The channel id whose readers bound a memory answer posted in `channel` (a thread
+        counts as its parent; a channel memory does not know gives -1, i.e. nothing)."""
+        where = self._memory_channel(channel)
+        return where[0] if where else -1
+
     async def _memory_tools(self, message, guild, member) -> MemoryTools | None:
-        answering = None
-        if message.guild is not None:  # in a DM the asker's own readable channels are enough
-            where = self._memory_channel(message.channel)
-            answering = where[0] if where else -1
+        # in a DM (answering None) the asker's own readable channels are enough
+        answering = self._answering_id(message.channel) if message.guild is not None else None
         return await self._memory_tools_for(guild, member, answering)
 
-    async def _memory_tools_for(self, guild, member, answering: int | None) -> MemoryTools | None:
+    async def _memory_tools_for(
+        self, guild, member, answering: int | None, *also: int
+    ) -> MemoryTools | None:
         """Memory tools for `member`, scoped to what everyone reading `answering` (a channel id;
-        None = a DM, the asker alone) may see. None when memory is off or the scope fails."""
+        None = a DM, the asker alone) may see, and also everyone reading each channel in `also`
+        (where the answer may be posted instead). None when memory is off or the scope fails."""
         if not self.team.enabled(guild.id, "memory"):
             return None
         try:
             allowed = await asyncio.to_thread(self._memory_scope, guild, member, answering)
+            for other in also:
+                if other != answering:
+                    more = await asyncio.to_thread(self._memory_scope, guild, member, other)
+                    allowed = {cid: name for cid, name in allowed.items() if cid in more}
         except Exception:
             logger.warning("could not compute memory scope", exc_info=True)
             return None

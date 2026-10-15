@@ -70,3 +70,11 @@ def test_pack_roundtrip():
     vs = [normalize([1.0, 2.0]), normalize([0.0, 1.0])]
     back = unpack(pack(vs), 2)
     assert len(pack(vs)) == 16 and [list(v) for v in back] == [list(v) for v in vs]
+
+
+def test_query_embeddings_fail_fast_without_retry(monkeypatch):
+    monkeypatch.setattr("salid.llm.RETRY_DELAYS", (0.0,))
+    c = FakeEmbedClient(errors.ClientError(429, {"error": {"message": "quota"}}))
+    with pytest.raises(errors.ClientError):
+        VertexEmbedder(c, "m", 2).embed(["q"], "query")
+    assert len(c.calls) == 1  # an answer is waiting: no retry, the caller falls back to keywords

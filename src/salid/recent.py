@@ -67,7 +67,10 @@ class RecentMessages:
         channel_id = getattr(getattr(message, "channel", None), "id", None)
         if channel_id is None:
             return
-        self._channel(channel_id).append(Snapshot.of(message, channel_id))
+        dq = self._channel(channel_id)
+        if any(s.id == message.id for s in dq):  # already there from a history read
+            return
+        dq.append(Snapshot.of(message, channel_id))
 
     def edit(self, channel_id: int, message_id: int, content: str) -> None:
         dq = self._chans.get(channel_id)
@@ -110,7 +113,9 @@ class RecentMessages:
         return rows[:limit]
 
     def reset(self) -> None:
-        """After a reconnect: events may have been missed, so every channel must be re-read."""
+        """After a reconnect: events (edits, deletes) may have been missed, so everything is
+        forgotten and every channel is read again."""
+        self._chans.clear()
         self._primed.clear()
 
     def sweep(self, now: datetime) -> None:

@@ -77,7 +77,9 @@ class VertexEmbedder:
         out: list[array] = []
         for i in range(0, len(texts), self.batch):
             part = texts[i : i + self.batch]
-            resp = llm.embed(self.client, self.model, part, config)
+            # a query has an answer waiting: fail fast (the caller falls back to keywords)
+            delays = () if task == "query" else None
+            resp = llm.embed(self.client, self.model, part, config, delays)
             got = list(getattr(resp, "embeddings", None) or [])
             if len(got) != len(part):
                 raise ValueError(f"expected {len(part)} embeddings, got {len(got)}")

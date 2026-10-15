@@ -104,6 +104,8 @@ class FakeEmbedder:
 
     def __init__(self, fail=False):
         self.calls, self.fail = [], fail
+        if fail:  # its own model id: cached query vectors of the working fake never leak in
+            self.model_id = "fake-down@4"
 
     def embed(self, texts, task):
         self.calls.append((list(texts), task))

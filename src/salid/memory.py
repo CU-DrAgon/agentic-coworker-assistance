@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import threading
+import time
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -34,6 +35,8 @@ MAX_UPDATES_PER_TICK = 3
 MAX_FETCH = 600  # messages read per channel-day update
 RETRY_AFTER = timedelta(minutes=5)  # after a failed summary call
 MAX_VECTORIZE_PER_TICK = 10  # old summaries given vectors per tick (backfill)
+BACKFILL_BUDGET_S = 3.0  # the backfill stops after this long (it runs inside the bot's tick)
+VECTORS_RECHECK = timedelta(minutes=10)  # a done guild / failed summary is looked at again
 DISCORD_EPOCH_MS = 1420070400000
 
 
@@ -132,6 +135,10 @@ def vectorize(summary: dict, previous: DaySummary | None, embedder) -> Vectors:
     return Vectors(model_id, hashes, pack([known[h] for h in hashes]), len(missing), reused)
 
 
+def _summary_key(s: DaySummary) -> tuple[int, int, str]:
+    return (s.guild_id, s.channel_id, s.local_date)
+
+
 def vectors_usable(s: DaySummary, model_id: str) -> bool:
     """The summary has vectors for every item from `model_id` (an empty summary needs none)."""
     items = summary_items(s.summary)
@@ -170,6 +177,7 @@ class MemoryScheduler:
         enabled: Callable[[int], bool] = lambda gid: True,
         max_updates: int = MAX_UPDATES_PER_TICK,
         embedder=None,
+        timer: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store, self.s, self.llm = store, settings, llm
         self.now = now or settings.now
@@ -182,7 +190,11 @@ class MemoryScheduler:
         self._lock = threading.Lock()
         self._purged_on: str | None = None
         self.embedder = embedder or NullEmbedder()
-        self._vectors_done: set[int] = set()  # guilds whose summaries all have vectors
+        self.timer = timer  # wall-clock budget of one backfill run
+        # guild -> when all its summaries had vectors; summaries may also be written outside the
+        # scheduler (history import), so a done guild is looked at again after VECTORS_RECHECK
+        self._vectors_done: dict[int, datetime] = {}
+        self._vector_failed: dict[tuple[int, int, str], datetime] = {}  # summary -> failed at
         self._backfill_turn = 0
 
     # ------------------------------------------------------------ events from the log
@@ -217,33 +229,48 @@ class MemoryScheduler:
 
     def _backfill(self, guild_ids: list[int]) -> int:
         """Give old summaries vectors: one guild per tick (round-robin), newest days first, at most
-        MAX_VECTORIZE_PER_TICK. A guild with nothing missing is skipped until it gets a new
-        summary. Returns the summaries vectorised."""
+        MAX_VECTORIZE_PER_TICK and BACKFILL_BUDGET_S. A guild with nothing missing, and a summary
+        whose embedding failed, are skipped for VECTORS_RECHECK. Returns the summaries done."""
         model_id = self.embedder.model_id
-        todo = [g for g in guild_ids if g not in self._vectors_done and self.enabled(g)]
+        now = self.now()
+        todo = [
+            g
+            for g in guild_ids
+            if self.enabled(g)
+            and now - self._vectors_done.get(g, now - VECTORS_RECHECK) >= VECTORS_RECHECK
+        ]
         if not model_id or not todo:
             return 0
         gid = todo[self._backfill_turn % len(todo)]
         self._backfill_turn += 1
         missing = sorted(
-            (x for x in self.store.all_summaries(gid) if not vectors_usable(x, model_id)),
+            (
+                x
+                for x in self.store.all_summaries(gid)
+                if not vectors_usable(x, model_id)
+                and now - self._vector_failed.get(_summary_key(x), now - VECTORS_RECHECK)
+                >= VECTORS_RECHECK
+            ),
             key=lambda x: x.local_date,
             reverse=True,
         )
         if not missing:
-            self._vectors_done.add(gid)
+            self._vectors_done[gid] = now
             return 0
-        done = 0
+        done, started = 0, self.timer()
         for x in missing[:MAX_VECTORIZE_PER_TICK]:
             try:
                 v = vectorize(x.summary, x, self.embedder)
             except Exception:
                 logger.warning("memory vector backfill failed for guild %s", gid, exc_info=True)
+                self._vector_failed[_summary_key(x)] = now  # skipped for a while: others go first
                 break
             self.store.put_summary_vectors(
                 gid, x.channel_id, x.local_date, v.model_id, v.hashes, v.data
             )
             done += 1
+            if self.timer() - started >= BACKFILL_BUDGET_S:
+                break
         logger.info(
             "memory vector backfill guild=%s summaries=%d left=%d", gid, done, len(missing) - done
         )
@@ -375,7 +402,7 @@ class MemoryScheduler:
             vecs=vec.data,
         )
         self.store.put_summary(out)
-        self._vectors_done.discard(gid)
+        self._vectors_done.pop(gid, None)
         logger.info(
             "memory update guild=%s channel=%s day=%s new=%d llm=%s final=%s embedded=%d reused=%d",
             gid, cid, day, len(msgs), calls, out.final, vec.embedded, vec.reused,

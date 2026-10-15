@@ -3,6 +3,7 @@
 Offline: SQLite and the Firestore fake, scripted LLMs, small Discord fakes."""
 
 import json
+import time
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -34,6 +35,7 @@ from test_modes import (  # noqa: F401  (fixtures)
 )
 
 from salid import memory_summary
+from salid import qa as qa_mod
 from salid.embed import unpack
 from salid.guild_settings import (
     GuildSettings,
@@ -417,6 +419,14 @@ def test_adapter_applies_permissions_audience_and_modes(bot, rworld):
     assert set(scope(bot, w, w.boss, 10)) == {10, 12}  # boss cannot read 10: only the same channel
     set_mode(bot, 12, "off")
     assert set(scope(bot, w, w.staff, None)) == {10}  # off channels are never remembered
+
+
+async def test_memory_tools_for_several_answering_channels_intersect(bot, rworld):
+    w = rworld
+    bot._viewers.clear()
+    wide = await bot._memory_tools_for(w.g, w.boss, 11)
+    both = await bot._memory_tools_for(w.g, w.boss, 11, 12)
+    assert set(wide.allowed) == {11, 12} and set(both.allowed) == {12}
 
 
 # ------------------------------------------------------------------ tools
@@ -1158,3 +1168,90 @@ def test_old_sqlite_summary_table_gets_vector_columns(tmp_path):
     assert st.get_summary(GUILD, 10, "2026-10-01").vec_model == ""
     assert st.put_summary_vectors(GUILD, 10, "2026-10-01", "fake@4", ["h"], b"\1" * 16)
     assert st.get_summary(GUILD, 10, "2026-10-01").vecs == b"\1" * 16
+
+
+# ------------------------------------------------------------------ review fixes
+def test_backfill_stops_at_its_time_budget(mstore, settings):
+    for d in range(1, 13):
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      final=True, message_count=3, summary={"overview": f"day {d}"}))  # fmt: skip
+    seconds = iter(range(0, 1000, 2))  # every timer read: 2 s later
+    emb = FakeEmbedder()
+    s = sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb,
+              timer=lambda: next(seconds))  # fmt: skip
+    s.tick([GUILD])
+    assert len(emb.calls) == 2  # the tick loop is not held for the whole batch
+
+
+def test_backfill_rechecks_a_done_guild_for_summaries_written_elsewhere(mstore, settings):
+    clock, emb = Clock(bkk(14, 10)), FakeEmbedder()
+    s = sched(mstore, settings, clock, FakeClient([]), embedder=emb)
+    s.tick([GUILD])  # nothing to do yet: the guild is marked done
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01",
+                                  final=True, summary={"overview": "imported"}))  # fmt: skip
+    s.tick([GUILD])  # e.g. written by the history importer, not by the scheduler
+    assert emb.calls == []
+    clock.at = bkk(14, 10, 11)
+    s.tick([GUILD])
+    assert vectors_usable(mstore.get_summary(GUILD, 10, "2026-10-01"), "fake@4")
+
+
+def test_one_unembeddable_summary_does_not_stall_the_backfill(mstore, settings):
+    for d, text in ((1, "day 1"), (2, "day 2"), (3, "poison")):
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      final=True, message_count=3, summary={"overview": text}))  # fmt: skip
+
+    class Picky(FakeEmbedder):
+        def embed(self, texts, task):
+            if any("poison" in t for t in texts):
+                raise RuntimeError("rejected")
+            return super().embed(texts, task)
+
+    s = sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=Picky())
+    s.tick([GUILD])
+    s.tick([GUILD])
+    for day in ("2026-10-01", "2026-10-02"):
+        assert vectors_usable(mstore.get_summary(GUILD, 10, day), "fake@4")
+
+
+def test_slow_query_embedding_times_out_to_keywords(mstore, settings, monkeypatch):
+    monkeypatch.setattr(qa_mod, "QUERY_EMBED_TIMEOUT_S", 0.05)
+
+    class Slow(FakeEmbedder):
+        model_id = "slow@4"
+
+        def embed(self, texts, task):
+            if task == "query":
+                time.sleep(0.5)
+            return super().embed(texts, task)
+
+    st, tools = hybrid_tools(mstore, settings, emb=Slow())
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    started = time.monotonic()
+    r = tools.chat_search(["งบโฆษณา"], query="a slow marketing question")
+    assert time.monotonic() - started < 0.4 and [h["match"] for h in r["hits"]] == ["keyword"]
+
+
+def test_month_range_ending_in_the_future_stays_within_budget(settings):
+    base = offline_memory_store()
+    st, tools = hybrid_tools(base, settings, allowed={10: "general"})
+    base.add_message(mk(settings, 1, bkk(14, 9).astimezone(UTC), "ads", cid=10))
+    base.client.streams.clear()
+    r = tools.chat_search(["ads"], "2026-10-01", "2026-10-31", query="ads this month")
+    assert r["hits"] and len(base.client.streams) <= 10
+
+
+def test_query_only_search_uses_its_words_when_meaning_search_is_off(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {12: "ads"}, settings, retention_days=30)  # no embedder
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=12, local_date="2026-10-05",
+                                  message_count=3, final=True,
+                                  summary={"overview": "marketing plan for Q4"}))  # fmt: skip
+    r = tools.chat_search([], query="what is the marketing plan?")
+    assert [h["date"] for h in r["hits"]] == ["2026-10-05"]
+
+
+def test_query_only_search_uses_its_words_when_embedding_fails(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings, emb=FakeEmbedder(fail=True))
+    topic_day(st, "2026-10-05", 12, "marketing plan")
+    r = tools.chat_search([], query="the marketing plan please")
+    assert [(h["date"], h["match"]) for h in r["hits"]] == [("2026-10-05", "keyword")]

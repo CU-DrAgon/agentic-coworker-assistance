@@ -20,6 +20,7 @@ from google.genai import types
 
 from .config import Settings
 from .embed import NullEmbedder, cosine
+from .gate import extract_keywords
 from .i18n import resolve_lang, t
 from .memory_index import entries_for
 from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
@@ -186,6 +187,7 @@ RAW_GROUP_FETCH = 600  # messages read per such channel-day
 MIN_SIMILARITY = 0.55  # cosine a summary item needs to count as a meaning match (provisional)
 RRF_K = 60  # reciprocal rank fusion constant
 QUERY_CACHE_SIZE = 512  # recent query vectors kept (the model often repeats a search)
+QUERY_EMBED_TIMEOUT_S = 2.0  # longest wait for the query vector before keyword-only search
 RAW_NOTE = (
     f"raw messages older than {RAW_RECENT_DAYS} days are searched through summaries only; for an "
     "exact code, number or phrase use chat_messages with a keyword and dates"
@@ -336,6 +338,8 @@ class MemoryTools:
         kws = [k.strip().casefold() for k in (keywords or []) if isinstance(k, str) and k.strip()]
         kws = list(dict.fromkeys(kws))[:12]
         query = (query or "").strip()
+        if not kws and query:  # words of the question, so keyword search works without meaning
+            kws = [k.casefold() for k in extract_keywords(query)]
         use_meaning = semantic and bool(self.embedder.model_id)
         if not kws and not (query and use_meaning):
             return {"error": "give at least one keyword or a query"}
@@ -361,7 +365,7 @@ class MemoryTools:
         qv, ms_embed = None, 0.0
         if pending is not None:
             try:
-                qv = pending.result()
+                qv = pending.result(timeout=QUERY_EMBED_TIMEOUT_S)
             except Exception:
                 logger.warning("query embedding failed; keyword search only", exc_info=True)
             ms_embed = (time.monotonic() - t_index) * 1000
@@ -397,10 +401,11 @@ class MemoryTools:
                     g["sim"] = best[0]
                     g["near"] = [line[:300] for _, line in sorted(sims, reverse=True)[:2]]
         raw_queries = 0
-        if kws and max(a, raw_from) <= b:  # recent raw messages (not summarised yet)
+        raw_to = min(b, today.isoformat())  # no reads for days that have not happened yet
+        if kws and max(a, raw_from) <= raw_to:  # recent raw messages (not summarised yet)
             raw_queries += 1
             rows = self.store.messages(
-                self.guild_id, self.allowed, max(a, raw_from), b, limit=MAX_ROWS_SEARCH,
+                self.guild_id, self.allowed, max(a, raw_from), raw_to, limit=MAX_ROWS_SEARCH,
                 newest_first=True,
             )  # fmt: skip
             for m in rows:  # newest first

@@ -613,9 +613,14 @@ class MeetingManager:
         if member is None or not bot.team.enabled(s.guild_id, "qa"):
             return
         async with s.answer_lock:
+            t0 = time.monotonic()
             history = s.transcript.history(bot.s.now())
-            # the answer is posted in the voice channel's chat: its readers bound the memory scope
-            memory = await bot._memory_tools_for(member.guild, member, s.voice_channel.id)
+            # the answer goes to the voice channel's chat, or to the fallback channel when that
+            # fails (see _post): the readers of both bound the memory scope
+            fallback = s.fallback_channel
+            also = (bot._answering_id(fallback),) if fallback is not None else ()
+            memory = await bot._memory_tools_for(member.guild, member, s.voice_channel.id, *also)
+            t_ctx = time.monotonic()
             ans = await asyncio.to_thread(
                 ask,
                 bot.s,
@@ -627,6 +632,10 @@ class MeetingManager:
                 history=history,
                 language=s.language,
                 memory=memory,
+            )
+            is_exec = bot.is_exec_member(member)
+            bot._log_answer(
+                s.guild_id, s.voice_channel.id, is_exec, ans, t0, t_ctx, time.monotonic()
             )
             for i, part in enumerate(chunks(ans.text, 1800)):
                 await self._post(s, f"{member.mention} {part}" if i == 0 else part)
