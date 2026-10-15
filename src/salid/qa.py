@@ -890,7 +890,10 @@ CHAT_TOOLS_PROMPT = (
     "ถ้าได้ needs_confirmation (เช่นคนในห้องปลายทางยังมองไม่เห็นห้องต้นทาง) ให้บอกคำเตือน ขอให้ผู้ใช้ยืนยัน แล้วเรียกซ้ำด้วยอาร์กิวเมนต์เดิมหลังผู้ใช้ตอบในข้อความถัดไปเท่านั้น. "
     "ถ้า ambiguous ให้ถามว่าหมายถึงห้อง/คนไหน; สำเร็จแล้วยืนยันสั้นๆ ว่าส่งไปที่ไหน.\n"
     "การแจ้งเตือนส่วนตัว (เครื่องมือ set_my_notifications / show_my_notifications ถ้ามี): ทุกคนปรับของตัวเองได้ด้วยการพูด เช่น “ไม่ต้องส่งสรุปเย็น”, "
-    "“ส่งสรุปเช้า 7 โมง”, “ส่งเสาร์อาทิตย์ด้วย”, “แจ้งเอกสารสำคัญทุกฉบับ / เฉพาะที่สำคัญ / ปิด”, “เลิกเตือนเรื่องที่ค้างตอบ”. ส่งเฉพาะค่าที่เขาขอเปลี่ยน."
+    "“ส่งสรุปเช้า 7 โมง”, “ส่งเสาร์อาทิตย์ด้วย”, “แจ้งเอกสารสำคัญทุกฉบับ / เฉพาะที่สำคัญ / ปิด”, “เลิกเตือนเรื่องที่ค้างตอบ”. ส่งเฉพาะค่าที่เขาขอเปลี่ยน.\n"
+    "ความชอบส่วนตัว (เครื่องมือ remember_my_preference / show_my_preferences / forget_my_preferences ถ้ามี): เมื่อผู้ใช้บอกความชอบแบบถาวรว่าอยากให้สลิดปฏิบัติกับเขาอย่างไร "
+    "เช่น “เรียกผมว่าพี่ปัส” (nickname), “ตอบสั้นๆ นะ” (reply_length), “สรุปเป็นภาษาอังกฤษ” (language), “สนใจเรื่องการตลาด” (focus_add), “ผมดูแลบัญชี” (role_note), “ไม่ต้องใส่อีโมจิ” (style_add) "
+    "ให้เรียกเครื่องมือแล้วยืนยันประโยคเดียว; อย่าบันทึกคำขอครั้งเดียว (“ตอบสั้นๆ ข้อนี้”) ถ้าไม่ชัดว่าถาวรหรือไม่ให้ถามสั้นๆ. แก้ได้เฉพาะของผู้พูดเอง."
 )
 
 MENTION_PROMPT = (
@@ -1012,7 +1015,8 @@ CAPABILITIES_PROMPT = (
     "16) สรุปส่วนตัวทาง DM: สรุปเช้า (ปกติ 08:30 วันทำงาน: นัดประชุมวันนี้พร้อมลิงก์ งานที่ครบกำหนด เอกสารสำคัญที่ได้รับ เรื่องที่มีคนฝากไว้และยังไม่ได้ตอบ) "
     "และสรุปเย็น (ปกติ 18:00) แทน DM ติดตามงานเดิม ไม่ส่งถ้าไม่มีอะไรจะสรุป; แจ้งเตือนทันทีเมื่อมีเอกสารสำคัญ (สัญญา ใบแจ้งหนี้/ใบเสนอราคายอดสูง หนังสือราชการ "
     "หรือเอกสารที่ระบุถึงคนนั้น) ในห้องที่เขาอ่านได้ (ไม่เกิน 10 ครั้งต่อวัน); ถ้ามีคนแท็กฝากเรื่องไว้แล้วผ่านไป 2 ชั่วโมงยังไม่ตอบ จะเตือนเบาๆ ครั้งเดียว. "
-    "ทุกคนปรับของตัวเองได้ด้วยการพูด (เวลา เปิด/ปิด รวมเสาร์อาทิตย์ ระดับแจ้งเตือนเอกสาร) แอดมินเปิดปิดทั้งเซิร์ฟเวอร์ได้ใน Hub\n"
+    "ทุกคนปรับของตัวเองได้ด้วยการพูด (เวลา เปิด/ปิด รวมเสาร์อาทิตย์ ระดับแจ้งเตือนเอกสาร) แอดมินเปิดปิดทั้งเซิร์ฟเวอร์ได้ใน Hub "
+    "และบอกความชอบส่วนตัวให้สลิดจำได้ (ชื่อที่ให้เรียก ความยาวคำตอบ ภาษาใน DM เรื่องที่สนใจ หน้าที่ สไตล์) ใช้กับตัวเองเท่านั้น สั่งลืมได้\n"
     "17) ส่งไฟล์ต่อให้คน: ตอบกลับไฟล์หรือเอกสารแล้วบอกให้ส่งต่อ เช่น “ส่งไฟล์นี้ไปห้อง… แล้วแท็กคุณ…” สลิดโพสต์ไฟล์พร้อมข้อความสั้นสุภาพและลิงก์ต้นฉบับในห้องปลายทาง "
     "(ผู้สั่งต้องอ่านห้องต้นทางและพิมพ์ในห้องปลายทางได้; ถ้าคนในห้องปลายทางยังมองไม่เห็นห้องต้นทางจะขอให้ยืนยันก่อน) หรือส่ง DM หรือร่างอีเมลแนบไฟล์\n"
     "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
@@ -1119,6 +1123,7 @@ def system_prompt(
     chat: bool = False,
     people: list[str] | None = None,
     coo: bool = False,
+    profile: str = "",
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1155,6 +1160,7 @@ def system_prompt(
         p += SECRETARY_PROMPT
     if chat:
         p += CHAT_TOOLS_PROMPT
+    p += profile  # the asker's own preferences (salid.profiles.profile_block), "" when none
     if people is not None:
         p += MENTION_PROMPT
         p += "\nคนที่แท็กได้ (ชื่อที่แสดง): " + (", ".join(people) if people else "(ยังไม่มีรายชื่อ)")
@@ -1487,6 +1493,7 @@ def build_agent(
     chat: bool = False,
     people: list[str] | None = None,
     coo: bool = False,
+    profile: str = "",
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1503,6 +1510,7 @@ def build_agent(
         chat=chat,
         people=people,
         coo=coo,
+        profile=profile,
     )
     model_calls = 0
 
@@ -1558,6 +1566,7 @@ async def ask_async(
     chat_actions: ChatActions | None = None,
     people: list[str] | None = None,
     extra_tools: list | None = None,
+    profile: str = "",
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -1609,6 +1618,7 @@ async def ask_async(
         chat=bool(chat_tools),
         people=people,
         coo=bool(extra_tools),
+        profile=profile,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -1670,6 +1680,7 @@ def ask(
     chat_actions: ChatActions | None = None,
     people: list[str] | None = None,
     extra_tools: list | None = None,
+    profile: str = "",
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1693,5 +1704,6 @@ def ask(
             chat_actions=chat_actions,
             people=people,
             extra_tools=extra_tools,
+            profile=profile,
         )
     )

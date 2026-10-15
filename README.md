@@ -442,6 +442,15 @@ Code: `coo.py` (Discord side), `memory_access.py` (rules), `tasks.py`, `disclosu
   asks appear in the briefs. Members tune everything by talking (`set_my_notifications` / `show_my_notifications`:
   morning / evening on-off and times, weekends, `doc_alerts` all | important | off, ask reminders), stored per
   (guild, user) in `salid_notif_prefs`.
+- **Personal preferences** (`salid.profiles`, agent tools `remember_my_preference` / `show_my_preferences` /
+  `forget_my_preferences`). "เรียกผมว่าพี่ปัส", "ตอบสั้นๆ", "สนใจเรื่องการตลาด", "สรุปเป็นภาษาอังกฤษ", "ไม่ต้องใส่อีโมจิ",
+  "ผมดูแลบัญชี": a `Profile` per (guild, user) in `salid_profiles` (nickname <= 40 chars, `reply_length`
+  short | normal | detailed, `language` th | en, <= 8 focus topics, role note <= 120, <= 8 style notes). The tools are
+  bound in code to the speaker, so nobody edits another person's profile; only lasting preferences are saved. The
+  asker's own profile (never anyone else's) goes into the prompt as a quoted data block that cannot change
+  permissions, scoping or factual rules. `language` applies in DMs, personal briefs and `auto` channels; a channel set
+  to th / en keeps its language. Briefs also use the recipient's length and focus. Profiles are not in reports or memory
+  search; "forget" deletes them.
 - **Deliver files** (`salid.deliver`, agent tool `deliver_file`). "ส่งเอกสารนี้ไปห้อง… แล้วแท็ก…" (also as a reply to the
   file): Salid posts the file(s) in the channel (fuzzy Thai / English name match; a Thai-to-Latin guess asks first), DMs
   a person, or drafts an email with the file (normal confirm flow), with a short polite note, real `@[name]` mentions

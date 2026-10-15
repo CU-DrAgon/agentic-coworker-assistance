@@ -217,6 +217,7 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     )
     assert seen[0].pop("chat_actions").show_settings is not None  # bound settings tools
     assert seen[0].pop("people") == []  # nobody else can see that channel in the fakes
+    assert seen[0].pop("profile") == ""  # no saved preferences: an empty block
     assert seen == [
         {
             "guild_id": OTHER_GUILD,

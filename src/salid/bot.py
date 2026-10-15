@@ -102,6 +102,7 @@ from .permissions import (
     guild_missing,
     permission_message,
 )
+from .profiles import ProfileMixin, effective_language, profile_block
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .scheduling import DiscordCalendar, MeetingService
@@ -245,7 +246,7 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Client):
+class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client):
     def __init__(
         self,
         settings: Settings,
@@ -362,6 +363,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
+        self._profile_init()  # personal preferences (salid.profiles)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1294,6 +1296,8 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         gid = guild.id
         is_exec = self.is_exec_member(member)
         setting = self._lang_setting(message)  # th / en / auto: auto lets the model follow the user
+        profile = self._profile_of(gid, member.id)  # the asker's own preferences, never others'
+        setting = effective_language(setting, profile)  # a channel's th / en wins over it
         lang = resolve_lang(setting, q)
         task = parse_deep_trigger(q)
         if task is not None:
@@ -1355,6 +1359,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
                     interjection=interjection,
                     chat_actions=chat_actions,
                     people=people,
+                    profile=profile_block(profile),
                     **({"files": files, "actions": actions} if files else {}),
                     **self._web_kw(gid),
                     **({"secretary": secretary} if secretary is not None else {}),
@@ -1587,6 +1592,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
             deliver_file=self._deliver_actions(
                 message, guild, member, lang, loop, secretary, request_id
             ),
+            **self._profile_actions(gid, member.id),
         )
 
     @staticmethod
@@ -1735,6 +1741,8 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         files = await self._file_inputs(target) if getattr(target, "attachments", None) else []
         if not content and not files:
             return None
+        profile = self._profile_of(guild.id, member.id)
+        setting = effective_language(setting, profile)
         lang = resolve_lang(setting, content)
         q = message_summary_question(lang, target.author.display_name, content)
         ans = await asyncio.to_thread(
@@ -1746,6 +1754,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
             is_exec=self.is_exec_member(member),
             user_id=member.id,
             language=setting,
+            profile=profile_block(profile),
             **({"files": files} if files else {}),
             **self._web_kw(guild.id),
         )
@@ -2056,8 +2065,11 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
         guild, user, here = interaction.guild, interaction.user, interaction.channel
         await interaction.response.defer(ephemeral=bool(private))
         await asyncio.to_thread(self.team.current, guild.id)
-        setting = self._lang_setting(interaction)
+        profile = self._profile_of(guild.id, user.id)
+        setting = effective_language(self._lang_setting(interaction), profile)
         lang = self._interaction_lang(interaction)
+        if setting != "auto":
+            lang = setting
         send = partial(interaction.followup.send, ephemeral=bool(private))
         if not (self.team.enabled(guild.id, "qa") and self.team.enabled(guild.id, "memory")):
             await send(t("summary_unavailable", lang))
@@ -2089,6 +2101,7 @@ class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Cl
             user_id=user.id,
             language=setting if setting != "auto" else lang,
             memory=memory,
+            profile=profile_block(profile),
             **self._web_kw(guild.id),
         )
         logger.info("summary command answered in %.1fs (%d rounds)", ans.seconds, ans.rounds)
