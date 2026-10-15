@@ -9,6 +9,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     default_mode         mode of channels with no entry above (default "call")
     channel_languages    {channel id str: th|en|auto}, reply language override, see salid.i18n
     default_language     reply language of channels with no entry above (default "th")
+    receipt_home_channel_id  str main receipt channel ("" = auto-pick), see salid.receipt_forward
+    receipt_forward      bool copy receipts posted in other channels to the home channel (default true)
     digest_channel_id    str ("" = no daily digest)
     digest_time          "HH:MM"
     exec_role_names      list[str] roles that count as executives (default ผู้บริหาร, Executive)
@@ -127,6 +129,8 @@ class GuildSettingsUpdate(BaseModel):
     receipt_channel_ids: list[str] = Field(default_factory=list, max_length=50)
     ask_channel_ids: list[str] = Field(default_factory=list, max_length=50)
     digest_channel_id: str = ""
+    receipt_home_channel_id: str = ""
+    receipt_forward: bool = True
     digest_time: str = "18:00"
     exec_role_names: list[str] = Field(default_factory=lambda: list(DEFAULT_EXEC_ROLES))
     channel_modes: dict[str, str] = Field(default_factory=dict)
@@ -175,12 +179,12 @@ class GuildSettingsUpdate(BaseModel):
     def _ids(cls, v):
         return _clean_ids(v)
 
-    @field_validator("digest_channel_id", mode="before")
+    @field_validator("digest_channel_id", "receipt_home_channel_id", mode="before")
     @classmethod
     def _digest_id(cls, v):
         v = "" if v is None else str(v).strip()
         if v and not _ID.match(v):
-            raise ValueError("digest_channel_id must be numeric")
+            raise ValueError("channel id must be numeric")
         return v
 
     @field_validator("digest_time")

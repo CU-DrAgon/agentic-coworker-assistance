@@ -470,7 +470,7 @@ def test_home_page_links_to_hub(client):
 
 def test_update_model_is_what_the_hub_writes():
     assert set(GuildSettingsUpdate.model_fields) == {
-        "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id",
+        "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "receipt_home_channel_id", "receipt_forward",
         "digest_time", "exec_role_names", "channel_modes", "default_mode", "channel_languages", "default_language", "memory_retention_days",
     }  # fmt: skip
 

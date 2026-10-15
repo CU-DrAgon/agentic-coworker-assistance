@@ -564,6 +564,18 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "⚠️ อาจซ้ำกับใบเสร็จ #{id} (ร้าน/วันที่/ยอดเท่ากัน)",
         "en": "⚠️ Possible duplicate of receipt #{id} (same vendor, date and total)",
     },
+    "fwd_header": {
+        "th": "📎 ใบเสร็จจาก {user} (ส่งมาใน #{channel}) · [ข้อความต้นฉบับ]({url})",
+        "en": "📎 Receipt from {user} (sent in #{channel}) · [original message]({url})",
+    },
+    "fwd_header_dm": {
+        "th": "📎 ใบเสร็จจาก {user} (ส่งมาทาง DM)",
+        "en": "📎 Receipt from {user} (sent by DM)",
+    },
+    "fwd_ack": {
+        "th": "ส่งต่อไปที่ #{home} ให้แล้วครับ (ข้อความเดิมลบได้ถ้าต้องการ)",
+        "en": "Forwarded to #{home} (you can delete your original message if you like).",
+    },
     "rc_duplicate": {
         "th": "ℹ️ ใบเสร็จนี้เคยบันทึกแล้ว (#{id} ร้าน {vendor} ยอด {total}) ไม่บันทึกซ้ำ",
         "en": "ℹ️ This receipt was already recorded (#{id}, vendor {vendor}, total {total}). Not "

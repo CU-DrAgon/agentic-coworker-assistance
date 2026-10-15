@@ -228,6 +228,8 @@
         <div id="features"></div>
         <div class="fields">
           <label><span data-i18n="receipt_ids_l"></span> <div class="checks" id="receipt-ids"></div><small data-i18n="receipt_ids_s"></small></label>
+          <label><span data-i18n="home_id_l"></span> <select class="field" id="receipt-home"></select><small data-i18n="home_id_s"></small></label>
+          <div class="checks"><label><input type="checkbox" id="receipt-forward"> <span data-i18n="fwd_l"></span></label></div><small data-i18n="fwd_s"></small>
           <label><span data-i18n="ask_ids_l"></span> <div class="checks" id="ask-ids"></div><small data-i18n="ask_ids_s"></small></label>
           <label><span data-i18n="digest_id_l"></span> <select class="field" id="digest-id"></select></label>
           <label><span data-i18n="mem_days_l"></span>
@@ -514,6 +516,26 @@
  "receipt_ids_s": {
   "th": "ห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” รับใบเสร็จได้อยู่แล้วโดยไม่ต้องเลือก",
   "en": "Channels with “ใบเสร็จ” or “receipt” in the name already accept receipts without being selected"
+ },
+ "home_id_l": {
+  "th": "ห้องรับใบเสร็จหลัก",
+  "en": "Main receipt channel"
+ },
+ "home_id_auto": {
+  "th": "เลือกให้อัตโนมัติ",
+  "en": "Pick automatically"
+ },
+ "home_id_s": {
+  "th": "ใบเสร็จที่ส่งผิดห้องจะถูกคัดลอกมาที่นี่ ถ้าไม่เลือก สลิดใช้ห้องรับใบเสร็จห้องแรกที่ส่งข้อความได้",
+  "en": "Receipts posted in other channels are copied here. If not set, Salid uses the first receipt channel it can post in"
+ },
+ "fwd_l": {
+  "th": "ส่งต่อใบเสร็จที่ส่งผิดห้อง",
+  "en": "Forward receipts sent to the wrong channel"
+ },
+ "fwd_s": {
+  "th": "ข้อความเดิมไม่ถูกลบ (สลิดไม่มีสิทธิ์ลบข้อความ)",
+  "en": "The original message is kept (Salid cannot delete messages)"
  },
  "ask_ids_l": {
   "th": "ห้องตอบทุกข้อความ",
@@ -1145,6 +1167,14 @@ function renderChecks(box, channels, selected) {
 }
 const checked = (box) => [...box.querySelectorAll("input:checked")].map((i) => i.value);
 
+function renderHomeSelect(channels, selected) {
+  const sel = $("receipt-home"); sel.textContent = "";
+  sel.append(Object.assign(tx(document.createElement("option"), "home_id_auto"), { value: "" }));
+  const known = new Set(channels.map((c) => c.id));
+  for (const c of channels) { const o = document.createElement("option"); o.value = c.id; o.textContent = "#" + c.name; sel.append(o); }
+  if (selected && !known.has(selected)) sel.append(Object.assign(tx(document.createElement("option"), "channel_gone", { id: selected }), { value: selected }));
+  sel.value = selected || "";
+}
 function renderDigestSelect(channels, selected) {
   const sel = $("digest-id"); sel.textContent = "";
   sel.append(Object.assign(tx(document.createElement("option"), "digest_none"), { value: "" }));
@@ -1252,6 +1282,8 @@ function fillSettings(s) {
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
   renderChecks($("ask-ids"), channels, s.ask_channel_ids);
   renderDigestSelect(channels, s.digest_channel_id);
+  renderHomeSelect(channels, s.receipt_home_channel_id);
+  $("receipt-forward").checked = s.receipt_forward !== false;
   renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language);
   $("digest-time").value = s.digest_time || "18:00";
   fillRetention(s.memory_retention_days || 90);
@@ -1327,6 +1359,8 @@ async function save() {
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
+    receipt_home_channel_id: $("receipt-home").value,
+    receipt_forward: $("receipt-forward").checked,
     channel_modes: collectModes(),
     default_mode: $("default-mode").value || "call",
     channel_languages: collectLanguages(),

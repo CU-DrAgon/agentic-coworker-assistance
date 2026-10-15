@@ -79,6 +79,7 @@ from .modes import (
 )
 from .naming import command_text, mentions_name
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
+from .receipt_forward import forward_receipt
 from .store import Store
 from .summary import (
     PERIODS,
@@ -842,11 +843,41 @@ class SecretaryBot(discord.Client):
         if res.reaction:
             with contextlib.suppress(discord.HTTPException):
                 await message.add_reaction(res.reaction)
+        fwd = await self._forward(
+            message, message.guild, [(att.filename, data)], res, self._lang(message)
+        )
         if not quiet:  # listen mode: reaction only, no text reply
-            sent = await message.reply(res.reply, mention_author=False)
+            text = res.reply
+            if fwd is not None:
+                text += "\n" + t("fwd_ack", self._lang(message), home=fwd.channel.name)
+            sent = await message.reply(text, mention_author=False)
             if res.status == "created":
                 self.store.set_reply_message(res.receipt.id, sent.id)
+        if fwd is not None and res.status == "created":  # replies in the home channel win
+            self.store.set_reply_message(res.receipt.id, fwd.id)
         return res
+
+    async def _forward(self, message, guild, files, res, lang):
+        """Copy a created / duplicate receipt to the guild's receipt home channel when it was
+        posted elsewhere (see salid.receipt_forward). The sent copy, or None."""
+        if res.status not in ("created", "duplicate") or guild is None:
+            return None
+        try:
+            return await forward_receipt(
+                guild=guild,
+                settings=self.team.current(guild.id),
+                env_receipt_ids=self.s.receipt_channel_ids,
+                name_matches=is_receipt_channel_name,
+                source=message.channel if message.guild is not None else None,
+                author=message.author,
+                jump_url=getattr(message, "jump_url", None),
+                files=files,
+                text=res.reply,
+                lang=lang,
+            )
+        except Exception:
+            logger.exception("receipt forward failed")
+            return None
 
     async def _intake(self, message: discord.Message, quiet: bool = False) -> bool:
         """Read every attachment as a receipt. True when at least one was a receipt (saved or a
@@ -988,7 +1019,7 @@ class SecretaryBot(discord.Client):
         return inputs
 
     def _file_actions(
-        self, message, guild, member, is_exec: bool, setting: str, loop
+        self, message, guild, member, is_exec: bool, setting: str, loop, forwards=None
     ) -> FileActions:
         """The side effects the agent may trigger for this message. Guild, submitter, channel and
         message are bound here; the model only chooses which attachment."""
@@ -996,7 +1027,7 @@ class SecretaryBot(discord.Client):
         lang = self._lang(message)
 
         def record(f: FileInput, note: str):
-            return ingest_attachment(
+            res = ingest_attachment(
                 self.store,
                 self.llm,
                 self.s,
@@ -1012,6 +1043,9 @@ class SecretaryBot(discord.Client):
                 archive=self.archive,
                 lang=lang,
             )
+            if forwards is not None:
+                forwards.append((f, res))  # posted to the receipt home channel by _answer
+            return res
 
         def deep(task: str) -> str:
             status = self._deep_status(gid, task, is_exec)
@@ -1071,12 +1105,13 @@ class SecretaryBot(discord.Client):
             history = t("history_meeting", lang, meeting=meeting, chat=history).rstrip()
         memory = await self._memory_tools(message, guild, member)
         files: list[FileInput] = []
+        forwards: list = []  # (file, IngestResult) of receipts the agent recorded
         actions = None
         if with_files:
             self._agent_msgs.add(message.id)  # the agent reads these: no separate receipt intake
             files = await self._file_inputs(message)
             actions = self._file_actions(
-                message, guild, member, is_exec, setting, asyncio.get_running_loop()
+                message, guild, member, is_exec, setting, asyncio.get_running_loop(), forwards
             )
         async with message.channel.typing():
             ans = await asyncio.to_thread(
@@ -1115,6 +1150,17 @@ class SecretaryBot(discord.Client):
             if reaction:
                 with contextlib.suppress(discord.HTTPException):
                     await message.add_reaction(reaction)
+        forwarded = None
+        for f, res in forwards[:4]:
+            fwd = await self._forward(message, guild, [(f.filename, f.data)], res, lang)
+            if fwd is not None and res.status == "created":
+                self.store.set_reply_message(res.receipt.id, fwd.id)
+            forwarded = forwarded or fwd
+        if forwarded is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await message.reply(
+                    t("fwd_ack", lang, home=forwarded.channel.name), mention_author=False
+                )
         self._note_answer(message, sent)
         return True
 

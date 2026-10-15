@@ -136,6 +136,10 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   next steps, questions written in an image are answered, and heavy analysis can start a deep task
   (`start_deep_task`, executives only, `deep_tasks` switch). Receipt channels (and unaddressed images
   elsewhere) keep the direct receipt pipeline.
+  A receipt recorded outside a receipt channel (or by DM, when the sender shares one server with Salid) is
+  also copied to the server's main receipt channel (hub setting, else the first receipt channel Salid can
+  post in), re-uploading the files with a link to the original; replies there correct or void it. The
+  original is never deleted. Switch: `receipt_forward` (default on). Nothing is posted for history import.
 - **Channel modes** (`/โหมด` or `/mode`, or the hub's "โหมดของแต่ละห้อง"): per channel, `🔇 off` (ignore the
   channel), `👂 listen` (receipts get an emoji reaction only; an @mention gets 👂), `🙋 call` (default:
   answers when @mentioned or called by name, `สลิด` and misspellings but not `สลิป`; for 3 minutes

@@ -71,7 +71,7 @@ def test_document_layout(gstore):
     doc = gstore.client.collection("salid_guilds").docs[str(GUILD)]
     assert set(doc) == {
         "guild_name", "icon_url", "channels", "active", "installed_at", "features",
-        "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "digest_time",
+        "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "receipt_home_channel_id", "receipt_forward", "digest_time",
         "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
         "channel_languages", "default_language", "memory_retention_days",
     }  # fmt: skip
