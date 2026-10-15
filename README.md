@@ -258,3 +258,9 @@ Deep tasks are Discord-only.
 - Transcription quality on overlapping speech, noisy audio or a lot of English code-switching is limited
   by the model.
 - Tests are offline and mock every external service; the end-to-end paths were verified manually.
+
+## License
+
+Copyright (c) 2026 The Frontier Company Limited.
+
+This project is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may read, run and modify it for noncommercial purposes. Any commercial use requires a separate license from The Frontier Company Limited.
