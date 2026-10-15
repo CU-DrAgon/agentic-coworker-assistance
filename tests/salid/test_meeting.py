@@ -839,7 +839,8 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
     posted, spoken = [], []
 
     async def go():
-        async def memory_tools(where, guild, member):
+        async def memory_tools(guild, voice_channel, humans):
+            seen["humans"] = [h.id for h in humans]
             return "MEM"
 
         bot = SimpleNamespace(
@@ -847,7 +848,7 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
             team=SimpleNamespace(enabled=lambda g, f: True),
             store=None,
             is_exec_member=lambda mem: True,
-            _memory_tools=memory_tools,
+            _room_memory_tools=memory_tools,
             _web_kw=lambda gid: {"web_client": "W"},
         )
         mgr = m.MeetingManager(bot)
@@ -856,6 +857,7 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
             transcript=SimpleNamespace(history=lambda now: ""),
             answer_lock=asyncio.Lock(),
             text_channel=None,
+            voice_channel=SimpleNamespace(members=[SimpleNamespace(id=6, bot=False)]),
             language="th",
             ending=False,
             vc=SimpleNamespace(is_connected=lambda: True),
@@ -875,6 +877,7 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
 
     asyncio.run(go())
     assert seen["memory"] == "MEM" and seen["web_client"] == "W"
+    assert seen["spoken"] is True and sorted(seen["humans"]) == [5, 6]  # the whole room
     assert posted == ["@u answer"] and spoken == ["answer"]
 
 

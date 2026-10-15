@@ -1599,9 +1599,11 @@ class MeetingManager:
             history = s.transcript.history(bot.s.now())
             memory = None
             guild = getattr(member, "guild", None)
-            if guild is not None:  # the asker's readable channels, as for a text question
-                where = SimpleNamespace(guild=guild, channel=s.text_channel)
-                memory = await bot._memory_tools(where, guild, member)
+            if guild is not None:  # channels everyone in the room can read: the answer is spoken
+                humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
+                if all(m.id != member.id for m in humans):
+                    humans.append(member)
+                memory = await bot._room_memory_tools(guild, s.voice_channel, humans)
             ans = await asyncio.to_thread(
                 ask,
                 bot.s,
@@ -1613,6 +1615,7 @@ class MeetingManager:
                 history=history,
                 language=s.language,
                 memory=memory,
+                spoken=True,
                 **bot._web_kw(s.guild_id),
             )
             if getattr(bot.s, "meeting_text_echo", False):  # meetings stay voice by default

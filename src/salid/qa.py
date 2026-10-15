@@ -1548,6 +1548,12 @@ def build_agent(
     )
 
 
+SPOKEN_HINT = (
+    "(คำตอบนี้จะถูกพูดออกเสียงในห้องเสียง: ตอบ 1-3 ประโยคสั้น ๆ พูดได้ลื่น ไม่ใช้รายการหรือ markdown / "
+    "answer in 1-3 short sentences suitable for speaking, no lists or markdown)"
+)
+
+
 async def ask_async(
     settings: Settings,
     store: Store,
@@ -1570,6 +1576,7 @@ async def ask_async(
     people: list[str] | None = None,
     extra_tools: list | None = None,
     profile: str = "",
+    spoken: bool = False,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -1638,6 +1645,8 @@ async def ask_async(
     )
     if skipped:
         text_in += "\n" + skipped_note(skipped)
+    if spoken:
+        text_in += "\n" + SPOKEN_HINT
     message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
     async for event in runner.run_async(
@@ -1684,6 +1693,7 @@ def ask(
     people: list[str] | None = None,
     extra_tools: list | None = None,
     profile: str = "",
+    spoken: bool = False,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1708,5 +1718,6 @@ def ask(
             people=people,
             extra_tools=extra_tools,
             profile=profile,
+            spoken=spoken,
         )
     )

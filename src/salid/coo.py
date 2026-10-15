@@ -186,13 +186,24 @@ class CooMixin:
             *getattr(guild, "stage_channels", ()),
         ]
 
-    def _coo_scope(self, guild, member, answering: int | None, allowed: dict[int, str]):
+    def _coo_scope(
+        self,
+        guild,
+        member,
+        answering: int | None,
+        allowed: dict[int, str],
+        room: frozenset[int] | None = None,
+    ):
         """(tool channel map, Visibility) for one asker answering in channel `answering` (None =
-        a DM / private reply). Blocking."""
+        a DM / private reply). `room`: the humans in a voice room (the audience; `member` is the
+        lowest ranked of them): the answer reaches all of them, and disclosure grants of one
+        person are not used when others listen. Blocking."""
         ranks = self._ranks(guild)
         audience = None
         unknown = False
-        if answering is not None:
+        if room is not None:
+            audience = frozenset(room)
+        elif answering is not None:
             where = guild.get_channel(answering)
             unknown = where is None
             audience = frozenset() if unknown else self._channel_viewers(guild, where)
@@ -202,8 +213,12 @@ class CooMixin:
             channels=frozenset(allowed),
             authors=authors,
             dm_authors=hierarchy_authors(member.id, ranks, None),
-            unlocked=self.disclosures.unlocked_ids(guild.id, member.id),
-            dm=answering is None,
+            unlocked=(
+                frozenset()
+                if room is not None and len(room) > 1
+                else self.disclosures.unlocked_ids(guild.id, member.id)
+            ),
+            dm=answering is None and room is None,
         )
         people = self._people(guild)
         read = {

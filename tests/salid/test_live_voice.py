@@ -147,12 +147,21 @@ def test_instruction_has_date_persona_tools_and_language():
     s = FixedClockSettings()
     th = build_instruction(s, "th")
     assert "2026-10-14" in th and "วันพุธ" in th and "สัปดาห์เริ่มวันจันทร์" in th
-    assert "สลิด" in th and "Salid" in th and "เงียบ" in th and "เรียกเครื่องมือเสมอ" in th
+    assert "สลิด" in th and "Salid" in th and "เงียบ" in th and "ask_salid" in th
     assert "กำลังฟัง" in th and "กำลังคุยอยู่" in th and "พูดภาษาไทย" in th
     assert "always speak English" in build_instruction(s, "en")
     assert "ภาษาเดียวกับคนที่พูด" in build_instruction(s, "auto")
-    assert "ดูข้อมูลบัญชีของร้านไม่ได้" in build_instruction(s, "th", qa=False)
+    assert "ดูข้อมูลของทีมไม่ได้" in build_instruction(s, "th", qa=False)
+    assert "ask_salid" not in build_instruction(s, "th", qa=False)
     assert "แอน: ส่งงาน" in build_instruction(s, "th", history="แอน: ส่งงาน")
+
+
+def test_instruction_answers_general_questions_without_tools_and_never_raises_money():
+    th = build_instruction(FixedClockSettings(), "th")
+    assert "ตอบเองตรง ๆ ห้ามเรียกเครื่องมือ" in th  # general knowledge, opinions, small talk
+    assert "ห้ามพูดถึงเงิน ใบเสร็จ หรือค่าใช้จ่ายเองเด็ดขาด" in th
+    assert "แป๊บนึงนะคะ" in th  # a short natural filler while ask_salid runs
+    assert "spending_summary" not in th
 
 
 # ------------------------------------------------------------------ fake Live API
@@ -319,8 +328,10 @@ async def test_join_connects_live_at_once_and_builds_the_session_config(lv):
     assert cfg.session_resumption.handle is None
     assert cfg.context_window_compression.sliding_window is not None
     names = [d.name for d in cfg.tools[0].function_declarations]
-    assert names[:4] == ["spending_summary", "list_receipts", "compare_periods", "flagged_receipts"]
-    assert "find_duplicates" in names
+    assert names == [
+        "ask_salid", "set_minutes_destination", "post_note", "ask_consent", "set_recording",
+    ]  # fmt: skip
+    assert "spending_summary" not in names  # no raw ledger tools in Live mode
     assert "2026-10-14" in cfg.system_instruction
     assert live.closed is False
     await lv.mgr.end((1000, 77))
@@ -449,46 +460,100 @@ async def test_nothing_plays_when_voice_reply_is_switched_off_or_meeting_ends(lv
 
 
 # ------------------------------------------------------------------ tools
-async def test_tool_call_in_an_all_exec_room_returns_the_ledger_result(lv):
+@pytest.fixture
+def asked(monkeypatch, lv):
+    """Records what ask_salid hands to the text agent; the room memory scope is stubbed."""
+    seen = {}
+
+    def fake_ask(*a, **kw):
+        seen.update(kw, question=a[2])
+        return SimpleNamespace(text="x" * 900)
+
+    async def room_memory(guild, voice_channel, humans):
+        seen["room"] = sorted(h.id for h in humans)
+        return "MEM"
+
+    monkeypatch.setattr("salid.qa.ask", fake_ask)
+    monkeypatch.setattr(lv.bot, "_room_memory_tools", room_memory)
+    monkeypatch.setattr(lv.bot, "_web_kw", lambda gid: {"web_client": "W"})
+    return seen
+
+
+async def test_ask_salid_runs_the_text_agent_scoped_to_the_room(lv, asked):
     s, live = await lv.join(5)
-    live.push(tool_msg("spending_summary", {"start_date": "2026-10-01", "end_date": "2026-10-31"}))
+    s.transcript.add(lv.bot.s.now(), "แอน", "คุยเรื่องแผนไตรมาสสี่")
+    live.push(tool_msg("ask_salid", {"question": "ใครรับงานแผนไตรมาสสี่"}))
     await until(lambda: live.tool_responses)
     (resp,) = live.tool_responses[0]
-    assert resp.id == "call-1" and resp.name == "spending_summary"
-    assert resp.response["total"] == 1250.5 and resp.response["total_fmt"] == "฿1,250.50"
+    assert resp.name == "ask_salid" and len(resp.response["answer"]) == lvm.ANSWER_MAX_CHARS
+    assert asked["room"] == [5] and asked["memory"] == "MEM" and asked["web_client"] == "W"
+    assert asked["is_exec"] is True and asked["spoken"] is True
+    assert "คุยเรื่องแผนไตรมาสสี่" in asked["history"]  # this meeting's transcript is visible
+    assert asked["language"] == s.language
     await lv.mgr.end((1000, 77))
 
 
-async def test_tool_call_ignores_undeclared_arguments_and_unknown_tools(lv):
+async def test_ask_salid_in_a_mixed_room_has_no_ledger_and_says_so(lv, asked):
+    s, live = await lv.join(5, 11)  # 11 is not an executive
+    live.push(tool_msg("ask_salid", {"question": "ยอดใช้จ่ายเดือนนี้"}))
+    await until(lambda: live.tool_responses)
+    assert asked["room"] == [5, 11]  # memory is scoped to everyone present
+    assert asked["is_exec"] is False and asked["user_id"] == 0  # nobody's receipts
+    assert lvm.LEDGER_NOTE in asked["question"]
+    await lv.mgr.end((1000, 77))
+
+
+async def test_ask_salid_single_non_exec_gets_only_their_own_data(lv, asked):
+    s, live = await lv.join(11)
+    live.push(tool_msg("ask_salid", {"question": "ใบเสร็จของฉัน"}))
+    await until(lambda: live.tool_responses)
+    assert asked["is_exec"] is False and asked["user_id"] == 11
+    assert lvm.LEDGER_NOTE not in asked["question"]
+    await lv.mgr.end((1000, 77))
+
+
+async def test_ask_salid_refuses_unknown_tools_empty_questions_and_an_empty_room(lv, asked):
     s, live = await lv.join(5)
     live.push(
-        tool_msg("flagged_receipts", {"submitter_id": 100}, id="a"),
-        tool_msg("drop_tables", {}, id="b"),
-        tool_msg("compare_periods", {"a_start": "2026-10-01"}, id="c"),  # arguments missing
+        tool_msg("spending_summary", {}, id="a"), tool_msg("ask_salid", {"question": " "}, id="b")
     )
-    await until(lambda: len(live.tool_responses) == 3)
+    await until(lambda: len(live.tool_responses) == 2)
     by_id = {r[0].id: r[0].response for r in live.tool_responses}
-    assert by_id["a"]["count"] == 0  # no flagged receipts; the injected id changed nothing
-    assert "unknown tool" in by_id["b"]["error"]
-    assert "error" in by_id["c"]  # a bad call is data for the model, not a crash
-    await lv.mgr.end((1000, 77))
-
-
-async def test_tool_call_in_a_mixed_room_is_refused(lv):
-    s, live = await lv.join(5, 11)  # 11 is not an executive
-    live.push(tool_msg("spending_summary", {"start_date": "2026-10-01", "end_date": "2026-10-31"}))
-    await until(lambda: live.tool_responses)
-    assert live.tool_responses[0][0].response == {"error": lvm.NO_TOOLS_MIXED_ROOM}
-    await lv.mgr.end((1000, 77))
-
-
-async def test_tool_call_with_nobody_in_the_room_is_refused(lv):
-    s, live = await lv.join(5)
+    assert "unknown tool" in by_id["a"]["error"] and by_id["b"] == {"error": "empty question"}
     lv.chan.members = []
-    live.push(tool_msg("flagged_receipts", {}))
-    await until(lambda: live.tool_responses)
-    assert live.tool_responses[0][0].response == {"error": lvm.NO_TOOLS_MIXED_ROOM}
+    live.push(tool_msg("ask_salid", {"question": "ใครมา"}, id="c"))
+    await until(lambda: len(live.tool_responses) == 3)
+    assert live.tool_responses[2][0].response == {"error": lvm.NO_ROOM}
     await lv.mgr.end((1000, 77))
+
+
+async def test_ask_salid_failure_is_data_for_the_model(lv, monkeypatch):
+    def boom(*a, **kw):
+        raise RuntimeError("agent down")
+
+    monkeypatch.setattr("salid.qa.ask", boom)
+    s, live = await lv.join(5)
+    live.push(tool_msg("ask_salid", {"question": "อะไรก็ได้"}))
+    await until(lambda: live.tool_responses)
+    assert live.tool_responses[0][0].response == {"error": "agent down"}
+    await lv.mgr.end((1000, 77))
+
+
+async def test_room_scope_is_the_channels_every_human_can_read(lv):
+    class Chan:
+        def __init__(self, id, name):
+            self.id, self.name = id, name
+
+    a, b = Chan(1, "all"), Chan(2, "execs-only")
+    lv.guild.text_channels = [a, b]
+    lv.guild.voice_channels = []
+    lv.bot._channel_viewers = lambda g, c: frozenset({5, 11}) if c is a else frozenset({5})
+    lv.bot._can_read = lambda c, m: m.id in ({5, 11} if c is a else {5})
+    lv.bot.team.channel_mode = lambda *x: "listen"
+    h5, h11 = SimpleNamespace(id=5), SimpleNamespace(id=11)
+    vc = SimpleNamespace(id=77)
+    assert lv.bot._room_scope(lv.guild, vc, [h5]) == {1: "all", 2: "execs-only"}
+    assert lv.bot._room_scope(lv.guild, vc, [h5, h11]) == {1: "all"}  # #execs-only: 11 cannot read
 
 
 async def test_qa_feature_off_means_no_tools_in_the_config_and_a_refusal(lv):
@@ -497,8 +562,8 @@ async def test_qa_feature_off_means_no_tools_in_the_config_and_a_refusal(lv):
     s, live = await lv.join(5)
     names = [d.name for d in lv.connect.configs[0].tools[0].function_declarations]
     assert names == ["set_minutes_destination", "post_note", "ask_consent", "set_recording"]
-    assert "ดูข้อมูลบัญชีของร้านไม่ได้" in lv.connect.configs[0].system_instruction
-    live.push(tool_msg("flagged_receipts", {}))
+    assert "ดูข้อมูลของทีมไม่ได้" in lv.connect.configs[0].system_instruction
+    live.push(tool_msg("ask_salid", {"question": "อะไร"}))
     await until(lambda: live.tool_responses)
     assert live.tool_responses[0][0].response == {"error": lvm.QA_OFF}
     await lv.mgr.end((1000, 77))

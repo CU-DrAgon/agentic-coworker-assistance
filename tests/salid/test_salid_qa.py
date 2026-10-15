@@ -264,3 +264,15 @@ def test_digest_in_english(seeded):
     assert "Daily expense summary" in d and "Needs review" in d and "unclear data" in d
     assert "สรุปค่าใช้จ่าย" not in d
     assert "No receipts" in build_daily_digest(seeded, GUILD, "2026-01-01", "en")
+
+
+def test_spoken_hint_asks_for_a_short_answer_without_markdown(seeded, settings):
+    store = seeded
+    for spoken in (True, False):
+        llm = scripted(text_resp("ok"))
+        ask(settings, store, "สรุปให้หน่อย", guild_id=GUILD, is_exec=True, user_id=EXEC_ID,
+            model=llm, spoken=spoken)  # fmt: skip
+        text = "".join(p.text or "" for c in llm.requests[0].contents for p in c.parts or [])
+        assert ("1-3 short sentences" in text) is spoken and (
+            "no lists or markdown" in text
+        ) is spoken

@@ -3048,6 +3048,56 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             visibility=vis,
         )
 
+    def _room_scope(self, guild, voice_channel, humans) -> dict[int, str]:
+        """Channel id -> name that EVERY human in a voice room can read (the audience of a spoken
+        answer), plus the voice channel itself. Blocking: run in a thread."""
+        ids = {h.id for h in humans}
+        allowed: dict[int, str] = {}
+        channels = [
+            *guild.text_channels,
+            *getattr(guild, "voice_channels", ()),
+            *getattr(guild, "stage_channels", ()),
+        ]
+        for c in channels:
+            if self.team.channel_mode(guild.id, c.id, c.name, self.s.ask_channel_ids) == "off":
+                continue
+            viewers = set(self._channel_viewers(guild, c)) - ids
+            viewers |= {h.id for h in humans if self._can_read(c, h)}  # live, not from the cache
+            if c.id == voice_channel.id or ids <= viewers:
+                allowed[c.id] = c.name
+        return allowed
+
+    async def _room_memory_tools(self, guild, voice_channel, humans) -> MemoryTools | None:
+        """Memory tools for an answer spoken to everyone in `voice_channel`: only channels all of
+        them can read, and hierarchy-granted work only when every human outranks its author."""
+        humans = list(humans)
+        if not humans or not self.team.enabled(guild.id, "memory"):
+            return None
+        try:
+            allowed = await asyncio.to_thread(self._room_scope, guild, voice_channel, humans)
+        except Exception:
+            logger.warning("could not compute the room memory scope", exc_info=True)
+            return None
+        vis = None
+        try:
+            ranks = await asyncio.to_thread(self._ranks, guild)
+            lowest = min(humans, key=lambda h: ranks.get(h.id, -1))
+            room = frozenset(h.id for h in humans)
+            allowed, vis = await asyncio.to_thread(
+                self._coo_scope, guild, lowest, None, allowed, room
+            )
+        except Exception:
+            logger.warning("could not compute the room hierarchy scope", exc_info=True)
+        return MemoryTools(
+            self.memory_store,
+            guild.id,
+            allowed,
+            self.s,
+            self.team.memory_retention_days(guild.id),
+            opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
+            visibility=vis,
+        )
+
     # ------------------------------------------------------------- digest
     def due_digests(self, now: datetime) -> list[tuple[discord.Guild, discord.abc.Messageable]]:
         """Guilds whose daily digest is due this minute (and not yet sent today)."""

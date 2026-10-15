@@ -11,15 +11,15 @@ with proactive audio on, stays silent while people talk among themselves.
 
 The per-speaker transcription pipeline in meeting.py keeps running for the transcript and summary
 (speaker names); in live mode it just does not answer wake words. Audio is never stored or logged.
-Account data stays behind the same ledger tools as the text Q&A; because the mixed stream does not
-say who is speaking, tools are only usable when everyone in the room is an executive.
+The model has ONE data tool, ask_salid(question): it runs the full text agent (team memory scoped to
+what everyone in the room may read, web, and the ledger only when every human present is an
+executive; the mixed stream does not say who is speaking). General knowledge and chat need no tool.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
-import inspect
 import logging
 import threading
 import time
@@ -31,7 +31,7 @@ import discord
 from google.genai import types
 
 from .meeting import SPEAK_COOLDOWN_S, _connected, _stop_playback
-from .qa import THAI_DAYS, LedgerTools, build_tools
+from .qa import THAI_DAYS
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -132,6 +132,25 @@ def set_recording(recording: bool) -> dict:
     return {}
 
 
+def ask_salid(question: str) -> dict:
+    """Ask the full Salid text assistant when the question needs TEAM information or current web
+    info: what was said or decided in meetings/chats, tasks and owners, files, receipts and
+    spending, schedules, or fresh news. Do NOT call it for general knowledge, opinions, small talk
+    or explanations you can give yourself. Returns a short answer to say aloud in your own words.
+
+    Args:
+        question: the question, complete and self-contained (names, dates, the topic).
+    """
+    return {}
+
+
+ASK_TIMEOUT_S = 60.0
+ANSWER_MAX_CHARS = 600
+LEDGER_NOTE = (
+    "(ในห้องเสียงมีผู้ที่ไม่ใช่ผู้บริหาร: ห้ามใช้หรือเปิดเผยข้อมูลบัญชี/ใบเสร็จ/การใช้จ่ายของร้าน "
+    "ถ้าถามเรื่องนี้ให้ตอบสั้น ๆ ว่าดูได้เฉพาะเมื่อทุกคนในห้องเป็นผู้บริหาร ถามในแชทแทนได้)"
+)
+
 _MEETING_TOOLS = {
     "set_minutes_destination": "set_minutes_destination",
     "post_note": "post_note",
@@ -146,7 +165,7 @@ STATE_ENGAGED = (
 )
 FORCE_CUE = "(มีคนเรียกชื่อคุณ: ตอบกลับทันทีตามบริบท)"
 
-NO_TOOLS_MIXED_ROOM = "ข้อมูลบัญชีของร้านดูได้เฉพาะเมื่อทุกคนในห้องเป็นผู้บริหาร ถามในแชทแทนได้นะ"
+NO_ROOM = "ไม่มีใครอยู่ในห้องเสียงตอนนี้"
 QA_OFF = "ฟีเจอร์ถามตอบข้อมูลบัญชีถูกปิดอยู่"
 
 
@@ -315,12 +334,16 @@ def build_instruction(
     )
     if qa:
         p += (
-            "เรื่องเงินและใบเสร็จของร้าน: ต้องเรียกเครื่องมือเสมอ ห้ามคำนวณหรือเดาตัวเลขเอง "
-            "พูดจำนวนเงินให้เป็นธรรมชาติเป็นบาท ถ้าไม่มีข้อมูลให้บอกตรง ๆ "
-            "ถ้าเครื่องมือตอบว่าดูไม่ได้ ให้บอกเหตุผลสั้น ๆ ตามนั้น\n"
+            "เครื่องมือข้อมูลมีอันเดียวคือ ask_salid (ผู้ช่วยเต็มรูปแบบที่รู้ความจำของทีมและค้นเว็บได้)\n"
+            "- คำถามความรู้ทั่วไป ทฤษฎี ความเห็น การอธิบาย คุยเล่น ทักทาย: ตอบเองตรง ๆ ห้ามเรียกเครื่องมือ\n"
+            "- เรียก ask_salid เฉพาะเมื่อคำถามต้องใช้ข้อมูลของทีม (ใครพูดอะไร/มติ งานและเจ้าของ ไฟล์ ใบเสร็จ/ค่าใช้จ่าย "
+            "ตารางนัด) หรือข้อมูลล่าสุดจากเว็บ แล้วเรียบเรียงคำตอบเป็นคำพูดของคุณเอง ห้ามเดาหรือคำนวณตัวเลขเอง\n"
+            "- ห้ามพูดถึงเงิน ใบเสร็จ หรือค่าใช้จ่ายเองเด็ดขาด เว้นแต่มีคนถามเรื่องนั้นโดยตรง\n"
+            "- ระหว่างรอ ask_salid จะพูดคำเติมสั้นมาก ๆ ได้ เช่น “แป๊บนึงนะคะ” (พูดเป็นธรรมชาติ ไม่ต้องทุกครั้ง)\n"
+            "- ถ้า ask_salid บอกว่าดูไม่ได้ ให้บอกเหตุผลสั้น ๆ ตามนั้น\n"
         )
     else:
-        p += "ตอนนี้คุณดูข้อมูลบัญชีของร้านไม่ได้ ถ้ามีคนถามเรื่องเงินหรือใบเสร็จให้บอกตรง ๆ ว่าตอนนี้ดูไม่ได้\n"
+        p += "ตอนนี้คุณดูข้อมูลของทีมไม่ได้ ถ้ามีคนถามเรื่องข้อมูลทีม เงิน หรือใบเสร็จให้บอกตรง ๆ ว่าตอนนี้ดูไม่ได้ ส่วนความรู้ทั่วไปตอบเองได้\n"
     if language == "en":
         p += "Language: always speak English (keep Thai names and vendors as they are).\n"
     elif language == "auto":
@@ -427,7 +450,7 @@ class LiveVoice:
         qa = await self._qa_enabled()
         fns = [set_minutes_destination, post_note, ask_consent, set_recording]
         if qa:
-            fns = [*build_tools(LedgerTools(self.bot.store, sess.guild_id)), *fns]
+            fns = [ask_salid, *fns]
         decls = [
             types.FunctionDeclaration.from_callable_with_api_option(
                 callable=fn, api_option="ENTERPRISE"
@@ -627,17 +650,6 @@ class LiveVoice:
         return None
 
     # ---- tools
-    def _scope_ok(self) -> str | None:
-        """None when the tools may run, else the refusal to hand to the model. Executed in a thread
-        (permission lookups may touch the guild store)."""
-        bot, s = self.bot, self.session
-        if not bot.team.enabled(s.guild_id, "qa"):
-            return QA_OFF
-        humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
-        if not humans or not all(bot.is_exec_member(m) for m in humans):
-            return NO_TOOLS_MIXED_ROOM
-        return None
-
     async def _run_tool(self, name: str, args: dict) -> dict:
         if name in _MEETING_TOOLS:  # not account data: no executive check
             mgr, a = self.bot.meetings, args or {}
@@ -651,26 +663,58 @@ class LiveVoice:
                 )
             return mgr.set_recording(self.session, bool(a.get("recording", True)))
 
-        def call() -> dict:
-            refusal = self._scope_ok()
-            if refusal:
-                return {"error": refusal}
-            # Everyone present is an executive at the point of access, so the whole guild ledger
-            # is in scope. The check and query share this worker call; no await can widen the room.
-            ledger = LedgerTools(self.bot.store, self.session.guild_id, forced_submitter_id=None)
-            fn = {f.__name__: f for f in build_tools(ledger)}.get(name)
-            if fn is None:
-                return {"error": f"unknown tool {name}"}
-            params = inspect.signature(fn).parameters
-            clean = {k: v for k, v in (args or {}).items() if k in params and v is not None}
-            try:
-                result = fn(**clean)
-            except Exception as e:
-                logger.warning("live: tool %s failed: %s", name, e)
-                return {"error": str(e)}
-            return result if isinstance(result, dict) else {"result": result}
+        if name != "ask_salid":
+            return {"error": f"unknown tool {name}"}
+        try:
+            return await asyncio.wait_for(
+                self._ask_salid(str((args or {}).get("question", ""))), ASK_TIMEOUT_S
+            )
+        except TimeoutError:
+            return {"error": "timeout"}
+        except Exception as e:
+            logger.warning("live: ask_salid failed: %s", e)
+            return {"error": str(e)}
 
-        return await asyncio.to_thread(call)
+    async def _ask_salid(self, question: str) -> dict:
+        """The full text agent for this room: team memory limited to what every human present may
+        read, the ledger only when all of them are executives, web when enabled, and the last
+        minutes of this meeting as history. The answer is short enough to be spoken."""
+        from .qa import ask
+
+        bot, s = self.bot, self.session
+        if not question.strip():
+            return {"error": "empty question"}
+        if not bot.team.enabled(s.guild_id, "qa"):
+            return {"error": QA_OFF}
+        humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
+        if not humans:
+            return {"error": NO_ROOM}
+        guild = getattr(humans[0], "guild", None)
+        memory = (
+            await bot._room_memory_tools(guild, s.voice_channel, humans)
+            if guild is not None
+            else None
+        )
+        everyone_exec = all(bot.is_exec_member(m) for m in humans)
+        if everyone_exec or len(humans) == 1:  # one identified person: their own receipts only
+            user_id = humans[0].id
+        else:  # unknown speaker: no account data at all
+            user_id, question = 0, f"{question}\n{LEDGER_NOTE}"
+        ans = await asyncio.to_thread(
+            ask,
+            bot.s,
+            bot.store,
+            question,
+            guild_id=s.guild_id,
+            is_exec=everyone_exec,
+            user_id=user_id,
+            history=s.transcript.history(bot.s.now(), window_s=180, max_chars=3000),
+            language=s.language,
+            memory=memory,
+            spoken=True,
+            **bot._web_kw(s.guild_id),
+        )
+        return {"answer": (ans.text or "")[:ANSWER_MAX_CHARS]}
 
     async def _on_tool_call(self, live: Any, tool_call: Any) -> None:
         self._awaiting_answer = True  # the turn_complete that follows is not the end of the answer
