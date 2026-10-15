@@ -1,54 +1,39 @@
 """Hub API tests: Google token verification is replaced by a fake, no network, no Firestore."""
 
+from datetime import timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 
 from meeting_scribe import hub, pipeline
 from meeting_scribe.app import app
 from meeting_scribe.config import get_settings
+from salid import guild_settings as gs
+from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
 from salid.models import Receipt
 from salid.store import SQLiteStore
-from salid.team_settings import TeamSettingsStore
 
 CLIENT_ID = "123-abc.apps.googleusercontent.com"
+A, B = 1000, 2000  # two guilds
 TOKENS = {
-    "good": {"email": "Boss@Example.com", "email_verified": True},
-    "stranger": {"email": "x@example.com", "email_verified": True},
+    "boss": {"email": "Boss@Example.com", "email_verified": True},  # admin of A
+    "other": {"email": "other@example.com", "email_verified": True},  # admin of B
+    "super": {"email": "root@example.com", "email_verified": True},  # HUB_ADMIN_EMAILS
+    "stranger": {"email": "x@example.com", "email_verified": True},  # admin of nothing
     "unverified": {"email": "boss@example.com", "email_verified": False},
+    "noemail": {"email_verified": True},
 }
-AUTH = {"Authorization": "Bearer good"}
-
-
-class FakeFirestore:
-    """Just enough Firestore for one document: collection(c).document(d).get()/set()."""
-
-    def __init__(self):
-        self.cols = {}
-
-    def collection(self, name):
-        docs = self.cols.setdefault(name, {})
-        outer = type("Col", (), {"docs": docs})()
-        outer.document = lambda doc_id: FakeDoc(docs, doc_id)
-        return outer
-
-
-class FakeDoc:
-    def __init__(self, docs, doc_id):
-        self.docs, self.id = docs, doc_id
-
-    def get(self):
-        data = self.docs.get(self.id)
-        return type("Snap", (), {"exists": data is not None, "to_dict": lambda s: data})()
-
-    def set(self, data):
-        self.docs[self.id] = dict(data)
+AUTH = {"Authorization": "Bearer boss"}
+OTHER = {"Authorization": "Bearer other"}
+SUPER = {"Authorization": "Bearer super"}
+STRANGER = {"Authorization": "Bearer stranger"}
 
 
 @pytest.fixture
-def env(monkeypatch, tmp_path):
+def env(monkeypatch):
     monkeypatch.setenv("STORE", "memory")
     monkeypatch.setenv("HUB_GOOGLE_CLIENT_ID", CLIENT_ID)
-    monkeypatch.setenv("HUB_ADMIN_EMAILS", "boss@example.com, other@example.com")
+    monkeypatch.setenv("HUB_ADMIN_EMAILS", "root@example.com")
     monkeypatch.setenv("SALID_DISCORD_CLIENT_ID", "123456789012345678")
     get_settings.cache_clear()
     pipeline.get_store.cache_clear()
@@ -75,13 +60,33 @@ def client(env, seen, tmp_path):
         return verify
 
     sqlite = SQLiteStore(str(tmp_path / "l.db"))
-    team = TeamSettingsStore(client=FakeFirestore())
+    guilds = MemoryGuildStore()
+    for gid, name in ((A, "ร้านกาแฟ"), (B, "Bar B")):
+        guilds.upsert_guild(
+            gid,
+            name=name,
+            icon_url=f"https://cdn/{gid}.png",
+            channels=[{"id": str(gid + 1), "name": "ใบเสร็จ"}, {"id": str(gid + 2), "name": "chat"}],
+            installed=True,
+        )
+    guilds.redeem_link_code(guilds.create_link_code(A, 1, "u"), "boss@example.com")
+    guilds.redeem_link_code(guilds.create_link_code(B, 2, "v"), "other@example.com")
     app.dependency_overrides[hub.google_token_verifier] = verifier
-    app.dependency_overrides[hub.get_team_store] = lambda: team
+    app.dependency_overrides[hub.get_guild_store] = lambda: guilds
     app.dependency_overrides[hub.get_salid_runtime] = lambda: (object(), sqlite)
     c = TestClient(app)
-    c.sqlite, c.team = sqlite, team
+    c.sqlite, c.guilds = sqlite, guilds
     return c
+
+
+def add_receipt(client, gid, vendor, created="2026-10-14T10:00:00+07:00", conf=0.9, sha=None):
+    client.sqlite.add_receipt(
+        Receipt(
+            guild_id=gid, submitter_id=1, submitter_name="A", sha256=sha or f"{gid}-{vendor}",
+            vendor=vendor, total=100.0, effective_date="2026-10-14", created_at=created,
+            confidence=conf,
+        )
+    )  # fmt: skip
 
 
 # ------------------------------------------------------------------ auth
@@ -89,6 +94,7 @@ def test_page_serves_and_injects_client_id(client):
     r = client.get("/hub")
     assert r.status_code == 200 and "accounts.google.com/gsi/client" in r.text
     assert CLIENT_ID in r.text and "__HUB_GOOGLE_CLIENT_ID__" not in r.text
+    assert r.headers["referrer-policy"] == "no-referrer"  # the page URL may carry a link code
 
 
 def test_page_rejects_odd_client_id(client, env):
@@ -97,32 +103,47 @@ def test_page_rejects_odd_client_id(client, env):
     assert 'const CLIENT_ID = "";' in client.get("/hub").text
 
 
-@pytest.mark.parametrize("path", ["me", "settings", "activity"])
-def test_api_requires_a_valid_admin_token(client, path):
-    url = f"/api/hub/{path}"
+GUILD_PATHS = [f"/api/hub/guilds/{A}/{p}" for p in ("settings", "activity")]
+
+
+@pytest.mark.parametrize("url", ["/api/hub/me", "/api/hub/guilds", *GUILD_PATHS])
+def test_api_requires_a_valid_google_token(client, url):
     assert client.get(url).status_code == 401
     assert client.get(url, headers={"Authorization": "Basic x"}).status_code == 401
     assert client.get(url, headers={"Authorization": "Bearer nope"}).status_code == 401
-    assert client.get(url, headers={"Authorization": "Bearer stranger"}).status_code == 403
     assert client.get(url, headers={"Authorization": "Bearer unverified"}).status_code == 403
+    assert client.get(url, headers={"Authorization": "Bearer noemail"}).status_code == 403
     assert client.get(url, headers=AUTH).status_code == 200
+
+
+def test_any_verified_google_account_may_sign_in(client):
+    assert client.get("/api/hub/me", headers=STRANGER).json()["email"] == "x@example.com"
+    assert client.get("/api/hub/guilds", headers=STRANGER).json() == []
 
 
 def test_token_is_verified_against_the_configured_client_id(client, seen):
     client.get("/api/hub/me", headers=AUTH)
-    assert seen == [("good", CLIENT_ID)]
+    assert seen == [("boss", CLIENT_ID)]
 
 
-@pytest.mark.parametrize("client_id,emails", [("", "a@b.c"), (CLIENT_ID, ""), ("", "")])
-def test_fails_closed_when_not_configured(client, env, seen, client_id, emails):
-    env.setenv("HUB_GOOGLE_CLIENT_ID", client_id)
-    env.setenv("HUB_ADMIN_EMAILS", emails)
+def test_fails_closed_without_a_google_client_id(client, env, seen):
+    env.setenv("HUB_GOOGLE_CLIENT_ID", "")
     get_settings.cache_clear()
-    for method, path in [("get", "me"), ("get", "settings"), ("get", "activity")]:
-        assert getattr(client, method)(f"/api/hub/{path}", headers=AUTH).status_code == 503
-    assert client.post("/api/hub/ask", json={"question": "x"}, headers=AUTH).status_code == 503
-    assert client.put("/api/hub/settings", json={}, headers=AUTH).status_code == 503
+    for path in ("me", "guilds", f"guilds/{A}/settings", f"guilds/{A}/activity"):
+        assert client.get(f"/api/hub/{path}", headers=AUTH).status_code == 503
+    assert (
+        client.post(f"/api/hub/guilds/{A}/ask", json={"question": "x"}, headers=AUTH).status_code
+        == 503
+    )
+    assert client.post("/api/hub/link", json={"code": "x" * 20}, headers=AUTH).status_code == 503
+    assert client.put(f"/api/hub/guilds/{A}/settings", json={}, headers=AUTH).status_code == 503
     assert seen == []  # nothing is even verified
+
+
+def test_admin_emails_setting_is_optional(client, env):
+    env.setenv("HUB_ADMIN_EMAILS", "")
+    get_settings.cache_clear()
+    assert client.get("/api/hub/guilds", headers=AUTH).status_code == 200
 
 
 def test_default_verifier_uses_google_with_audience(monkeypatch):
@@ -135,81 +156,211 @@ def test_default_verifier_uses_google_with_audience(monkeypatch):
     assert calls == [("tok", "cid")]
 
 
-# ------------------------------------------------------------------ endpoints
-def test_me_returns_email_and_invite(client, env):
+# ------------------------------------------------------------------ me / guild list
+def test_me_returns_email_invite_and_super_flag(client, env):
     me = client.get("/api/hub/me", headers=AUTH).json()
-    assert me["email"] == "boss@example.com"
+    assert me["email"] == "boss@example.com" and me["is_super"] is False
     assert "client_id=123456789012345678" in me["invite_url"]
+    assert client.get("/api/hub/me", headers=SUPER).json()["is_super"] is True
     env.setenv("SALID_DISCORD_CLIENT_ID", "")
     get_settings.cache_clear()
     assert client.get("/api/hub/me", headers=AUTH).json()["invite_url"] is None
 
 
-def test_settings_defaults_then_round_trip(client):
-    s = client.get("/api/hub/settings", headers=AUTH).json()
+def test_guild_list_shows_only_guilds_the_user_administers(client):
+    got = client.get("/api/hub/guilds", headers=AUTH).json()
+    assert got == [
+        {"id": str(A), "name": "ร้านกาแฟ", "icon_url": f"https://cdn/{A}.png", "active": True}
+    ]
+    assert [g["id"] for g in client.get("/api/hub/guilds", headers=OTHER).json()] == [str(B)]
+    assert [g["id"] for g in client.get("/api/hub/guilds", headers=SUPER).json()] == [
+        str(B),
+        str(A),
+    ]  # super admins see everything (sorted by name)
+    client.guilds.set_active(A, False)
+    assert client.get("/api/hub/guilds", headers=AUTH).json()[0]["active"] is False
+
+
+# ------------------------------------------------------------------ link flow
+def link(client, code, headers=STRANGER):
+    return client.post("/api/hub/link", json={"code": code}, headers=headers)
+
+
+def test_link_code_makes_the_signed_in_account_a_guild_admin(client):
+    code = client.guilds.create_link_code(A, 77, "Boss#1")
+    assert client.get(f"/api/hub/guilds/{A}/settings", headers=STRANGER).status_code == 403
+    r = link(client, code)
+    assert r.status_code == 200 and r.json()["id"] == str(A) and r.json()["name"] == "ร้านกาแฟ"
+    assert "x@example.com" in client.guilds.get(A).admin_emails
+    assert client.get(f"/api/hub/guilds/{A}/settings", headers=STRANGER).status_code == 200
+    assert [g["id"] for g in client.get("/api/hub/guilds", headers=STRANGER).json()] == [str(A)]
+    assert client.get(f"/api/hub/guilds/{B}/settings", headers=STRANGER).status_code == 403
+
+
+def test_link_code_works_once_only(client):
+    code = client.guilds.create_link_code(A, 77, "Boss#1")
+    assert link(client, code).status_code == 200
+    assert link(client, code, OTHER).status_code == 400
+    assert "other@example.com" in client.guilds.get(B).admin_emails  # still only B
+    assert "other@example.com" not in client.guilds.get(A).admin_emails
+
+
+def test_expired_unknown_and_malformed_codes_are_rejected(client, monkeypatch):
+    code = client.guilds.create_link_code(A, 77, "u")
+    real = gs._now()
+    monkeypatch.setattr(gs, "_now", lambda: real + timedelta(minutes=16))
+    assert link(client, code).status_code == 400
+    assert link(client, "does-not-exist-123456").status_code == 400
+    assert link(client, "short").status_code == 422
+    assert link(client, code, {}).status_code == 401  # needs a Google sign-in first
+    assert "x@example.com" not in client.guilds.get(A).admin_emails
+
+
+# ------------------------------------------------------------------ guild-scoped access
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("get", "settings", None),
+        ("put", "settings", {}),
+        ("get", "activity", None),
+        ("post", "ask", {"question": "x"}),
+    ],
+)
+def test_a_guild_admin_cannot_touch_another_guild(client, monkeypatch, method, path, body):
+    asked = []
+    monkeypatch.setattr("salid.qa.ask", lambda *a, **k: asked.append(1))
+    url = f"/api/hub/guilds/{B}/{path}"
+    for who in (AUTH, STRANGER):
+        assert (
+            getattr(client, method)(
+                url, headers=who, **({"json": body} if body else {})
+            ).status_code
+            == 403
+        )
+    assert not asked and client.guilds.get(B).updated_at == ""
+
+
+def test_unknown_guild_is_403_for_users_and_404_for_super_admins(client):
+    url = "/api/hub/guilds/31337/settings"
+    assert client.get(url, headers=AUTH).status_code == 403
+    assert client.get(url, headers=SUPER).status_code == 404
+    assert client.put(url, json={}, headers=SUPER).status_code == 404
+    assert client.guilds.find(31337) is None  # never created by a PUT
+
+
+def test_super_admin_can_open_any_guild(client):
+    for gid in (A, B):
+        assert client.get(f"/api/hub/guilds/{gid}/settings", headers=SUPER).status_code == 200
+
+
+# ------------------------------------------------------------------ settings
+def test_settings_defaults_round_trip_and_layout(client):
+    s = client.get(f"/api/hub/guilds/{A}/settings", headers=AUTH).json()
     assert s["features"] == dict(receipts=True, qa=True, digest=True, deep_tasks=True)
+    assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
+    assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
     body = {
         "features": {"digest": False},
-        "receipt_channel_ids": ["111", "222"],
+        "receipt_channel_ids": [str(A + 1)],
         "ask_channel_ids": [],
-        "digest_channel_id": "333",
+        "digest_channel_id": str(A + 2),
         "digest_time": "07:45",
+        "exec_role_names": ["หัวหน้า", "Executive"],
     }
-    put = client.put("/api/hub/settings", json=body, headers=AUTH).json()
+    put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
     assert put["updated_by"] == "boss@example.com" and put["updated_at"]
-    got = client.get("/api/hub/settings", headers=AUTH).json()
+    got = client.get(f"/api/hub/guilds/{A}/settings", headers=AUTH).json()
     assert got == put and got["features"]["digest"] is False and got["features"]["qa"] is True
-    doc = client.team.client.collection("salid_teams").docs["default"]
-    assert doc["receipt_channel_ids"] == ["111", "222"]
+    doc = client.guilds.client.collection("salid_guilds").docs[str(A)]
+    assert doc["receipt_channel_ids"] == [str(A + 1)] and doc["exec_role_names"][0] == "หัวหน้า"
+    assert client.guilds.get(B).updated_at == ""  # the other guild is untouched
+
+
+def test_hub_cannot_change_admins_channels_or_active_flag(client):
+    body = {"admin_emails": ["evil@x.com"], "channels": [], "active": False, "guild_name": "pwned"}
+    client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH)
+    g = client.guilds.get(A)
+    assert g.admin_emails == ["boss@example.com"] and g.active and g.guild_name == "ร้านกาแฟ"
+    assert len(g.channels) == 2
 
 
 @pytest.mark.parametrize(
     "bad",
-    [{"receipt_channel_ids": ["abc"]}, {"digest_time": "7pm"}, {"digest_channel_id": "1x"}],
+    [
+        {"receipt_channel_ids": ["abc"]},
+        {"digest_time": "7pm"},
+        {"digest_channel_id": "1x"},
+        {"exec_role_names": ["x" * 101]},
+        {"receipt_channel_ids": ["999"]},  # numeric but not a channel of this guild
+        {"ask_channel_ids": [str(B + 1)]},  # a channel of the OTHER guild
+        {"digest_channel_id": "12345"},
+    ],
 )
 def test_settings_validation(client, bad):
-    assert client.put("/api/hub/settings", json=bad, headers=AUTH).status_code == 422
-    assert client.team.client.collection("salid_teams").docs == {}
+    r = client.put(f"/api/hub/guilds/{A}/settings", json=bad, headers=AUTH)
+    assert r.status_code == 422
+    assert client.guilds.get(A).updated_at == ""
 
 
-def test_activity_merges_receipts_and_meetings_newest_first(client):
-    for n, (vendor, created, conf) in enumerate(
-        [("Makro", "2026-10-14T10:00:00+07:00", 0.9), ("Grab", "2026-10-14T12:00:00+07:00", 0.3)]
-    ):
-        client.sqlite.add_receipt(
-            Receipt(
-                submitter_id=1, submitter_name="A", sha256=f"s{n}", vendor=vendor, total=100.0,
-                effective_date="2026-10-14", created_at=created, confidence=conf,
-            )
-        )  # fmt: skip
-    meeting = pipeline.get_store().create("Weekly sync")
-    items = client.get("/api/hub/activity", headers=AUTH).json()
-    assert [i["kind"] for i in items][0] == "meeting" and meeting.created_at.year >= 2026
-    rest = [i for i in items if i["kind"] == "receipt"]
-    assert [(i["title"], i["status"]) for i in rest] == [("Grab", "review"), ("Makro", "ok")]
-    assert items[0]["title"] == "Weekly sync" and items[0]["status"] == "recording"
-    assert len(items) == 3
+def test_any_numeric_channel_is_accepted_until_the_bot_has_synced_the_list(client):
+    client.guilds.upsert_guild(A, name="n", icon_url="", channels=[])
+    r = client.put(
+        f"/api/hub/guilds/{A}/settings", json={"receipt_channel_ids": ["12345"]}, headers=AUTH
+    )
+    assert r.status_code == 200
+
+
+# ------------------------------------------------------------------ activity
+def test_activity_shows_only_this_guilds_receipts_newest_first(client):
+    add_receipt(client, A, "Makro", "2026-10-14T10:00:00+07:00")
+    add_receipt(client, A, "Grab", "2026-10-14T12:00:00+07:00", conf=0.3)
+    add_receipt(client, B, "SecretBarTab", "2026-10-14T13:00:00+07:00")
+    items = client.get(f"/api/hub/guilds/{A}/activity", headers=AUTH).json()
+    assert [(i["title"], i["status"]) for i in items] == [("Grab", "review"), ("Makro", "ok")]
+    assert "SecretBarTab" not in str(items)
+    items_b = client.get(f"/api/hub/guilds/{B}/activity", headers=OTHER).json()
+    assert [i["title"] for i in items_b] == ["SecretBarTab"]
+
+
+def test_meetings_are_only_shown_to_super_admins(client):
+    # Meetings are not per guild yet, so a guild admin must never see them.
+    add_receipt(client, A, "Makro")
+    pipeline.get_store().create("Weekly sync")
+    assert [
+        i["kind"] for i in client.get(f"/api/hub/guilds/{A}/activity", headers=AUTH).json()
+    ] == ["receipt"]
+    kinds = [i["kind"] for i in client.get(f"/api/hub/guilds/{A}/activity", headers=SUPER).json()]
+    assert kinds[0] == "meeting" and "receipt" in kinds
 
 
 def test_activity_survives_a_broken_receipt_store(client):
     app.dependency_overrides[hub.get_salid_runtime] = lambda: (object(), object())
     pipeline.get_store().create("Only meeting")
-    items = client.get("/api/hub/activity", headers=AUTH).json()
+    items = client.get(f"/api/hub/guilds/{A}/activity", headers=SUPER).json()
     assert [i["kind"] for i in items] == ["meeting"]
 
 
-def test_ask_runs_salid_qa_as_executive(client, monkeypatch):
+# ------------------------------------------------------------------ ask
+def test_ask_runs_salid_qa_as_executive_of_that_guild_only(client, monkeypatch):
+    add_receipt(client, A, "Makro")
+    add_receipt(client, B, "SecretBarTab")
     calls = []
 
-    def fake_ask(settings, store, question, *, is_exec, user_id):
-        calls.append((question, is_exec))
-        return type("A", (), {"text": "ยอดรวม ฿1,000"})()
+    def fake_ask(settings, store, question, *, guild_id, is_exec, user_id):
+        calls.append((question, guild_id, is_exec))
+        vendors = [r.vendor for r in store.recent(guild_id, 50)]  # what Q&A could read
+        return type("A", (), {"text": ",".join(vendors)})()
 
     monkeypatch.setattr("salid.qa.ask", fake_ask)
-    r = client.post("/api/hub/ask", json={"question": " เดือนนี้ใช้เท่าไร "}, headers=AUTH)
-    assert r.json() == {"answer": "ยอดรวม ฿1,000"} and calls == [("เดือนนี้ใช้เท่าไร", True)]
-    assert client.post("/api/hub/ask", json={"question": ""}, headers=AUTH).status_code == 422
-    assert client.post("/api/hub/ask", json={"question": "x"}).status_code == 401
+    r = client.post(f"/api/hub/guilds/{A}/ask", json={"question": " เดือนนี้ใช้เท่าไร "}, headers=AUTH)
+    assert r.json() == {"answer": "Makro"} and calls == [("เดือนนี้ใช้เท่าไร", A, True)]
+    r = client.post(f"/api/hub/guilds/{B}/ask", json={"question": "x"}, headers=OTHER)
+    assert r.json() == {"answer": "SecretBarTab"} and calls[-1][1] == B
+    assert (
+        client.post(f"/api/hub/guilds/{A}/ask", json={"question": ""}, headers=AUTH).status_code
+        == 422
+    )
+    assert client.post(f"/api/hub/guilds/{A}/ask", json={"question": "x"}).status_code == 401
 
 
 def test_ask_failure_is_a_502_without_details(client, monkeypatch):
@@ -217,9 +368,21 @@ def test_ask_failure_is_a_502_without_details(client, monkeypatch):
         raise RuntimeError("secret internals")
 
     monkeypatch.setattr("salid.qa.ask", boom)
-    r = client.post("/api/hub/ask", json={"question": "x"}, headers=AUTH)
+    r = client.post(f"/api/hub/guilds/{A}/ask", json={"question": "x"}, headers=AUTH)
     assert r.status_code == 502 and "secret" not in r.text
+
+
+def test_old_single_team_endpoints_are_gone(client):
+    for path in ("settings", "activity"):
+        assert client.get(f"/api/hub/{path}", headers=AUTH).status_code == 404
 
 
 def test_home_page_links_to_hub(client):
     assert 'href="/hub"' in client.get("/").text
+
+
+def test_update_model_is_what_the_hub_writes():
+    assert set(GuildSettingsUpdate.model_fields) == {
+        "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id",
+        "digest_time", "exec_role_names",
+    }  # fmt: skip
