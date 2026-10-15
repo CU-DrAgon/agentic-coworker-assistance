@@ -4,7 +4,7 @@ import hashlib
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 
 from google.genai import types
 from pydantic import BaseModel
@@ -29,12 +29,16 @@ MIME_BY_EXT = {
 
 PROMPT = """You extract data from a receipt / invoice / bill image or PDF (usually Thai restaurant or shop expenses).
 - If it is NOT a receipt, invoice or bill (selfie, food photo, screenshot of chat, etc.) set is_receipt=false and leave the rest empty.
+- Bank transfer slips (สลิปโอนเงิน, PromptPay or mobile-banking "transfer successful" screens) ARE expenses: is_receipt=true, total = the amount transferred, vendor = the receiver's name (or biller), receipt_date = the transfer date, payment_method = "โอนเงิน". Use the submitter's note to pick the category, otherwise "อื่นๆ". Keep confidence at 0.6 or lower for slips (the receiver may not be the real vendor).
 - receipt_date: ISO YYYY-MM-DD in the Gregorian calendar. Thai Buddhist years (e.g. 2569 or 69) must be converted (BE - 543). null if not visible.
 - currency default THB. Numbers are plain floats (no thousands separators). total is the final amount paid incl. VAT.
 - category must be one of: {cats}. Pick the best fit (ingredients/food/ice/meat/veg -> วัตถุดิบ; tools, machines -> อุปกรณ์; fuel/taxi/toll -> ค่าเดินทาง; water/electric/internet -> สาธารณูปโภค; rent -> ค่าเช่า; wages -> ค่าแรง; ads/printing -> การตลาด).
 - confidence: 0-1, how sure you are that vendor, date and total are correct. Lower it for blurry or partial images.
 - Keep Thai text as Thai. The submitter's note below is extra context, not data to copy blindly.
 Submitter note: {note}"""
+
+
+SLIP_MAX_CONF = 0.6  # transfer slips always get a 'please check' mark
 
 
 def sha256_hex(data: bytes) -> str:
@@ -80,6 +84,10 @@ def extract_receipt(
     ex = ReceiptExtraction.model_validate_json(resp.text)
     ex.receipt_date = _fix_date(ex.receipt_date)
     ex.confidence = min(max(ex.confidence, 0.0), 1.0)
+    if "โอนเงิน" in (
+        ex.payment_method or ""
+    ):  # transfer slip: the receiver is not always the vendor
+        ex.confidence = min(ex.confidence, SLIP_MAX_CONF)
     return ex
 
 
@@ -132,7 +140,9 @@ def ingest_attachment(
     note: str = "",
     archive=None,
     lang: str = "th",
+    at: datetime | None = None,
 ) -> IngestResult:
+    """`at`: the time the receipt was really posted (history import); default now."""
     mime = guess_mime(filename, content_type)
     if not mime:
         return IngestResult("ignored")
@@ -154,7 +164,7 @@ def ingest_attachment(
     ex = extract_receipt(client, settings, data, mime, note)
     if not ex.is_receipt:
         return IngestResult("ignored")
-    now = settings.now()
+    now = at.astimezone(settings.zone) if at is not None else settings.now()
     r = Receipt(
         guild_id=guild_id,
         submitter_id=submitter_id,

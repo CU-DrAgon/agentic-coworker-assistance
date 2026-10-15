@@ -443,7 +443,7 @@ MEMORY_PROMPT = (
 CAPABILITIES_PROMPT = (
     "\nสิ่งที่สลิดทำได้ (ใช้ตอบเมื่อมีคนถามว่าทำอะไรได้บ้าง หรือถามวิธีใช้ ตอบให้กระชับ เลือกเฉพาะที่เกี่ยวข้อง "
     "อย่าอ้างว่าทำได้มากกว่านี้):\n"
-    "1) ใบเสร็จและบัญชี: ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า ใบเสร็จ/receipt หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
+    "1) ใบเสร็จและบัญชี: ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า ใบเสร็จ/receipt/invoice/ใบกำกับ/สลิป/slip/บิล/bill/expense/ค่าใช้จ่าย/เบิก หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
     "แล้วบันทึกลงบัญชี เตือนถ้าน่าจะซ้ำ แก้ข้อมูลได้โดยตอบกลับ (reply) ข้อความใบเสร็จของสลิด. "
     "ถามยอดใช้จ่ายได้ เช่น เดือนนี้จ่ายค่าอะไรไปเท่าไร แยกหมวด ใครส่ง รายการที่ต้องตรวจ "
     "(ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นเฉพาะของตัวเอง). มีสรุปรายวันส่งเข้าห้องตามเวลาที่ตั้งไว้\n"
@@ -474,8 +474,27 @@ CAPABILITIES_PROMPT = (
 )
 
 
+NO_REPLY = "NO_REPLY"
+INTERJECTION_PROMPT = (
+    "\nYou were not asked directly. If the tools return nothing relevant or you have nothing "
+    f"concrete and useful to add, reply with exactly {NO_REPLY}."
+)
+
+
+def is_no_reply(text: str | None) -> bool:
+    """True when the model chose silence: the text is NO_REPLY (case-insensitive), also when it
+    is wrapped in a little punctuation or quotes (short text only)."""
+    s = (text or "").strip()
+    return len(s) <= 20 and NO_REPLY.casefold() in s.casefold().replace(" ", "_")
+
+
 def system_prompt(
-    settings: Settings, scoped: bool, now=None, language: str = "th", memory: bool = False
+    settings: Settings,
+    scoped: bool,
+    now=None,
+    language: str = "th",
+    memory: bool = False,
+    interjection: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message."""
     now = now or settings.now()
@@ -488,13 +507,15 @@ def system_prompt(
         f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD\n"
         "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
         "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วย ฿. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
-        "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้ใช้เป็นบริบทและตอบเฉพาะข้อความล่าสุด"
+        "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
     if scoped:
         p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
     if memory:
         p += MEMORY_PROMPT
+    if interjection:
+        p += INTERJECTION_PROMPT
     if language == "en":
         p += "\nLanguage: write your whole reply in English."
     elif language == "auto":
@@ -672,10 +693,18 @@ def build_agent(
     on_model_call=None,
     language: str = "th",
     memory: bool = False,
+    interjection: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
-    prompt = system_prompt(settings, scoped=scoped, now=now, language=language, memory=memory)
+    prompt = system_prompt(
+        settings,
+        scoped=scoped,
+        now=now,
+        language=language,
+        memory=memory,
+        interjection=interjection,
+    )
     model_calls = 0
 
     def before_model(callback_context, llm_request):
@@ -721,6 +750,7 @@ async def ask_async(
     model=None,
     language: str = "th",
     memory: MemoryTools | None = None,
+    interjection: bool = False,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -736,13 +766,19 @@ async def ask_async(
         model=model,
         language=language,
         memory=memory is not None,
+        interjection=interjection,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
     await runner.session_service.create_session(
         app_name=APP_NAME, user_id=adk_user, session_id=session_id
     )
-    text_in = f"บทสนทนาก่อนหน้า:\n{history}\n\nข้อความล่าสุด:\n{question}" if history else question
+    text_in = (
+        f"บทสนทนาก่อนหน้าในห้องนี้ (หลายคนคุยกัน เรียงจากเก่าไปใหม่):\n{history}\n\n"
+        f"ข้อความล่าสุดที่ต้องตอบ:\n{question}"
+        if history
+        else question
+    )
     message = types.Content(role="user", parts=[types.Part(text=text_in)])
     rounds, text = 0, ""
     async for event in runner.run_async(
@@ -755,6 +791,8 @@ async def ask_async(
             rounds += 1
         elif event.is_final_response() and event.content and event.content.parts:
             text = "".join(p.text or "" for p in event.content.parts if not p.thought).strip()
+    if not text and interjection:
+        text = NO_REPLY  # an unprompted answer that failed is never worth posting
     return Answer(
         text or t("qa_failed", resolve_lang(language, question)),
         rounds,
@@ -776,6 +814,7 @@ def ask(
     model=None,
     language: str = "th",
     memory: MemoryTools | None = None,
+    interjection: bool = False,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -791,5 +830,6 @@ def ask(
             model=model,
             language=language,
             memory=memory,
+            interjection=interjection,
         )
     )

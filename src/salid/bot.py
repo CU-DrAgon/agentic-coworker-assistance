@@ -39,6 +39,7 @@ from .i18n import LANGS, LANGUAGE_LABELS, parse_language_command, resolve_lang, 
 from .image_memory import (
     MAX_IMAGE_BYTES,
     MAX_IMAGES_PER_MESSAGE,
+    ImageNote,
     describe_image,
     format_note,
     image_mime,
@@ -56,6 +57,7 @@ from .memory import (
 from .memory_access import ChannelAccess, allowed_channel_ids
 from .memory_import import MemoryImporter, Target, import_progress
 from .memory_store import MemoryStore, SQLiteMemoryStore, make_memory_store
+from .memory_summary import render_summary
 from .modes import (
     CHAT_CHANNEL_NAME,
     MODES,
@@ -65,8 +67,8 @@ from .modes import (
     mode_label,
     parse_snooze_command,
 )
-from .naming import mentions_name
-from .qa import MemoryTools, ask
+from .naming import command_text, mentions_name
+from .qa import MemoryTools, ask, is_no_reply
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -74,9 +76,9 @@ ATTACH_LIMIT = 15 * 1024 * 1024
 SYNC_MIN_INTERVAL_S = 30.0  # channel-list writes per guild are batched to one per interval
 MAX_SYNCED_CHANNELS = 500
 RECEIPT_CHANNEL_HINTS = (
-    "ใบเสร็จ",
-    "receipt",
-)  # a channel whose name has one of these takes receipts
+    "ใบเสร็จ", "receipt", "invoice", "ใบกำกับ", "สลิป", "slip", "บิล", "bill", "expense",
+    "ค่าใช้จ่าย", "เบิก",
+)  # fmt: skip  # a channel whose name has one of these takes receipts (case-insensitive)
 # CHAT_CHANNEL_NAME (salid.modes) is created on join (needs Manage Channels): mode "chat".
 # A bare @mention right after the same person's message is treated as a question about it.
 FOLLOWUP_WINDOW_SECONDS = 120
@@ -89,8 +91,10 @@ JOIN_HISTORY = 15  # channel lines the join-mode batch gate reads
 QUIET_SECONDS = 30  # join mode: a channel must be this quiet before the batch gate runs
 MAX_INTERJECTIONS_PER_HOUR = 3  # join mode: unprompted answers per channel, rolling hour
 MAX_JOIN_CANDIDATES = 5
+INTERJECT_SAME_USER_COOLDOWN = 600  # join mode: no second unprompted answer to one person
 SNOOZE_SECONDS = 3600
 TICK_SECONDS = 5.0
+IMAGE_NOTE_PREFIX = "[ผู้ใช้ส่งรูปภาพ / the user posted an image]"
 MEMORY_TICK_SECONDS = 30.0  # how often the memory scheduler looks for due summary updates
 MEMORY_QUEUE_MAX = 20000
 IMPORT_PAGE_SLEEP_S = 1.0  # pause between history pages (discord.py also rate-limits)
@@ -101,8 +105,12 @@ MODE_COMMANDS = ("โหมด", "mode")
 MEMORY_COMMANDS = ("ความจำ", "memory")
 LANGUAGE_COMMANDS = ("ภาษา", "language")
 # Chat context handed to the model: this person's and Salid's recent messages in the channel.
-HISTORY_MESSAGES = 10
-HISTORY_SECONDS = 30 * 60
+# Conversation context for an answer: the whole room (everyone, not only the asker), so Salid
+# follows group chat like a person reading back the channel.
+HISTORY_MESSAGES = 30
+HISTORY_SECONDS = 3 * 3600
+HISTORY_CHARS = 8000  # oldest lines are dropped first
+HISTORY_LINE_CHARS = 500
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
 JOIN_COMMANDS = ("เข้าประชุม", "join")
 LEAVE_COMMANDS = ("ออกประชุม", "leave")
@@ -204,6 +212,7 @@ class SecretaryBot(discord.Client):
         self._convos: dict[int, _Convo] = {}  # channel -> running conversation
         self._pending: dict[int, _Pending] = {}  # join mode: channel -> candidates
         self._interjections: dict[int, deque[float]] = {}  # join mode budget, per channel
+        self._interjected_at: dict[tuple[int, int], float] = {}  # (channel, user) -> last time
         self._snoozed: dict[int, float] = {}  # channel -> snooze end (in memory only)
         self._tick_task: asyncio.Task | None = None
         self._digest_task: asyncio.Task | None = None
@@ -426,18 +435,55 @@ class SecretaryBot(discord.Client):
                 or is_receipt_channel_name(getattr(message.channel, "name", ""))
                 or (mentioned and has_receipt_file(message))
             )
-            if logged and not own_receipt(is_receipt_post, receipts_on):
-                self._describe_soon(message)  # images -> text, in the background
+            image_only = not message.content.strip() and bool(self._image_candidates(message))
+            inline_image = (
+                not is_receipt_post
+                and image_only
+                and self._images_enabled(gid)
+                and (mode == "chat" or self._replying_to_salid(message))
+            )
+            if not own_receipt(is_receipt_post, receipts_on) and not inline_image:
+                # images -> text (and receipts, anywhere), in the background
+                self._describe_soon(
+                    message,
+                    logged,
+                    intake_mode=mode if receipts_on and not is_receipt_post else None,
+                )
             if is_receipt_post:
                 if receipts_on:
                     await self._intake(message, quiet=mode == "listen")
                 return
-            if mentioned and await self._meeting_command(message):
+            called = mentioned or (self._starts_with_name(message))
+            if called and await self._meeting_command(message):
                 return
-            if mentioned and await self._snooze_command(message):
+            if called and await self._snooze_command(message):
                 return
-            if mentioned and await self._language_command(message):
+            if called and await self._language_command(message):
                 return
+            # no image describer: images are receipt candidates when Salid is addressed
+            if (
+                receipts_on
+                and self._image_candidates(message)
+                and not self._images_enabled(gid)
+                and (mode == "chat" or (mode in ("call", "join") and called))
+                and await self._intake(message)
+            ):
+                return
+            image_note = ""
+            if inline_image:
+                handled, notes = await self._describe_message(
+                    message,
+                    self._image_candidates(message),
+                    intake_mode=mode if receipts_on else None,
+                    apply=logged,
+                )
+                if handled:
+                    return
+                image_note = "\n".join(notes.values())
+                if not image_note:
+                    return
+            elif mode == "chat" and image_only:
+                return  # a bare image that is not a receipt: no generic greeting
             if mode == "listen":
                 if mentioned and self._is_snoozed(message.channel.id):
                     with contextlib.suppress(discord.HTTPException):
@@ -446,9 +492,11 @@ class SecretaryBot(discord.Client):
                     await self._answer(message, message.guild, message.author)
                 return
             if mode == "chat":
-                await self._answer(message, message.guild, message.author)
+                await self._answer(
+                    message, message.guild, message.author, **self._note_kw(image_note)
+                )
                 return
-            await self._call_or_join(message, mode, mentioned)
+            await self._call_or_join(message, mode, mentioned, image_note)
         except Exception:
             logger.exception("handler failed")
 
@@ -491,16 +539,26 @@ class SecretaryBot(discord.Client):
         locale = str(getattr(interaction, "locale", "") or "")
         return "en" if locale and not locale.startswith("th") else "th"
 
-    async def _call_or_join(self, message: discord.Message, mode: str, mentioned: bool) -> None:
+    @staticmethod
+    def _note_kw(image_note: str) -> dict:
+        return {"image_note": image_note} if image_note else {}
+
+    def _starts_with_name(self, message: discord.Message) -> bool:
+        """The message opens with Salid's name (no @tag): "Salid เข้าประชุมหน่อย"."""
+        return command_text(self._strip_mentions(message.content or "", message))[1]
+
+    async def _call_or_join(
+        self, message: discord.Message, mode: str, mentioned: bool, image_note: str = ""
+    ) -> None:
         """call/join: answer when called by tag or name, replied to, or (inside the conversation
         window) when the gate says the message is meant for Salid. Join mode also queues
         questions for the quiet-time batch gate."""
         cid = message.channel.id
         if mentioned or mentions_name(message.content):
-            await self._answer(message, message.guild, message.author)
+            await self._answer(message, message.guild, message.author, **self._note_kw(image_note))
             return
         if self._replying_to_salid(message):
-            await self._answer(message, message.guild, message.author)
+            await self._answer(message, message.guild, message.author, **self._note_kw(image_note))
             return
         if mentions_other(message, self.user):
             return  # talking to someone else
@@ -559,10 +617,15 @@ class SecretaryBot(discord.Client):
             logger.warning("could not read channel history", exc_info=True)
         return lines[::-1]
 
+    def _command_text(self, message: discord.Message) -> str:
+        """Text for the typed-command parsers: tag, a leading name ("Salid ...") and trailing
+        politeness (หน่อย / ครับ / please) removed."""
+        return command_text(self._strip_mentions(message.content or "", message))[0]
+
     async def _snooze_command(self, message: discord.Message) -> bool:
         """'@Salid เงียบก่อน' / 'be quiet' (listen mode for an hour) and 'คุยได้แล้ว' / 'you can talk'
         again. Open to everyone."""
-        cmd = parse_snooze_command(self._strip_mentions(message.content, message))
+        cmd = parse_snooze_command(self._command_text(message))
         if cmd is None:
             return False
         cid = message.channel.id
@@ -579,7 +642,7 @@ class SecretaryBot(discord.Client):
     async def _language_command(self, message: discord.Message) -> bool:
         """'@Salid พูดภาษาอังกฤษ' / 'speak English' etc.: sets this channel's reply language.
         Executives and server managers only; others get a short refusal."""
-        text = self._strip_mentions(message.content, message)
+        text = self._command_text(message)
         cmd = parse_language_command(text)
         if cmd is None or message.guild is None:
             return False
@@ -604,7 +667,7 @@ class SecretaryBot(discord.Client):
 
     async def _meeting_command(self, message: discord.Message) -> bool:
         """'@Salid เข้าประชุม' / 'join' / 'ออกประชุม' / 'leave' typed in a text channel."""
-        cmd = parse_meeting_command(self._strip_mentions(message.content, message))
+        cmd = parse_meeting_command(self._command_text(message))
         if cmd is None or not hasattr(message.author, "voice"):
             return False
         lang = self._lang(message)
@@ -666,30 +729,46 @@ class SecretaryBot(discord.Client):
         await message.reply(text, mention_author=False)
         return True
 
-    async def _intake(self, message: discord.Message, quiet: bool = False):
-        note = message.content.strip()
+    async def _ingest_one(self, message: discord.Message, att, data: bytes, quiet: bool):
+        """Receipt pipeline for one attachment (bytes already read): ingest, reaction, reply."""
+        async with message.channel.typing():
+            res = await asyncio.to_thread(
+                ingest_attachment,
+                self.store,
+                self.llm,
+                self.s,
+                guild_id=message.guild.id,
+                data=data,
+                filename=att.filename,
+                content_type=att.content_type,
+                submitter_id=message.author.id,
+                submitter_name=message.author.display_name,
+                channel_id=message.channel.id,
+                message_id=message.id,
+                note=message.content.strip(),
+                archive=self.archive,
+                lang=self._lang(message),
+            )
+        if res.status == "ignored":
+            return res
+        if res.reaction:
+            with contextlib.suppress(discord.HTTPException):
+                await message.add_reaction(res.reaction)
+        if not quiet:  # listen mode: reaction only, no text reply
+            sent = await message.reply(res.reply, mention_author=False)
+            if res.status == "created":
+                self.store.set_reply_message(res.receipt.id, sent.id)
+        return res
+
+    async def _intake(self, message: discord.Message, quiet: bool = False) -> bool:
+        """Read every attachment as a receipt. True when at least one was a receipt (saved or a
+        duplicate); images that are not receipts are described for memory instead."""
+        found = False
         for idx, att in enumerate(message.attachments):
             if att.size > ATTACH_LIMIT:
                 continue
             data = await att.read()
-            async with message.channel.typing():
-                res = await asyncio.to_thread(
-                    ingest_attachment,
-                    self.store,
-                    self.llm,
-                    self.s,
-                    guild_id=message.guild.id,
-                    data=data,
-                    filename=att.filename,
-                    content_type=att.content_type,
-                    submitter_id=message.author.id,
-                    submitter_name=message.author.display_name,
-                    channel_id=message.channel.id,
-                    message_id=message.id,
-                    note=note,
-                    archive=self.archive,
-                    lang=self._lang(message),
-                )
+            res = await self._ingest_one(message, att, data, quiet)
             if res.receipt is not None and self.team.enabled(message.guild.id, "memory"):
                 self._apply_notes(message, {idx: receipt_note(res.receipt)})
             elif (
@@ -698,16 +777,8 @@ class SecretaryBot(discord.Client):
                 and self._images_enabled(message.guild.id)
             ):  # not a receipt: describe it instead
                 self._spawn(self._describe_message(message, [(idx, att)]))
-            if res.status == "ignored":
-                continue
-            if res.reaction:
-                with contextlib.suppress(discord.HTTPException):
-                    await message.add_reaction(res.reaction)
-            if quiet:  # listen mode: reaction only, no text reply
-                continue
-            sent = await message.reply(res.reply, mention_author=False)
-            if res.status == "created":
-                self.store.set_reply_message(res.receipt.id, sent.id)
+            found = found or res.status != "ignored"
+        return found
 
     def _note_answer(self, message: discord.Message, sent) -> None:
         """Salid answered here: open or refresh the channel's conversation (call/join only)."""
@@ -731,27 +802,60 @@ class SecretaryBot(discord.Client):
         return text.strip()
 
     async def _recent_chat(self, message: discord.Message) -> str:
-        """Recent lines between this person and Salid here, oldest first (context only; the
-        ledger scope is still decided in code)."""
+        """The room's recent conversation, oldest first: every participant (not only the asker)
+        with local times, plus the message being replied to and today's summary of this channel
+        when memory has one. Context only; the ledger and memory scopes are decided in code."""
         history = getattr(message.channel, "history", None)
         if history is None:
             return ""
+        zone = self.s.zone
         lines: list[str] = []
         try:
-            async for prev in history(limit=30, before=message):
+            async for prev in history(limit=HISTORY_MESSAGES + 10, before=message):
                 if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
                     break
-                if prev.author.id not in (message.author.id, getattr(self.user, "id", None)):
+                if getattr(prev.author, "bot", False) and prev.author != self.user:
                     continue
                 text = self._strip_mentions(prev.content, prev)
+                if not text and getattr(prev, "attachments", None):
+                    text = " ".join(f"[{a.filename}]" for a in prev.attachments)
                 if text:
                     who = "สลิด" if prev.author == self.user else prev.author.display_name
-                    lines.append(f"{who}: {text[:500]}")
+                    at = prev.created_at.astimezone(zone).strftime("%H:%M")
+                    lines.append(f"[{at}] {who}: {text[:HISTORY_LINE_CHARS]}")
                 if len(lines) >= HISTORY_MESSAGES:
                     break
         except discord.HTTPException:
             logger.warning("could not read channel history", exc_info=True)
-        return "\n".join(reversed(lines))
+        lines.reverse()
+        while lines and sum(len(x) + 1 for x in lines) > HISTORY_CHARS:
+            lines.pop(0)
+        parts = []
+        summary = await self._today_summary(message)
+        if summary:
+            parts.append(f"สรุปห้องนี้วันนี้ (ก่อนหน้าแชตด้านล่าง):\n{summary}")
+        ref = getattr(message, "reference", None)
+        replied = getattr(ref, "resolved", None) if ref else None
+        if getattr(replied, "content", None):
+            who = "สลิด" if replied.author == self.user else replied.author.display_name
+            parts.append(f"ข้อความที่ผู้ถามกำลังตอบกลับ:\n{who}: {replied.content[:1000]}")
+        if lines:
+            parts.append("\n".join(lines))
+        return "\n\n".join(parts)
+
+    async def _today_summary(self, message: discord.Message) -> str:
+        """Today's memory summary of this channel (free: already stored), or ''."""
+        guild = getattr(message, "guild", None)
+        if guild is None or not self.team.enabled(guild.id, "memory"):
+            return ""
+        try:
+            day = datetime.now(self.s.zone).date().isoformat()
+            channel = getattr(message.channel, "parent", None) or message.channel
+            got = await asyncio.to_thread(self.memory_store.get_summary, guild.id, channel.id, day)
+            return render_summary(got.summary, max_chars=1500) if got and got.summary else ""
+        except Exception:
+            logger.warning("could not read today's summary", exc_info=True)
+            return ""
 
     async def _previous_text(self, message: discord.Message) -> str:
         """The author's own message just before a bare @mention ("Hi" then "@Salid")."""
@@ -772,14 +876,27 @@ class SecretaryBot(discord.Client):
             logger.warning("could not read channel history", exc_info=True)
         return ""
 
-    async def _answer(self, message: discord.Message, guild: discord.Guild, member):
+    async def _answer(
+        self,
+        message: discord.Message,
+        guild: discord.Guild,
+        member,
+        *,
+        interjection: bool = False,
+        image_note: str = "",
+    ) -> bool:
+        """Answer `message`. `interjection`: Salid was not asked (join mode), so the model may
+        stay silent (NO_REPLY). `image_note`: stored description of the image(s) in the message,
+        put in front of the question. Returns True when something was posted."""
         q = self._strip_mentions(message.content, message)
         if not q:
             q = await self._previous_text(message)
-        if not q:
+        if not q and not image_note:
             sent = await message.reply(t("greeting", self._lang(message, "")), mention_author=False)
             self._note_answer(message, sent)
-            return
+            return True
+        if image_note:
+            q = f"{IMAGE_NOTE_PREFIX} {image_note}\n{q}".strip()
         gid = guild.id
         is_exec = self.is_exec_member(member)
         setting = self._lang_setting(message)  # th / en / auto: auto lets the model follow the user
@@ -790,10 +907,12 @@ class SecretaryBot(discord.Client):
                 await self._deep(message, gid, task, is_exec, setting)
             else:
                 await message.reply(t("deep_off", lang), mention_author=False)
-            return
+            return True
         if not self.team.enabled(gid, "qa"):
+            if interjection:
+                return False
             await message.reply(t("qa_off", lang), mention_author=False)
-            return
+            return True
         history = await self._recent_chat(message)
         meeting = self.meetings.context_for(message.channel.id)
         if meeting:  # talking in a live meeting's chat: the spoken transcript is context too
@@ -811,14 +930,19 @@ class SecretaryBot(discord.Client):
                 history=history,
                 language=setting,
                 memory=memory,
+                interjection=interjection,
             )
         logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
+        if interjection and is_no_reply(ans.text):
+            logger.info("interjection suppressed (nothing useful to add)")
+            return False
         sent = None
         for i, part in enumerate(chunks(ans.text)):
             sent = await (
                 message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
             )
         self._note_answer(message, sent)
+        return True
 
     async def _deep(
         self,
@@ -1170,19 +1294,73 @@ class SecretaryBot(discord.Client):
             if not self._interjection_allowed(cid):  # budget first: no tokens when out of budget
                 logger.info("join budget used up in channel %s", cid)
                 continue
+            now = self._clock()
+            candidates = [  # same person twice in a row: dropped before the gate (no tokens)
+                m for m in pending.candidates if not self._user_cooling_down(cid, m.author.id, now)
+            ]
+            if not candidates:
+                logger.info("join candidates all in same-user cooldown in channel %s", cid)
+                continue
             lines = await self._gate_lines(pending.channel, JOIN_HISTORY)
-            ids = [str(m.id) for m in pending.candidates]
+            ids = [str(m.id) for m in candidates]
+            hints = await self._interjection_hints(pending.guild, candidates)
+            kw = {"hints": hints} if hints else {}
             picked = await asyncio.to_thread(
-                gate.pick_interjection, self.llm, self.s.gate_model, lines, ids, channel_id=cid
+                partial(
+                    gate.pick_interjection,
+                    self.llm,
+                    self.s.gate_model,
+                    lines,
+                    ids,
+                    channel_id=cid,
+                    **kw,
+                )
             )
-            target = next((m for m in pending.candidates if str(m.id) == picked), None)
+            target = next((m for m in candidates if str(m.id) == picked), None)
             if target is None:
                 continue
-            self._interjections[cid].append(self._clock())
-            try:
-                await self._answer(target, pending.guild, target.author)
+            try:  # budget and cooldown are used only when something was actually posted
+                posted = await self._answer(target, pending.guild, target.author, interjection=True)
             except Exception:
                 logger.exception("join answer failed")
+                continue
+            if posted is not False:
+                self._interjections.setdefault(cid, deque()).append(self._clock())
+                self._interjected_at[(cid, target.author.id)] = self._clock()
+
+    def _user_cooling_down(self, channel_id: int, user_id: int, now: float) -> bool:
+        at = self._interjected_at.get((channel_id, user_id))
+        if at is not None and now - at >= INTERJECT_SAME_USER_COOLDOWN:
+            del self._interjected_at[(channel_id, user_id)]
+            return False
+        return at is not None
+
+    async def _interjection_hints(self, guild, candidates) -> dict[str, str]:
+        """Free stage-2 hints: per candidate a keyword search of memory (same scoping as the
+        chat_search tool for that candidate), compact lines, 600 characters in all. No LLM call.
+        Empty when memory is off."""
+        if not self.team.enabled(guild.id, "memory"):
+            return {}
+        hints: dict[str, str] = {}
+        for m in candidates:
+            kws = gate.extract_keywords(self._strip_mentions(m.content or "", m))
+            if not kws:
+                continue
+            try:
+                tools = await self._memory_tools(m, guild, m.author)
+                if tools is None:
+                    continue
+                result = await asyncio.to_thread(
+                    tools.chat_search, kws, limit=gate.HINT_HITS_PER_CANDIDATE + 2
+                )
+            except Exception:
+                logger.warning("memory hint lookup failed", exc_info=True)
+                continue
+            if line := gate.hint_line(
+                result, exclude_text=self._strip_mentions(m.content or "", m)
+            ):
+                hints[str(m.id)] = line
+        return gate.fit_hints(hints)
 
     # ------------------------------------------------------------- organisational memory
     def _memory_enqueue(self, job) -> None:
@@ -1447,42 +1625,68 @@ class SecretaryBot(discord.Client):
     def _images_enabled(self, guild_id: int) -> bool:
         return self.team.enabled(guild_id, "memory") and self.team.enabled(guild_id, "image_memory")
 
-    def _describe_soon(self, message) -> None:
-        """Describe the message's images in the background (never delays a reply)."""
+    def _describe_soon(self, message, logged: bool = True, intake_mode: str | None = None) -> None:
+        """Describe the message's images in the background (never delays a reply). With
+        `intake_mode` set, images the describer takes for receipts also go through receipt
+        intake (quietly in listen mode)."""
         cands = self._image_candidates(message)
-        if cands and self._images_enabled(message.guild.id):
-            self._spawn(self._describe_message(message, cands))
+        if cands and self._images_enabled(message.guild.id) and (logged or intake_mode):
+            self._spawn(
+                self._describe_message(message, cands, intake_mode=intake_mode, apply=logged)
+            )
 
-    async def _describe_att(self, att) -> str | None:
-        """One model call per image; the bytes live only inside this call."""
+    async def _read_describe(self, att) -> tuple[bytes | None, ImageNote | None]:
+        """One model call per image; the bytes are returned so receipt intake can reuse them."""
         if (getattr(att, "size", 0) or 0) > MAX_IMAGE_BYTES:
             self.image_stats["skipped"] += 1
-            return None
+            return None, None
+        data = None
         try:
             data = await att.read()
             async with self._image_sem:
                 note = await asyncio.to_thread(
                     describe_image, self.llm, self.s.gate_model, data, image_mime(att)
                 )
-            text = format_note(note)
         except Exception as e:  # never log contents, only the kind of failure
             self.image_stats["failed"] += 1
             logger.warning("image description failed (%s)", type(e).__name__)
-            return None
+            return data, None
         self.image_stats["described"] += 1
-        return text
+        return data, note
 
-    async def _describe_message(self, message, cands) -> None:
-        notes = {}
+    async def _describe_att(self, att) -> str | None:
+        _data, note = await self._read_describe(att)
+        return format_note(note) if note is not None else None
+
+    async def _describe_message(
+        self, message, cands, intake_mode: str | None = None, apply: bool = True
+    ) -> tuple[bool, dict[int, str]]:
+        """Describe images; receipt-like ones also run receipt intake when `intake_mode` is set.
+        Returns (a receipt was handled, notes by attachment index)."""
+        notes: dict[int, str] = {}
+        handled = False
         for i, att in cands:
-            if (text := await self._describe_att(att)) is not None:
-                notes[i] = text
+            data, note = await self._read_describe(att)
+            if note is None:
+                continue
+            notes[i] = format_note(note)
+            if intake_mode and data is not None and note.is_receipt_like:
+                try:
+                    res = await self._ingest_one(message, att, data, intake_mode == "listen")
+                except Exception:
+                    logger.exception("receipt intake from image failed")
+                    continue
+                if res.status != "ignored":
+                    handled = True
+                    if res.receipt is not None:
+                        notes[i] = receipt_note(res.receipt)
         logger.info(
             "memory images guild=%s channel=%s described=%d of %d (totals %s)",
             message.guild.id, message.channel.id, len(notes), len(cands), self.image_stats,
         )  # fmt: skip
-        if notes:
+        if notes and apply:
             self._apply_notes(message, notes)
+        return handled, notes
 
     def _apply_notes(self, message, notes: dict[int, str]) -> None:
         """Update the message's log record with image descriptions / receipt summaries."""
@@ -1542,12 +1746,48 @@ class SecretaryBot(discord.Client):
             if marker not in text:
                 continue
             used += 1
-            note = await self._describe_att(att)
-            text = text.replace(marker, note or marker.replace("[image:", "[image-unread:", 1), 1)
+            data, note = await self._read_describe(att)
+            new = format_note(note) if note is not None else None
+            if note is not None and note.is_receipt_like and data is not None:
+                receipt = await self._backlog_receipt(msg, att, data)
+                if receipt is not None:
+                    used += 1  # the extraction call counts against the same daily cap
+                    new = receipt_note(receipt)
+            text = text.replace(marker, new or marker.replace("[image:", "[image-unread:", 1), 1)
         # anything still plain has no attachment to read (message gone): stop retrying it
         if msg is None or not cands:
             text = text.replace("[image: ", "[image-unread: ")
         return text, used
+
+    async def _backlog_receipt(self, msg, att, data: bytes):
+        """Quietly ingest an old receipt-like image into the ledger (no reply, no reaction):
+        original author as submitter, the message time as the fallback date, deduped by sha256."""
+        gid = msg.guild.id
+        if not self.team.enabled(gid, "receipts") or self._mode(msg.channel, gid) == "off":
+            return None
+        try:
+            res = await asyncio.to_thread(
+                ingest_attachment,
+                self.store,
+                self.llm,
+                self.s,
+                guild_id=gid,
+                data=data,
+                filename=att.filename,
+                content_type=att.content_type,
+                submitter_id=msg.author.id,
+                submitter_name=msg.author.display_name,
+                channel_id=msg.channel.id,
+                message_id=msg.id,
+                note=(msg.content or "").strip(),
+                archive=self.archive,
+                lang=resolve_lang(self.team.current(gid).default_language, msg.content),
+                at=msg.created_at,
+            )
+        except Exception as e:  # counts only, never contents
+            logger.warning("history receipt intake failed (%s)", type(e).__name__)
+            return None
+        return res.receipt if res.status in ("created", "duplicate") else None
 
     async def _memory_due(self) -> None:
         """Layer 2: run due summary updates (and the daily purge), throttled, off the loop."""

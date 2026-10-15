@@ -39,7 +39,8 @@ PROMPT = (
     "You describe one image posted in a team's Discord chat so it can be searched later. "
     "Reply as JSON with: description (1-2 sentences), text (ALL legible text transcribed "
     "verbatim, Thai or English, keeping numbers, amounts and dates exactly; at most about 600 "
-    "characters, empty if none), type (one of: " + KINDS + "). Do not guess unreadable text."
+    "characters, empty if none), type (one of: " + KINDS + "; a bank transfer slip, payment "
+    "slip, tax invoice or bill is receipt/invoice). Do not guess unreadable text."
 )
 
 
@@ -47,6 +48,12 @@ class ImageNote(BaseModel):
     description: str = ""
     text: str = ""
     type: str = "other"
+
+    @property
+    def is_receipt_like(self) -> bool:
+        """The describer thinks this is a receipt / invoice / bill / transfer slip."""
+        kind = (self.type or "").casefold()
+        return any(w in kind for w in ("receipt", "invoice", "bill", "slip", "ใบเสร็จ", "สลิป"))
 
 
 def image_mime(att) -> str | None:

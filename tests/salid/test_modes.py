@@ -165,21 +165,27 @@ def bot(world, monkeypatch, tmp_path):
         clock=clock,
     )
     b.clock, b.calls = clock, []
-    b.gate = SimpleNamespace(window=False, pick="first", window_calls=0, pick_calls=0)
+    b.answer_kw, b.hints_seen = [], []
+    b.gate = SimpleNamespace(window=False, pick="first", window_calls=0, pick_calls=0, silent=False)
 
     async def intake(m, quiet=False):
         b.calls.append(("intake-quiet" if quiet else "intake", m.content))
 
-    async def answer(m, guild, who):  # like the real one: reply, then note the answer
+    async def answer(m, guild, who, **kw):  # like the real one: reply, then note the answer
         b.calls.append(("answer", m.content))
+        b.answer_kw.append(kw)
+        if kw.get("interjection") and b.gate.silent:
+            return False  # the model said NO_REPLY: nothing posted
         b._note_answer(m, await m.reply("ans", mention_author=False))
+        return True
 
     def window_gate(client, model, history, line, *, channel_id):
         b.gate.window_calls += 1
         return b.gate.window
 
-    def pick_gate(client, model, lines, ids, *, channel_id):
+    def pick_gate(client, model, lines, ids, *, channel_id, hints=None):
         b.gate.pick_calls += 1
+        b.hints_seen.append((list(ids), hints))
         return ids[0] if b.gate.pick == "first" else b.gate.pick
 
     monkeypatch.setattr(botmod.gate, "addressed_to_salid", window_gate)
@@ -434,8 +440,10 @@ async def test_join_budget_is_three_per_hour_per_channel(bot, world):
     set_mode(bot, 10, "join")
     ch = world.gen
 
+    users = itertools.count(100)  # one person is on a 10 min cooldown, so everyone is new
+
     async def attempt():
-        await send(bot, world, ch, "ยอดค่าใช้จ่ายเท่าไหร่")
+        await send(bot, world, ch, "ยอดค่าใช้จ่ายเท่าไหร่", who=next(users))
         bot.clock.advance(60)
         await bot.tick()
 
@@ -451,9 +459,10 @@ async def test_join_budget_is_three_per_hour_per_channel(bot, world):
 async def test_budget_is_per_channel(bot, world):
     set_mode(bot, 10, "join")
     set_mode(bot, 12, "join")
+    users = itertools.count(100)
     for ch in (world.gen, world.named):
         for _ in range(3):
-            await send(bot, world, ch, "เบิกได้ไหม")
+            await send(bot, world, ch, "เบิกได้ไหม", who=next(users))
             bot.clock.advance(60)
             await bot.tick()
     assert len(bot.calls) == 6
@@ -910,3 +919,24 @@ async def test_welcome_is_sent_in_the_guild_default_language(bot, world):
     bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
     await bot.on_guild_join(world.g)
     assert world.gen.sent and world.gen.sent[0].startswith("Hi, I'm")
+
+
+# ------------------------------------------------------------------ receipt channel names
+@pytest.mark.parametrize(
+    "name",
+    ["tax-invoice", "Tax-Invoice", "ใบกำกับภาษี", "สลิปโอน", "slips", "บิลร้าน", "bills",
+     "expenses", "ค่าใช้จ่าย", "เบิกเงิน", "ใบเสร็จ-ร้าน", "Receipts"],
+)  # fmt: skip
+def test_receipt_channel_name_hints(name):
+    assert botmod.is_receipt_channel_name(name)
+
+
+@pytest.mark.parametrize("name", ["ทั่วไป", "general", "", None])
+def test_non_receipt_channel_names(name):
+    assert not botmod.is_receipt_channel_name(name)
+
+
+async def test_tax_invoice_channel_takes_receipts(bot, world):
+    world.gen.name = "tax-invoice"
+    await send(bot, world, world.gen, "", attachments=[photo()])
+    assert bot.calls == [("intake", "")]
