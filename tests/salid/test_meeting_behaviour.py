@@ -543,3 +543,23 @@ async def test_live_is_told_the_state(lv):
     await until(lambda: len(sent) == 2)
     assert "กำลังฟัง" in sent[1][0]
     await lv.mgr.end((1000, 77))
+
+
+def test_stop_playback_keeps_listening():
+    """Barge-in must not stop receiving audio (voice-recv `stop()` stops both)."""
+    from salid.meeting import _stop_playback
+
+    calls = []
+
+    class VC:
+        def is_playing(self):
+            return True
+
+        def stop_playing(self):
+            calls.append("stop_playing")
+
+        def stop(self):
+            calls.append("stop")
+
+    _stop_playback(VC())
+    assert calls == ["stop_playing"]

@@ -387,9 +387,12 @@ def _connected(vc: Any) -> bool:
 
 
 def _stop_playback(vc: Any) -> None:
+    """Stop Salid's own audio only. On a voice-recv client `stop()` also stops LISTENING, which
+    left Salid deaf after anyone talked over it, so call `stop_playing()` when it exists."""
     with contextlib.suppress(Exception):
         if vc.is_playing():
-            vc.stop()
+            stop = getattr(vc, "stop_playing", None) or vc.stop
+            stop()
 
 
 # ------------------------------------------------------------------ voice receive sink
