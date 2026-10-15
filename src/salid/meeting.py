@@ -423,6 +423,11 @@ class MeetingSession:
     dropped: int = 0
     language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
     fallback_lang: str = "th"  # th / en: what fixed messages use when `language` is auto
+    empty_grace: float = EMPTY_GRACE_S  # nobody else in the channel: end after this long
+    on_end: Any = None  # async callable(session), run after the summary was posted
+    meeting_id: str | None = None  # the scheduled meeting this session takes notes for
+    summary_text: str = ""
+    summary_url: str = ""  # jump link of the first summary message
 
     @property
     def lang(self) -> str:
@@ -470,18 +475,29 @@ class MeetingManager:
     async def _connect(self, channel):
         return await channel.connect(cls=voice_recv.VoiceRecvClient)
 
-    async def _post(self, session: MeetingSession, text: str) -> None:
+    async def _post(self, session: MeetingSession, text: str):
+        """Post to the meeting's text chat (else the fallback channel); the sent message or None."""
         for ch in (session.text_channel, session.fallback_channel):
             if ch is None:
                 continue
             try:
-                await ch.send(text)
-                return
+                return await ch.send(text)
             except discord.HTTPException:
                 logger.warning("could not post to channel %s", getattr(ch, "id", "?"))
+        return None
 
     # ---- commands (return the reply for the invoker, in `lang`)
-    async def join(self, member, fallback_channel=None, lang: str = "th") -> str:
+    async def join(
+        self,
+        member,
+        fallback_channel=None,
+        lang: str = "th",
+        *,
+        announce: str = "meet_announce",
+        empty_grace: float = EMPTY_GRACE_S,
+        on_end=None,
+        meeting_id: str | None = None,
+    ) -> str:
         guild = member.guild
         if not self.bot.team.enabled(guild.id, "voice_meetings"):
             return t("meet_off", lang)
@@ -510,6 +526,7 @@ class MeetingManager:
             guild_id=guild.id, voice_channel=channel, text_channel=channel,
             fallback_channel=fallback_channel, vc=vc, loop=loop, started=time.monotonic(),
             language=self.bot.team.channel_language(guild.id, channel.id), fallback_lang=lang,
+            empty_grace=empty_grace, on_end=on_end, meeting_id=meeting_id,
         )  # fmt: skip
         self.sessions[guild.id] = session
         try:
@@ -524,7 +541,7 @@ class MeetingManager:
             asyncio.create_task(self._worker(session)) for _ in range(TRANSCRIBE_WORKERS)
         ]
         session.tasks.append(asyncio.create_task(self._ticker(session)))
-        await self._post(session, t("meet_announce", session.lang))
+        await self._post(session, t(announce, session.lang))
         logger.info("meeting started in guild %s channel %s", guild.id, channel.id)
         return t("meet_joined", lang, channel=channel.name)
 
@@ -557,7 +574,7 @@ class MeetingManager:
                     s.empty_since = None
                 elif s.empty_since is None:
                     s.empty_since = now
-                elif now - s.empty_since > EMPTY_GRACE_S:
+                elif now - s.empty_since > s.empty_grace:
                     asyncio.create_task(self.end(s.guild_id, "empty"))
                     return
         except asyncio.CancelledError:
@@ -646,7 +663,14 @@ class MeetingManager:
         for task in s.tasks:
             if task is not asyncio.current_task():
                 task.cancel()
-        await self._post_summary(s, reason)
+        try:
+            await self._post_summary(s, reason)
+        finally:
+            if s.on_end is not None:
+                try:
+                    await s.on_end(s)
+                except Exception:
+                    logger.exception("meeting end callback failed")
 
     async def _post_summary(self, s: MeetingSession, reason: str) -> None:
         from .bot import chunks
@@ -670,8 +694,11 @@ class MeetingManager:
             return
         why = t(f"end_{reason}", s.lang) if reason in END_REASONS else reason
         header = t("meet_summary_header", s.lang, reason=why)
-        for part in chunks(header + body, 1900):
-            await self._post(s, part)
+        s.summary_text = body
+        for i, part in enumerate(chunks(header + body, 1900)):
+            sent = await self._post(s, part)
+            if i == 0 and sent is not None:
+                s.summary_url = getattr(sent, "jump_url", "") or ""
         s.transcript.lines.clear()  # transcript is never persisted
 
     async def shutdown(self) -> None:

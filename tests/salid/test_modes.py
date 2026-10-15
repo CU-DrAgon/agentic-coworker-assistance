@@ -903,8 +903,8 @@ async def test_mode_help_and_confirmation_in_english(bot, world):
 def test_welcome_message_mentions_both_languages():
     th = t("welcome", "th", mention="@S", chat="#c", days=90)
     en = t("welcome", "en", mention="@S", chat="#c", days=90)
-    forms = ("/โหมด", "/mode", "/ภาษา", "/language", "/เข้าประชุม", "/join", "/ออกประชุม",
-             "/leave", "/ตั้งค่า", "/setup", "speak English")  # fmt: skip
+    forms = ("/โหมด", "/mode", "/ภาษา", "/language", "/เข้าประชุม", "/join-meeting", "/ออกประชุม",
+             "/leave-meeting", "/ตั้งค่า", "/setup", "speak English")  # fmt: skip
     for text in (th, en):
         assert all(f in text for f in forms), text
     assert "พูดภาษาอังกฤษ" in th and "พูดภาษาไทย" in en
@@ -956,8 +956,8 @@ def test_every_slash_command_is_bilingual(bot):
         ("ภาษา", "language"),
         ("ความจำ", "memory"),
         ("ห้อง", "channels"),
-        ("เข้าประชุม", "join"),
-        ("ออกประชุม", "leave"),
+        ("เข้าประชุม", "join-meeting"),
+        ("ออกประชุม", "leave-meeting"),
         ("ยกเลิก", "cancel"),
     ]
     for th_name, en_name in pairs:

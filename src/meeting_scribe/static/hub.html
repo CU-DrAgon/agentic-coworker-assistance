@@ -825,11 +825,47 @@
  },
  "f_voice_meetings_d": {
   "th": "พิมพ์ /เข้าประชุม ให้สลิดเข้าห้องเสียง ถอดว่าใครพูดอะไร ตอบเมื่อถูกเรียก และสรุปตอนจบ",
-  "en": "Type /join and Salid enters the voice channel, transcribes who said what, answers when called and summarizes at the end"
+  "en": "Type /join-meeting and Salid enters the voice channel, transcribes who said what, answers when called and summarizes at the end"
  },
  "f_voice_meetings_w": {
   "th": "/เข้าประชุม",
-  "en": "/join"
+  "en": "/join-meeting"
+ },
+ "f_documents_n": {
+  "th": "ทำเอกสารบัญชีเป็น PDF",
+  "en": "Accounting documents as PDF"
+ },
+ "f_documents_d": {
+  "th": "สลิดสร้างรายงานค่าใช้จ่าย รายการใบเสร็จ และรายงานการประชุมเป็นไฟล์ PDF แนบในแชต (ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นของตัวเอง)",
+  "en": "Salid builds expense summaries, receipt lists and meeting minutes as PDF attachments (executives see the whole team, others only their own)"
+ },
+ "f_documents_w": {
+  "th": "ขอในแชต",
+  "en": "ask in chat"
+ },
+ "f_scheduling_n": {
+  "th": "นัดประชุมและเตือนล่วงหน้า",
+  "en": "Schedule meetings and reminders"
+ },
+ "f_scheduling_d": {
+  "th": "สลิดสร้างกิจกรรมนัดประชุมใน Discord (ถามยืนยันก่อน) เตือนผู้เข้าร่วมทางแชตและ DM ทักคนที่ยังไม่เข้า และเข้ามาจดประชุมให้ตามนัด",
+  "en": "Salid creates Discord scheduled events (after confirming), reminds attendees in chat and DM, nudges no-shows and joins to take notes at the start time"
+ },
+ "f_scheduling_w": {
+  "th": "ขอในแชต",
+  "en": "ask in chat"
+ },
+ "f_email_n": {
+  "th": "ร่างและส่งอีเมล",
+  "en": "Draft and send email"
+ },
+ "f_email_d": {
+  "th": "สลิดร่างอีเมลให้ดูก่อน และส่งเมื่อผู้บริหารหรือผู้จัดการยืนยันเท่านั้น (ต้องตั้งค่า Gmail ก่อนจึงส่งจริง)",
+  "en": "Salid drafts an email for review and sends it only after an executive or manager confirms (real sending needs Gmail to be configured)"
+ },
+ "f_email_w": {
+  "th": "ขอในแชต",
+  "en": "ask in chat"
  },
  "f_digest_n": {
   "th": "สรุปรายวันให้ผู้บริหาร",
@@ -1019,9 +1055,12 @@ const FEATURES = [
   { id: "memory" },
   { id: "image_memory" },
   { id: "web" },
+  { id: "documents" },
+  { id: "scheduling" },
+  { id: "email" },
   { id: "followup", soon: true },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1246,7 +1285,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1323,7 +1362,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

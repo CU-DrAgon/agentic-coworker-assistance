@@ -54,6 +54,18 @@ class Settings(BaseSettings):
     memory_import_summaries_per_day: int = 200  # past-day summaries generated per guild per day
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).
     guild_collection: str = "salid_guilds"
+    # PDF documents (salid.pdf_report): regular TTF/OTF with Thai glyphs; empty = search known paths.
+    pdf_font: str = ""
+    # Scheduled meetings (salid.scheduling)
+    meeting_remind_minutes: int = 10  # reminder before the start (and again at the start)
+    meeting_noshow_minutes: int = 5  # DM attendees missing from the voice channel after this
+    meeting_empty_minutes: int = 2  # an auto-joined meeting ends after this long with nobody in it
+    # Email (salid.email_out): Gmail sends only when all three are set (refresh token = secret)
+    gmail_client_id: str = ""
+    gmail_client_secret: str = ""
+    gmail_refresh_token: str = ""
+    gmail_sender: str = ""  # the From address (the dedicated Google account)
+    email_daily_limit: int = 20  # emails per guild per day
     # Where `/ตั้งค่า` links point: the web service that serves /hub.
     hub_url: str = "https://meeting-scribe-638191001920.asia-southeast1.run.app"
 
