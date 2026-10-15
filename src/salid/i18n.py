@@ -533,6 +533,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Salid has left the meeting. The summary is coming in the voice channel's chat.",
     },
     "meet_wake_empty": {"th": "ครับ? ว่ามาได้เลยครับ", "en": "Yes? Go ahead."},
+    "meet_wake_spoken": {"th": "ค่ะ? ว่ามาได้เลยค่ะ", "en": "Yes? Go ahead."},
     "meet_no_transcript": {
         "th": "จบการประชุมแล้วครับ แต่ยังไม่ได้ยินเนื้อหาให้สรุปเลย 🙂",
         "en": "The meeting is over, but I did not hear anything to summarize 🙂",

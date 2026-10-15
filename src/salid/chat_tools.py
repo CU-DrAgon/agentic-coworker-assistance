@@ -109,7 +109,10 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         DM ว่า...". When to is someone else the DM says who it is from, so put only what the
         requester asked to pass on (never ledger figures, memory or other people's data that they
         have not shown the recipient). On success confirm in one short sentence; on dms_closed
-        pass on the guidance given.
+        pass on the guidance given. One or two named people per request: never DM "everyone" / a
+        whole server or role (decline politely as your own choice, e.g. "สลิดไม่ส่งข้อความหาทุกคนทีเดียว"
+        and suggest posting in a channel; never say DMs are impossible or not allowed), and never relay a
+        request for money or credentials.
 
         Args:
             text: the message (short; for "me" it may be a summary or answer you prepared).

@@ -5,6 +5,7 @@ import contextlib
 import io
 import logging
 import random
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -1126,6 +1127,22 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             text = text.replace(f"<@&{role.id}>", "")
         return text.strip()
 
+    def _name_mentions(self, text: str, message: discord.Message) -> str:
+        """`<@123>` of other people -> `@display name`, so the model can use the name in a tool
+        ("ฝากบอก @Jemm ทาง DM" -> send_dm(to="Jemm")) instead of searching chat for a number.
+        Salid's own tag is already gone (see `_strip_mentions`)."""
+        guild = getattr(message, "guild", None)
+        pool = {m.id: m for m in getattr(message, "mentions", ()) or ()}
+
+        def one(m: re.Match) -> str:
+            uid = int(m.group(1))
+            who = pool.get(uid) or (guild.get_member(uid) if guild is not None else None)
+            if who is None or uid == getattr(self.user, "id", None):
+                return m.group(0)
+            return f"@{getattr(who, 'display_name', None) or getattr(who, 'name', uid)}"
+
+        return re.sub(r"<@!?(\d{1,25})>", one, text)
+
     async def _recent_chat(self, message: discord.Message) -> str:
         """The room's recent conversation, oldest first: every participant (not only the asker)
         with local times, plus the message being replied to and today's summary of this channel
@@ -1297,7 +1314,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         stay silent (NO_REPLY). Attachments (images, PDFs, text files) go to the agent with the
         text, and it decides what to do with them (record a receipt, summarise, ...); not for an
         interjection, which was not addressed to Salid. Returns True when something was posted."""
-        q = self._strip_mentions(message.content, message)
+        q = self._name_mentions(self._strip_mentions(message.content, message), message)
         with_files = bool(message.attachments) and not interjection
         if not q and not with_files:
             q = await self._previous_text(message)

@@ -23,11 +23,14 @@ def mentions_name(text: str) -> bool:
 # Misheard names in SPEECH transcripts: สนิท (also "close / intimate"), สิริ / ซิริ / Siri. They count
 # only as an address: with a greeting, a politeness particle, "น้อง", or alone at the start / end
 # of the utterance, never in the middle of a sentence ("สนิทกันมาก").
+# "โซรี่ / ซิรี่" are how the speech model writes "Siri" after "เฮ้". They count only right
+# after a greeting (below), never alone.
 _FUZZY = r"(?:สนิท|สิริ|ซิริ|ซีริ|siri)"
-_GREET = r"(?:หวัดดี|สวัสดี|ว่าไง|hey|hi|hello|ok)"
+_FUZZY_GREETED = r"(?:โซรี่|โซรี|ซิรี่|ซิริ|ซีริ)"
+_GREET = r"(?:หวัดดี|สวัสดี|ว่าไง|เฮ้|hey|hi|hello|ok)"
 _PART = r"(?:ครับ|ค่ะ|คะ|นะ|จ๋า|จ้า)"
 _FUZZY_RE = re.compile(
-    rf"(?:{_GREET}\s*{_PART}?\s*(?P<a>{_FUZZY})(?![ก-๙a-z])"
+    rf"(?:{_GREET}\s*{_PART}?\s*(?P<a>{_FUZZY}|{_FUZZY_GREETED})(?![ก-๙a-z])"
     rf"|(?<![ก-๙a-z])(?P<b>{_FUZZY})\s*{_GREET}"
     rf"|น้อง\s?(?P<c>{_FUZZY})"
     rf"|(?<![ก-๙a-z])(?P<d>{_FUZZY})\s*{_PART}(?![ก-๙])"

@@ -1467,7 +1467,7 @@ class MeetingManager:
             if called and s.live is not None:
                 # Deterministic: the name was said, so Salid must answer. If the Live model has
                 # not started to speak by itself, give it a cue.
-                s.live.ensure_reply(seg.started + seg.duration_s)
+                s.live.ensure_reply(seg.started + seg.duration_s, text)
             return  # otherwise the Live session answers by itself; this is only the record
         if self._is_echo(s, seg):
             return  # probably Salid's own voice coming back through someone's mic
@@ -1483,6 +1483,9 @@ class MeetingManager:
             s.pending_wake[seg.user_id] = now
             if member is not None:
                 await self._notice(s, f"{member.mention} {t('meet_wake_empty', s.lang)}")
+                # Voice meetings stay voice: the name alone gets a spoken "yes?" too (silence
+                # after "ครับ สลิด" looked like Salid was not listening).
+                self._spawn(s, self._say_text(s, self._sp(s, "meet_wake_spoken")))
             return
         s.pending_wake.pop(seg.user_id, None)
         if self.bot.s.voice_reply and member is not None:

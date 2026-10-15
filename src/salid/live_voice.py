@@ -318,7 +318,10 @@ def build_instruction(
         "- มี 2 สถานะ ระบบจะบอกสถานะให้เป็นข้อความในวงเล็บ: (1) กำลังฟัง (ค่าเริ่มต้น) คุณฟังและจดเงียบ ๆ "
         "ห้ามพูด ยกเว้นเมื่อมีคนเรียกชื่อ “สลิด” (Salid, สะลิด, สลิต, ซาลิด) ให้ตอบทันทีสั้น ๆ โดยเฉพาะถ้าเป็นการทักทาย ให้ทักกลับ "
         "(2) กำลังคุยอยู่ ตอบทุกประโยคที่พูดกับคุณเหมือนบทสนทนาปกติ ไม่ต้องรอชื่อ ถ้าเขาบอกพอแล้ว/ขอบคุณ ให้ตอบ “ได้ค่ะ” สั้น ๆ แล้วเงียบ\n"
-        "- ถ้าคนในห้องคุยกันเอง ให้เงียบสนิท ไม่ต้องตอบหรือแสดงความเห็น\n"
+        "- ถ้าคนในห้องคุยกันเอง ให้เงียบสนิท ไม่ต้องตอบหรือแสดงความเห็น แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต "
+        "(เช่น “เมื่อวานกินข้าวที่ไหน”) เว้นแต่เขาเรียกชื่อคุณหรือหันมาถามคุณ\n"
+        "- คำที่เสียงคล้ายชื่อคุณแต่อยู่กลางประโยคและไม่ใช่การเรียกคุณ (เช่น “สนิท” ใน “เขาสนิทกันมาก”, “สลิป”, “สิริ”) "
+        "ไม่ใช่การเรียกชื่อ ให้เงียบ\n"
         "- ตอบสั้น 1-3 ประโยค เป็นธรรมชาติเหมือนคุยกันจริง ไม่อ่านเป็นรายการยาว ๆ\n"
         "- บุคลิกน่ารัก ร่าเริง เป็นกันเอง เสียงผู้หญิง ลงท้ายด้วย “ค่ะ” “คะ” “นะคะ” ห้ามส่งเสียงสัตว์\n"
         "- ตอนเข้าห้องอย่าเพิ่งพูดอะไร รอจนมีคนทักหรือคุยกับคุณ\n"
@@ -330,6 +333,7 @@ def build_instruction(
         "ตัวเลขที่มีคนขอให้จำ) ให้เรียก post_note บรรทัดสั้น ๆ ต่อหนึ่งเรื่อง ไม่ใช่ทุกประโยค\n"
         "- ถ้ามีคนบอกให้ส่งมติ/สรุปการประชุมไปห้องไหน ให้เรียกเครื่องมือ set_minutes_destination แล้วยืนยันสั้น ๆ\n"
         f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
+        "ถ้ามีคนถามว่าวันนี้/พรุ่งนี้/เมื่อวานวันอะไร ให้ตอบจากวันที่นี้เท่านั้น ห้ามเดาจากความจำ. "
         "สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง “เดือนนี้”, “สัปดาห์ก่อน” ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD ตอนเรียกเครื่องมือ\n"
     )
     if qa:
@@ -558,12 +562,12 @@ class LiveVoice:
             turns=types.Content(role="user", parts=[types.Part(text=text)]), turn_complete=False
         )
 
-    def ensure_reply(self, since: float) -> None:
+    def ensure_reply(self, since: float, heard: str = "") -> None:
         """Someone said the name (the utterance ended at `since`, monotonic). If the model has not
         started answering `live_force_reply_seconds` after that, force a turn with a cue."""
-        self._spawn(self._force_reply(since))
+        self._spawn(self._force_reply(since, heard))
 
-    async def _force_reply(self, since: float) -> None:
+    async def _force_reply(self, since: float, heard: str = "") -> None:
         wait = float(getattr(self.bot.s, "live_force_reply_seconds", 1.2))
         delay = since + wait - time.monotonic()
         if delay > 0:
@@ -571,12 +575,15 @@ class LiveVoice:
         live = self._live
         if live is None or self._closing or self.session.ending:
             return
-        if self._last_audio_at >= since or self._turn_audio:
-            return  # the model is answering (or answered) already
+        if self._last_audio_at >= since or self._turn_audio or self._awaiting_answer:
+            return  # the model is answering (or answered, or waiting for a tool result) already
         logger.info("live: name heard but no reply: forcing a turn")
         self._last_audio_at = time.monotonic()  # one cue per call
+        cue = FORCE_CUE
+        if heard.strip():  # the model may have dropped the audio: say what was heard (transcript)
+            cue += f" ข้อความที่เขาพูดคือ: “{heard.strip()[:300]}”"
         await live.send_client_content(
-            turns=types.Content(role="user", parts=[types.Part(text=FORCE_CUE)]),
+            turns=types.Content(role="user", parts=[types.Part(text=cue)]),
             turn_complete=True,
         )
 

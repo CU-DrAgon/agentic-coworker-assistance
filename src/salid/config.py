@@ -82,8 +82,10 @@ class Settings(BaseSettings):
     # Two states: listening (speaks only when its name is called) and engaged (answers every
     # utterance). Engaged falls back to listening after this long without anyone addressing it.
     engaged_timeout_seconds: float = 90.0
-    # Live: the name was heard but the model has not started to answer after this long: force a turn.
-    live_force_reply_seconds: float = 1.2
+    # Live: the name was heard but the model has not started to answer after this long (counted from
+    # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
+    # (VAD silence + thinking); a cue sent earlier replaced a real answer with a generic greeting.
+    live_force_reply_seconds: float = 5.0
     # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
     # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
     transcribe_location: str = "asia-southeast1"
