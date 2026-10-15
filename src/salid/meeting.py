@@ -475,6 +475,19 @@ class MeetingManager:
         self.bot = bot
         self.sessions: dict[int, MeetingSession] = {}
         self._joining: set[int] = set()  # guilds with a join in flight
+        self._stt_client: Any = None
+
+    @property
+    def stt_client(self) -> Any:
+        """Vertex client for segment transcription (regional when `transcribe_location` is set)."""
+        loc = getattr(self.bot.s, "transcribe_location", "")
+        if not loc or loc == getattr(self.bot.s, "gemini_location", loc):
+            return self.bot.llm
+        if self._stt_client is None:
+            from .llm import make_client
+
+            self._stt_client = make_client(self.bot.s.model_copy(update={"gemini_location": loc}))
+        return self._stt_client
 
     # ---- helpers
     def session_for_channel(self, channel_id: int | None) -> MeetingSession | None:
@@ -603,7 +616,7 @@ class MeetingManager:
             member.display_name if member else t("meet_participant", s.lang, n=seg.user_id % 1000)
         )
         text = await asyncio.to_thread(
-            transcribe_pcm, self.bot.llm, self.bot.s.gemini_model, seg.pcm
+            transcribe_pcm, self.stt_client, self.bot.s.gemini_model, seg.pcm
         )
         if not text:
             return

@@ -43,3 +43,18 @@ def test_timeout_raises_after_all_retries(monkeypatch):
     with pytest.raises(httpx.TimeoutException):
         llm.generate(client, "m", "x", None)
     assert client.models.calls == n
+
+
+def test_meeting_transcription_uses_the_regional_client():
+    from salid.meeting import MeetingManager
+
+    s = Settings(gcp_project="p", gemini_location="global", transcribe_location="asia-southeast1")
+    shared = object()
+    mgr = MeetingManager(SimpleNamespace(s=s, llm=shared))
+    stt = mgr.stt_client
+    assert stt is not shared and stt is mgr.stt_client  # created once
+    assert stt._api_client.location == "asia-southeast1"
+    same = MeetingManager(
+        SimpleNamespace(s=s.model_copy(update={"transcribe_location": ""}), llm=shared)
+    )
+    assert same.stt_client is shared

@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     voice_reply: bool = True
     tts_model: str = "gemini-2.5-flash-tts"
     tts_voice: str = "Puck"  # male voice, matches the persona (ends with ครับ)
+    # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
+    # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
+    transcribe_location: str = "asia-southeast1"
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).
     guild_collection: str = "salid_guilds"
     # Where `/ตั้งค่า` links point: the web service that serves /hub.
