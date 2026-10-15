@@ -117,6 +117,8 @@ CATALOG: dict[str, dict[str, str]] = {
         "(หรือแท็กแล้วพิมพ์ “พูดภาษาอังกฤษ” / “speak English”)\n"
         "• สั่งเข้าห้องประชุมเสียงด้วย /เข้าประชุม หรือ /join และให้ออกด้วย /ออกประชุม หรือ /leave "
         "(หรือแท็กแล้วพิมพ์ “เข้าประชุม” / “join”)\n"
+        "• ผมจำข้อความในห้องที่เปิดโหมดไว้ {days} วัน เพื่อตอบว่าเมื่อวานคุยอะไร งานถึงไหน "
+        "และเปิดเผยเฉพาะกับคนที่เห็นห้องนั้น (ไม่อยากให้จำ ตั้งห้องเป็น 🔇 ปิด ด้วย /โหมด)\n"
         "• ผู้ดูแลพิมพ์ /ตั้งค่า หรือ /setup เพื่อเชื่อมกับศูนย์บัญชาการ (หน้าเว็บสำหรับตั้งค่า)",
         "en": "Hi, I'm “Salid”, your team's secretary and teammate 🐱\n"
         "• Chat with me about anything in {chat}, no tag needed. In other channels tag {mention} "
@@ -128,6 +130,9 @@ CATALOG: dict[str, dict[str, str]] = {
         "(or tag me and say “speak English” / “พูดภาษาไทย”).\n"
         "• Ask me to join a voice meeting with /join or /เข้าประชุม and to leave with /leave or "
         "/ออกประชุม (or tag me and say “join” / “leave”).\n"
+        "• I remember messages in channels that are not switched off for {days} days, to answer "
+        "things like “what did we discuss yesterday?”, and only share them with people who can "
+        "see the channel (set a channel to 🔇 Off with /mode to stop it).\n"
         "• Admins: type /setup or /ตั้งค่า to link the server to the command center (the web "
         "page for settings).",
     },
@@ -238,25 +243,79 @@ CATALOG: dict[str, dict[str, str]] = {
     "mode_label_join": {"th": "🎧 ร่วมวง", "en": "🎧 Join"},
     "mode_label_chat": {"th": "💬 ตอบทุกข้อความ", "en": "💬 Chat"},
     "mode_help_off": {
-        "th": "สลิดไม่ยุ่งกับห้องนี้เลย (ไม่อ่านใบเสร็จ ไม่ตอบ แท็กก็ไม่ตอบ)",
-        "en": "Salid stays out of this channel completely (no receipts, no replies, even if tagged)",
+        "th": "สลิดไม่ยุ่งกับห้องนี้เลย (ไม่อ่านใบเสร็จ ไม่ตอบ แท็กก็ไม่ตอบ) และไม่บันทึกข้อความ",
+        "en": "Salid stays out of this channel completely (no receipts, no replies, even if tagged) "
+        "and nothing is recorded",
     },
     "mode_help_listen": {
-        "th": "ทำงานเบื้องหลังเท่านั้น อ่านใบเสร็จแล้วแปะอีโมจิ ไม่ตอบเป็นข้อความ",
-        "en": "Works in the background only: reads receipts and adds an emoji, no text replies",
+        "th": "ฟังเงียบ ไม่พูดเอง อ่านใบเสร็จแล้วแปะอีโมจิ ตอบเมื่อถูกแท็กเท่านั้น (ไม่ตอบเมื่อเรียกชื่อเฉยๆ) "
+        "สลิดจำข้อความของห้องนี้ไว้ {days} วัน",
+        "en": "Listens quietly and never speaks unprompted: reads receipts with an emoji and replies "
+        "only when tagged (not when just called by name). Salid remembers this channel's messages "
+        "for {days} days",
     },
     "mode_help_call": {
-        "th": "ตอบเมื่อถูกแท็กหรือถูกเรียกชื่อ แล้วคุยต่อได้ 3 นาทีโดยไม่ต้องแท็ก",
-        "en": "Replies when tagged or called by name, then keeps chatting for 3 minutes without a tag",
+        "th": "ตอบเมื่อถูกแท็กหรือถูกเรียกชื่อ แล้วคุยต่อได้ 3 นาทีโดยไม่ต้องแท็ก สลิดจำข้อความของห้องนี้ไว้ {days} วัน",
+        "en": "Replies when tagged or called by name, then keeps chatting for 3 minutes without a tag. "
+        "Salid remembers this channel's messages for {days} days",
     },
     "mode_help_join": {
-        "th": "เหมือนโหมดเรียกแล้วคุย และสลิดอาจเข้าร่วมวงเองเมื่อมีคำถามที่ช่วยได้ (จำกัดชั่วโมงละ 3 ครั้ง)",
+        "th": "เหมือนโหมดเรียกแล้วคุย และสลิดอาจเข้าร่วมวงเองเมื่อมีคำถามที่ช่วยได้ (จำกัดชั่วโมงละ 3 ครั้ง) "
+        "สลิดจำข้อความของห้องนี้ไว้ {days} วัน",
         "en": "Like Call, and Salid may chime in on its own when it can help with a question "
-        "(at most 3 times an hour)",
+        "(at most 3 times an hour). Salid remembers this channel's messages for {days} days",
     },
     "mode_help_chat": {
-        "th": "ตอบทุกข้อความในห้อง",
-        "en": "Replies to every message in the channel",
+        "th": "ตอบทุกข้อความในห้อง สลิดจำข้อความของห้องนี้ไว้ {days} วัน",
+        "en": "Replies to every message in the channel. Salid remembers this channel's messages "
+        "for {days} days",
+    },
+    "cmd_memory": _bi("ดูหรือตั้งจำนวนวันที่สลิดจำข้อความ", "View or set how long Salid remembers chats"),
+    "cmd_memory_arg": _bi("จำนวนวัน 1-3650 (ไม่ใส่ = ดูสถานะ)", "Days 1-3650 (empty = view status)"),
+    "memory_on": {"th": "เปิด", "en": "on"},
+    "memory_off": {"th": "ปิดอยู่", "en": "off"},
+    "memory_status": {
+        "th": "ความจำของทีม: {state} · เก็บข้อความไว้ {days} วัน",
+        "en": "Team memory: {state} · messages are kept for {days} days",
+    },
+    "memory_import": {
+        "th": "นำเข้าประวัติแล้ว {done}/{total} ห้อง, {messages} ข้อความ, รูป {images}/{cap}",
+        "en": "History imported: {done}/{total} channels, {messages} messages, images {images}/{cap}",
+    },
+    "memory_modes": {
+        "th": "ห้องที่ถูกบันทึก: ทุกโหมดยกเว้น {off} (โหมด {recorded})",
+        "en": "Recorded channels: every mode except {off} (modes {recorded})",
+    },
+    "memory_footer": {
+        "th": "ผู้ดูแลหรือผู้บริหารเปลี่ยนจำนวนวันได้ด้วย /ความจำ days:<จำนวนวัน> "
+        "ปิดห้องเดียวด้วย /โหมด 🔇 หรือปิดทั้งเซิร์ฟเวอร์ที่หน้าศูนย์บัญชาการ",
+        "en": "Admins or executives can change the days with /memory days:<number>. Switch one "
+        "channel off with /mode 🔇, or the whole server in the command center.",
+    },
+    "memory_set": {
+        "th": "ตั้งให้สลิดจำข้อความไว้ {days} วันแล้วครับ (ใช้กับข้อความเก่าด้วยในการล้างรอบถัดไป)",
+        "en": "Salid will now keep messages for {days} days (this also applies to existing "
+        "messages at the next daily cleanup).",
+    },
+    "memory_denied": {
+        "th": "เปลี่ยนจำนวนวันที่จำข้อความได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารครับ",
+        "en": "Only server admins or executives can change how long messages are kept.",
+    },
+    "memory_bad_days": {
+        "th": "ใส่จำนวนวันเป็นตัวเลข {lo} ถึง {hi} ครับ",
+        "en": "Please give a number of days from {lo} to {hi}.",
+    },
+    "memory_failed": {
+        "th": "ตั้งค่าไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะครับ",
+        "en": "Could not save the setting. Please try again later.",
+    },
+    "memory_notice": {
+        "th": "📝 ต่อไปนี้สลิดจะจำข้อความในห้องนี้ไว้ {days} วัน เพื่อช่วยตอบคำถามอย่าง “เมื่อวานคุยเรื่องอะไร” "
+        "และจะให้ข้อมูลจากห้องนี้เฉพาะกับคนที่เห็นห้องนี้เท่านั้น "
+        "ถ้าไม่ต้องการ พิมพ์ /โหมด แล้วเลือก 🔇 ปิด",
+        "en": "📝 From now on Salid will remember messages in this channel for {days} days to help "
+        "answer questions like “what did we discuss yesterday?”, and will only share information "
+        "from it with people who can see this channel. To stop, type /mode and pick 🔇 Off.",
     },
     # ---------------------------------------------------------------- slash command texts
     # (Discord shows one description, so these are bilingual in both columns)

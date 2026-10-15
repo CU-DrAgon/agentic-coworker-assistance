@@ -229,11 +229,12 @@ async def test_listen_reads_receipts_with_reaction_only(bot, world):
     assert bot.calls == [("intake-quiet", "ร้านนี้")]
 
 
-async def test_listen_answers_nothing_and_reacts_to_a_mention(bot, world):
+async def test_listen_answers_a_tag_but_not_a_bare_name(bot, world):
     set_mode(bot, 10, "listen")
     m = await send(bot, world, world.gen, "ยอดเท่าไร", mention=True)
     n = await send(bot, world, world.gen, "สลิด ยอดเท่าไร")
-    assert bot.calls == [] and m.reactions == ["👂"] and not n.reactions and not m.replies
+    assert bot.calls == [("answer", "ยอดเท่าไร")] and not n.reactions and not m.reactions
+    assert not n.replies and len(bot.calls) == 1  # never unprompted, no name-only answers
 
 
 async def test_listen_still_accepts_meeting_commands_by_mention(bot, world, monkeypatch):
@@ -890,8 +891,8 @@ async def test_mode_help_and_confirmation_in_english(bot, world):
 
 
 def test_welcome_message_mentions_both_languages():
-    th = t("welcome", "th", mention="@S", chat="#c")
-    en = t("welcome", "en", mention="@S", chat="#c")
+    th = t("welcome", "th", mention="@S", chat="#c", days=90)
+    en = t("welcome", "en", mention="@S", chat="#c", days=90)
     forms = ("/โหมด", "/mode", "/ภาษา", "/language", "/เข้าประชุม", "/join", "/ออกประชุม",
              "/leave", "/ตั้งค่า", "/setup", "speak English")  # fmt: skip
     for text in (th, en):

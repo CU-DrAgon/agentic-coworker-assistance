@@ -184,6 +184,8 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     del bot._answer  # use the real one
     m = Msg(world.b, world.b.text_channels[1], member(world.b, STAFF), "ยอดเท่าไร", mention=True)
     await bot._answer(m, world.b, m.author)
+    mem = seen[0].pop("memory")  # no read permissions in the fakes: only the channel itself
+    assert (mem.guild_id, mem.allowed) == (OTHER_GUILD, {21: "chat"})
     assert seen == [
         {
             "guild_id": OTHER_GUILD,
@@ -369,6 +371,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "mode",
         "ภาษา",
         "language",
+        "ความจำ",
+        "memory",
     }
     assert all(c.guild_only for c in cmds.values())
 

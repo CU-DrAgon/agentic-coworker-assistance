@@ -207,6 +207,11 @@
           <label>ห้องรับใบเสร็จเพิ่มเติม <div class="checks" id="receipt-ids"></div><small>ห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” รับใบเสร็จได้อยู่แล้วโดยไม่ต้องเลือก</small></label>
           <label>ห้องตอบทุกข้อความ <div class="checks" id="ask-ids"></div><small>สลิดตอบทุกข้อความในห้องนี้ (เหมือนโหมด 💬) ห้องชื่อ “คุยกับน้องสลิด” เป็นแบบนี้อยู่แล้ว</small></label>
           <label>ห้องสรุปรายวัน <select class="field" id="digest-id"></select></label>
+          <label>เก็บความจำของทีมไว้กี่วัน
+            <select id="mem-days"><option value="7">7 วัน</option><option value="30">30 วัน</option><option value="90">90 วัน</option><option value="180">180 วัน</option><option value="365">365 วัน</option><option value="custom">กำหนดเอง</option></select>
+            <input type="number" id="mem-days-custom" min="1" max="3650" step="1" hidden>
+            <small>1-3650 วัน ใช้กับข้อความเก่าด้วย (ล้างวันละครั้ง) สลิดนำเข้าประวัติข้อความย้อนหลังตามจำนวนวันนี้ด้วย</small>
+            <small id="mem-progress"></small></label>
           <label>เวลาส่งสรุปรายวัน <input type="time" id="digest-time" value="18:00"><small>เวลาไทย (Asia/Bangkok)</small></label>
           <label>ชื่อ role ผู้บริหาร <input type="text" id="exec-roles" placeholder="ผู้บริหาร, Executive"><small>คั่นด้วยจุลภาค เจ้าของและแอดมินของเซิร์ฟเวอร์เป็นผู้บริหารอยู่แล้ว</small></label>
         </div>
@@ -270,9 +275,11 @@ const FEATURES = [
   { id: "voice_meetings", name: "ฟังประชุมในห้องเสียง", desc: "พิมพ์ /เข้าประชุม ให้สลิดเข้าห้องเสียง ถอดว่าใครพูดอะไร ตอบเมื่อถูกเรียก และสรุปตอนจบ", where: "/เข้าประชุม" },
   { id: "digest", name: "สรุปรายวันให้ผู้บริหาร", desc: "ทุกวัน ยอดใช้จ่าย หมวด และรายการที่ต้องตรวจ", where: "#ผู้บริหาร" },
   { id: "deep_tasks", name: "งานใหญ่หลายขั้น", desc: "ผู้บริหารสั่งงานวิเคราะห์ สลิดทำเบื้องหลังแล้วส่งรายงาน", where: "เฉพาะผู้บริหาร" },
+  { id: "memory", name: "องค์ความรู้ของทีม", desc: "สลิดจำข้อความในห้องที่เปิดโหมด (ไม่ใช่ปิด) ไว้ 90 วัน เพื่อตอบว่าเมื่อวานคุยอะไร งานถึงไหน โดยเปิดเผยเฉพาะกับคนที่เห็นห้องนั้น", where: "ถามสลิดได้เลย" },
+  { id: "image_memory", name: "จำเนื้อหารูปภาพ", desc: "สลิดอ่านรูปที่โพสต์ในห้องที่เปิดความจำ (บรรยายภาพและถอดข้อความในรูป) เพื่อให้ค้นหาและสรุปได้ ไม่เก็บไฟล์รูป ต้องเปิดองค์ความรู้ของทีมไว้ด้วย", where: "ห้องที่ไม่ใช่โหมดปิด" },
   { id: "followup", name: "ติดตามงานที่รับปาก", desc: "จดว่าใครรับปากอะไร แล้วเตือนก่อนถึงกำหนด", where: "เร็วๆ นี้", soon: true },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true };
 let guilds = [];
 let guildId = null;
 
@@ -440,14 +447,34 @@ function collectLanguages() {
   return Object.fromEntries(sels.filter((x) => x.value).map((x) => [x.dataset.channel, x.value]));
 }
 
+async function loadMemoryStatus() {
+  const box = $("mem-progress"); box.textContent = "";
+  try {
+    const p = await gapi("/memory-status");
+    if (p.channels_total) box.textContent = `นำเข้าประวัติแล้ว ${p.channels_done}/${p.channels_total} ห้อง, ${p.messages.toLocaleString("th-TH")} ข้อความ, รูป ${p.images_done}/${p.images_cap}`;
+  } catch { /* progress is optional */ }
+}
+function fillRetention(days) {
+  const sel = $("mem-days"), box = $("mem-days-custom");
+  const preset = [...sel.options].some((o) => o.value === String(days));
+  sel.value = preset ? String(days) : "custom";
+  box.hidden = preset; box.value = preset ? "" : days;
+}
+function collectRetention() {
+  const sel = $("mem-days");
+  const n = Number(sel.value === "custom" ? $("mem-days-custom").value : sel.value);
+  return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : 90;
+}
 function fillSettings(s) {
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, ...s.features };
   const channels = s.channels || [];
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
   renderChecks($("ask-ids"), channels, s.ask_channel_ids);
   renderDigestSelect(channels, s.digest_channel_id);
   renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language);
   $("digest-time").value = s.digest_time || "18:00";
+  fillRetention(s.memory_retention_days || 90);
+  loadMemoryStatus();
   $("exec-roles").value = (s.exec_role_names || []).join(", ");
   $("no-channels").hidden = channels.length > 0;
   $("guild-name").textContent = s.guild_name || "";
@@ -497,7 +524,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), "กำลังบันทึก...");
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
@@ -506,6 +533,7 @@ async function save() {
     channel_languages: collectLanguages(),
     default_language: $("default-language").value || "th",
     digest_time: $("digest-time").value || "18:00",
+    memory_retention_days: collectRetention(),
     exec_role_names: $("exec-roles").value.split(",").map((x) => x.trim()).filter(Boolean),
   };
   try {
@@ -595,6 +623,7 @@ async function start() {
 }
 
 $("save").addEventListener("click", save);
+$("mem-days").addEventListener("change", (ev) => { $("mem-days-custom").hidden = ev.target.value !== "custom"; });
 $("ask-form").addEventListener("submit", ask);
 $("guild-switch").addEventListener("change", (ev) => loadGuild(ev.target.value));
 $("signout").addEventListener("click", () => {

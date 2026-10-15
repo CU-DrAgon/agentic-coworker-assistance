@@ -519,3 +519,15 @@ def test_summary_language_auto_follows_the_transcript(env):
     mt_.summarize_transcript(client, "m", "[10:00] แอน: ส่งวันศุกร์")
     en, th, default = (c[1][0] for c in client.models.calls)
     assert "in English" in en and "เป็นภาษาไทย" in th and "เป็นภาษาไทย" in default
+
+
+async def test_transcribed_segments_are_logged_as_voice_memory(env, monkeypatch):
+    s = await start(env)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "เรามาเริ่มกันเลย")
+    await env.mgr.handle_segment(s, segment(10))
+    await env.bot.drain_memory()
+    day = env.bot.s.now().date().isoformat()
+    (rec,) = env.bot.memory_store.messages(1000, {env.chan.id}, day, day)
+    assert (rec.kind, rec.author_name, rec.text) == ("voice", "แอน", "เรามาเริ่มกันเลย")
+    assert s.transcript.lines  # the in-memory transcript still works
+    await env.mgr.end(1000)
