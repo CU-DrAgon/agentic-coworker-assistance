@@ -513,6 +513,33 @@ async def test_dm_reply_is_recorded_and_the_organiser_is_told(w):
     assert await w.svc.handle_dm_reply(11, "late reply") is None  # too long after our DM
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["ประชุมกี่โมงครับ", "ขอดูสรุปประชุมเมื่อวาน", "ช่วยสรุปยอดหน่อย", "นัดนี้เลื่อนได้ไหม",
+     "ทำยังไงดี", "ใครเข้าบ้าง?", "what time is it", "can you resend the link",
+     "how do I join", "please send the notes", "where is the room?"],
+)  # fmt: skip
+async def test_questions_and_requests_after_a_reminder_are_not_absence_reasons(w, text):
+    w.now = NOW + timedelta(minutes=5)
+    meeting_at(w, NOW)
+    await w.svc.tick()  # the reminder DM is stamped
+    w.room.sent.clear()
+    assert await w.svc.handle_dm_reply(11, text) is None  # goes to the normal answer path
+    assert w.room.sent == [] and w.store.get_meeting("m1")["attendance_notes"] == {}
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["ไปช้า 10 นาที", "ติดลูกค้า", "ขอโทษครับ ไม่สะดวกเข้า", "ลาป่วยครับ", "stuck in traffic",
+     "I can't make it", "running late"],
+)  # fmt: skip
+async def test_genuine_absence_reasons_still_work(w, text):
+    w.now = NOW + timedelta(minutes=5)
+    meeting_at(w, NOW)
+    await w.svc.tick()
+    assert await w.svc.handle_dm_reply(11, text)
+
+
 async def test_attendance_text_lists_absence_reasons(w):
     m = meeting_at(
         w, NOW, attended=[10], attendance_notes={"11": {"name": "Bob", "note": "ติดลูกค้า"}}

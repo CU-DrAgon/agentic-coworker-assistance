@@ -239,6 +239,8 @@
             <small id="mem-progress"></small></label>
           <label><span data-i18n="digest_time_l"></span> <input type="time" id="digest-time" value="18:00"><small data-i18n="digest_time_s"></small></label>
           <label><span data-i18n="followup_time_l"></span> <input type="time" id="followup-time" value="10:00"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="morning_time_l"></span> <input type="time" id="morning-time" value="08:30"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="evening_time_l"></span> <input type="time" id="evening-time" value="18:00"><small data-i18n="digest_time_s"></small></label>
           <label><span data-i18n="report_time_l"></span> <input type="time" id="report-time" value="18:30"><small data-i18n="digest_time_s"></small></label>
           <label><span data-i18n="report_id_l"></span> <select class="field" id="report-id"></select><small data-i18n="report_id_s"></small></label>
           <label><span data-i18n="exec_roles_l"></span> <input type="text" id="exec-roles" data-i18n-attr="placeholder:exec_roles_ph"><small data-i18n="exec_roles_s"></small></label>
@@ -1012,6 +1014,26 @@
   "th": "ห้องส่วนตัวของผู้บริหาร",
   "en": "Leadership-only channel"
  },
+ "f_briefings_n": {
+  "th": "สรุปเช้า-เย็นและแจ้งเตือนส่วนตัว",
+  "en": "Personal morning/evening briefs and alerts"
+ },
+ "f_briefings_d": {
+  "th": "สลิด DM สรุปเช้า (นัดประชุม งานที่ครบกำหนด เอกสารสำคัญ เรื่องที่รอคุณตอบ) และสรุปเย็นให้สมาชิกแต่ละคน แจ้งเตือนทันทีเมื่อมีเอกสารสำคัญที่เกี่ยวกับเขา และเตือนเบาๆ เมื่อมีคนฝากเรื่องไว้แล้วยังไม่ได้ตอบ สมาชิกปรับเองได้โดยคุยกับสลิด (ใช้แทน DM ติดตามงานเดิม)",
+  "en": "Salid DMs each member a morning brief (meetings, tasks due, important documents, asks waiting for them) and an evening brief, alerts them at once about important documents that concern them, and gently reminds them of unanswered requests. Members tune it by talking to Salid. Replaces the old task follow-up DM."
+ },
+ "f_briefings_w": {
+  "th": "DM ส่วนตัว ปรับได้รายคน",
+  "en": "Private DMs, adjustable per person"
+ },
+ "morning_time_l": {
+  "th": "เวลาสรุปเช้า (DM)",
+  "en": "Morning brief time (DM)"
+ },
+ "evening_time_l": {
+  "th": "เวลาสรุปเย็น (DM)",
+  "en": "Evening brief time (DM)"
+ },
  "followup_time_l": {
   "th": "เวลาติดตามงาน (DM)",
   "en": "Task follow-up time (DM)"
@@ -1156,8 +1178,9 @@ const FEATURES = [
   { id: "email" },
   { id: "followups" },
   { id: "reports" },
+  { id: "briefings" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1390,7 +1413,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1403,6 +1426,8 @@ function fillSettings(s) {
   $("digest-time").value = s.digest_time || "18:00";
   $("followup-time").value = s.followup_time || "10:00";
   $("report-time").value = s.report_time || "18:30";
+  $("morning-time").value = s.morning_brief_time || "08:30";
+  $("evening-time").value = s.evening_brief_time || "18:00";
   fillRetention(s.memory_retention_days || 90);
   loadMemoryStatus();
   $("exec-roles").value = (s.exec_role_names || []).join(", ");
@@ -1472,7 +1497,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
@@ -1485,6 +1510,8 @@ async function save() {
     digest_time: $("digest-time").value || "18:00",
     followup_time: $("followup-time").value || "10:00",
     report_time: $("report-time").value || "18:30",
+    morning_brief_time: $("morning-time").value || "08:30",
+    evening_brief_time: $("evening-time").value || "18:00",
     report_channel_id: $("report-id").value,
     memory_retention_days: collectRetention(),
     exec_role_names: $("exec-roles").value.split(",").map((x) => x.trim()).filter(Boolean),

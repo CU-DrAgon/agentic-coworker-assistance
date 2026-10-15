@@ -274,6 +274,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         email=True,
         followups=True,
         reports=True,
+        briefings=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
@@ -348,15 +349,16 @@ def test_hub_page_has_both_languages_for_the_coordinator_controls():
     for key in (
         "f_followups_n", "f_followups_d", "f_followups_w", "f_reports_n", "f_reports_d",
         "f_reports_w", "followup_time_l", "report_time_l", "report_id_l", "report_auto",
-        "report_id_s",
+        "report_id_s", "f_briefings_n", "f_briefings_d", "f_briefings_w", "morning_time_l",
+        "evening_time_l",
     ):  # fmt: skip
         m = re.search(rf'"{key}": (\{{.*?\}})', html, re.S)
         assert m, key
         d = json.loads(m.group(1))
         assert d["th"] and d["en"], key
-    for ident in ("followup-time", "report-time", "report-id"):
+    for ident in ("followup-time", "report-time", "report-id", "morning-time", "evening-time"):
         assert f'id="{ident}"' in html
-    assert 'id: "followups"' in html and 'id: "reports"' in html
+    assert 'id: "followups"' in html and 'id: "reports"' in html and 'id: "briefings"' in html
 
 
 def test_hub_saves_channel_modes_and_default_mode(client):
@@ -519,7 +521,7 @@ def test_update_model_is_what_the_hub_writes():
     assert set(GuildSettingsUpdate.model_fields) == {
         "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "receipt_home_channel_id", "receipt_forward",
         "digest_time", "exec_role_names", "channel_modes", "default_mode", "channel_languages", "default_language", "memory_retention_days",
-        "followup_time", "report_time", "report_channel_id",
+        "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
     }  # fmt: skip
 
 

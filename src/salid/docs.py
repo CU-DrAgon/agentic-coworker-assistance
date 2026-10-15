@@ -43,7 +43,11 @@ PROMPT = (
     "slides, notes, other), summary (1-3 lines, in the document's language), parties (people / "
     "companies named, empty if none), amounts (every key amount WITH currency, e.g. 'total "
     "1,250.50 THB'), dates (key dates, ISO when clear), references (invoice / PO / reference "
-    "numbers) and text ({text_rule}). Use only what is in the document; never guess unreadable "
+    "numbers), amount_value (the main total as a plain number, no currency; null if none), "
+    "addressed_to (people - not companies - the document is addressed to or names as the "
+    "recipient / responsible person, comma separated, empty if none) and text ({text_rule}). For "
+    "doc_type also use legal (court / lawyer / legal notice) or official (government / "
+    "authority letter) when that fits. Use only what is in the document; never guess unreadable "
     "parts."
 )
 TEXT_RULE_LAYER = "leave empty"
@@ -58,6 +62,8 @@ class DocNote(BaseModel):
     dates: str = ""
     references: str = ""
     text: str = ""
+    amount_value: float | None = None  # the main total as a number (importance threshold)
+    addressed_to: str = ""  # people it is addressed to / names (who it concerns)
 
 
 class DocUnreadable(ValueError):

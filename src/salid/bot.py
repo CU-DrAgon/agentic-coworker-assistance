@@ -18,6 +18,8 @@ from discord import app_commands
 from . import gate
 from .ack import Ack, ack_flavor, ack_text
 from .archive import make_archive
+from .briefing_bot import BriefingMixin
+from .briefings import DocInfo, split_names
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
 from .chat_tools import ChatActions
 from .config import Settings
@@ -31,6 +33,7 @@ from .deep_task import (
     reply_parts,
     run_deep_task,
 )
+from .deliver import DeliverMixin
 from .digest import build_daily_digest
 from .dm import closed_dm_message, send_dm
 from .docs import doc_kind
@@ -103,7 +106,7 @@ from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .scheduling import DiscordCalendar, MeetingService
 from .secretary import SecretaryContext, SecretaryState
-from .secretary_store import SecretaryStore, make_secretary_store
+from .secretary_store import SecretaryStore, make_secretary_store, new_id
 from .store import Store
 from .summary import (
     PERIODS,
@@ -241,7 +244,7 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, MediaMixin, discord.Client):
+class SecretaryBot(CooMixin, BriefingMixin, DeliverMixin, MediaMixin, discord.Client):
     def __init__(
         self,
         settings: Settings,
@@ -260,6 +263,7 @@ class SecretaryBot(CooMixin, MediaMixin, discord.Client):
             dm_messages=True,
             voice_states=True,
             guild_scheduled_events=True,
+            reactions=True,  # a reaction answers a pending ask (salid.briefing_bot)
         )
         super().__init__(intents=intents)
         self.s, self.store, self.llm = settings, store, llm
@@ -353,6 +357,7 @@ class SecretaryBot(CooMixin, MediaMixin, discord.Client):
         self._seen_mode: dict[int, str] = {}  # channel -> last mode seen (off -> on notice)
         self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
+        self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -552,6 +557,7 @@ class SecretaryBot(CooMixin, MediaMixin, discord.Client):
                 return
             if mode == "off":
                 return
+            await self._asks_observe(message)  # pending asks (answers and new requests)
             if await self._maybe_delete_own(message):
                 return
             mentioned = mentions_bot(message, self.user)
@@ -1534,6 +1540,9 @@ class SecretaryBot(CooMixin, MediaMixin, discord.Client):
         def dm(text: str, to: str = "me", attach: str | None = None) -> dict:
             return run(self._send_dm_tool(guild, member, text, to, attach, lang, secretary))
 
+        notif_on = self.team.enabled(gid, "briefings")
+        request_id = new_id()  # one per request: a delivery confirms only in a later message
+
         return ChatActions(
             set_channel_mode=set_mode,
             set_channel_language=set_language,
@@ -1542,6 +1551,15 @@ class SecretaryBot(CooMixin, MediaMixin, discord.Client):
             hidden_channels=hidden,
             cancel_deep_task=cancel,
             send_dm=dm,
+            set_my_notifications=(
+                (lambda **kw: self._notif_set(gid, member.id, **kw)) if notif_on else None
+            ),
+            show_my_notifications=(
+                (lambda: self._notif_show(gid, member.id)) if notif_on else None
+            ),
+            deliver_file=self._deliver_actions(
+                message, guild, member, lang, loop, secretary, request_id
+            ),
         )
 
     @staticmethod
@@ -2567,12 +2585,14 @@ class SecretaryBot(CooMixin, MediaMixin, discord.Client):
 
     async def on_raw_message_delete(self, payload) -> None:
         if payload.guild_id is not None:
+            self._asks_forget(payload.guild_id, {payload.message_id})
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, [payload.message_id])
             )
 
     async def on_raw_bulk_message_delete(self, payload) -> None:
         if payload.guild_id is not None:
+            self._asks_forget(payload.guild_id, set(payload.message_ids))
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, sorted(payload.message_ids))
             )
@@ -2752,6 +2772,14 @@ class SecretaryBot(CooMixin, MediaMixin, discord.Client):
             if note is None:
                 continue
             notes[i] = format_note(note)
+            self._doc_alert_soon(
+                message,
+                i,
+                DocInfo(
+                    getattr(att, "filename", "") or "image", "image", note.type,
+                    note.description, note.amount_value, split_names(note.addressed_to),
+                ),
+            )  # fmt: skip
             if intake_mode and data is not None and note.is_receipt_like:
                 try:
                     res = await self._ingest_one(message, att, data, intake_mode == "listen")

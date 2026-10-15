@@ -439,13 +439,16 @@ class CooMixin:
 
     # ------------------------------------------------------------- timers
     async def _coo_due(self) -> None:
-        """Daily follow-ups and the evening report, checked every half minute."""
+        """Follow-ups (only when briefings are off), the evening report, the personal briefs and the
+        pending-ask reminders, checked every half minute."""
         if self._clock() - self._coo_last < COO_TICK_S:
             return
         self._coo_last = self._clock()
         now = self.s.now()
         await self._followups_due(now)
         await self._reports_due(now)
+        await self._briefings_due(now)
+        await self._asks_due(now)
 
     @staticmethod
     def _in_window(now: datetime, hhmm: str, span: timedelta) -> bool:
@@ -462,6 +465,8 @@ class CooMixin:
                 await asyncio.to_thread(self.team.current, gid)
                 if not (self.team.enabled(gid, "followups") and self.team.enabled(gid, "memory")):
                     continue
+                if self.team.enabled(gid, "briefings"):
+                    continue  # the morning brief carries the due tasks: never both
                 if not self._in_window(now, self.team.followup_time(gid), FOLLOWUP_WINDOW):
                     continue
                 day = now.date()

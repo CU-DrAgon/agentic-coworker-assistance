@@ -304,6 +304,20 @@ class DiscordCalendar:
 
 
 # ------------------------------------------------------------------ service
+_REQUEST_RE = re.compile(
+    r"[?？]|อะไร|ยังไง|อย่างไร|ไหม|มั้ย|หรือเปล่า|หรือไม่|กี่|เมื่อ(?:ไร|ไหร่)|ที่ไหน|ใคร|ทำไม|"
+    r"เท่า(?:ไร|ไหร่)|บอก|ช่วย|ขอ(?!โทษ|ลา)|"
+    r"\b(?:what|how|why|when|where|who|which|can(?!['’]t)|could|would|will you|please|pls|"
+    r"help|show|tell|send)\b",
+    re.I,
+)
+
+
+def looks_like_request(text: str) -> bool:
+    """A question or a request to Salid (not a reason for being absent)."""
+    return bool(_REQUEST_RE.search(text or ""))
+
+
 class MeetingService:
     """Meeting records + the reminder loop. `clock()` returns an aware datetime (injectable);
     `get_guild(id)` is the bot's `get_guild`; `meetings` is the voice `MeetingManager`."""
@@ -763,7 +777,7 @@ class MeetingService:
         record it on the meeting and tell the organiser in the meeting's text channel. Returns the
         acknowledgement for the attendee, or None when the DM is not such a reply."""
         text = (text or "").strip()
-        if not text or len(text) > 200 or "\n" in text:
+        if not text or len(text) > 200 or "\n" in text or looks_like_request(text):
             return None
         now = self.clock()
         best = None

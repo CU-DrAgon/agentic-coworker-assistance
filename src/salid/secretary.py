@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import mimetypes
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -557,7 +558,13 @@ class SecretaryTools:
                 return {"error": "the attached PDF expired; make it again and redraft"}
             if len(data) > MAX_ATTACHMENT_BYTES:
                 return {"error": "attachment too large"}
-            attachments.append((e["attachment"], data, "application/pdf"))
+            attachments.append(
+                (
+                    e["attachment"],
+                    data,
+                    mimetypes.guess_type(e["attachment"])[0] or "application/pdf",
+                )
+            )
         mail = OutgoingEmail(e["to"], e["subject"], e["body"], e["cc"], attachments)
         res = c.sender.send(mail)
         e.update(

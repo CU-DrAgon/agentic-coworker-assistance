@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     gmail_refresh_token: str = ""
     gmail_sender: str = ""  # the From address (the dedicated Google account)
     email_daily_limit: int = 20  # emails per guild per day
+    # Briefings (salid.briefings): documents above this total (invoice / quotation) are "important",
+    # an unanswered request to a member is reminded after this many hours.
+    doc_alert_min_amount: float = 50000.0
+    ask_reminder_hours: float = 2.0
+    doc_alerts_per_day: int = 10  # real-time document alerts per person per day
     # Where `/ตั้งค่า` links point: the web service that serves /hub.
     hub_url: str = "https://meeting-scribe-638191001920.asia-southeast1.run.app"
 

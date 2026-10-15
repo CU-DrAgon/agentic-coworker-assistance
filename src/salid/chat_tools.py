@@ -24,6 +24,9 @@ class ChatActions:
     hidden_channels: Callable[[], dict] | None = None
     cancel_deep_task: Callable[[], dict] | None = None
     send_dm: Callable[[str, str, str | None], dict] | None = None
+    set_my_notifications: Callable[..., dict] | None = None
+    show_my_notifications: Callable[[], dict] | None = None
+    deliver_file: Callable[..., dict] | None = None
 
 
 def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> list:
@@ -115,6 +118,75 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
             lambda: actions.send_dm(text, to, attach),
         )
 
+    def set_my_notifications(
+        morning: bool | None = None,
+        evening: bool | None = None,
+        morning_time: str | None = None,
+        evening_time: str | None = None,
+        weekends: bool | None = None,
+        doc_alerts: str | None = None,
+        ask_reminders: bool | None = None,
+    ) -> dict:
+        """Change the requester's OWN private notifications from Salid (anyone may): the morning
+        brief, the evening brief, their times, whether they also come on weekends, alerts about
+        important documents, and reminders about requests nobody answered. Pass only what they
+        asked to change. Use for "ไม่ต้องส่งสรุปเย็น", "ส่งสรุปเช้า 7 โมง", "ส่งเสาร์อาทิตย์ด้วย",
+        "แจ้งเอกสารสำคัญทุกฉบับ", "เลิกเตือนเรื่องที่ค้างตอบ". Confirm in one short sentence.
+
+        Args:
+            morning: true/false, the morning brief on or off.
+            evening: true/false, the evening brief on or off.
+            morning_time: local time like "07:30" ("default" = the server's default time).
+            evening_time: local time like "18:00" ("default" = the server's default time).
+            weekends: true to also get briefs on Saturday and Sunday, false for weekdays only.
+            doc_alerts: all (every document they can read), important (default) or off.
+            ask_reminders: true/false, the reminder when someone asked them something and they
+                have not answered for a couple of hours.
+        """
+        a = dict(
+            morning=morning, evening=evening, morning_time=morning_time,
+            evening_time=evening_time, weekends=weekends, doc_alerts=doc_alerts,
+            ask_reminders=ask_reminders,
+        )  # fmt: skip
+        return logged("set_my_notifications", a, lambda: actions.set_my_notifications(**a))
+
+    def show_my_notifications() -> dict:
+        """Show the requester's own notification settings (briefs, times, weekends, document
+        alerts, reminders). Use for "ตอนนี้ได้รับแจ้งเตือนอะไรบ้าง" or "what do you send me"."""
+        return logged("show_my_notifications", {}, actions.show_my_notifications)
+
+    def deliver_file(
+        destination: str,
+        note: str = "",
+        source: str = "this",
+        file_index: int | None = None,
+        mention: list[str] | None = None,
+    ) -> dict:
+        """Deliver a file / document for the requester: post it in a channel, DM it to a person,
+        or attach it to an email draft. Salid CAN do this. Use for "ส่ง / เอาไปลง / ฝากให้ /
+        forward / send this to ...", e.g. "นำเอกสารนี้ไปส่งที่ห้องเปเปอร์แล้วแท็ก jemm ด้วย".
+        Write `note` yourself: a short, polite message for the recipients in the requester's
+        language (do not paste the document). If the result says needs_confirmation, show the
+        warning to the requester and call again with EXACTLY the same arguments only after they
+        confirm in a later message. If it says ambiguous, ask which candidate. On success confirm
+        in one short sentence.
+
+        Args:
+            destination: a channel (name in Thai or English, or a #mention), a person (display
+                name) to DM, or "email:<address>" to draft an email with the file attached.
+            note: the short polite message to post with the file (may tag people with @[name]).
+            source: "this" = the file(s) on the current message or on the message it replies to;
+                or a message link / id (e.g. from chat_search); or the file_name of a PDF made
+                earlier in this conversation.
+            file_index: which attachment (0 = first) when the source has several; omit for all.
+            mention: display names of people to tag in the channel post.
+        """
+        a = dict(
+            destination=destination, note=note, source=source, file_index=file_index,
+            mention=mention or [],
+        )  # fmt: skip
+        return logged("deliver_file", a, lambda: actions.deliver_file(**a))
+
     tools = {
         "set_channel_mode": set_channel_mode,
         "set_channel_language": set_channel_language,
@@ -123,5 +195,8 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         "hidden_channels": hidden_channels,
         "cancel_deep_task": cancel_deep_task,
         "send_dm": send_dm,
+        "set_my_notifications": set_my_notifications,
+        "show_my_notifications": show_my_notifications,
+        "deliver_file": deliver_file,
     }
     return [fn for name, fn in tools.items() if getattr(actions, name) is not None]

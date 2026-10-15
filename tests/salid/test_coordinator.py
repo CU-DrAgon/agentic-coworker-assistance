@@ -420,8 +420,21 @@ def seed_tasks(bot, world):
     bot.tasks.save(Task(guild_id=GUILD, assignee_id=PEER, title="เสร็จแล้ว", due="2026-10-12", status="done"))  # fmt: skip
 
 
+def briefings_off(bot, **kw):
+    """The morning brief replaces the follow-up DM; these tests exercise the old one."""
+    from salid.guild_settings import GuildSettingsUpdate
+
+    bot.guilds_store.save_settings(
+        GUILD,
+        GuildSettingsUpdate(features={"briefings": False, **kw.pop("features", {})}, **kw),
+        "x",
+    )
+    bot.team._cache.clear()
+
+
 async def test_followups_dm_each_member_once_a_day_at_the_configured_time(bot, world):
     seed_tasks(bot, world)
+    briefings_off(bot)
     assert await bot._followups_due(at(9, 59)) == 0  # before 10:00 (the default)
     assert await bot._followups_due(at(10, 5)) == 1
     ((text, _),) = world.staff.dms
@@ -438,12 +451,15 @@ async def test_followups_respect_the_flag_and_the_hub_time(bot, world):
     seed_tasks(bot, world)
     from salid.guild_settings import GuildSettingsUpdate
 
-    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(followup_time="08:00"), "x")
-    bot.team._cache.clear()
+    briefings_off(bot, followup_time="08:00")
     assert await bot._followups_due(at(8, 1)) == 1  # the configured time, not 10:00
     world.staff.dms.clear()
     bot.guilds_store.save_settings(
-        GUILD, GuildSettingsUpdate(followup_time="08:00", features={"followups": False}), "x"
+        GUILD,
+        GuildSettingsUpdate(
+            followup_time="08:00", features={"followups": False, "briefings": False}
+        ),
+        "x",
     )
     bot.team._cache.clear()
     assert await bot._followups_due(at(8, 2, day=15)) == 0 and world.staff.dms == []

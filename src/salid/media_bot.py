@@ -14,6 +14,7 @@ from functools import partial
 import discord
 
 from . import docs, media
+from .briefings import DocInfo, split_names
 from .image_memory import describe_image, format_note, image_mime
 from .media import parse_message_ref  # noqa: F401 (re-export)
 from .memory import describe_attachment
@@ -34,6 +35,7 @@ class MediaMixin:
         self._media_sem = asyncio.Semaphore(2)
         self._doc_sem = asyncio.Semaphore(2)
         self._media_cache: dict[int, dict[int, media.Transcript]] = {}
+        self._doc_infos: dict[tuple[int, int], DocInfo] = {}  # (message id, attachment) -> analysis
         self._agent_receipts: dict[int, list[str]] = {}  # message id -> receipt notes (agent path)
         self.media_stats = {"transcribed": 0, "failed": 0, "skipped": 0, "docs": 0}
 
@@ -234,6 +236,13 @@ class MediaMixin:
                         return None
             self.doc_budget.add(gid, self._day(), dt.pages)
             self.media_stats["docs"] += 1
+            if note is not None and message is not None:  # kept for the live path's alert
+                self._doc_infos[(message.id, idx)] = DocInfo(
+                    name, kind, note.doc_type, note.summary, note.amount_value,
+                    split_names(note.addressed_to),
+                )  # fmt: skip
+                while len(self._doc_infos) > MEDIA_CACHE_KEPT:
+                    self._doc_infos.pop(next(iter(self._doc_infos)))
             return docs.doc_note(name, kind, dt, note)
         finally:
             del data
@@ -242,6 +251,10 @@ class MediaMixin:
         notes: dict[int, str] = {}
         for order, (i, att) in enumerate(cands):
             note = await self._doc_note(message, i, att, order, gid=message.guild.id)
+            if (info := self._doc_infos.pop((message.id, i), None)) is not None:
+                self._doc_alert_soon(
+                    message, i, info
+                )  # a live message: maybe an important document
             if note:
                 notes[i] = note
         if notes:

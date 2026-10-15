@@ -371,7 +371,31 @@ Code: `coo.py` (Discord side), `memory_access.py` (rules), `tasks.py`, `disclosu
   resolved from names or mentions, due date parsed, duplicates merged by text similarity), and one batched
   Flash-Lite call marks open tasks done when the new messages say so. Every day at `followup_time` (default 10:00)
   each member with tasks due or overdue gets a DM; replying updates the task (`update_task`: members only their own,
-  executives any). `list_tasks(person, status)` follows the hierarchy. Feature flag `followups`.
+  executives any). `list_tasks(person, status)` follows the hierarchy. Feature flag `followups` (the 10:00 DM is
+  sent only when `briefings` is off: the morning brief replaces it).
+- **Personal briefings** (`salid.briefings`, `salid.briefing_bot`; feature flag `briefings`, default on; hub: flag +
+  morning/evening times). Each member gets a morning brief DM (default 08:30, weekdays: today's meetings with
+  one-click links, tasks due / overdue, important documents since yesterday's evening brief, asks still waiting for
+  their reply) and an evening brief (default 18:00: meetings attended with decisions, tasks assigned / done today,
+  tomorrow's meetings, pending asks). Composed by the main model from capped structured input with a plain fallback;
+  nothing is sent when every section is empty; closed DMs are skipped and logged. **Important-document alerts**: the
+  existing PDF / Office / image note call also returns the type, main amount and addressees (no extra call); contracts,
+  legal / official letters, invoices or quotations above `SALID_DOC_ALERT_MIN_AMOUNT` (50,000) and anything
+  addressed to or mentioning members DM the people it concerns (mentioned members, the replied-to author, named
+  addressees, executives for contracts / invoices) who can read the channel, never the uploader, at most 10 a day per
+  person and once per document. **Pending asks**: a message that user-mentions a member and matches a Thai / English
+  request regex is tracked (no model); a later post by that member in the same channel / thread or a reaction answers
+  it; still open after `SALID_ASK_REMINDER_HOURS` (2) the member gets one gentle reminder (08:00-20:00 only), and open
+  asks appear in the briefs. Members tune everything by talking (`set_my_notifications` / `show_my_notifications`:
+  morning / evening on-off and times, weekends, `doc_alerts` all | important | off, ask reminders), stored per
+  (guild, user) in `salid_notif_prefs`.
+- **Deliver files** (`salid.deliver`, agent tool `deliver_file`). "ส่งเอกสารนี้ไปห้อง… แล้วแท็ก…" (also as a reply to the
+  file): Salid posts the file(s) in the channel (fuzzy Thai / English name match; a Thai-to-Latin guess asks first), DMs
+  a person, or drafts an email with the file (normal confirm flow), with a short polite note, real `@[name]` mentions
+  (nothing else pings) and "ส่งต่อจาก @you · [ต้นฉบับ](link)". In code: the requester must read the source channel and
+  be able to send in the destination, Salid needs Send + Attach; if people at the destination cannot read the source
+  channel a confirmation in a later message is required; files over 25 MB are linked, not attached; every delivery
+  is logged in `salid_deliveries`.
 - **Evening report.** At `report_time` (default 18:30, hub and guild settings; feature flag `reports`) Salid posts a
   report for leadership in the private channel `รายงานจากสลิด` (created with permission overwrites for the owner,
   Administrator / Manage Server roles, the executive roles and Salid; without Manage Channels it asks the owner by DM

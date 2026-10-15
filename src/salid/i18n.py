@@ -999,4 +999,71 @@ CATALOG: dict[str, dict[str, str]] = {
     "cmd_report": _bi("รายงานประจำวันจากสลิด", "Daily report from Salid"),
     "cmd_report_date": _bi("วันที่ (ปี-เดือน-วัน) ไม่ใส่ = วันนี้", "Date (YYYY-MM-DD), default today"),
     "cmd_report_mine": _bi("ดูของฉันเอง", "Show only my own day"),
+    # ---------------------------------------------------------------- briefings and alerts
+    "bf_title_morning": {
+        "th": "**สรุปเช้าของคุณ {name} ({day})**",
+        "en": "**Good morning {name}, your brief for {day}**",
+    },
+    "bf_title_evening": {
+        "th": "**สรุปเย็นของคุณ {name} ({day})**",
+        "en": "**Evening brief for {name} ({day})**",
+    },
+    "bf_meetings": {"th": "**นัดวันนี้**", "en": "**Today's meetings**"},
+    "bf_meetings_tomorrow": {"th": "**นัดพรุ่งนี้**", "en": "**Tomorrow's meetings**"},
+    "bf_meeting_line": {"th": "• {time} {title} {link}", "en": "• {time} {title} {link}"},
+    "bf_tasks_due": {"th": "**งานที่ครบกำหนดหรือเลยกำหนด**", "en": "**Tasks due or overdue**"},
+    "bf_task_line": {
+        "th": "• #{id} {title} (กำหนด {due})",
+        "en": "• #{id} {title} (due {due})",
+    },
+    "bf_docs": {"th": "**เอกสารสำคัญที่ได้รับ**", "en": "**Important documents received**"},
+    "bf_doc_line": {
+        "th": "• {kind}: {summary} ({channel}) {link}",
+        "en": "• {kind}: {summary} ({channel}) {link}",
+    },
+    "bf_asks": {"th": "**เรื่องที่รอคุณตอบ**", "en": "**Waiting for your reply**"},
+    "bf_ask_line": {
+        "th": "• {who} ({channel}): {text} {link}",
+        "en": "• {who} ({channel}): {text} {link}",
+    },
+    "bf_attended": {"th": "**ประชุมที่คุณเข้าวันนี้**", "en": "**Meetings you attended today**"},
+    "bf_new_tasks": {"th": "**งานใหม่ที่ได้รับวันนี้**", "en": "**New tasks assigned today**"},
+    "bf_done": {"th": "**งานที่เสร็จวันนี้**", "en": "**Done today**"},
+    "bf_open": {"th": "**งานที่ยังค้าง**", "en": "**Still open**"},
+    "bf_footer": {
+        "th": "ปรับหรือปิดสรุปนี้ได้โดยบอกสลิด เช่น “ไม่ต้องส่งสรุปเย็น”",
+        "en": "To change or stop these briefs just tell Salid, e.g. “no evening brief”.",
+    },
+    "alert_doc": {
+        "th": "**เอกสารสำคัญ** ({kind}): {summary}\nห้อง {channel} · {link}",
+        "en": "**Important document** ({kind}): {summary}\nChannel {channel} · {link}",
+    },
+    "ask_reminder": {
+        "th": "ขอเตือนเบาๆ ครับ {who} ฝากเรื่องนี้ไว้ในห้อง {channel} และยังไม่มีคำตอบจากคุณ: “{text}” {link}",
+        "en": "A gentle reminder: {who} asked you something in {channel} and there is no reply "
+        "from you yet: “{text}” {link}",
+    },
+    # ---------------------------------------------------------------- deliver_file
+    "deliver_footer": {
+        "th": "ส่งต่อจาก {who} · [ต้นฉบับ]({url})",
+        "en": "Forwarded from {who} · [original]({url})",
+    },
+    "deliver_oversize": {
+        "th": "ไฟล์ใหญ่เกินกว่าจะแนบ (เกิน 25 MB) ดูได้ที่ต้นฉบับ: {url}",
+        "en": "The file is too large to attach (over 25 MB); see the original: {url}",
+    },
+    "deliver_email_body": {
+        "th": "เรียนทุกท่าน\nขอส่งไฟล์ {name} มาพร้อมอีเมลนี้ครับ",
+        "en": "Hello,\nPlease find the file {name} attached.",
+    },
+    "deliver_footer_plain": {"th": "ส่งต่อจาก {who}", "en": "Forwarded from {who}"},
+    "deliver_original": {"th": "[ต้นฉบับ]({url})", "en": "[original]({url})"},
+    "deliver_dm_from": {
+        "th": "ส่งต่อจาก {who} ({server}) ผ่านสลิดครับ",
+        "en": "Forwarded by Salid from {who} ({server}).",
+    },
+    "deliver_warn_audience": {
+        "th": "เอกสารนี้มาจาก #{source} ซึ่ง {who} มองไม่เห็น ยืนยันจะส่งไหมครับ",
+        "en": "This document comes from #{source}, which {who} cannot see. Send it anyway?",
+    },
 }
