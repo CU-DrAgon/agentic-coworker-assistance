@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-KINDS = ("chat", "voice", "salid")
+KINDS = ("chat", "voice", "salid", "dm")
 MAX_DAYS = 400  # safety cap on a date range
 MAX_ROWS = 5000  # safety cap on rows one read returns
 
@@ -45,7 +45,8 @@ class MemoryMessage(BaseModel):
     text: str = ""
     jump_url: str = ""
     edited_at: datetime | None = None
-    kind: str = "chat"  # chat | voice | salid
+    kind: str = "chat"  # chat | voice | salid | dm
+    visibility: str = "normal"  # normal | private (a DM note only its author may see)
 
     @property
     def key(self) -> tuple[str, int]:
@@ -162,6 +163,10 @@ class MemoryStore(Protocol):
         descriptions). False when the record does not exist."""
         ...
 
+    def set_visibility(self, guild_id: int, message_id: int, visibility: str) -> bool:
+        """Mark a record "normal" or "private". False when the record does not exist."""
+        ...
+
     def delete_messages(self, guild_id: int, message_ids: Collection[int]) -> list[tuple[int, str]]:
         """Delete records; return the (channel_id, local_date) of each that existed and mark
         those channel-days' summaries dirty."""
@@ -227,7 +232,7 @@ CREATE TABLE IF NOT EXISTS salid_messages (
   guild_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
   channel_id INTEGER NOT NULL, thread_id INTEGER,
   author_id INTEGER, author_name TEXT, created_at TEXT NOT NULL, local_date TEXT NOT NULL,
-  text TEXT, jump_url TEXT, edited_at TEXT, kind TEXT,
+  text TEXT, jump_url TEXT, edited_at TEXT, kind TEXT, visibility TEXT DEFAULT 'normal',
   PRIMARY KEY (guild_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS ix_msg_day ON salid_messages(guild_id, local_date, channel_id);
@@ -247,7 +252,7 @@ CREATE TABLE IF NOT EXISTS salid_day_summaries (
 """
 MESSAGE_COLS = (
     "guild_id,message_id,channel_id,thread_id,author_id,author_name,created_at,local_date,"
-    "text,jump_url,edited_at,kind"
+    "text,jump_url,edited_at,kind,visibility"
 )
 
 
@@ -271,6 +276,9 @@ class SQLiteMemoryStore:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self._conn() as c:
             c.executescript(SCHEMA)
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(salid_messages)")}
+            if "visibility" not in cols:  # database from before DM notes
+                c.execute("ALTER TABLE salid_messages ADD COLUMN visibility TEXT DEFAULT 'normal'")
 
     @contextmanager
     def _conn(self):
@@ -289,7 +297,9 @@ class SQLiteMemoryStore:
 
     @staticmethod
     def _msg(row) -> MemoryMessage:
-        return message_from_doc(dict(row))
+        d = dict(row)
+        d["visibility"] = d.get("visibility") or "normal"
+        return message_from_doc(d)
 
     @staticmethod
     def _sum(row) -> DaySummary:
@@ -303,7 +313,7 @@ class SQLiteMemoryStore:
         d = message_to_doc(m)
         with self._conn() as c:
             c.execute(
-                f"INSERT OR REPLACE INTO salid_messages ({MESSAGE_COLS}) VALUES ({_marks(12)})",
+                f"INSERT OR REPLACE INTO salid_messages ({MESSAGE_COLS}) VALUES ({_marks(13)})",
                 [d[k] for k in MESSAGE_COLS.split(",")],
             )
 
@@ -313,6 +323,14 @@ class SQLiteMemoryStore:
                 "UPDATE salid_messages SET text=?, edited_at=COALESCE(?, edited_at) "
                 "WHERE guild_id=? AND message_id=?",
                 (text, iso(edited_at) if edited_at else None, guild_id, message_id),
+            )
+            return cur.rowcount > 0
+
+    def set_visibility(self, guild_id, message_id, visibility) -> bool:
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE salid_messages SET visibility=? WHERE guild_id=? AND message_id=?",
+                (visibility, guild_id, message_id),
             )
             return cur.rowcount > 0
 

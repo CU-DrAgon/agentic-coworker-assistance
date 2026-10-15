@@ -863,4 +863,140 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "สลิดเข้ามาจดประชุมตามนัดครับ 🎙️ (เก็บเป็นข้อความในความจำเท่านั้น ไม่บันทึกเสียง)",
         "en": "Salid has joined to take notes for the scheduled meeting 🎙️ (kept as text only, no audio is recorded).",
     },
+    # ---------------------------------------------------------------- coordinator: disclosure
+    "disc_where_dm": {"th": "บันทึก DM ส่วนตัว", "en": "a private DM note"},
+    "disc_desc": {
+        "th": "{n} ข้อความที่คุณเขียนไว้ ช่วงวันที่ {span} ({where})",
+        "en": "{n} message(s) you wrote, dated {span} ({where})",
+    },
+    "disc_ask": {
+        "th": "{asker} ถามสลิดเรื่อง “{topic}”\nคำถามเดิม: “{question}”\n"
+        "สลิดมีข้อมูลที่เป็นของคุณที่เกี่ยวข้อง: {description}\n"
+        "(สลิดยังไม่ได้บอกเนื้อหาให้ใคร) อนุญาตให้สลิดบอก {asker} เรื่องนี้ไหมครับ?",
+        "en": "{asker} asked Salid about “{topic}”.\nOriginal question: “{question}”\n"
+        "Salid holds related information of yours: {description}\n"
+        "(Nothing has been shared yet.) May Salid tell {asker} about it?",
+    },
+    "disc_btn_ok": {"th": "อนุญาต", "en": "Approve"},
+    "disc_btn_no": {"th": "ไม่อนุญาต", "en": "Decline"},
+    "disc_owner_approved": {
+        "th": "✅ อนุญาตแล้ว สลิดจะบอก {asker} เฉพาะข้อมูลชุดนี้ครับ",
+        "en": "✅ Approved. Salid will tell {asker} only this information.",
+    },
+    "disc_owner_declined": {
+        "th": "🚫 ไม่อนุญาต สลิดจะไม่บอก {asker} ครับ",
+        "en": "🚫 Declined. Salid will not tell {asker}.",
+    },
+    "disc_handled": {
+        "th": "คำขอนี้ตัดสินไปแล้วครับ",
+        "en": "This request has already been decided.",
+    },
+    "disc_not_yours": {
+        "th": "คำขอนี้ไม่ใช่ของคุณครับ",
+        "en": "This request is not yours to answer.",
+    },
+    "disc_asker_declined": {
+        "th": "เรื่อง “{topic}”: เจ้าของข้อมูลยังไม่อนุญาตให้บอกครับ ขอโทษด้วยนะครับ ลองถามเจ้าของโดยตรงได้เลย",
+        "en": "About “{topic}”: the owner of that information did not allow sharing it, sorry. "
+        "You can ask them directly.",
+    },
+    "disc_asker_approved": {
+        "th": "เรื่อง “{topic}”: เจ้าของข้อมูลอนุญาตแล้วครับ\n\n",
+        "en": "About “{topic}”: the owner approved sharing it.\n\n",
+    },
+    "disc_asker_failed": {
+        "th": "เจ้าของข้อมูลอนุญาตแล้ว แต่สลิดเรียบเรียงคำตอบไม่สำเร็จ ลองถามอีกครั้งทาง DM ได้เลยครับ",
+        "en": "The owner approved, but Salid could not put the answer together. Please ask again in a DM.",
+    },
+    # ---------------------------------------------------------------- coordinator: DMs
+    "dm_notice": {
+        "th": "ℹ️ เรื่องงานที่คุณบอกสลิดทาง DM สลิดจะจดไว้ให้ทีม และผู้ที่ตำแหน่ง (role) สูงกว่าคุณอาจเห็นได้ "
+        "ถ้าเรื่องไหนเป็นความลับ พิมพ์ “เรื่องนี้เก็บเป็นความลับ” แล้วสลิดจะเก็บให้คุณคนเดียวครับ",
+        "en": "ℹ️ Work information you tell Salid in a DM is noted for the team, and people with a "
+        "higher role than yours may see it. If something is confidential, type “keep this private” "
+        "and Salid will keep it to you alone.",
+    },
+    "dm_private_marked": {
+        "th": "รับทราบครับ เรื่องนี้เก็บเป็นความลับ เห็นเฉพาะคุณคนเดียว สลิดจะไม่เอาไปรายงานหรือบอกใครครับ 🔒",
+        "en": "Understood. That stays confidential: only you can see it, and Salid will not report "
+        "it or tell anyone. 🔒",
+    },
+    "dm_private_note": {
+        "th": "(ผู้ใช้ระบุว่าเรื่องนี้เป็นความลับ เก็บไว้ให้เขาคนเดียว)",
+        "en": "(The user said this is confidential: keep it to them alone.)",
+    },
+    # ---------------------------------------------------------------- coordinator: follow-ups
+    "fu_header": {
+        "th": "สวัสดีครับ {name} สลิดขอติดตามงานที่ถึงกำหนดหรือเลยกำหนดครับ:",
+        "en": "Hi {name}, Salid is following up on tasks that are due or overdue:",
+    },
+    "fu_line": {"th": "• #{id} {title} (กำหนด {due})", "en": "• #{id} {title} (due {due})"},
+    "fu_footer": {
+        "th": "ตอบกลับที่นี่ได้เลยว่าถึงไหนแล้ว เช่น “#{id} เสร็จแล้ว” หรือ “ติดเรื่อง…” แล้วสลิดจะอัปเดตให้ครับ",
+        "en": "Just reply here with the status, e.g. “#{id} done” or “blocked on…”, and Salid will "
+        "update it.",
+    },
+    # ---------------------------------------------------------------- coordinator: reports
+    "rep_title": {"th": "**📋 รายงานประจำวันที่ {day}**", "en": "**📋 Daily report for {day}**"},
+    "rep_brief": {"th": "**ภาพรวมบริษัท**", "en": "**Company brief**"},
+    "rep_spend": {
+        "th": "- ใช้จ่ายวันนี้ {today} ({n} ใบ) · เดือนนี้ {month}",
+        "en": "- Spent today {today} ({n} receipts) · this month {month}",
+    },
+    "rep_review": {
+        "th": "- ใบเสร็จที่ต้องตรวจ {n} ใบ · อาจซ้ำ {d} ใบ",
+        "en": "- Receipts to review: {n} · possible duplicates: {d}",
+    },
+    "rep_meetings": {"th": "**ประชุมวันนี้**", "en": "**Meetings today**"},
+    "rep_people": {"th": "**งานของแต่ละคน**", "en": "**Work by person**"},
+    "rep_person": {
+        "th": "- **{name}**: {msgs} ข้อความ · งานค้าง {open}",
+        "en": "- **{name}**: {msgs} messages · {open} open task(s)",
+    },
+    "rep_opened": {"th": "เปิดใหม่: ", "en": "opened: "},
+    "rep_done": {"th": "เสร็จ: ", "en": "done: "},
+    "rep_overdue": {"th": "เลยกำหนด: ", "en": "overdue: "},
+    "rep_risks": {"th": "**ความเสี่ยง / สิ่งที่ควรตาม**", "en": "**Risks / to follow up**"},
+    "pr_title": {"th": "**วันนี้ของคุณ ({day})**", "en": "**Your day ({day})**"},
+    "pr_where": {"th": "คุณเขียนใน: {where}", "en": "You wrote in: {where}"},
+    "pr_none": {
+        "th": "วันนี้ยังไม่พบข้อความของคุณในห้องที่สลิดจดไว้ครับ",
+        "en": "Salid has not recorded any message from you today.",
+    },
+    "pr_done": {"th": "งานที่เสร็จวันนี้: ", "en": "Tasks done today: "},
+    "pr_open": {"th": "งานที่ยังค้าง:", "en": "Open tasks:"},
+    "report_channel_topic": {
+        "th": "รายงานประจำวันจากสลิด สำหรับเจ้าของ แอดมิน และผู้บริหาร",
+        "en": "Daily reports from Salid for the owner, admins and executives",
+    },
+    "report_need_channel": {
+        "th": "สลิดอยากส่งรายงานเย็นให้ผู้บริหารในห้องส่วนตัว “{name}” แต่ไม่มีสิทธิ์จัดการช่อง (Manage Channels) "
+        "รบกวนให้สิทธิ์สลิด หรือสร้างห้องที่เห็นเฉพาะผู้บริหารแล้วเลือกเป็นห้องรายงานในหน้า Hub ครับ",
+        "en": "Salid would like to post the evening report for leadership in a private channel "
+        "“{name}” but lacks the Manage Channels permission. Please grant it, or create a "
+        "leadership-only channel and pick it as the report channel in the hub.",
+    },
+    "report_denied": {
+        "th": "รายงานบริษัทดูได้เฉพาะเจ้าของ แอดมิน และผู้บริหารครับ (ดูของตัวเองด้วย /รายงาน ของฉัน)",
+        "en": "The company report is for the owner, admins and executives (use /report mine for yours).",
+    },
+    "report_bad_date": {
+        "th": "วันที่ต้องเป็นรูปแบบ ปี-เดือน-วัน เช่น 2026-10-14 ครับ",
+        "en": "The date must look like 2026-10-14.",
+    },
+    "report_off": {
+        "th": "ตอนนี้ปิดความจำหรือรายงานอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
+        "en": "Memory or reports are switched off. You can turn them on in Salid's command center.",
+    },
+    "report_posted": {
+        "th": "ส่งรายงานวันที่ {day} เข้า {channel} แล้วครับ",
+        "en": "Posted the report for {day} in {channel}.",
+    },
+    "report_failed": {
+        "th": "สร้างรายงานไม่สำเร็จ ลองใหม่ภายหลังครับ",
+        "en": "Could not build the report. Please try again later.",
+    },
+    "cmd_report": _bi("รายงานประจำวันจากสลิด", "Daily report from Salid"),
+    "cmd_report_date": _bi("วันที่ (ปี-เดือน-วัน) ไม่ใส่ = วันนี้", "Date (YYYY-MM-DD), default today"),
+    "cmd_report_mine": _bi("ดูของฉันเอง", "Show only my own day"),
 }

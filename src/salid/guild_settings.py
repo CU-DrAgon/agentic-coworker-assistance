@@ -2,7 +2,9 @@
 
 One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
 
-    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web, documents, scheduling, email, media_memory, doc_memory, read_receipts}: bool, all default true
+    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
+                         documents, scheduling, email, media_memory, doc_memory, read_receipts,
+                         followups, reports}: bool, all default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -13,6 +15,9 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     receipt_forward      bool copy receipts posted in other channels to the home channel (default true)
     digest_channel_id    str ("" = no daily digest)
     digest_time          "HH:MM"
+    followup_time        "HH:MM" daily task follow-up DMs (default 10:00)
+    report_time          "HH:MM" evening report (default 18:30)
+    report_channel_id    str ("" = Salid creates/uses the private channel รายงานจากสลิด)
     exec_role_names      list[str] roles that count as executives (default ผู้บริหาร, Executive)
     admin_emails         list[str] lowercase Google accounts allowed to manage this guild in the hub
     guild_name, icon_url, installed_at, active   written by the bot (join / leave / resync)
@@ -69,6 +74,8 @@ FEATURES = (
     "documents",
     "scheduling",
     "email",
+    "followups",
+    "reports",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -118,6 +125,8 @@ class Features(BaseModel):
     documents: bool = True  # make_report_pdf: accounting documents as PDF
     scheduling: bool = True  # schedule_meeting & co: Discord Scheduled Events + reminders
     email: bool = True  # draft_email / send_email (still needs confirmation and a role)
+    followups: bool = True  # daily DM to members with open tasks (needs `memory`)
+    reports: bool = True  # evening report to the private reports channel (needs `memory`)
 
 
 class Channel(BaseModel):
@@ -144,6 +153,9 @@ class GuildSettingsUpdate(BaseModel):
     receipt_home_channel_id: str = ""
     receipt_forward: bool = True
     digest_time: str = "18:00"
+    followup_time: str = "10:00"
+    report_time: str = "18:30"
+    report_channel_id: str = ""
     exec_role_names: list[str] = Field(default_factory=lambda: list(DEFAULT_EXEC_ROLES))
     channel_modes: dict[str, str] = Field(default_factory=dict)
     default_mode: str = DEFAULT_MODE
@@ -191,7 +203,9 @@ class GuildSettingsUpdate(BaseModel):
     def _ids(cls, v):
         return _clean_ids(v)
 
-    @field_validator("digest_channel_id", "receipt_home_channel_id", mode="before")
+    @field_validator(
+        "digest_channel_id", "receipt_home_channel_id", "report_channel_id", mode="before"
+    )
     @classmethod
     def _digest_id(cls, v):
         v = "" if v is None else str(v).strip()
@@ -199,7 +213,7 @@ class GuildSettingsUpdate(BaseModel):
             raise ValueError("channel id must be numeric")
         return v
 
-    @field_validator("digest_time")
+    @field_validator("digest_time", "followup_time", "report_time")
     @classmethod
     def _time(cls, v):
         if not _TIME.match(v):
@@ -583,6 +597,16 @@ class BotGuildSettings:
         g = self.current(guild_id)
         # Defaults apply until the hub has saved the document (every save sets updated_at).
         return g.digest_time if g.updated_at else env_time
+
+    def followup_time(self, guild_id: int) -> str:
+        return self.current(guild_id).followup_time
+
+    def report_time(self, guild_id: int) -> str:
+        return self.current(guild_id).report_time
+
+    def report_channel_id(self, guild_id: int) -> int | None:
+        v = self.current(guild_id).report_channel_id
+        return int(v) if v else None
 
     def exec_role_names(self, guild_id: int, env_names: set[str]) -> set[str]:
         g = self.current(guild_id)

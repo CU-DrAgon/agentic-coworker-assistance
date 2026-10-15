@@ -206,6 +206,7 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     m = Msg(world.b, world.b.text_channels[1], member(world.b, STAFF), "ยอดเท่าไร", mention=True)
     await bot._answer(m, world.b, m.author)
     mem = seen[0].pop("memory")  # no read permissions in the fakes: only the channel itself
+    assert seen[0].pop("extra_tools")  # the coordinator tools (salid.coo_tools)
     assert (mem.guild_id, mem.allowed) == (OTHER_GUILD, {21: "chat"})
     sec = seen[0].pop("secretary")  # bound to the message's guild and author, not model input
     assert (sec.guild_id, sec.author_id, sec.is_exec, sec.can_email) == (
@@ -416,6 +417,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "channels",
         "สรุป",
         "summary",
+        "รายงาน",
+        "report",
     }
     assert all(c.guild_only for c in cmds.values())
 
