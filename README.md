@@ -128,6 +128,22 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   and ask channels). Only server managers or executives may change a mode. `@Salid เงียบก่อน` makes the
   channel `listen` for an hour; `@Salid คุยได้แล้ว` ends it. The old "any channel named salid answers
   everything" rule is gone.
+- **Thai and English commands**: every typed command (an @mention followed by the words, matched only at the
+  start of the message, case-insensitive) has both forms: `เข้าประชุม` / `join`, `join the meeting`, `come to the
+  meeting`; `ออกประชุม` / `leave`, `leave the meeting`, `end meeting`, `stop meeting`; `เงียบก่อน` / `be quiet`,
+  `quiet`, `shh`, `shush`, `mute`, `hush`, `snooze`; `คุยได้แล้ว` / `you can talk`, `talk again`, `unmute`,
+  `unsnooze`, `wake up`, `come back`. Slash commands have Thai names with English aliases (`/โหมด` `/mode`,
+  `/ภาษา` `/language`, `/เข้าประชุม` `/join`, `/ออกประชุม` `/leave`, `/ตั้งค่า` `/setup`). The name is recognised in
+  Latin letters too ("hey salid, what did we spend?").
+- **Reply language** (`/ภาษา` or `/language`, `@Salid พูดภาษาอังกฤษ` / `speak English` / `English please`,
+  `พูดไทย` / `speak Thai`, `ภาษาอัตโนมัติ` / `auto language`, or the hub's per-channel language select and the
+  server default): `th` (default, the old behaviour), `en`, or `auto` (answer in the language of the message:
+  any Thai character means Thai, otherwise English; with no text, e.g. a slash command, the user's Discord
+  locale). Resolution: channel override, else the guild's `default_language`; DMs use `auto`. It applies to
+  everything Salid says: fixed replies (catalog in `src/salid/i18n.py`), Q&A and voice answers (system prompt),
+  meeting summaries, the daily digest, receipt replies and deep-task reports. Only managers/executives may
+  change it; others get a short refusal. A voice meeting uses the language of the voice channel's text chat as
+  it was when the meeting started.
 - **Q&A runs on Google ADK**: an `LlmAgent` (Gemini on Vertex) with four ledger `FunctionTool`s that
   are built per request around the asker's scope, so the model cannot widen it. At most 4 tool rounds.
 - **Storage**: `SALID_STORE=sqlite` (default, local dev) or `firestore` (collection
@@ -226,7 +242,7 @@ A Thai web page in the same app and Cloud Run service, multi-guild. Anyone signs
 verified account); a guild switcher at the top lists the servers that account administers. Per server:
 the latest receipts, Salid expense Q&A as an executive, feature switches (receipts, Q&A, daily digest,
 deep tasks), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and
-the executive role names. A user with no server sees a big "เพิ่ม Salid เข้า Discord" button and the two
+the executive role names, and per-channel modes plus reply languages (with a server default for each). A user with no server sees a big "เพิ่ม Salid เข้า Discord" button and the two
 steps: 1. add Salid to the server, 2. type `/ตั้งค่า` in Discord and open the link.
 
 How an account becomes a guild admin, with no OAuth secret and no bot token in the web service:

@@ -336,6 +336,46 @@ def test_hub_drops_unknown_mode_values(client):
     assert put["channel_modes"] == {str(A + 2): "off"} and put["default_mode"] == "call"
 
 
+def test_hub_saves_channel_languages_and_default_language(client):
+    body = {"channel_languages": {str(A + 1): "en", str(A + 2): "auto"}, "default_language": "en"}
+    put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
+    assert put["channel_languages"] == body["channel_languages"] and put["default_language"] == "en"
+    assert client.guilds.get(A).channel_languages == body["channel_languages"]
+    # the hub sends the full map: a channel left out is removed, the default falls back to th
+    client.put(
+        f"/api/hub/guilds/{A}/settings",
+        json={"channel_languages": {str(A + 2): "th"}},
+        headers=AUTH,
+    )
+    g = client.guilds.get(A)
+    assert g.channel_languages == {str(A + 2): "th"} and g.default_language == "th"
+    assert client.guilds.get(B).channel_languages == {}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"channel_languages": {"999": "en"}},  # not a channel of this guild
+        {"channel_languages": {str(B + 1): "en"}},  # a channel of the OTHER guild
+    ],
+)
+def test_hub_rejects_languages_for_unknown_channels(client, bad):
+    r = client.put(f"/api/hub/guilds/{A}/settings", json=bad, headers=AUTH)
+    assert r.status_code == 422 and client.guilds.get(A).channel_languages == {}
+
+
+def test_hub_drops_unknown_language_values(client):
+    body = {"channel_languages": {str(A + 1): "fr", str(A + 2): "en"}, "default_language": "fr"}
+    put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
+    assert put["channel_languages"] == {str(A + 2): "en"} and put["default_language"] == "th"
+
+
+def test_hub_page_has_the_language_selectors(client):
+    html = client.get("/hub").text
+    assert 'id="default-language"' in html and "channel_languages" in html
+    assert "lang-sel" in html and "default_language" in html
+
+
 def test_hub_page_has_the_mode_section(client):
     html = client.get("/hub").text
     assert "โหมดของแต่ละห้อง" in html and 'id="default-mode"' in html and "channel_modes" in html
@@ -423,5 +463,5 @@ def test_home_page_links_to_hub(client):
 def test_update_model_is_what_the_hub_writes():
     assert set(GuildSettingsUpdate.model_fields) == {
         "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id",
-        "digest_time", "exec_role_names", "channel_modes", "default_mode",
+        "digest_time", "exec_role_names", "channel_modes", "default_mode", "channel_languages", "default_language",
     }  # fmt: skip

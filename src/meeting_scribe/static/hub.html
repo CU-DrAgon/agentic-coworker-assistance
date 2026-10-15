@@ -213,6 +213,7 @@
         <h3 id="modes-h" style="margin:18px 0 6px;font-size:1rem">โหมดของแต่ละห้อง</h3>
         <div class="fields" id="modes">
           <label>โหมดเริ่มต้นของเซิร์ฟเวอร์ <select class="field" id="default-mode"></select><small>ใช้กับห้องที่ไม่ได้เลือกโหมดเฉพาะ</small></label>
+          <label>ภาษาที่สลิดตอบ (เริ่มต้นของเซิร์ฟเวอร์) <select class="field" id="default-language"></select><small>ใช้กับห้องที่ไม่ได้เลือกภาษาเฉพาะ · อัตโนมัติ = ตอบตามภาษาที่คนพิมพ์มา</small></label>
           <div id="channel-modes" class="fields"></div>
         </div>
         <small class="hint">🔇 ปิด = สลิดไม่ยุ่งกับห้องนี้ · 👂 ฟังเงียบ = อ่านใบเสร็จแล้วแปะอีโมจิเท่านั้น · 🙋 เรียกแล้วคุย = ตอบเมื่อถูกแท็กหรือเรียกชื่อ · 🎧 ร่วมวง = เหมือนเรียกแล้วคุย และเข้าร่วมเองเมื่อมีคำถามที่ช่วยได้ · 💬 ตอบทุกข้อความ</small>
@@ -399,7 +400,15 @@ function renderDigestSelect(channels, selected) {
 }
 
 const MODES = [["off", "🔇 ปิด"], ["listen", "👂 ฟังเงียบ"], ["call", "🙋 เรียกแล้วคุย"], ["join", "🎧 ร่วมวง"], ["chat", "💬 ตอบทุกข้อความ"]];
-let currentModes = {};
+const LANGUAGES = [["th", "ไทย"], ["en", "English"], ["auto", "อัตโนมัติ (ตามภาษาที่พิมพ์)"]];
+let currentModes = {}, currentLanguages = {};
+function languageSelect(value, withDefault) {
+  const sel = document.createElement("select"); sel.className = "field";
+  if (withDefault) { const o = document.createElement("option"); o.value = ""; o.textContent = "ภาษา: ตามค่าเริ่มต้น"; sel.append(o); }
+  for (const [v, label] of LANGUAGES) { const o = document.createElement("option"); o.value = v; o.textContent = label; sel.append(o); }
+  sel.value = value || "";
+  return sel;
+}
 function modeSelect(value, withDefault) {
   const sel = document.createElement("select"); sel.className = "field";
   if (withDefault) { const o = document.createElement("option"); o.value = ""; o.textContent = "ตามค่าเริ่มต้น"; sel.append(o); }
@@ -407,19 +416,27 @@ function modeSelect(value, withDefault) {
   sel.value = value || "";
   return sel;
 }
-function renderModes(channels, modes, def) {
+function renderModes(channels, modes, def, languages, defLang) {
   currentModes = { ...(modes || {}) };
+  currentLanguages = { ...(languages || {}) };
   const dm = $("default-mode"); dm.replaceWith(Object.assign(modeSelect(def || "call", false), { id: "default-mode" }));
+  const dl = $("default-language"); dl.replaceWith(Object.assign(languageSelect(defLang || "th", false), { id: "default-language" }));
   const box = $("channel-modes"); box.textContent = "";
   for (const c of channels) {
     const label = document.createElement("label"); label.append("#" + c.name + " ");
-    const sel = modeSelect(currentModes[c.id] || "", true); sel.dataset.channel = c.id;
-    label.append(sel); box.append(label);
+    const sel = modeSelect(currentModes[c.id] || "", true); sel.dataset.channel = c.id; sel.classList.add("mode-sel");
+    const lsel = languageSelect(currentLanguages[c.id] || "", true); lsel.dataset.channel = c.id; lsel.classList.add("lang-sel");
+    label.append(sel, " ", lsel); box.append(label);
   }
 }
 function collectModes() {
-  const sels = [...$("channel-modes").querySelectorAll("select")];
+  const sels = [...$("channel-modes").querySelectorAll("select.mode-sel")];
   if (!sels.length) return currentModes; // channel list not synced yet: keep what is stored
+  return Object.fromEntries(sels.filter((x) => x.value).map((x) => [x.dataset.channel, x.value]));
+}
+function collectLanguages() {
+  const sels = [...$("channel-modes").querySelectorAll("select.lang-sel")];
+  if (!sels.length) return currentLanguages;
   return Object.fromEntries(sels.filter((x) => x.value).map((x) => [x.dataset.channel, x.value]));
 }
 
@@ -429,7 +446,7 @@ function fillSettings(s) {
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
   renderChecks($("ask-ids"), channels, s.ask_channel_ids);
   renderDigestSelect(channels, s.digest_channel_id);
-  renderModes(channels, s.channel_modes, s.default_mode);
+  renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language);
   $("digest-time").value = s.digest_time || "18:00";
   $("exec-roles").value = (s.exec_role_names || []).join(", ");
   $("no-channels").hidden = channels.length > 0;
@@ -486,6 +503,8 @@ async function save() {
     digest_channel_id: $("digest-id").value,
     channel_modes: collectModes(),
     default_mode: $("default-mode").value || "call",
+    channel_languages: collectLanguages(),
+    default_language: $("default-language").value || "th",
     digest_time: $("digest-time").value || "18:00",
     exec_role_names: $("exec-roles").value.split(",").map((x) => x.trim()).filter(Boolean),
   };
