@@ -5,7 +5,9 @@ description = "Record a Google Meet, get a live Thai transcript with speaker lab
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "discord-py>=2.7.1",
+    "davey>=0.1.7",
+    "discord-ext-voice-recv==0.5.2a179",
+    "discord-py[voice]>=2.7.1",
     "fastapi>=0.141.1",
     "google-adk==2.11.0",
     "google-cloud-firestore==2.34.1",

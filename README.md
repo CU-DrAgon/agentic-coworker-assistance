@@ -144,6 +144,16 @@ server's executive role names (default `ผู้บริหาร`, `Executive
 
 The bot is prepared for a Cloud Run worker pool (see below) but not deployed.
 
+**Voice meetings (`/เข้าประชุม`, alias `/join`).** A member in a voice channel types `/เข้าประชุม` (or
+`@Salid เข้าประชุม`); Salid joins, announces itself in the channel's text chat, and transcribes every speaker by
+Discord name (per-user audio, so no diarization). Calling "สลิด ..." out loud gets a text answer in that chat, using
+the last ~5 minutes of transcript as context; the same transcript is context for text messages to Salid in that
+chat ("เมื่อกี้ตกลงอะไรกัน"). `/ออกประชุม` (`/leave`), everyone leaving, or 3 hours ends it with a Thai summary
+(decisions, action items with owners, open questions). Audio and transcript are kept in memory only, never stored.
+Needs the **Connect** permission, the voice-states intent (non-privileged), `libopus` + `ffmpeg` (in
+`Dockerfile.salid`) and `discord-ext-voice-recv` + `davey` (Discord's DAVE end-to-end encryption; see
+`src/salid/meeting.py`). Toggle: hub feature `voice_meetings`.
+
 Discord setup (once, by the operator):
 
 1. Create an application and bot at the Discord Developer Portal (name it **Salid**); copy the bot token.

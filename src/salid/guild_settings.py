@@ -2,7 +2,7 @@
 
 One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
 
-    features             {receipts, qa, digest, deep_tasks}: bool, all default true
+    features             {receipts, qa, digest, deep_tasks, voice_meetings}: bool, all default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is a question
     digest_channel_id    str ("" = no daily digest)
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 TTL_S = 60.0
 LINK_TTL = timedelta(minutes=15)
-FEATURES = ("receipts", "qa", "digest", "deep_tasks")
+FEATURES = ("receipts", "qa", "digest", "deep_tasks", "voice_meetings")
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 _ID = re.compile(r"^\d{1,25}$")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
@@ -59,6 +59,7 @@ class Features(BaseModel):
     qa: bool = True
     digest: bool = True
     deep_tasks: bool = True
+    voice_meetings: bool = True
 
 
 class Channel(BaseModel):

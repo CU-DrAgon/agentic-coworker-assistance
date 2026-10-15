@@ -27,6 +27,7 @@ from .deep_task import (
 from .digest import build_daily_digest
 from .extract import apply_correction, guess_mime, ingest_attachment
 from .guild_settings import BotGuildSettings, GuildStore, make_guild_store
+from .meeting import MeetingManager, parse_meeting_command
 from .qa import ask
 from .store import Store
 
@@ -70,6 +71,8 @@ SETUP_MESSAGE = (
 )
 SETUP_FAILED_MESSAGE = "สร้างลิงก์ไม่สำเร็จ ลองพิมพ์ /ตั้งค่า อีกครั้งภายหลังครับ"
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
+JOIN_COMMANDS = ("เข้าประชุม", "join")
+LEAVE_COMMANDS = ("ออกประชุม", "leave")
 
 
 def chunks(text: str, n: int = 1900):
@@ -118,7 +121,12 @@ class SecretaryBot(discord.Client):
         self, settings: Settings, store: Store, llm, guilds: GuildStore | None = None
     ) -> None:
         intents = discord.Intents(
-            guilds=True, messages=True, message_content=True, members=True, dm_messages=True
+            guilds=True,
+            messages=True,
+            message_content=True,
+            members=True,
+            dm_messages=True,
+            voice_states=True,
         )
         super().__init__(intents=intents)
         self.s, self.store, self.llm = settings, store, llm
@@ -133,6 +141,7 @@ class SecretaryBot(discord.Client):
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
         self._sync_last: dict[int, float] = {}
         self._sync_pending: dict[int, asyncio.Task] = {}
+        self.meetings = MeetingManager(self)
 
     async def setup_hook(self):
         self._register_commands()
@@ -270,6 +279,8 @@ class SecretaryBot(discord.Client):
                 if receipts_on:
                     await self._intake(message)
                 return
+            if mentioned and await self._meeting_command(message):
+                return
             ask_ids = self.team.ask_channel_ids(gid, self.s.ask_channel_ids)
             if (
                 mentioned
@@ -280,6 +291,27 @@ class SecretaryBot(discord.Client):
                 await self._answer(message, message.guild, message.author)
         except Exception:
             logger.exception("handler failed")
+
+    async def _meeting_command(self, message: discord.Message) -> bool:
+        """'@Salid เข้าประชุม' / 'ออกประชุม' typed in a text channel."""
+        cmd = parse_meeting_command(self._strip_mentions(message.content, message))
+        if cmd is None or not hasattr(message.author, "voice"):
+            return False
+        if cmd == "join":
+            reply = await self.meetings.join(message.author, fallback_channel=message.channel)
+        else:
+            reply = await self.meetings.leave(message.author)
+        await message.reply(reply, mention_author=False)
+        return True
+
+    async def on_voice_state_update(self, member, before, after):
+        """Salid itself was disconnected (kicked, channel deleted): end that meeting."""
+        if member == self.user and after.channel is None and before.channel is not None:
+            await self.meetings.end(before.channel.guild.id, "disconnected")
+
+    async def close(self):
+        await self.meetings.shutdown()
+        await super().close()
 
     async def _direct_message(self, message: discord.Message):
         """DMs have no guild: answer only when the asker shares exactly one guild with Salid."""
@@ -426,6 +458,9 @@ class SecretaryBot(discord.Client):
             await message.reply(QA_OFF_MESSAGE, mention_author=False)
             return
         history = await self._recent_chat(message)
+        meeting = self.meetings.context_for(message.channel.id)
+        if meeting:  # talking in a live meeting's chat: the spoken transcript is context too
+            history = f"บันทึกการประชุมล่าสุด (ใครพูดอะไร):\n{meeting}\n\nแชต:\n{history}".rstrip()
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -497,6 +532,35 @@ class SecretaryBot(discord.Client):
                     callback=setup,
                 )
             )
+        for names, handler, desc in (
+            (JOIN_COMMANDS, self.handle_join, "ให้สลิดเข้าห้องเสียงที่คุณอยู่ เพื่อฟังและจดบันทึกประชุม"),
+            (LEAVE_COMMANDS, self.handle_leave, "ให้สลิดออกจากห้องเสียงและสรุปการประชุม"),
+        ):
+            cb = self._command_callback(handler)
+            for name in names:
+                self.tree.add_command(
+                    app_commands.Command(name=name, description=desc, callback=cb)
+                )
+
+    @staticmethod
+    def _command_callback(handler):
+        async def cb(interaction: discord.Interaction):
+            await handler(interaction)
+
+        return app_commands.guild_only()(cb)
+
+    async def handle_join(self, interaction: discord.Interaction) -> None:
+        """/เข้าประชุม: join the invoker's voice channel and start the meeting."""
+        await interaction.response.defer(ephemeral=True)
+        await asyncio.to_thread(self.team.current, interaction.guild.id)
+        reply = await self.meetings.join(interaction.user, fallback_channel=interaction.channel)
+        await interaction.followup.send(reply, ephemeral=True)
+
+    async def handle_leave(self, interaction: discord.Interaction) -> None:
+        """/ออกประชุม: leave and post the summary."""
+        await interaction.response.send_message(
+            await self.meetings.leave(interaction.user), ephemeral=True
+        )
 
     async def handle_setup(self, interaction: discord.Interaction) -> None:
         """/ตั้งค่า: DM-style ephemeral reply with a one-time link to the hub for this guild."""

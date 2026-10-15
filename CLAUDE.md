@@ -61,6 +61,7 @@ Discord bot "สลิด" (display name Salid), **multi-tenant**: tenant key = 
 | `digest.py` | Daily digest text |
 | `guild_settings.py` | Firestore `salid_guilds/{guild_id}` (features, receipt/ask/digest channels, digest time, `exec_role_names`, `admin_emails`, bot-synced name/icon/`channels`/`installed_at`/`active`) and one-time `salid_link_codes/{code}`; `GuildStore`, in-memory `MemoryGuildStore` (local dev, tests), `BotGuildSettings` (60 s cache per guild, fail-open) |
 | `bot.py` / `__main__.py` | Discord client / `python -m salid`. Join/remove/channel events sync the guild doc; intake = receipt channels, channels named `ใบเสร็จ`/`receipt`, or @mention + file; executives = owner, Administrator/Manage Server, exec role names, `SALID_EXEC_USER_IDS`; per-guild digest; global slash commands `/ตั้งค่า` + `/setup` (ephemeral hub link) |
+| `meeting.py` | Voice meetings: `/เข้าประชุม` `/ออกประชุม` (+ "@Salid เข้าประชุม"). `MeetingManager` (one meeting per guild), `MeetingSink` (voice-recv sink: removes DAVE layer with `dave_session.decrypt`, decodes Opus per user), `Segmenter` (silence 1.2 s / max 20 s / min 0.6 s), Gemini transcription per segment, `Transcript` (memory only, 3 h), wake word `parse_wake` -> `qa.ask` with transcript history, summary on leave. Audio/transcript never persisted. Feature flag `voice_meetings`; invite permissions 1166416 (adds Manage Channels + Connect). |
 | `cli.py` | `python -m salid.cli extract|ask|deep|digest` for offline testing |
 | `scripts/salid_seed_demo.py` | Seed a demo SQLite ledger |
 

@@ -30,7 +30,9 @@ def install(store, gid=GUILD, name="ร้านกาแฟ", **kw):
 
 def test_missing_document_means_defaults(gstore):
     g = gstore.get(GUILD)
-    assert g.features.model_dump() == dict(receipts=True, qa=True, digest=True, deep_tasks=True)
+    assert g.features.model_dump() == dict(
+        receipts=True, qa=True, digest=True, deep_tasks=True, voice_meetings=True
+    )
     assert g.receipt_channel_ids == [] and g.digest_time == "18:00" and g.active
     assert g.exec_role_names == ["ผู้บริหาร", "Executive"] and g.admin_emails == []
     assert gstore.find(GUILD) is None
