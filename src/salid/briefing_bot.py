@@ -23,6 +23,7 @@ from .channel_access import split_message
 from .dm import send_dm
 from .i18n import resolve_lang, t
 from .mentions import match_members
+from .profiles import profile_block
 from .scheduling import join_link
 from .tasks import due_for_followup
 
@@ -98,8 +99,11 @@ class BriefingMixin:
         inp = await asyncio.to_thread(self._gather_brief, guild, member, kind, now)
         if inp.is_empty():
             return 0
-        lang = self._guild_lang(guild.id)
-        text = await asyncio.to_thread(bf.build_brief, self.llm, self.s.gemini_model, inp, lang)
+        profile = self._profile_of(guild.id, member.id)  # the recipient's own, nobody else's
+        lang = profile.language or self._guild_lang(guild.id)
+        text = await asyncio.to_thread(
+            bf.build_brief, self.llm, self.s.gemini_model, inp, lang, profile_block(profile)
+        )
         for chunk in split_message(text):
             res = await send_dm(member, chunk)
             if not res.ok:

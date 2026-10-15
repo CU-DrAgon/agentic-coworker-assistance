@@ -23,6 +23,7 @@ PREFS = "salid_notif_prefs"  # per (guild, user) briefing / alert preferences
 ASKS = "salid_asks"  # messages that mention a member and ask for something
 ALERTS = "salid_doc_alerts"  # important documents and who they concern
 DELIVERIES = "salid_deliveries"  # files Salid forwarded for people (audit log)
+PROFILES = "salid_profiles"  # per (guild, user) personal preferences (salid.profiles)
 
 
 class DocStore(Protocol):

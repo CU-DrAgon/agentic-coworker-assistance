@@ -27,6 +27,9 @@ class ChatActions:
     set_my_notifications: Callable[..., dict] | None = None
     show_my_notifications: Callable[[], dict] | None = None
     deliver_file: Callable[..., dict] | None = None
+    remember_my_preference: Callable[[str, str], dict] | None = None
+    show_my_preferences: Callable[[], dict] | None = None
+    forget_my_preferences: Callable[[str | None], dict] | None = None
 
 
 def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> list:
@@ -187,6 +190,43 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         )  # fmt: skip
         return logged("deliver_file", a, lambda: actions.deliver_file(**a))
 
+    def remember_my_preference(kind: str, value: str = "") -> dict:
+        """Remember a LASTING preference of the requester about how Salid should treat them (only
+        their own; anyone may). Use when they state it as a standing preference: "เรียกผมว่าพี่ปัส",
+        "ตอบสั้นๆ นะ" (as a general habit), "สนใจเรื่องการตลาดเป็นหลัก", "สรุปให้ผมเป็นภาษาอังกฤษ",
+        "ไม่ต้องใส่อีโมจิ", "ผมเป็นคนดูแลบัญชี". NOT for one-off requests ("ตอบสั้นๆ ข้อนี้"); if it
+        is unclear whether it is lasting, ask briefly first. Confirm in one short sentence.
+
+        Args:
+            kind: nickname (what to call them), reply_length (value short / normal / detailed),
+                language (th or en, for DMs, personal briefs and private replies), focus_add /
+                focus_remove (a topic they care about), role_note (their job, e.g. "ดูแลบัญชี"),
+                style_add / style_remove (a short instruction such as "no emoji").
+            value: the text (or short / normal / detailed, th / en). Empty clears nickname,
+                reply_length, language or role_note.
+        """
+        return logged(
+            "remember_my_preference",
+            {"kind": kind, "value": value},
+            lambda: actions.remember_my_preference(kind, value),
+        )
+
+    def show_my_preferences() -> dict:
+        """Show what Salid remembers about how the requester likes to work (their own only).
+        Use for "จำอะไรเกี่ยวกับผมไว้บ้าง" or "what do you know about my preferences"."""
+        return logged("show_my_preferences", {}, actions.show_my_preferences)
+
+    def forget_my_preferences(kind: str | None = None) -> dict:
+        """Forget the requester's saved preferences: one kind (nickname, reply_length, language,
+        focus, role_note, style) or, with no kind, everything. Use for "ลืมที่ผมเคยบอกไว้ทั้งหมด".
+
+        Args:
+            kind: which preference to forget; omit to forget all of them.
+        """
+        return logged(
+            "forget_my_preferences", {"kind": kind}, lambda: actions.forget_my_preferences(kind)
+        )
+
     tools = {
         "set_channel_mode": set_channel_mode,
         "set_channel_language": set_channel_language,
@@ -198,5 +238,8 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         "set_my_notifications": set_my_notifications,
         "show_my_notifications": show_my_notifications,
         "deliver_file": deliver_file,
+        "remember_my_preference": remember_my_preference,
+        "show_my_preferences": show_my_preferences,
+        "forget_my_preferences": forget_my_preferences,
     }
     return [fn for name, fn in tools.items() if getattr(actions, name) is not None]

@@ -594,14 +594,17 @@ def render_plain(inp: BriefInput, lang: str = "th") -> str:
     return "\n".join(lines)[:MAX_PLAIN_CHARS]
 
 
-def build_brief(client, model: str, inp: BriefInput, lang: str = "th") -> str:
+def build_brief(client, model: str, inp: BriefInput, lang: str = "th", profile: str = "") -> str:
     """The brief text, composed by the main model from the capped input. Falls back to the plain
-    brief when the model fails, returns nothing, or drops one of the links."""
+    brief when the model fails, returns nothing, or drops one of the links. `profile`: the
+    recipient's own preferences block (salid.profiles.profile_block), "" for none."""
     capped = inp.capped()
     prompt = BRIEF_PROMPT.format(
         kind=inp.kind, name=inp.name, day=inp.day, language=LANG_NAME.get(lang, "Thai"),
         data=compact_text(capped),
     )  # fmt: skip
+    if profile:  # only the recipient's profile: length, focus to put first, how to address them
+        prompt = profile.strip() + "\n\n" + prompt
     try:
         resp = generate(
             client,
