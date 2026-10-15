@@ -101,6 +101,20 @@
   .who-row span { font-size: 14px; color: var(--muted); }
   .empty { color: var(--faint); font-size: 14px; padding: 6px 0; }
   @media (max-width: 600px) { .act { grid-template-columns: 56px minmax(0, 1fr); } .act .pill { grid-column: 2; justify-self: start; } }
+  header select { min-height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid #4A5190;
+    background: #2A2F57; color: #fff; font: inherit; font-size: 15px; max-width: 260px; }
+  header .gicon { width: 28px; height: 28px; border-radius: 50%; flex: none; background: #4A5190; }
+  .checks { display: flex; flex-direction: column; gap: 2px; max-height: 190px; overflow-y: auto;
+    border: 1px solid #C9CDD9; border-radius: 10px; padding: 6px 8px; background: #fff; }
+  .checks label { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; font-size: 15px;
+    min-height: 32px; }
+  .checks input { width: 18px; height: 18px; flex: none; }
+  select.field { min-height: 44px; padding: 0 12px; border: 1px solid #C9CDD9; border-radius: 10px;
+    font: inherit; font-size: 15px; width: 100%; background: #fff; }
+  .notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
+  .empty-state { align-items: flex-start; gap: 18px; }
+  .btn.big { min-height: 56px; padding: 0 32px; font-size: 18px; border-radius: 14px; }
+  .steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; }
 </style>
 </head>
 <body>
@@ -119,11 +133,11 @@
   <section class="panel">
     <div class="box">
       <h2>เข้าสู่ระบบ</h2>
-      <p>ใช้บัญชี Google ที่ได้รับสิทธิ์เป็นผู้ดูแลทีม</p>
+      <p>ใช้บัญชี Google ของคุณ แล้วเลือกเซิร์ฟเวอร์ Discord ที่คุณดูแล</p>
       <div id="gsi-button"></div>
       <div class="notice error" id="login-msg" role="alert" hidden></div>
-      <div class="notice" id="not-configured" hidden>ระบบยังไม่ได้ตั้งค่าการเข้าสู่ระบบ (ต้องกำหนด HUB_GOOGLE_CLIENT_ID และ HUB_ADMIN_EMAILS) กรุณาติดต่อผู้ดูแลระบบ</div>
-      <p style="font-size:13px;color:var(--faint)">ยังไม่มีทีม? เข้าสู่ระบบแล้วกด <strong>เพิ่มสลิดเข้า Discord</strong> เพื่อเพิ่มสลิดเข้าเซิร์ฟเวอร์ของคุณ ไม่ต้องติดตั้งหรือเขียนโค้ด</p>
+      <div class="notice" id="not-configured" hidden>ระบบยังไม่ได้ตั้งค่าการเข้าสู่ระบบ (ต้องกำหนด HUB_GOOGLE_CLIENT_ID) กรุณาติดต่อผู้ดูแลระบบ</div>
+      <p style="font-size:13px;color:var(--faint)">ยังไม่มีเซิร์ฟเวอร์? เข้าสู่ระบบแล้วกด <strong>เพิ่ม Salid เข้า Discord</strong> ไม่ต้องติดตั้งหรือเขียนโค้ด</p>
       <a href="/" style="font-size:14px">กลับหน้าอัดประชุม</a>
     </div>
   </section>
@@ -133,6 +147,8 @@
   <header>
     <div class="brand"><span class="mark" aria-hidden="true">ส</span><strong>สลิด</strong><span>ศูนย์บัญชาการ</span></div>
     <div class="grow"></div>
+    <img class="gicon" id="gicon" alt="" hidden>
+    <select id="guild-switch" aria-label="เลือกเซิร์ฟเวอร์ Discord" hidden></select>
     <span class="who" id="who"></span>
     <button type="button" id="signout">ออกจากระบบ</button>
   </header>
@@ -148,14 +164,28 @@
     <main>
       <h1>สวัสดีครับ วันนี้ให้สลิดช่วยอะไรดี</h1>
       <div class="notice error" id="app-msg" role="alert" hidden></div>
+      <div class="notice" id="link-msg" role="status" hidden></div>
+
+      <section class="card empty-state" id="no-guild" aria-labelledby="ng-h" hidden>
+        <h2 id="ng-h">ยังไม่มีเซิร์ฟเวอร์ที่เชื่อมกับบัญชีนี้</h2>
+        <a class="btn big discord" id="invite-big" href="#" target="_blank" rel="noopener" hidden>เพิ่ม Salid เข้า Discord</a>
+        <p id="invite-big-soon" class="hint" hidden>ยังไม่ได้ตั้งค่าแอป Discord (SALID_DISCORD_CLIENT_ID)</p>
+        <ol class="steps">
+          <li>เพิ่ม Salid เข้าเซิร์ฟเวอร์</li>
+          <li>พิมพ์ <strong>/ตั้งค่า</strong> ใน Discord แล้วกดลิงก์ที่ได้</li>
+        </ol>
+        <span class="hint">เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์เท่านั้นที่ขอลิงก์ได้ ลิงก์ใช้ได้ครั้งเดียวและหมดอายุใน 15 นาที</span>
+      </section>
+
+      <div id="guild-view" hidden>
 
       <section class="card" id="channels" aria-labelledby="ch-h">
         <h2 id="ch-h">ช่องทางที่เชื่อมต่อ</h2>
         <div class="channels">
           <div class="ch">
-            <div class="top"><strong>Discord</strong><span class="pill ok">พร้อมใช้</span></div>
-            <p>เพิ่มสลิดเข้าเซิร์ฟเวอร์ของทีม แล้วกำหนดห้องด้านล่าง</p>
-            <a class="btn discord" id="invite" href="#" target="_blank" rel="noopener" hidden>เพิ่มสลิดเข้า Discord</a>
+            <div class="top"><strong>Discord</strong><span class="pill ok" id="guild-pill">พร้อมใช้</span></div>
+            <p id="guild-name">เซิร์ฟเวอร์ที่เชื่อมอยู่</p>
+            <a class="btn discord" id="invite" href="#" target="_blank" rel="noopener" hidden>เพิ่ม Salid เข้าเซิร์ฟเวอร์อื่น</a>
             <p id="invite-soon" hidden>ยังไม่ได้ตั้งค่าแอป Discord (SALID_DISCORD_CLIENT_ID)</p>
           </div>
           <div class="ch">
@@ -174,16 +204,18 @@
         <h2 id="sk-h">สลิดทำอะไรให้ทีมนี้</h2>
         <div id="features"></div>
         <div class="fields">
-          <label>ห้องรับใบเสร็จ <input type="text" id="receipt-ids" inputmode="numeric" placeholder="เช่น 123456789012345678, 987654321098765432"><small>รหัสห้อง Discord คั่นด้วยจุลภาค เพิ่มจากที่ตั้งไว้ในระบบ</small></label>
-          <label>ห้องถามสลิด <input type="text" id="ask-ids" inputmode="numeric" placeholder="รหัสห้อง คั่นด้วยจุลภาค"><small>ทุกข้อความในห้องนี้ถือเป็นคำถาม</small></label>
-          <label>ห้องสรุปรายวัน <input type="text" id="digest-id" inputmode="numeric" placeholder="รหัสห้อง"></label>
+          <label>ห้องรับใบเสร็จเพิ่มเติม <div class="checks" id="receipt-ids"></div><small>ห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” รับใบเสร็จได้อยู่แล้วโดยไม่ต้องเลือก</small></label>
+          <label>ห้องถามสลิด <div class="checks" id="ask-ids"></div><small>ทุกข้อความในห้องนี้ถือเป็นคำถาม (ห้องอื่นแท็ก @Salid ได้)</small></label>
+          <label>ห้องสรุปรายวัน <select class="field" id="digest-id"></select></label>
           <label>เวลาส่งสรุปรายวัน <input type="time" id="digest-time" value="18:00"><small>เวลาไทย (Asia/Bangkok)</small></label>
+          <label>ชื่อ role ผู้บริหาร <input type="text" id="exec-roles" placeholder="ผู้บริหาร, Executive"><small>คั่นด้วยจุลภาค เจ้าของและแอดมินของเซิร์ฟเวอร์เป็นผู้บริหารอยู่แล้ว</small></label>
         </div>
+        <span class="hint" id="no-channels" hidden>สลิดยังไม่ได้ส่งรายชื่อห้องของเซิร์ฟเวอร์นี้มา ลองรอสักครู่แล้วโหลดหน้าใหม่</span>
         <div class="row">
           <button type="button" class="btn" id="save">บันทึกการตั้งค่า</button>
           <span class="hint" id="save-msg" role="status" aria-live="polite"></span>
         </div>
-        <span class="hint">สลิดอ่านการตั้งค่าใหม่ภายในประมาณ 1 นาที รหัสห้องคัดลอกได้จาก Discord (เปิดโหมดนักพัฒนา แล้วคลิกขวาที่ห้อง)</span>
+        <span class="hint">สลิดอ่านการตั้งค่าใหม่ภายในประมาณ 1 นาที</span>
       </section>
 
       <section class="card" id="command" aria-labelledby="cm-h">
@@ -194,7 +226,7 @@
           <input type="text" id="ask" maxlength="1000" placeholder="ถามหรือสั่งงาน เช่น สรุปบัญชีสัปดาห์นี้" style="flex:1 1 280px;width:auto" autocomplete="off">
           <button type="submit" class="btn" id="ask-btn">ส่ง</button>
         </form>
-        <span class="hint">คำตอบเดียวกับที่ได้จากการถามสลิดใน Discord ในฐานะผู้บริหาร (เห็นบัญชีทั้งร้าน) งานใหญ่หลายขั้นตอนสั่งผ่าน Discord</span>
+        <span class="hint">คำตอบเดียวกับที่ได้จากการถามสลิดใน Discord ในฐานะผู้บริหาร (เห็นบัญชีทั้งเซิร์ฟเวอร์นี้) งานใหญ่หลายขั้นตอนสั่งผ่าน Discord</span>
       </section>
 
       <div class="cols">
@@ -204,46 +236,67 @@
         </section>
         <section class="card" id="people" aria-labelledby="pp-h">
           <h2 id="pp-h">ใครเห็นอะไร</h2>
-          <div class="who-row"><strong>ผู้บริหาร (role ผู้บริหาร ใน Discord)</strong><span>เห็นบัญชีทั้งร้าน ถามได้ทุกเรื่อง สั่งงานใหญ่ได้</span></div>
+          <div class="who-row"><strong>ผู้บริหาร</strong><span>เจ้าของเซิร์ฟเวอร์ แอดมิน ผู้ที่จัดการเซิร์ฟเวอร์ได้ หรือผู้มี role ตามที่ตั้งไว้ด้านบน เห็นบัญชีทั้งเซิร์ฟเวอร์ ถามได้ทุกเรื่อง สั่งงานใหญ่ได้</span></div>
           <div class="who-row"><strong>พนักงาน</strong><span>ส่งใบเสร็จได้ เห็นเฉพาะใบเสร็จที่ตัวเองส่ง</span></div>
-          <div class="who-row"><strong>ห้องส่วนตัว</strong><span>สลิดใช้ข้อมูลห้องไหน ก็ตอบได้เฉพาะคนที่อยู่ในห้องนั้น</span></div>
-          <div class="who-row"><strong>ผู้ดูแลหน้านี้</strong><span>บัญชี Google ที่ได้รับสิทธิ์ เห็นภาพรวมและถามสลิดได้เหมือนผู้บริหาร</span></div>
+          <div class="who-row"><strong>แยกตามเซิร์ฟเวอร์</strong><span>ข้อมูลของแต่ละเซิร์ฟเวอร์แยกจากกันทั้งหมด เซิร์ฟเวอร์อื่นมองไม่เห็นบัญชีของคุณ</span></div>
+          <div class="who-row"><strong>ผู้ดูแลหน้านี้</strong><span>บัญชี Google ที่เชื่อมผ่านคำสั่ง /ตั้งค่า เห็นภาพรวมและถามสลิดได้เหมือนผู้บริหาร</span></div>
         </section>
+      </div>
       </div>
     </main>
   </div>
 </div>
 
+
 <script>
 "use strict";
 const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
 const TOKEN_KEY = "salid_hub_token";
+const LINK_KEY = "salid_hub_link";
+const GUILD_KEY = "salid_hub_guild";
 const $ = (id) => document.getElementById(id);
 
 const FEATURES = [
   { id: "receipts", name: "รับใบเสร็จและทำบัญชี", desc: "ส่งรูปใบเสร็จในห้อง สลิดอ่านยอดและบันทึกให้", where: "#ใบเสร็จ" },
-  { id: "qa", name: "ตอบคำถามเรื่องค่าใช้จ่าย", desc: "ถามสลิดใน Discord แล้วได้คำตอบจากบัญชีของทีม", where: "#ถามสลิด" },
+  { id: "qa", name: "ตอบคำถามเรื่องค่าใช้จ่าย", desc: "ถามสลิดใน Discord แล้วได้คำตอบจากบัญชีของทีม", where: "@Salid" },
   { id: "meetings", name: "ส่งสรุปประชุมเข้าแชต", desc: "อัดประชุมจากหน้าเว็บ แล้วสลิดโพสต์สรุปและงานที่ต้องทำ เปิดไว้เสมอ", where: "#ประชุม", info: true },
   { id: "digest", name: "สรุปรายวันให้ผู้บริหาร", desc: "ทุกวัน ยอดใช้จ่าย หมวด และรายการที่ต้องตรวจ", where: "#ผู้บริหาร" },
   { id: "deep_tasks", name: "งานใหญ่หลายขั้น", desc: "ผู้บริหารสั่งงานวิเคราะห์ สลิดทำเบื้องหลังแล้วส่งรายงาน", where: "เฉพาะผู้บริหาร" },
   { id: "followup", name: "ติดตามงานที่รับปาก", desc: "จดว่าใครรับปากอะไร แล้วเตือนก่อนถึงกำหนด", where: "เร็วๆ นี้", soon: true },
 ];
 let features = { receipts: true, qa: true, digest: true, deep_tasks: true };
+let guilds = [];
+let guildId = null;
 
-function store(op, v) {
+// Browser storage may be blocked: every access is wrapped, and the page works without it.
+function mem(op, key, v) {
   try {
-    if (op === "get") return sessionStorage.getItem(TOKEN_KEY);
-    if (op === "set") sessionStorage.setItem(TOKEN_KEY, v);
-    else sessionStorage.removeItem(TOKEN_KEY);
-  } catch { /* storage blocked: the token then lives only in memory */ }
+    if (op === "get") return sessionStorage.getItem(key);
+    if (op === "set") sessionStorage.setItem(key, v);
+    else sessionStorage.removeItem(key);
+  } catch { /* storage blocked: values then live only in memory */ }
   return null;
 }
-let token = store("get");
+let token = mem("get", TOKEN_KEY);
+
+// A `/ตั้งค่า` link opens /hub?link=<code>. Take the code out of the address bar at once (it is a
+// one-time credential) and keep it until it has been redeemed after sign-in.
+let linkCode = null;
+try {
+  const params = new URLSearchParams(location.search);
+  if (params.has("link")) {
+    linkCode = params.get("link");
+    mem("set", LINK_KEY, linkCode);
+    history.replaceState(null, "", location.pathname);
+  }
+} catch { /* ignore */ }
+linkCode = linkCode || mem("get", LINK_KEY);
 
 function show(view) { $("login").hidden = view !== "login"; $("app").hidden = view !== "app"; }
 function note(el, msg) { el.textContent = msg || ""; el.hidden = !msg; }
 
 class AuthError extends Error {}
+class ApiError extends Error { constructor(msg, status) { super(msg); this.status = status; } }
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
@@ -255,35 +308,39 @@ async function api(path, opts = {}) {
   if (!res.ok) {
     let detail = "";
     try { const j = await res.json(); detail = typeof j.detail === "string" ? j.detail : "ข้อมูลไม่ถูกต้อง"; } catch { /* ignore */ }
-    throw new Error(detail || "เกิดข้อผิดพลาด (" + res.status + ")");
+    throw new ApiError(detail || "เกิดข้อผิดพลาด (" + res.status + ")", res.status);
   }
   return res.json();
 }
+const gapi = (suffix, opts) => api("/api/hub/guilds/" + guildId + suffix, opts);
 
 function toLogin(msg) {
-  token = null; store("clear");
+  token = null; mem("clear", TOKEN_KEY);
   show("login");
   note($("login-msg"), msg);
   renderGoogleButton();
 }
 
 function onCredential(resp) {
-  token = resp.credential; store("set", token);
+  token = resp.credential; mem("set", TOKEN_KEY, token);
   start();
 }
 
 let gsiReady = false;
 function renderGoogleButton() {
-  if (!CLIENT_ID) { note($("not-configured"), ""); $("not-configured").hidden = false; $("gsi-button").hidden = true; return; }
+  if (!CLIENT_ID) { $("not-configured").hidden = false; $("gsi-button").hidden = true; return; }
   if (!window.google || !google.accounts) { setTimeout(renderGoogleButton, 200); return; }
   if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: onCredential }); gsiReady = true; }
   google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signin_with", locale: "th", width: 300 });
 }
 
-function handleAuth(e) {
+// Returns true when `e` was an auth problem and has been handled. A 403 on a guild call only
+// means "not your guild" (the account itself is fine), so it does not sign the user out.
+function handleAuth(e, { guildCall = false } = {}) {
   if (!(e instanceof AuthError)) return false;
   if (e.message === "not_configured") { token = null; show("login"); $("not-configured").hidden = false; $("gsi-button").hidden = true; }
-  else if (e.message === "forbidden") toLogin("บัญชีนี้ไม่มีสิทธิ์เข้าหน้านี้ ลองเข้าด้วยบัญชี Google อื่น");
+  else if (e.message === "forbidden" && guildCall) note($("app-msg"), "บัญชีนี้ไม่มีสิทธิ์จัดการเซิร์ฟเวอร์นี้ พิมพ์ /ตั้งค่า ใน Discord เพื่อเชื่อมใหม่");
+  else if (e.message === "forbidden") toLogin("บัญชี Google นี้ยังไม่ได้ยืนยันอีเมล ลองเข้าด้วยบัญชีอื่น");
   else toLogin("เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง");
   return true;
 }
@@ -309,13 +366,43 @@ function renderFeatures() {
   }
 }
 
-const idList = (s) => s.split(/[,\s]+/).filter(Boolean);
+// A checkbox list of the guild's text channels; ids that no longer exist stay visible so that
+// saving does not silently drop them.
+function renderChecks(box, channels, selected) {
+  box.textContent = "";
+  const known = new Set(channels.map((c) => c.id));
+  const all = [...channels, ...selected.filter((id) => !known.has(id)).map((id) => ({ id, name: id + " (ไม่พบห้องนี้แล้ว)" }))];
+  if (!all.length) { const e = document.createElement("span"); e.className = "hint"; e.textContent = "ยังไม่มีห้อง"; box.append(e); return; }
+  for (const c of all) {
+    const label = document.createElement("label");
+    const cb = document.createElement("input"); cb.type = "checkbox"; cb.value = c.id; cb.checked = selected.includes(c.id);
+    const span = document.createElement("span"); span.textContent = "#" + c.name;
+    label.append(cb, span); box.append(label);
+  }
+}
+const checked = (box) => [...box.querySelectorAll("input:checked")].map((i) => i.value);
+
+function renderDigestSelect(channels, selected) {
+  const sel = $("digest-id"); sel.textContent = "";
+  const none = document.createElement("option"); none.value = ""; none.textContent = "ไม่ส่งสรุปรายวัน"; sel.append(none);
+  const known = new Set(channels.map((c) => c.id));
+  const all = [...channels, ...(selected && !known.has(selected) ? [{ id: selected, name: selected + " (ไม่พบห้องนี้แล้ว)" }] : [])];
+  for (const c of all) { const o = document.createElement("option"); o.value = c.id; o.textContent = "#" + c.name; sel.append(o); }
+  sel.value = selected || "";
+}
+
 function fillSettings(s) {
   features = { receipts: true, qa: true, digest: true, deep_tasks: true, ...s.features };
-  $("receipt-ids").value = s.receipt_channel_ids.join(", ");
-  $("ask-ids").value = s.ask_channel_ids.join(", ");
-  $("digest-id").value = s.digest_channel_id || "";
+  const channels = s.channels || [];
+  renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
+  renderChecks($("ask-ids"), channels, s.ask_channel_ids);
+  renderDigestSelect(channels, s.digest_channel_id);
   $("digest-time").value = s.digest_time || "18:00";
+  $("exec-roles").value = (s.exec_role_names || []).join(", ");
+  $("no-channels").hidden = channels.length > 0;
+  $("guild-name").textContent = s.guild_name || "";
+  $("guild-pill").textContent = s.active === false ? "สลิดออกจากเซิร์ฟเวอร์แล้ว" : "พร้อมใช้";
+  $("guild-pill").className = "pill " + (s.active === false ? "warn" : "ok");
   renderFeatures();
 }
 
@@ -345,24 +432,33 @@ function renderActivity(items) {
   }
 }
 
+function renderSwitcher() {
+  const sel = $("guild-switch"); sel.textContent = "";
+  for (const g of guilds) { const o = document.createElement("option"); o.value = g.id; o.textContent = g.name; sel.append(o); }
+  sel.hidden = !guilds.length;
+  if (guildId) sel.value = guildId;
+  const g = guilds.find((x) => x.id === guildId);
+  const icon = $("gicon");
+  icon.hidden = !(g && /^https:\/\//.test(g.icon_url));
+  if (!icon.hidden) icon.src = g.icon_url;
+}
+
 // ---------- actions ----------
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), "กำลังบันทึก...");
   const body = {
     features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks },
-    receipt_channel_ids: idList($("receipt-ids").value),
-    ask_channel_ids: idList($("ask-ids").value),
-    digest_channel_id: $("digest-id").value.trim(),
+    receipt_channel_ids: checked($("receipt-ids")),
+    ask_channel_ids: checked($("ask-ids")),
+    digest_channel_id: $("digest-id").value,
     digest_time: $("digest-time").value || "18:00",
+    exec_role_names: $("exec-roles").value.split(",").map((x) => x.trim()).filter(Boolean),
   };
-  if ([...body.receipt_channel_ids, ...body.ask_channel_ids, body.digest_channel_id].some((x) => x && !/^\d+$/.test(x))) {
-    note($("save-msg"), "รหัสห้องต้องเป็นตัวเลขเท่านั้น"); btn.disabled = false; return;
-  }
   try {
-    fillSettings(await api("/api/hub/settings", { method: "PUT", body: JSON.stringify(body) }));
+    fillSettings(await gapi("/settings", { method: "PUT", body: JSON.stringify(body) }));
     note($("save-msg"), "บันทึกแล้ว");
   } catch (e) {
-    if (!handleAuth(e)) note($("save-msg"), "บันทึกไม่สำเร็จ: " + e.message);
+    if (!handleAuth(e, { guildCall: true })) note($("save-msg"), "บันทึกไม่สำเร็จ: " + e.message);
   } finally { btn.disabled = false; }
 }
 
@@ -378,11 +474,48 @@ async function ask(ev) {
   $("ask").value = ""; $("ask-btn").disabled = true;
   bubble(q, "me"); const wait = bubble("สลิดกำลังคิด...", "bot");
   try {
-    wait.textContent = (await api("/api/hub/ask", { method: "POST", body: JSON.stringify({ question: q }) })).answer;
+    wait.textContent = (await gapi("/ask", { method: "POST", body: JSON.stringify({ question: q }) })).answer;
   } catch (e) {
-    if (handleAuth(e)) return;
+    if (handleAuth(e, { guildCall: true })) return;
     wait.textContent = "ตอบไม่ได้ในตอนนี้ ลองใหม่อีกครั้งครับ"; wait.classList.add("err");
   } finally { $("ask-btn").disabled = false; }
+}
+
+async function loadGuild(id) {
+  guildId = id; mem("set", GUILD_KEY, id);
+  renderSwitcher();
+  $("chat").textContent = "";
+  const empty = document.createElement("div"); empty.className = "empty"; empty.id = "chat-empty";
+  empty.textContent = "ลองถาม เช่น \"เดือนนี้ค่าวัตถุดิบเท่าไร ซื้อร้านไหนเยอะสุด\""; $("chat").append(empty);
+  $("guild-view").hidden = false; $("no-guild").hidden = true;
+  note($("save-msg"), "");
+  try {
+    const [settings, activity] = await Promise.all([gapi("/settings"), gapi("/activity")]);
+    note($("app-msg"), "");
+    fillSettings(settings); renderActivity(activity);
+  } catch (e) {
+    if (!handleAuth(e, { guildCall: true })) note($("app-msg"), "โหลดข้อมูลไม่สำเร็จ: " + e.message);
+  }
+}
+
+// Redeem the one-time `/ตั้งค่า` code with the signed-in Google account. Returns the guild id
+// on success. An auth error keeps the code for after the next sign-in; any other outcome
+// consumes it, since a code is useless once it has been tried.
+async function redeemLink() {
+  const code = linkCode;
+  try {
+    const g = await api("/api/hub/link", { method: "POST", body: JSON.stringify({ code }) });
+    linkCode = null; mem("clear", LINK_KEY);
+    $("link-msg").className = "notice ok";
+    note($("link-msg"), "เชื่อมกับเซิร์ฟเวอร์ “" + g.name + "” เรียบร้อยแล้ว");
+    return g.id;
+  } catch (e) {
+    if (e instanceof AuthError) throw e;
+    linkCode = null; mem("clear", LINK_KEY);
+    $("link-msg").className = "notice error";
+    note($("link-msg"), "ลิงก์นี้ใช้ไม่ได้ (หมดอายุหรือถูกใช้ไปแล้ว) พิมพ์ /ตั้งค่า ใน Discord เพื่อขอลิงก์ใหม่");
+    return null;
+  }
 }
 
 async function start() {
@@ -390,12 +523,18 @@ async function start() {
     const me = await api("/api/hub/me");
     note($("login-msg"), "");
     $("who").textContent = me.email;
-    $("invite").hidden = !me.invite_url; $("invite-soon").hidden = !!me.invite_url;
-    if (me.invite_url) $("invite").href = me.invite_url;
+    for (const [btn, soon] of [["invite", "invite-soon"], ["invite-big", "invite-big-soon"]]) {
+      $(btn).hidden = !me.invite_url; $(soon).hidden = !!me.invite_url;
+      if (me.invite_url) $(btn).href = me.invite_url;
+    }
     show("app");
-    const [settings, activity] = await Promise.all([api("/api/hub/settings"), api("/api/hub/activity")]);
-    note($("app-msg"), "");
-    fillSettings(settings); renderActivity(activity);
+    const linked = linkCode ? await redeemLink() : null;
+    guilds = await api("/api/hub/guilds");
+    const wanted = linked || mem("get", GUILD_KEY);
+    guildId = (guilds.find((g) => g.id === wanted) || guilds[0] || {}).id || null;
+    renderSwitcher();
+    if (!guildId) { $("guild-view").hidden = true; $("no-guild").hidden = false; return; }
+    await loadGuild(guildId);
   } catch (e) {
     if (!handleAuth(e)) { show("app"); note($("app-msg"), "โหลดข้อมูลไม่สำเร็จ: " + e.message); }
   }
@@ -403,6 +542,7 @@ async function start() {
 
 $("save").addEventListener("click", save);
 $("ask-form").addEventListener("submit", ask);
+$("guild-switch").addEventListener("change", (ev) => loadGuild(ev.target.value));
 $("signout").addEventListener("click", () => {
   try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch { /* ignore */ }
   toLogin("");
