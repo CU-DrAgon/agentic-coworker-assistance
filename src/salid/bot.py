@@ -26,9 +26,12 @@ from .digest import build_daily_digest
 from .extract import apply_correction, ingest_attachment
 from .qa import ask
 from .store import Store
+from .team_settings import BotTeamSettings, make_bot_team_settings
 
 logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
+QA_OFF_MESSAGE = "ตอนนี้ปิดการถามตอบอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
+DEEP_OFF_MESSAGE = "ตอนนี้ปิดงานใหญ่อยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
 
 
 def chunks(text: str, n: int = 1900):
@@ -38,12 +41,14 @@ def chunks(text: str, n: int = 1900):
 
 
 class SecretaryBot(discord.Client):
-    def __init__(self, settings: Settings, store: Store, llm):
+    def __init__(self, settings: Settings, store: Store, llm, team: BotTeamSettings | None = None):
         intents = discord.Intents(
             guilds=True, messages=True, message_content=True, members=True, dm_messages=True
         )
         super().__init__(intents=intents)
         self.s, self.store, self.llm = settings, store, llm
+        # Hub toggles and channel ids (Firestore only; all on when unavailable).
+        self.team = team or make_bot_team_settings(settings)
         self.archive = make_archive(settings)
         self._digest_task: asyncio.Task | None = None
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
@@ -73,13 +78,18 @@ class SecretaryBot(discord.Client):
         if message.author.bot or message.author == self.user:
             return
         try:
-            if await self._maybe_correction(message):
+            await asyncio.to_thread(self.team.current)  # refresh the cache off the event loop
+            receipts_on = self.team.enabled("receipts")
+            if receipts_on and await self._maybe_correction(message):
                 return
-            if message.channel.id in self.s.receipt_channel_ids and message.attachments:
-                await self._intake(message)
+            receipt_ids = self.team.receipt_channel_ids(self.s.receipt_channel_ids)
+            if message.channel.id in receipt_ids and message.attachments:
+                if receipts_on:
+                    await self._intake(message)
                 return
             mentioned = self.user is not None and self.user in message.mentions
-            if message.guild is None or mentioned or message.channel.id in self.s.ask_channel_ids:
+            ask_ids = self.team.ask_channel_ids(self.s.ask_channel_ids)
+            if message.guild is None or mentioned or message.channel.id in ask_ids:
                 await self._answer(message)
         except Exception:
             logger.exception("handler failed")
@@ -142,7 +152,13 @@ class SecretaryBot(discord.Client):
         is_exec = self.is_exec(message)
         task = parse_deep_trigger(q)
         if task is not None:
-            await self._deep(message, task, is_exec)
+            if self.team.enabled("deep_tasks"):
+                await self._deep(message, task, is_exec)
+            else:
+                await message.reply(DEEP_OFF_MESSAGE, mention_author=False)
+            return
+        if not self.team.enabled("qa"):
+            await message.reply(QA_OFF_MESSAGE, mention_author=False)
             return
         async with message.channel.typing():
             ans = await asyncio.to_thread(
@@ -192,7 +208,7 @@ class SecretaryBot(discord.Client):
 
     # ------------------------------------------------------------- digest
     def next_digest_at(self, now: datetime) -> datetime:
-        hh, mm = (int(x) for x in self.s.digest_time.split(":"))
+        hh, mm = (int(x) for x in self.team.digest_time(self.s.digest_time).split(":"))
         t = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         return t if t > now else t + timedelta(days=1)
 
@@ -200,10 +216,16 @@ class SecretaryBot(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             now = self.s.now()
+            await asyncio.to_thread(self.team.current)
             nxt = self.next_digest_at(now)
-            await asyncio.sleep((nxt - now).total_seconds())
-            if self.s.digest_channel_id:
-                ch = self.get_channel(self.s.digest_channel_id)
+            wait = (nxt - now).total_seconds()
+            if wait > 60:  # wake up every minute so hub changes to the time apply promptly
+                await asyncio.sleep(60)
+                continue
+            await asyncio.sleep(wait)
+            channel_id = self.team.digest_channel_id(self.s.digest_channel_id)
+            if channel_id and self.team.enabled("digest"):
+                ch = self.get_channel(channel_id)
                 if ch:
                     text = await asyncio.to_thread(build_daily_digest, self.store, nxt.date())
                     for part in chunks(text):

@@ -57,6 +57,7 @@ class Store(Protocol):
     def all_receipts(
         self, start: str, end: str, submitter_id: int | None = None, limit: int = 5000
     ) -> list[Receipt]: ...
+    def recent(self, limit: int = 20) -> list[Receipt]: ...
 
 
 SCHEMA = """
@@ -243,6 +244,14 @@ class SQLiteStore:
             rows = c.execute(
                 f"SELECT * FROM receipts WHERE {' AND '.join(where)} ORDER BY effective_date, id LIMIT ?",
                 [*p, limit],
+            ).fetchall()
+        return [self._row(r) for r in rows]
+
+    def recent(self, limit=20):
+        """Newest receipts first (by id); used by the hub activity feed."""
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM receipts ORDER BY id DESC LIMIT ?", (max(1, min(int(limit), 100)),)
             ).fetchall()
         return [self._row(r) for r in rows]
 

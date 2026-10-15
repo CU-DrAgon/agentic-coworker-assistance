@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     deep_task_timeout: int = 600  # seconds
     deep_task_model: str = "gemini-3-flash-preview"  # see deep_task.build_cli_settings
     low_confidence: float = 0.7
+    # Team settings written by the web hub (Firestore only; see salid.team_settings).
+    team_collection: str = "salid_teams"
+    team_id: str = "default"
 
     @field_validator("receipt_channel_ids", "ask_channel_ids", "exec_user_ids", mode="before")
     @classmethod

@@ -224,3 +224,9 @@ class FirestoreStore:
         rows = self._in_range(start, end, submitter_id)
         rows.sort(key=lambda r: (r.effective_date, r.id or 0))
         return rows[:limit]
+
+    def recent(self, limit: int = 20) -> list[Receipt]:
+        """Newest receipts first (by id). Scans the collection, see the scale note above."""
+        rows = [Receipt(**s.to_dict()) for s in self._col.stream()]
+        rows.sort(key=lambda r: r.id or 0, reverse=True)
+        return rows[: max(1, min(int(limit), 100))]

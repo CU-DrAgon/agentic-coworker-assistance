@@ -136,3 +136,9 @@ def test_reply_message_lookup(store, settings):
     r = ingest(store, settings, FakeClient([json_resp(EX)])).receipt
     store.set_reply_message(r.id, 999)
     assert store.get_by_reply_message(999).id == r.id and store.get_by_reply_message(1) is None
+
+
+def test_recent_returns_newest_first_and_respects_limit(seeded):
+    assert [r.id for r in seeded.recent(3)] == [5, 4, 3]
+    assert len(seeded.recent()) == 5
+    assert len(seeded.recent(0)) == 1  # limit is clamped to at least 1
