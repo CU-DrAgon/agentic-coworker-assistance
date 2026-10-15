@@ -499,3 +499,28 @@ async def test_recent_chat_keeps_only_this_person_and_salid(bot, world):
     msg = Msg(world.a, Chan(10), me, "คุยต่อ")
     msg.created_at = now
     assert await bot._recent_chat(msg) == "พี่: ทักครับ\nสลิด: สวัสดีครับ"
+
+
+async def test_join_creates_the_chat_channel_and_welcomes_there(bot, world):
+    from salid.bot import CHAT_CHANNEL_NAME
+
+    g = world.a
+    g.me = SimpleNamespace(guild_permissions=SimpleNamespace(manage_channels=True))
+
+    async def create_text_channel(name, **kw):
+        ch = FakeChannel(40, name)
+        ch.mention = f"<#{ch.id}>"
+        g.text_channels.append(ch)
+        return ch
+
+    g.create_text_channel = create_text_channel
+    await bot.on_guild_join(g)
+    chat = g.text_channels[-1]
+    assert chat.name == CHAT_CHANNEL_NAME and "<#40>" in chat.sent[0]
+    await bot.on_guild_join(g)  # rejoin: reuses the existing channel
+    assert [c.name for c in g.text_channels].count(CHAT_CHANNEL_NAME) == 1
+
+
+async def test_join_without_manage_channels_still_welcomes(bot, world):
+    await bot.on_guild_join(world.b)
+    assert "คุยกับน้องสลิด" in world.b.text_channels[0].sent[0]

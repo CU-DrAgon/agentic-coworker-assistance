@@ -42,12 +42,16 @@ QA_OFF_MESSAGE = "ตอนนี้ปิดการถามตอบอย�
 DEEP_OFF_MESSAGE = "ตอนนี้ปิดงานใหญ่อยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด"
 DM_MESSAGE = "สลิดแยกข้อมูลของแต่ละเซิร์ฟเวอร์ครับ รบกวนแท็ก {mention} ถามในห้องแชตของเซิร์ฟเวอร์ที่ต้องการนะครับ"
 WELCOME_MESSAGE = (
-    "สวัสดีครับ ผม “สลิด” เลขาที่ช่วยทำบัญชีจากใบเสร็จ 📒\n"
+    "สวัสดีครับ ผม “สลิด” เลขาและเพื่อนร่วมทีม 🐱\n"
+    "• คุยกับผมได้ทุกเรื่องในห้อง {chat} พิมพ์ได้เลยไม่ต้องแท็ก "
+    "ห้องอื่นแท็ก {mention} ก่อนครับ\n"
     "• ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” "
-    "หรือแท็ก {mention} พร้อมรูป (ห้องไหนก็ได้) ผมจะอ่านยอดและบันทึกให้เอง\n"
-    "• ผู้บริหารถามเรื่องค่าใช้จ่ายได้โดยแท็ก {mention} แล้วพิมพ์คำถาม\n"
+    "หรือแท็ก {mention} พร้อมรูป ผมจะอ่านยอดและบันทึกให้เอง\n"
     "• ผู้ดูแลพิมพ์ /ตั้งค่า เพื่อเชื่อมกับศูนย์บัญชาการ (หน้าเว็บสำหรับตั้งค่า)"
 )
+# Created on join (needs Manage Channels); the name contains "สลิด", so it is an ask channel.
+CHAT_CHANNEL_NAME = "คุยกับน้องสลิด"
+CHAT_CHANNEL_TOPIC = "คุยกับน้องสลิดได้ทุกเรื่อง พิมพ์ได้เลยไม่ต้องแท็ก"
 GREETING_MESSAGE = (
     'สวัสดีครับ สลิดเองครับ 🐱 ส่งรูปใบเสร็จมาได้เลย หรือแท็กสลิดพร้อมคำถาม เช่น "เดือนนี้จ่ายค่าวัตถุดิบไปเท่าไร" ครับ'
 )
@@ -187,15 +191,34 @@ class SecretaryBot(discord.Client):
 
     async def on_guild_join(self, guild: discord.Guild):
         logger.info("joined guild %s", guild.id)
+        chat = await self._ensure_chat_channel(guild)
         await self._sync_guild(guild, installed=True)
-        target = guild.system_channel
+        target = chat or guild.system_channel
         if target is None or not target.permissions_for(guild.me).send_messages:
             target = next(
                 (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), None
             )
         if target is not None:
+            where = chat.mention if chat else f"ที่ชื่อมีคำว่า “สลิด” (เช่น #{CHAT_CHANNEL_NAME})"
             with contextlib.suppress(discord.HTTPException):
-                await target.send(WELCOME_MESSAGE.format(mention=self.user.mention))
+                await target.send(WELCOME_MESSAGE.format(mention=self.user.mention, chat=where))
+
+    async def _ensure_chat_channel(self, guild: discord.Guild):
+        """The guild's Salid chat channel: an existing one named after Salid, else a new one."""
+        existing = next((c for c in guild.text_channels if is_ask_channel_name(c.name)), None)
+        if existing is not None:
+            return existing
+        perms = getattr(guild.me, "guild_permissions", None)
+        if not getattr(perms, "manage_channels", False):
+            logger.info("no Manage Channels in guild %s: chat channel not created", guild.id)
+            return None
+        try:
+            return await guild.create_text_channel(
+                CHAT_CHANNEL_NAME, topic=CHAT_CHANNEL_TOPIC, reason="Salid chat channel"
+            )
+        except discord.HTTPException:
+            logger.warning("could not create chat channel in guild %s", guild.id, exc_info=True)
+            return None
 
     async def on_guild_remove(self, guild: discord.Guild):
         logger.info("removed from guild %s", guild.id)
