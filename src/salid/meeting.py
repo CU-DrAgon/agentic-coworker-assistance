@@ -37,6 +37,7 @@ from meeting_scribe.audio import to_flac
 
 from .llm import generate
 from .naming import _WAKE_RE
+from .speech import pcm_duration_s, pcm_source, spoken_text, synthesize
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -65,6 +66,8 @@ PENDING_WAKE_S = 15.0
 TRANSCRIBE_WORKERS = 2
 QUEUE_MAX = 60
 TICK_S = 0.5
+SPEAK_COOLDOWN_S = 1.5  # after Salid speaks, ignore wake words this long (room echo)
+SPEAK_TIMEOUT_PAD_S = 10.0
 
 ANNOUNCE_MESSAGE = (
     "สลิดเข้ามาฟังและจดบันทึกการประชุมครับ 🎙️ "
@@ -340,6 +343,19 @@ def summarize_transcript(client: Any, model: str, transcript: str) -> str:
     return (getattr(resp, "text", None) or "").strip()
 
 
+def _connected(vc: Any) -> bool:
+    try:
+        return bool(vc.is_connected())
+    except Exception:
+        return False
+
+
+def _stop_playback(vc: Any) -> None:
+    with contextlib.suppress(Exception):
+        if vc.is_playing():
+            vc.stop()
+
+
 # ------------------------------------------------------------------ voice receive sink
 class MeetingSink(voice_recv.AudioSink):
     """Runs in the extension's router thread. Asks for raw Opus (the extension then never decodes),
@@ -413,6 +429,10 @@ class MeetingSession:
     empty_since: float | None = None
     ending: bool = False
     dropped: int = 0
+    speech_pending: bool = False  # one shorten/TTS/playback pipeline at a time
+    speaking: bool = False  # Salid is playing a spoken reply
+    speaking_since: float = 0.0
+    speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
 
     def push_threadsafe(self, user_id: int, pcm: bytes) -> None:
         with contextlib.suppress(RuntimeError):  # loop already closed on shutdown
@@ -571,6 +591,8 @@ class MeetingManager:
             return
         s.transcript.add(self.bot.s.now(), name, text)
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
+        if self._is_echo(s, seg):
+            return  # probably Salid's own voice coming back through someone's mic
         question = parse_wake(text)
         now = time.monotonic()
         if question is None:
@@ -585,6 +607,16 @@ class MeetingManager:
             return
         s.pending_wake.pop(seg.user_id, None)
         await self.answer(s, member, name, question)
+
+    @staticmethod
+    def _is_echo(s: MeetingSession, seg: Segment) -> bool:
+        """True when the segment was (partly) spoken while Salid was talking, or just after.
+        Transcription lags the audio, so the audio's own timestamps are compared as well."""
+        if s.speaking or time.monotonic() < s.speaking_until:
+            return True
+        return bool(s.speaking_until) and (
+            seg.started + seg.duration_s >= s.speaking_since and seg.started <= s.speaking_until
+        )
 
     async def answer(self, s: MeetingSession, member, name: str, question: str) -> None:
         from .bot import chunks
@@ -607,6 +639,72 @@ class MeetingManager:
             )
             for i, part in enumerate(chunks(ans.text, 1800)):
                 await self._post(s, f"{member.mention} {part}" if i == 0 else part)
+        if bot.s.voice_reply and not s.ending and _connected(s.vc):
+            # In the background: playback takes seconds and must not hold a transcription worker.
+            s.tasks = [t for t in s.tasks if not t.done()]
+            s.tasks.append(asyncio.create_task(self.speak(s, ans.text, question)))
+
+    async def speak(self, s: MeetingSession, text: str, question: str = "") -> None:
+        """Say a short spoken version of `text` in the voice channel. The written answer is
+        already posted, so any failure here is logged and swallowed."""
+        bot = self.bot
+        vc = s.vc
+        if (
+            not bot.s.voice_reply
+            or s.ending
+            or s.speech_pending
+            or s.speaking
+            or not _connected(vc)
+            or vc.is_playing()
+        ):
+            return
+        # Claim the pipeline before its first await. Two transcription workers can answer at once;
+        # only one should pay for shortening and TTS when Discord can play only one source.
+        s.speech_pending = True
+        source: discord.AudioSource | None = None
+        source_owned_by_player = False
+        try:
+            # The cheap model: ~1-2 s versus ~8 s for the thinking model, and it is plenty here.
+            spoken = await asyncio.to_thread(spoken_text, bot.llm, bot.s.gate_model, question, text)
+            if not spoken:
+                return
+            pcm = await asyncio.to_thread(
+                synthesize, bot.llm, bot.s.tts_model, bot.s.tts_voice, spoken
+            )
+            if not bot.s.voice_reply or s.ending or not _connected(vc) or vc.is_playing():
+                return
+            loop = asyncio.get_running_loop()
+            done: asyncio.Future = loop.create_future()
+
+            def finished(err: Exception | None) -> None:  # runs on the player thread
+                def resolve() -> None:
+                    if not done.done():
+                        done.set_result(err)
+
+                with contextlib.suppress(RuntimeError):  # loop already closed
+                    loop.call_soon_threadsafe(resolve)
+
+            source = pcm_source(pcm)
+            s.speaking, s.speaking_since = True, time.monotonic()
+            try:
+                vc.play(source, after=finished)
+                source_owned_by_player = True
+                err = await asyncio.wait_for(done, pcm_duration_s(pcm) + SPEAK_TIMEOUT_PAD_S)
+                if err:
+                    logger.warning("spoken reply playback error: %s", err)
+            finally:
+                s.speaking = False
+                s.speaking_until = time.monotonic() + SPEAK_COOLDOWN_S
+                _stop_playback(vc)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("spoken reply failed", exc_info=True)
+        finally:
+            s.speech_pending = False
+            if source is not None and not source_owned_by_player:
+                with contextlib.suppress(Exception):
+                    source.cleanup()
 
     # ---- ending
     async def end(self, guild_id: int, reason: str = "command") -> None:
@@ -616,6 +714,7 @@ class MeetingManager:
         s.ending = True
         self.sessions.pop(guild_id, None)
         logger.info("meeting ending in guild %s (%s)", guild_id, reason)
+        _stop_playback(s.vc)
         with contextlib.suppress(Exception):
             s.vc.stop_listening()
         with contextlib.suppress(Exception):
