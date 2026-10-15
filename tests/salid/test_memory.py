@@ -3,7 +3,7 @@
 Offline: SQLite and the Firestore fake, scripted LLMs, small Discord fakes."""
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
@@ -51,6 +51,7 @@ from salid.memory import (
     vectors_usable,
 )
 from salid.memory_access import ChannelAccess, allowed_channel_ids
+from salid.memory_index import IndexedMemoryStore
 from salid.memory_store import DaySummary, SQLiteMemoryStore
 from salid.memory_summary import summary_items
 from salid.qa import MemoryTools, ask
@@ -547,26 +548,136 @@ def test_chat_search_ranks_summary_hits_higher_and_matches_any_keyword(mstore, s
 
 def test_chat_search_ties_go_newest_first_and_limits_groups(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
-    for d in (5, 6, 7):
+    for d in (12, 13, 14):  # inside the raw window (last 3 days)
         mstore.add_message(mk(settings, d, bkk(d, 10).astimezone(UTC), "ads", cid=10))
     assert [h["date"] for h in tools.chat_search(["ads"])["hits"]] == [
-        "2026-10-07",
-        "2026-10-06",
-        "2026-10-05",
+        "2026-10-14",
+        "2026-10-13",
+        "2026-10-12",
     ]
     assert len(tools.chat_search(["ads"], limit=2)["hits"]) == 2
 
 
 def test_chat_search_output_is_capped(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
+    long = "ads " + "ก" * 450
     for d in range(1, 15):
-        for i in range(4):
-            mstore.add_message(
-                mk(settings, d * 10 + i, bkk(d, 10, i).astimezone(UTC), "ads " + "ก" * 450, cid=10)
-            )
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      message_count=4, final=True,
+                                      summary={"overview": long, "decisions": [long] * 6}))  # fmt: skip
     r = tools.chat_search(["ads"], limit=50)
     assert len(json.dumps(r, ensure_ascii=False)) <= 4500 and "truncated" in r["note"]
     assert all(len(h["messages"]) <= 3 for h in r["hits"])
+
+
+def test_old_raw_only_days_point_to_chat_messages(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {10: "g"}, settings, retention_days=30)
+    mstore.add_message(mk(settings, 1, bkk(5, 10).astimezone(UTC), "ads", cid=10))
+    r = tools.chat_search(["ads"])
+    assert r["hits"] == [] and "chat_messages" in r["note"]
+
+
+# ------------------------------------------------------------------ hybrid search
+def topic_day(st, day, cid, title, details=""):
+    """A final day summary with one topic, vectorised with the fake embedder."""
+    summary = {"overview": "", "topics": [{"title": title, "details": details, "people": []}]}
+    v = vectorize(summary, None, FakeEmbedder())
+    st.put_summary(DaySummary(guild_id=GUILD, channel_id=cid, local_date=day, message_count=3,
+                              final=True, summary=summary, vec_model=v.model_id,
+                              vec_hashes=v.hashes, vecs=v.data))  # fmt: skip
+
+
+def hybrid_tools(mstore, settings, allowed=None, emb=None):
+    st = IndexedMemoryStore(mstore, emb or FakeEmbedder())
+    return st, MemoryTools(st, GUILD, allowed or {10: "general", 12: "ads"}, settings,
+                           retention_days=30, embedder=emb or FakeEmbedder())  # fmt: skip
+
+
+def test_english_query_finds_a_thai_only_day(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา", "ค่าโฆษณาเฟซบุ๊ก 20,000")
+    topic_day(st, "2026-10-06", 10, "ซื้อน้ำแข็ง")
+    r = tools.chat_search(["marketing budget"], query="what is our marketing budget?")
+    assert [(h["date"], h["channel"], h["match"]) for h in r["hits"]] == [
+        ("2026-10-05", "ads", "meaning")
+    ]
+    assert "งบโฆษณา" in r["hits"][0]["summary_hits"][0]
+
+
+def test_thai_query_finds_an_english_only_day(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 10, "Facebook ads plan")
+    assert tools.chat_search(["งบโฆษณา"], query="งบโฆษณาเท่าไร")["hits"][0]["date"] == "2026-10-05"
+
+
+def test_keyword_and_meaning_together_rank_first(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-03", 10, "Q4 ads plan")  # keyword "ads" and meaning
+    topic_day(st, "2026-10-04", 10, "โฆษณา")  # meaning only (newer, so it wins the meaning tie)
+    r = tools.chat_search(["ads"], query="ads")
+    # RRF: 10-03 = 1/61 + 1/62 beats 10-04 = 1/61
+    assert [(h["date"], h["match"]) for h in r["hits"]] == [
+        ("2026-10-03", "both"),
+        ("2026-10-04", "meaning"),
+    ]
+
+
+def test_embedding_failure_falls_back_to_keywords(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings, emb=FakeEmbedder(fail=True))
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    r = tools.chat_search(["งบโฆษณา"], query="marketing budget")
+    assert [h["match"] for h in r["hits"]] == ["keyword"] and "error" not in r
+
+
+def test_semantic_false_makes_no_embedding_call(mstore, settings):
+    emb = FakeEmbedder()
+    st, tools = hybrid_tools(mstore, settings, emb=emb)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    tools.chat_search(["งบโฆษณา"], semantic=False)
+    assert not [c for c in emb.calls if c[1] == "query"]
+
+
+def test_meaning_hits_never_leave_the_allowed_channels(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings, allowed={10: "general"})
+    topic_day(st, "2026-10-05", 11, "งบโฆษณาลับ")
+    assert tools.chat_search(["marketing"], query="marketing budget")["hits"] == []
+
+
+def test_stale_vectors_are_ignored_not_crashed_on(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    st.put_summary_vectors(GUILD, 12, "2026-10-05", "other@8", ["x"], b"\0" * 32)
+    assert tools.chat_search(["marketing"], query="marketing")["hits"] == []
+
+
+def test_query_only_search_works(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    assert tools.chat_search([], query="marketing budget")["hits"][0]["date"] == "2026-10-05"
+    assert "error" in tools.chat_search([], query=" ")
+
+
+def test_chat_search_query_budget_on_firestore(settings):
+    base = offline_memory_store()
+    st, tools = hybrid_tools(base, settings, allowed={10: "general", 11: "b"})
+    start = date(2026, 10, 14)
+    for n in range(90):
+        day = (start - timedelta(days=n)).isoformat()
+        for cid in (10, 11):
+            base.put_summary(DaySummary(guild_id=GUILD, channel_id=cid, local_date=day,
+                                        message_count=2, final=n > 1,
+                                        summary={"overview": "ads" if n % 7 == 0 else "x"}))  # fmt: skip
+            at = datetime.fromisoformat(day).replace(hour=3, tzinfo=UTC)
+            for i in range(2):
+                base.add_message(
+                    mk(settings, n * 100 + cid * 2 + i, at + timedelta(minutes=i), "ads", cid=cid)
+                )
+    base.client.streams.clear()
+    assert tools.chat_search(["ads"], query="ads")["hits"]
+    assert len(base.client.streams) <= 10
+    base.client.streams.clear()
+    tools.chat_days("2026-10-08", "2026-10-14")
+    assert len(base.client.streams) <= 3
 
 
 def test_ask_wires_the_memory_tools_and_prompt(mstore, settings, tmp_path):
@@ -576,10 +687,12 @@ def test_ask_wires_the_memory_tools_and_prompt(mstore, settings, tmp_path):
     llm = scripted(fc_resp(("chat_search", {"keywords": ["ads", "งบโฆษณา"]})), text_resp("พบครับ"))
     a = ask(settings, SQLiteStore(str(tmp_path / "l.db")), "งบโฆษณาเหลือเท่าไหร่", guild_id=GUILD,
             is_exec=False, user_id=7, model=llm, memory=tools)  # fmt: skip
-    names = {d.name for t_ in llm.requests[0].config.tools for d in t_.function_declarations}
-    assert {"chat_days", "chat_messages", "chat_search", "spending_summary"} <= names
+    decls = {d.name: d for t_ in llm.requests[0].config.tools for d in t_.function_declarations}
+    assert {"chat_days", "chat_messages", "chat_search", "spending_summary"} <= set(decls)
+    search_params = decls["chat_search"].parameters_json_schema["properties"]
+    assert "query" in search_params and "semantic" not in search_params
     prompt = llm.requests[0].config.system_instruction
-    assert "chat_search" in prompt and "ความจำของทีม" in prompt
+    assert "chat_search" in prompt and "ความจำของทีม" in prompt and "query" in prompt
     blob = json.dumps(
         [
             str(p.function_response)

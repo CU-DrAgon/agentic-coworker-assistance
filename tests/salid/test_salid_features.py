@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from conftest import GUILD, FakeClient, json_resp, scripted, text_resp
+from conftest import GUILD, FakeClient, FakeEmbedder, json_resp, scripted, text_resp
 from test_bot_multitenant import ME, member
 from test_memory import mk
 from test_memory_import import (
@@ -31,6 +31,7 @@ from salid.config import Settings
 from salid.extract import IngestResult
 from salid.guild_settings import GuildSettingsUpdate
 from salid.i18n import t
+from salid.memory_index import IndexedMemoryStore
 from salid.models import Receipt
 from salid.naming import command_text
 
@@ -134,7 +135,7 @@ def test_keywords_drop_question_words_and_split_thai_on_particles():
 async def test_gate_gets_free_memory_hints_scoped_to_the_candidate(bot, world):
     set_mode(bot, 10, "join")
     set_mode(bot, 12, "join")
-    when = datetime(2026, 10, 10, 5, tzinfo=UTC)
+    when = datetime(2026, 10, 13, 5, tzinfo=UTC)  # raw messages: inside the 3-day raw window
     bot.memory_store.add_message(mk(bot.s, 1, when, "ซื้อน้ำแข็งที่ Makro 1,200 บาท", cid=10))
     bot.memory_store.add_message(mk(bot.s, 2, when, "น้ำแข็งลับของห้องอื่น", cid=12))
     await send(bot, world, world.gen, "น้ำแข็งซื้อที่ไหนเมื่อวาน")
@@ -142,8 +143,22 @@ async def test_gate_gets_free_memory_hints_scoped_to_the_candidate(bot, world):
     await bot.tick()
     ids, hints = bot.hints_seen[0]
     (line,) = hints.values()
-    assert line.startswith("memory has: [2026-10-10 #ทั่วไป]") and "Makro" in line
+    assert line.startswith("memory has: [2026-10-13 #ทั่วไป]") and "Makro" in line
     assert "ห้องอื่น" not in line and len(line) <= gate.HINT_TOTAL_CHARS
+
+
+async def test_answers_get_the_embedder_but_join_hints_stay_keyword_only(bot, world):
+    assert isinstance(bot.memory_store, IndexedMemoryStore)
+    emb = bot.embedder = FakeEmbedder()
+    set_mode(bot, 10, "join")
+    when = datetime(2026, 10, 13, 5, tzinfo=UTC)
+    bot.memory_store.add_message(mk(bot.s, 1, when, "ซื้อน้ำแข็งที่ Makro 1,200 บาท", cid=10))
+    m = await send(bot, world, world.gen, "น้ำแข็งซื้อที่ไหนเมื่อวาน")
+    bot.clock.advance(60)
+    await bot.tick()
+    assert bot.hints_seen and emb.calls == []  # hints: no embedding call
+    tools = await bot._memory_tools_for(world.g, m.author, world.gen.id)
+    assert tools.embedder is emb
 
 
 async def test_no_hints_when_memory_is_off(bot, world):

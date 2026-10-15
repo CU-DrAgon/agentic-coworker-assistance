@@ -4,8 +4,11 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
 import uuid
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -16,9 +19,11 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from .config import Settings
+from .embed import NullEmbedder, cosine
 from .i18n import resolve_lang, t
+from .memory_index import entries_for
 from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
-from .memory_summary import render_summary, summary_items
+from .memory_summary import render_summary
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -174,6 +179,35 @@ SUMMARY_WEIGHT = 3  # a keyword hit in a summary counts this many raw-message hi
 SEARCH_MSGS_PER_GROUP = 3
 MAX_SEARCH_DAYS = 400
 MAX_ROWS_SEARCH = 5000
+# Hybrid search (keyword + meaning) over day summaries; raw messages only where it pays off.
+RAW_RECENT_DAYS = 3  # raw messages of the last days are always scanned (not summarised yet)
+RAW_GROUPS = 5  # older top hits whose raw messages are read for quotes and links
+RAW_GROUP_FETCH = 600  # messages read per such channel-day
+MIN_SIMILARITY = 0.55  # cosine a summary item needs to count as a meaning match (provisional)
+RRF_K = 60  # reciprocal rank fusion constant
+QUERY_CACHE_SIZE = 512  # recent query vectors kept (the model often repeats a search)
+RAW_NOTE = (
+    f"raw messages older than {RAW_RECENT_DAYS} days are searched through summaries only; for an "
+    "exact code, number or phrase use chat_messages with a keyword and dates"
+)
+_query_cache: OrderedDict[tuple[str, str], object] = OrderedDict()
+_query_lock = threading.Lock()
+_embed_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="salid-embed")
+
+
+def _query_vector(embedder, text: str):
+    """The query's vector, cached per (model, text). Raises when embedding fails."""
+    key = (embedder.model_id, text)
+    with _query_lock:
+        if key in _query_cache:
+            _query_cache.move_to_end(key)
+            return _query_cache[key]
+    vec = embedder.embed([text], "query")[0]
+    with _query_lock:
+        _query_cache[key] = vec
+        while len(_query_cache) > QUERY_CACHE_SIZE:
+            _query_cache.popitem(last=False)
+    return vec
 
 
 class MemoryTools:
@@ -189,9 +223,11 @@ class MemoryTools:
         allowed: dict[int, str],
         settings,
         retention_days: int | None = None,
+        embedder=None,
     ):
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
         self.retention_days = retention_days or settings.memory_retention_days
+        self.embedder = embedder or NullEmbedder()
 
     def _range(self, start_date: str, end_date: str) -> tuple[str, str]:
         a, b = date.fromisoformat(start_date), date.fromisoformat(end_date)
@@ -285,15 +321,24 @@ class MemoryTools:
 
     def chat_search(
         self,
-        keywords: list[str],
+        keywords: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
+        query: str | None = None,
+        semantic: bool = True,
     ) -> dict:
+        """Hybrid search: keyword hits and meaning (embedding similarity) over the day summaries,
+        fused by reciprocal rank; raw messages of the last RAW_RECENT_DAYS days are scanned for
+        keywords, and the top older hits get their matching raw messages (quotes and links).
+        `semantic=False` (join-mode hints) makes no embedding call."""
+        started = time.monotonic()
         kws = [k.strip().casefold() for k in (keywords or []) if isinstance(k, str) and k.strip()]
         kws = list(dict.fromkeys(kws))[:12]
-        if not kws:
-            return {"error": "give at least one keyword"}
+        query = (query or "").strip()
+        use_meaning = semantic and bool(self.embedder.model_id)
+        if not kws and not (query and use_meaning):
+            return {"error": "give at least one keyword or a query"}
         today = self.s.now().date()
         end = date.fromisoformat(end_date) if end_date else today
         start = (
@@ -305,6 +350,21 @@ class MemoryTools:
             raise ValueError("end_date is before start_date")
         start = max(start, end - timedelta(days=MAX_SEARCH_DAYS - 1))
         a, b = start.isoformat(), end.isoformat()
+        raw_from = (today - timedelta(days=RAW_RECENT_DAYS - 1)).isoformat()
+
+        pending = None
+        if use_meaning:  # embed the query while the summaries load
+            pending = _embed_pool.submit(_query_vector, self.embedder, query or " ".join(kws))
+        t_index = time.monotonic()
+        entries = entries_for(self.store, self.guild_id, self.allowed, a, b, self.embedder)
+        ms_index = (time.monotonic() - t_index) * 1000
+        qv, ms_embed = None, 0.0
+        if pending is not None:
+            try:
+                qv = pending.result()
+            except Exception:
+                logger.warning("query embedding failed; keyword search only", exc_info=True)
+            ms_embed = (time.monotonic() - t_index) * 1000
 
         def hits(text: str) -> int:
             low = text.casefold()
@@ -314,45 +374,104 @@ class MemoryTools:
 
         def group(day: str, cid: int) -> dict:
             return groups.setdefault(
-                (day, cid), {"score": 0, "summary": [], "messages": [], "n_msgs": 0}
+                (day, cid),
+                {"score": 0, "summary": [], "messages": [], "n_msgs": 0, "sim": 0.0, "near": []},
             )
 
-        for x in self.store.summaries(self.guild_id, self.allowed, a, b):
-            for line in summary_items(x.summary):
+        for e in entries:
+            for line in e.items:
                 h = hits(line)
                 if h:
-                    g = group(x.local_date, x.channel_id)
+                    g = group(e.local_date, e.channel_id)
                     g["score"] += h * SUMMARY_WEIGHT
                     g["summary"].append(line[:300])
-        rows = self.store.messages(
-            self.guild_id, self.allowed, a, b, limit=MAX_ROWS_SEARCH, newest_first=True
-        )
-        for m in rows:  # newest first
-            h = hits(f"{m.text} {m.author_name}")
-            if h:
-                g = group(m.local_date, m.channel_id)
-                g["score"] += h
-                g["n_msgs"] += 1
-                if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
-                    g["messages"].append(self._msg(m))
-        ranked = sorted(groups.items(), key=lambda kv: (kv[1]["score"], kv[0][0]), reverse=True)
+            if qv is not None and e.vectors:
+                sims = [
+                    (cosine(qv, v), line)
+                    for v, line in zip(e.vectors, e.items, strict=False)
+                    if len(v) == len(qv)  # vectors of another model/dim are ignored
+                ]
+                best = max(sims, default=(0.0, ""))
+                if best[0] >= MIN_SIMILARITY:
+                    g = group(e.local_date, e.channel_id)
+                    g["sim"] = best[0]
+                    g["near"] = [line[:300] for _, line in sorted(sims, reverse=True)[:2]]
+        raw_queries = 0
+        if kws and max(a, raw_from) <= b:  # recent raw messages (not summarised yet)
+            raw_queries += 1
+            rows = self.store.messages(
+                self.guild_id, self.allowed, max(a, raw_from), b, limit=MAX_ROWS_SEARCH,
+                newest_first=True,
+            )  # fmt: skip
+            for m in rows:  # newest first
+                h = hits(f"{m.text} {m.author_name}")
+                if h:
+                    g = group(m.local_date, m.channel_id)
+                    g["score"] += h
+                    g["n_msgs"] += 1
+                    if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
+                        g["messages"].append(self._msg(m))
+
+        rankings = (
+            sorted((k for k, g in groups.items() if g["score"] > 0),
+                   key=lambda k: (groups[k]["score"], k[0]), reverse=True),
+            sorted((k for k, g in groups.items() if g["sim"] >= MIN_SIMILARITY),
+                   key=lambda k: (groups[k]["sim"], k[0]), reverse=True),
+        )  # fmt: skip
+        fused: dict[tuple[str, int], float] = {}
+        for ranking in rankings:
+            for rank, key in enumerate(ranking, start=1):
+                fused[key] = fused.get(key, 0.0) + 1 / (RRF_K + rank)
+        order = sorted(fused, key=lambda k: (fused[k], k[0]), reverse=True)
+        order = order[: max(1, min(int(limit), 50))]
+
+        if kws:  # quotes and links for the top older hits
+            for day, cid in [k for k in order if k[0] < raw_from][:RAW_GROUPS]:
+                raw_queries += 1
+                g = groups[(day, cid)]
+                for m in reversed(
+                    self.store.messages_after(self.guild_id, cid, day, None, RAW_GROUP_FETCH)
+                ):
+                    if hits(f"{m.text} {m.author_name}"):
+                        g["n_msgs"] += 1
+                        if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
+                            g["messages"].append(self._msg(m))
+
+        def match(g: dict) -> str:
+            kw, mean = g["score"] > 0, g["sim"] >= MIN_SIMILARITY
+            return "both" if kw and mean else "keyword" if kw else "meaning"
+
         items = [
             {
                 "date": day,
                 "channel": self._name(cid),
                 "score": g["score"],
-                "summary_hits": g["summary"][:6],
+                "match": match(g),
+                "summary_hits": (g["summary"] or g["near"])[:6],
                 "matching_messages": g["n_msgs"],
                 "messages": g["messages"],
             }
-            for (day, cid), g in ranked[: max(1, min(int(limit), 50))]
+            for day, cid in order
+            for g in (groups[(day, cid)],)
         ]
         fit, cut = self._fit(items, SEARCH_CHARS)
         out: dict = {"keywords": kws, "range": [a, b], "count": len(fit), "hits": fit}
+        notes = []
         if cut:
-            out["note"] = "output truncated: more hits exist, use narrower keywords or dates"
+            notes.append("output truncated: more hits exist, use narrower keywords or dates")
         if not fit:
-            out["note"] = "no matches in the channels you can see"
+            notes.append("no matches in the channels you can see")
+        if a < raw_from:
+            notes.append(RAW_NOTE)
+        if notes:
+            out["note"] = " | ".join(notes)
+        kinds = [h["match"] for h in fit]
+        logger.info(
+            "memory search guild=%s ms=%d ms_embed=%d ms_index=%d raw_queries=%d hits=%d "
+            "keyword=%d meaning=%d both=%d",
+            self.guild_id, (time.monotonic() - started) * 1000, ms_embed, ms_index, raw_queries,
+            len(fit), kinds.count("keyword"), kinds.count("meaning"), kinds.count("both"),
+        )  # fmt: skip
         return out
 
     def chat_messages(
@@ -392,6 +511,7 @@ class MemoryTools:
         fn = getattr(self, name)
         params = fn.__code__.co_varnames[1 : fn.__code__.co_argcount]
         clean = {k: v for k, v in (args or {}).items() if k in params and v is not None}
+        clean.pop("semantic", None)  # internal switch, never the model's choice
         try:
             return fn(**clean)
         except (TypeError, ValueError) as e:
@@ -423,8 +543,10 @@ PERSONA = {
 
 MEMORY_PROMPT = (
     "\nความจำของทีม: เมื่อถูกถามว่าเกิดอะไรขึ้น ใครพูดอะไร หรืองาน/เรื่องใดถึงไหนแล้ว "
-    "ถ้าคำถามไม่มีวันที่ชัดเจน ให้เรียก chat_search ก่อนด้วยคำค้น 3-8 คำ ทั้งไทย อังกฤษ คำพ้อง ชื่อคน และตัวย่อ "
-    "(เช่น งบโฆษณา, ค่าโฆษณา, ads, marketing budget) แล้วค่อยเปิดวันที่เจอด้วย chat_days หรือ chat_messages. "
+    "ถ้าคำถามไม่มีวันที่ชัดเจน ให้เรียก chat_search ก่อน โดยใส่ query เป็นคำถามของผู้ใช้ และ keywords 2-5 คำ "
+    "(ชื่อคน ตัวเลข รหัส คำสำคัญ) เพราะ chat_search ค้นตามความหมายได้ทั้งไทยและอังกฤษ "
+    "แล้วค่อยเปิดวันที่เจอด้วย chat_days หรือ chat_messages. "
+    "ถ้าหารหัส ตัวเลข หรือคำพูดเป๊ะๆ ที่เก่ากว่า 3 วัน ให้ใช้ chat_messages พร้อม keyword และช่วงวันที่. "
     "ถ้าคำถามมีวันที่ ให้เรียก chat_days (สรุปรายวันต่อห้อง) ได้เลย "
     "แล้วใช้ chat_messages (ข้อความจริง ค้นด้วย keyword) เมื่อต้องการรายละเอียดหรือคำพูดจริง. "
     "ข้อความที่ขึ้นต้นด้วย [รูป: ...] คือสิ่งที่อ่านได้จากรูปที่มีคนส่ง (รวมตัวหนังสือในรูป). "
@@ -684,23 +806,29 @@ def build_tools(
         return safe("chat_messages", a, lambda: memory.chat_messages(**a))
 
     def chat_search(
-        keywords: list[str],
+        keywords: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
+        query: str | None = None,
     ) -> dict:
-        """Search day summaries AND raw messages for ANY of the keywords (case-insensitive
-        substring), in the channels the asker may see. Hits are grouped by date and channel,
-        ranked by keyword hits (summary hits count more), with matching summary lines and up to
+        """Search the team's memory by keywords AND by meaning (Thai and English), in the
+        channels the asker may see. Day summaries are searched over the whole range; raw
+        messages of the last 3 days too. Hits are grouped by date and channel and ranked by
+        both signals (match = keyword, meaning or both), with matching summary lines and up to
         3 matching messages with links.
 
         Args:
-            keywords: 3-8 search words: Thai and English forms, synonyms, names, abbreviations.
+            keywords: 2-5 search words: names, numbers, codes and key terms (Thai or English).
             start_date: ISO date YYYY-MM-DD, optional (default: the whole retention window).
             end_date: ISO date YYYY-MM-DD, optional (default: today).
             limit: max date/channel groups, default 20.
+            query: the user's question in plain words, any language; improves meaning-based
+                matching.
         """
-        a = dict(keywords=keywords, start_date=start_date, end_date=end_date, limit=limit)
+        a = dict(
+            keywords=keywords, start_date=start_date, end_date=end_date, limit=limit, query=query
+        )
         return safe("chat_search", a, lambda: memory.chat_search(**a))
 
     return [*tools, chat_days, chat_messages, chat_search]

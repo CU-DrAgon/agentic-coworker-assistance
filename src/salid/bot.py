@@ -57,6 +57,7 @@ from .memory import (
 )
 from .memory_access import ChannelAccess, allowed_channel_ids
 from .memory_import import MemoryImporter, Target, import_progress
+from .memory_index import IndexedMemoryStore
 from .memory_store import MemoryStore, SQLiteMemoryStore, make_memory_store
 from .memory_summary import render_summary
 from .modes import (
@@ -224,7 +225,10 @@ class SecretaryBot(discord.Client):
         self.meetings = MeetingManager(self)
         # Organisational memory: raw log + day summaries (see salid.memory).
         self.embedder = make_embedder(settings, llm)  # NullEmbedder without a client (tests)
-        self.memory_store = memory or self._default_memory_store(settings, store)
+        # The index serves summary reads from memory; every memory write must go through it.
+        self.memory_store = IndexedMemoryStore(
+            memory or self._default_memory_store(settings, store), self.embedder
+        )
         self.memory = MemoryService(
             self.memory_store,
             settings,
@@ -1370,8 +1374,8 @@ class SecretaryBot(discord.Client):
                 tools = await self._memory_tools(m, guild, m.author)
                 if tools is None:
                     continue
-                result = await asyncio.to_thread(
-                    tools.chat_search, kws, limit=gate.HINT_HITS_PER_CANDIDATE + 2
+                result = await asyncio.to_thread(  # keyword-only: hints stay free
+                    tools.chat_search, kws, limit=gate.HINT_HITS_PER_CANDIDATE + 2, semantic=False
                 )
             except Exception:
                 logger.warning("memory hint lookup failed", exc_info=True)
@@ -1881,6 +1885,7 @@ class SecretaryBot(discord.Client):
             allowed,
             self.s,
             self.team.memory_retention_days(guild.id),
+            embedder=self.embedder,
         )
 
     # ------------------------------------------------------------- digest
