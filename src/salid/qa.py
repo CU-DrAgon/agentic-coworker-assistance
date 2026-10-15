@@ -25,7 +25,7 @@ from .store import Store, duplicate_extras, is_active, pick_keep
 from .web_read import make_read_web
 
 logger = logging.getLogger(__name__)
-MAX_ROUNDS = 4
+MAX_ROUNDS = 6
 APP_NAME = "salid"
 # Vertex 429s (shared quota) and 5xx are retried with backoff by the genai HTTP client
 # (same policy as meeting_scribe.agents).
@@ -841,7 +841,15 @@ WEB_PROMPT = (
     "ให้เรียก read_web (ลิงก์ในข้อความถูกแนบให้อัตโนมัติ ใส่ใน request แค่สิ่งที่ต้องการรู้ ห้ามใส่ข้อมูลบัญชี ความจำ หรือแชตของทีม). "
     "ในคำตอบ: บอกว่าแต่ละลิงก์คืออะไร สรุปประเด็นสำคัญ เสนอขั้นตอนต่อไปถ้ามีประโยชน์ และอ้างแหล่งที่มาเป็นลิงก์. "
     "ถ้าลิงก์อ่านไม่ได้ (ต้องล็อกอิน เพย์วอล์ล ไม่พบหน้า) ให้บอกตรงๆ ห้ามเดาเนื้อหา. "
-    "คำถามเรื่องภายในทีม (บัญชี ใบเสร็จ ใครพูดอะไร) ให้ใช้ ledger/ความจำก่อน ไม่ต้องค้นเว็บ."
+    "คำถามเรื่องภายในทีม (บัญชี ใบเสร็จ ใครพูดอะไร) ให้ใช้ ledger/ความจำก่อน ไม่ต้องค้นเว็บ. "
+    "ถ้ามีหลายลิงก์ ให้เรียก read_web ครั้งเดียวโดยใส่ทุกลิงก์ (ไม่เกิน 5) ใน request ห้ามเรียกแยกทีละลิงก์. "
+    "ลิงก์ที่เจอจากความจำหรือแชตของทีม (เช่น ผู้ใช้ขอสรุปวิดีโอที่เคยแชร์ในห้อง) ให้ใส่ URL นั้นใน request ได้."
+)
+
+# Sent on the last allowed call, when the tools are taken away.
+ROUNDS_EXHAUSTED = (
+    "ตอนนี้ใช้เครื่องมือครบจำนวนครั้งแล้ว ห้ามเรียกเครื่องมือเพิ่ม ให้ตอบจากข้อมูลที่ได้มาแล้ว "
+    "และบอกสั้นๆ ว่าส่วนไหนยังทำไม่ได้ ผู้ใช้ถามต่อเพื่อให้ทำส่วนที่เหลือได้"
 )
 
 NO_REPLY = "NO_REPLY"
@@ -1220,6 +1228,7 @@ def build_agent(
         if model_calls > MAX_ROUNDS:
             llm_request.config.tools = None
             llm_request.tools_dict.clear()
+            llm_request.append_instructions([ROUNDS_EXHAUSTED])
         return None
 
     return LlmAgent(
