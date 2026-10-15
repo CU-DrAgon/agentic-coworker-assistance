@@ -218,15 +218,17 @@ def photo_msg(world, chan, text="", who=STAFF, name="IMG_1025.jpg"):
                 attachments=[att(name, "image/jpeg")])  # fmt: skip
 
 
-async def test_slip_image_in_a_chat_channel_becomes_a_receipt(bot, world, monkeypatch):
+async def test_slip_image_in_a_chat_channel_goes_to_the_agent_not_to_intake(
+    bot, world, monkeypatch
+):
     llm = FakeClient([note_resp("สลิปโอนเงิน", "500.00", "receipt/invoice")])
     calls = real_pipeline(bot, monkeypatch, llm)
     FakeAtt.reads = 0
     m = photo_msg(world, world.chat)
     await bot.on_message(m)
     await settle(bot)
-    assert m.replies == ["บันทึกแล้ว"] and m.reactions == ["✅"]  # no greeting
-    assert len(calls) == 1 and len(image_calls(llm)) == 1 and FakeAtt.reads == 1  # read once
+    assert m.replies == ["(stub answer)"] and calls == []  # the agent decides via record_receipt
+    assert len(image_calls(llm)) == 1  # the describer still feeds memory, without receipt intake
 
 
 async def test_receipt_like_image_in_listen_mode_is_quiet(bot, world, monkeypatch):
@@ -280,34 +282,36 @@ async def test_image_only_message_that_is_not_a_receipt_is_discussed(bot, world,
     seen = []
     monkeypatch.setattr(
         botmod, "ask",
-        lambda s, store, q, **kw: seen.append(q) or SimpleNamespace(text="แมวน่ารัก", seconds=0, rounds=0),
+        lambda s, store, q, **kw: seen.append((q, kw)) or SimpleNamespace(text="แมวน่ารัก", seconds=0, rounds=0),
     )  # fmt: skip
     m = photo_msg(world, world.chat, name="cat.jpg")
     await bot.on_message(m)
-    assert m.replies == ["แมวน่ารัก"] and "แมวสีส้ม" in seen[0]
+    assert m.replies == ["แมวน่ารัก"]
+    assert [f.filename for f in seen[0][1]["files"]] == ["cat.jpg"]
     assert t("greeting", "th") not in m.replies
 
 
-async def test_chat_image_with_the_describer_off_falls_back_to_intake_without_greeting(
+def _qa_and_describer_off(bot):
+    bot.guilds_store.save_settings(
+        GUILD, GuildSettingsUpdate(features=dict(qa=False, image_memory=False)), "x"
+    )
+    bot.team._cache.clear()
+
+
+async def test_chat_image_with_qa_and_the_describer_off_falls_back_to_intake(
     bot, world, monkeypatch
 ):
     llm = FakeClient([])
     calls = real_pipeline(bot, monkeypatch, llm)
-    bot.guilds_store.save_settings(
-        GUILD, GuildSettingsUpdate(features=dict(image_memory=False)), "x"
-    )
-    bot.team._cache.clear()
+    _qa_and_describer_off(bot)
     m = photo_msg(world, world.chat)
     await bot.on_message(m)
     assert len(calls) == 1 and m.replies == ["บันทึกแล้ว"] and llm.models.calls == []
 
 
-async def test_chat_image_not_a_receipt_and_no_describer_stays_silent(bot, world, monkeypatch):
+async def test_chat_image_not_a_receipt_with_qa_off_stays_silent(bot, world, monkeypatch):
     real_pipeline(bot, monkeypatch, FakeClient([]), status="ignored")
-    bot.guilds_store.save_settings(
-        GUILD, GuildSettingsUpdate(features=dict(image_memory=False)), "x"
-    )
-    bot.team._cache.clear()
+    _qa_and_describer_off(bot)
     m = photo_msg(world, world.chat)
     await bot.on_message(m)
     assert m.replies == []  # not the generic greeting

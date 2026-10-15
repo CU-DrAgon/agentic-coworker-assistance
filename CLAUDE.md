@@ -56,7 +56,7 @@ Discord bot "สลิด" (display name Salid), **multi-tenant**: tenant key = 
 | `archive.py` | Optional GCS archive of original receipts (`SALID_RECEIPT_BUCKET`, objects `salid-receipts/{guild_id}/{sha256}.ext`), best effort |
 | `llm.py` | Vertex Gemini client + retry on transient errors |
 | `extract.py` | Receipt extraction, dedupe, ingest, corrections |
-| `qa.py` | Expense Q&A as a Google ADK `LlmAgent` + `InMemoryRunner`; `build_tools(LedgerTools)` makes per-request FunctionTools bound to the guild (`guild_id`) and the caller (`forced_submitter_id`), neither is in a tool schema, `ask`/`ask_async` return `Answer`; max 4 tool rounds |
+| `qa.py` | Expense Q&A as a Google ADK `LlmAgent` + `InMemoryRunner`; `build_tools(LedgerTools)` makes per-request FunctionTools bound to the guild (`guild_id`) and the caller (`forced_submitter_id`), neither is in a tool schema, `ask`/`ask_async` return `Answer`; max 4 tool rounds. Addressed messages with attachments pass `files: list[FileInput]` (multimodal parts, limits in `select_files`) + `FileActions` (bot-bound `record_receipt` / `start_deep_task` tools; `Answer.receipts` lets the bot link the reply message) |
 | `deep_task.py` | Executive "งานใหญ่:" / `/deep` tasks: guild- and caller-scoped CSV export + TASK.md in a temp dir, Gemini CLI headless with isolated HOME and a pinned model, collects `report.md`, always deletes the temp dir |
 | `digest.py` | Daily digest text (`lang`) |
 | `i18n.py` | Reply language: `resolve_lang` (auto = Thai chars -> th, else en), `resolve_language` (channel override -> guild default), `parse_language_command`, the `CATALOG` of fixed strings and `t()` |

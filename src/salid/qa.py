@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
 import logging
 import os
 import time
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from google.adk.agents import LlmAgent
@@ -19,7 +21,7 @@ from .config import Settings
 from .i18n import resolve_lang, t
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
-from .store import Store
+from .store import Store, duplicate_extras, is_active, pick_keep
 
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 4
@@ -33,7 +35,25 @@ THAI_DAYS = ["จันทร์", "อังคาร", "พุธ", "พฤห
 
 
 def baht(x: float) -> str:
+    """Thai baht only. For anything that may be another currency use `money`."""
     return "฿" + f"{x:,.2f}".removesuffix(".00")
+
+
+def money(amount: float, currency: str | None = "THB") -> str:
+    """Format in the receipt's own currency: ฿ for THB (also when missing), $ for USD, otherwise
+    "1,234.50 CODE". Never prefixes ฿ to another currency."""
+    cur = (currency or "THB").strip().upper() or "THB"
+    if cur == "THB":
+        return baht(amount)
+    if cur == "USD":
+        return ("-$" if amount < 0 else "$") + f"{abs(amount):,.2f}"
+    return f"{amount:,.2f} {cur}"
+
+
+def fmt_totals(by: dict[str, float]) -> str:
+    """Per-currency totals, e.g. "฿184,885.54, $131.99". Currencies are never added together."""
+    items = sorted(by.items(), key=lambda kv: (kv[0] != "THB", kv[0]))
+    return ", ".join(money(v, c) for c, v in items) or baht(0)
 
 
 class LedgerTools:
@@ -41,15 +61,27 @@ class LedgerTools:
     `forced_submitter_id` are injected into every query and are NOT part of any tool schema, so the
     model cannot widen the scope."""
 
-    def __init__(self, store: Store, guild_id: int, forced_submitter_id: int | None = None):
+    def __init__(
+        self,
+        store: Store,
+        guild_id: int,
+        forced_submitter_id: int | None = None,
+        actor: str = "",
+    ):
         self.store = store
         self.guild_id = guild_id
         self.forced = forced_submitter_id
+        self.actor = actor  # who asked (recorded as `voided_by`)
+
+    @property
+    def is_exec(self) -> bool:
+        """Executives are the unscoped askers; only they may void or restore receipts."""
+        return self.forced is None
 
     def _fmt_summary(self, s: dict) -> dict:
-        s["total_fmt"] = baht(s["total"])
+        s["total_fmt"] = fmt_totals(s["totals_by_currency"])
         for g in s["groups"]:
-            g["total_fmt"] = baht(g["total"])
+            g["total_fmt"] = fmt_totals(g["totals_by_currency"])
         return s
 
     def spending_summary(self, start_date: str, end_date: str, group_by: str = "none") -> dict:
@@ -67,6 +99,7 @@ class LedgerTools:
         vendor_contains: str | None = None,
         submitter: str | None = None,
         limit: int = 20,
+        include_void: bool = False,
     ) -> dict:
         rows = self.store.list_receipts(
             self.guild_id,
@@ -77,6 +110,7 @@ class LedgerTools:
             submitter,
             limit,
             submitter_id=self.forced,
+            include_void=include_void,
         )
         return {"count": len(rows), "receipts": [self._r(r) for r in rows]}
 
@@ -85,54 +119,200 @@ class LedgerTools:
     ) -> dict:
         a = self.store.summarize(self.guild_id, a_start, a_end, group_by, submitter_id=self.forced)
         b = self.store.summarize(self.guild_id, b_start, b_end, group_by, submitter_id=self.forced)
-        am, bm = (
-            {g["key"]: g["total"] for g in a["groups"]},
-            {g["key"]: g["total"] for g in b["groups"]},
-        )
+        am = {g["key"]: g["totals_by_currency"] for g in a["groups"]}
+        bm = {g["key"]: g["totals_by_currency"] for g in b["groups"]}
         rows = []
-        for k in sorted(set(am) | set(bm), key=lambda k: -(am.get(k, 0) + bm.get(k, 0))):
-            rows.append(self._delta(k, am.get(k, 0.0), bm.get(k, 0.0)))
+        for k in sorted(
+            set(am) | set(bm),
+            key=lambda k: -sum(am.get(k, {}).values()) - sum(bm.get(k, {}).values()),
+        ):
+            rows.append(self._delta(k, am.get(k, {}), bm.get(k, {})))
         return {
+            "note": "amounts are compared per currency; never add different currencies",
             "period_a": {
                 "start": a_start,
                 "end": a_end,
-                "total_fmt": baht(a["total"]),
+                "total_fmt": fmt_totals(a["totals_by_currency"]),
                 "total": a["total"],
+                "totals_by_currency": a["totals_by_currency"],
             },
             "period_b": {
                 "start": b_start,
                 "end": b_end,
-                "total_fmt": baht(b["total"]),
+                "total_fmt": fmt_totals(b["totals_by_currency"]),
                 "total": b["total"],
+                "totals_by_currency": b["totals_by_currency"],
             },
-            "overall": self._delta("all", a["total"], b["total"]),
+            "overall": self._delta("all", a["totals_by_currency"], b["totals_by_currency"]),
             "groups": rows,
         }
 
     @staticmethod
-    def _delta(key, a, b):
-        diff = round(a - b, 2)
-        return {
-            "key": key,
-            "a": a,
-            "b": b,
-            "diff": diff,
-            "diff_fmt": ("+" if diff > 0 else "-" if diff < 0 else "") + baht(abs(diff)),
-            "pct_change_vs_b": round(diff / b * 100, 1) if b else None,
-        }
+    def _delta(key, a: dict, b: dict):
+        """Per-currency difference a - b. With a single currency the flat fields a/b/diff/... are
+        also present; with several they are None and `by_currency` carries each one."""
+        by = {}
+        for cur in sorted(set(a) | set(b), key=lambda c: (c != "THB", c)):
+            av, bv = a.get(cur, 0.0), b.get(cur, 0.0)
+            diff = round(av - bv, 2)
+            by[cur] = {
+                "a": av,
+                "b": bv,
+                "diff": diff,
+                "diff_fmt": ("+" if diff > 0 else "-" if diff < 0 else "") + money(abs(diff), cur),
+                "pct_change_vs_b": round(diff / bv * 100, 1) if bv else None,
+            }
+        out = {"key": key, "by_currency": by}
+        flat = next(iter(by.values())) if len(by) == 1 else None
+        for f in ("a", "b", "diff", "diff_fmt", "pct_change_vs_b"):
+            out[f] = flat[f] if flat else None
+        return out
 
     def flagged_receipts(self) -> dict:
         rows = self.store.flagged(self.guild_id, submitter_id=self.forced)
         return {"count": len(rows), "receipts": [self._r(r) for r in rows]}
 
     @staticmethod
-    def _r(r) -> dict:
+    def _money(amount: float | None, currency: str = "THB") -> str | None:
+        if amount is None:
+            return None
+        return money(amount, currency)
+
+    def _sum_fmt(self, rows) -> tuple[dict, str]:
+        by: dict[str, float] = {}
+        for r in rows:
+            by[r.currency or "THB"] = by.get(r.currency or "THB", 0.0) + (r.total or 0.0)
+        by = {c: round(v, 2) for c, v in by.items()}
+        return by, fmt_totals(by)
+
+    def _dup_entry(self, r) -> dict:
+        out = {
+            "id": r.id,
+            "vendor": r.vendor,
+            "total": r.total,
+            "total_fmt": self._money(r.total, r.currency),
+            "date": r.effective_date,
+            "submitter": r.submitter_name,
+            "confidence": r.confidence,
+            "file_type": "pdf"
+            if (r.original_uri or "").lower().endswith(".pdf")
+            else "image/other",
+        }
+        if r.guild_id and r.channel_id and r.message_id:
+            out["source"] = {
+                "channel_id": r.channel_id,
+                "message_id": r.message_id,
+                "jump_url": f"https://discord.com/channels/{r.guild_id}/{r.channel_id}/{r.message_id}",
+            }
+        return out
+
+    def find_duplicates(self, start_date: str | None = None, end_date: str | None = None) -> dict:
+        """Groups of ACTIVE receipts that look like the same bill (read-only). Scoped users only
+        get duplicates among their own receipts."""
+        start = start_date or end_date and "0000-01-01"
+        end = end_date or start_date and "9999-12-31"
+        groups = self.store.duplicate_groups(
+            self.guild_id,
+            start if start and end else None,
+            end if start and end else None,
+            submitter_id=self.forced,
+        )
+        out = []
+        for g in groups:
+            keep = pick_keep(g)
+            extras = [r for r in g if r is not keep]
+            _, fmt = self._sum_fmt(extras)
+            out.append(
+                {
+                    "keep": self._dup_entry(keep),
+                    "duplicates": [self._dup_entry(r) for r in extras],
+                    "deduct_fmt": fmt,
+                }
+            )
+        by, fmt = self._sum_fmt(duplicate_extras(groups))
         return {
+            "group_count": len(out),
+            "groups": out,
+            "total_deduct_by_currency": by,
+            "total_deduct_fmt": fmt,
+            "can_void": self.is_exec,
+        }
+
+    def void_receipts(self, receipt_ids: list[int], reason: str) -> dict:
+        """Void (soft delete, reversible) ACTIVE receipts of this guild. Executives only."""
+        if not self.is_exec:
+            return {"error": "not_allowed"}
+        if not (reason or "").strip():
+            return {"error": "reason is required"}
+        ids = list(dict.fromkeys(int(i) for i in receipt_ids or []))
+        ignored, todo = [], {}
+        for rid in ids:
+            r = self.store.get(rid)
+            if r is None or r.guild_id != self.guild_id:
+                ignored.append({"id": rid, "reason": "not found in this server"})
+            elif not is_active(r):
+                ignored.append({"id": rid, "reason": "already void"})
+            else:
+                todo[rid] = r
+        refused = []
+        for g in self.store.duplicate_groups(self.guild_id):
+            gid = {r.id for r in g}
+            if gid <= set(todo):  # would leave the group with no active receipt
+                for rid in sorted(gid):
+                    refused.append(
+                        {"id": rid, "reason": "would void every copy of the bill; keep one"}
+                    )
+                    todo.pop(rid)
+        done = [
+            self.store.set_status(rid, "void", reason=reason.strip(), by=self.actor or "executive")
+            for rid in todo
+        ]
+        by, fmt = self._sum_fmt(done)
+        return {
+            "voided": [self._dup_entry(r) for r in done],
+            "ignored": ignored,
+            "refused": refused,
+            "deducted_by_currency": by,
+            "total_delta_fmt": "-" + fmt if done else baht(0),
+            "undo": "restore_receipts",
+        }
+
+    def restore_receipts(self, receipt_ids: list[int]) -> dict:
+        """Undo a void. Executives only."""
+        if not self.is_exec:
+            return {"error": "not_allowed"}
+        ignored, done = [], []
+        for rid in dict.fromkeys(int(i) for i in receipt_ids or []):
+            r = self.store.get(rid)
+            if r is None or r.guild_id != self.guild_id:
+                ignored.append({"id": rid, "reason": "not found in this server"})
+            elif is_active(r):
+                ignored.append({"id": rid, "reason": "not void"})
+            else:
+                done.append(self.store.set_status(rid, "active"))
+        by, fmt = self._sum_fmt(done)
+        return {
+            "restored": [self._dup_entry(r) for r in done],
+            "ignored": ignored,
+            "added_by_currency": by,
+            "total_delta_fmt": "+" + fmt if done else baht(0),
+        }
+
+    @staticmethod
+    def _r(r) -> dict:
+        extra = (
+            {"status": "void", "void_reason": r.void_reason, "voided_by": r.voided_by}
+            if not is_active(r)
+            else {}
+        )
+        return {
+            **extra,
             "id": r.id,
             "date": r.effective_date,
             "vendor": r.vendor,
             "total": r.total,
-            "total_fmt": baht(r.total) if r.total is not None else None,
+            "currency": r.currency or "THB",
+            "total_fmt": money(r.total, r.currency) if r.total is not None else None,
             "category": r.category,
             "submitter": r.submitter_name,
             "confidence": r.confidence,
@@ -141,7 +321,15 @@ class LedgerTools:
         }
 
     def call(self, name: str, args: dict) -> dict:
-        allowed = {"spending_summary", "list_receipts", "compare_periods", "flagged_receipts"}
+        allowed = {
+            "spending_summary",
+            "list_receipts",
+            "compare_periods",
+            "flagged_receipts",
+            "find_duplicates",
+            "void_receipts",
+            "restore_receipts",
+        }
         if name not in allowed:
             return {"error": f"unknown tool {name}"}
         fn = getattr(self, name)
@@ -401,6 +589,135 @@ class MemoryTools:
             return {"error": str(e)}
 
 
+# ---------------------------------------------------------------- files sent to Salid
+MAX_FILES = 4
+MAX_FILE_BYTES = 15 * 1024 * 1024
+MAX_TOTAL_BYTES = 20 * 1024 * 1024
+MAX_TEXT_FILE_BYTES = 200 * 1024
+NO_TEXT_TURN = "(ผู้ใช้ส่งไฟล์มาโดยไม่มีข้อความ)"
+_IMAGE_MIMES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+    "heic": "image/heic",
+    "heif": "image/heif",
+}
+_TEXT_EXTS = {"txt", "md", "csv", "tsv", "json", "log", "xml", "yaml", "yml", "html", "htm"}
+_RECEIPT_MIMES = {"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"}
+
+
+@dataclass
+class FileInput:
+    """One attachment of the message being answered. `index` is its position in the message's
+    attachments (the number the model passes to record_receipt). `size` defaults to len(data);
+    the bot may pass a size without data to plan what to read. `skip` = why it is not used."""
+
+    index: int
+    filename: str
+    mime: str | None
+    data: bytes = b""
+    size: int = 0
+    skip: str = ""
+
+    def __post_init__(self):
+        self.size = self.size or len(self.data)
+
+
+def file_mime(filename: str, content_type: str | None = None) -> str | None:
+    """The MIME type Salid can read (image, PDF, plain text), or None for anything else."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if ext in _IMAGE_MIMES:
+        return _IMAGE_MIMES[ext]
+    if ext == "pdf":
+        return "application/pdf"
+    if ext in _TEXT_EXTS:
+        return "text/plain"
+    if ct in set(_IMAGE_MIMES.values()):
+        return ct
+    if ct == "application/pdf":
+        return ct
+    if ct.startswith("text/"):
+        return "text/plain"
+    return None
+
+
+def select_files(files: list[FileInput]) -> tuple[list[FileInput], list[FileInput]]:
+    """(usable, skipped): applies the count, per-file and total size limits in order. Skipped files
+    carry the reason in `skip`."""
+    ok: list[FileInput] = []
+    skipped: list[FileInput] = []
+    total = 0
+    for f in files:
+        reason = f.skip
+        if not reason and not f.mime:
+            reason = "unsupported file type"
+        elif not reason and f.mime == "text/plain" and f.size > MAX_TEXT_FILE_BYTES:
+            reason = f"text file over {MAX_TEXT_FILE_BYTES // 1024} KB"
+        elif not reason and f.size > MAX_FILE_BYTES:
+            reason = f"over {MAX_FILE_BYTES // 1024 // 1024} MB"
+        elif not reason and len(ok) >= MAX_FILES:
+            reason = f"more than {MAX_FILES} files"
+        elif not reason and total + f.size > MAX_TOTAL_BYTES:
+            reason = f"total size over {MAX_TOTAL_BYTES // 1024 // 1024} MB"
+        if reason:
+            f.skip = reason
+            skipped.append(f)
+        else:
+            ok.append(f)
+            total += f.size
+    return ok, skipped
+
+
+def _gif_first_frame(data: bytes) -> bytes:
+    from PIL import Image
+
+    with Image.open(io.BytesIO(data)) as im:
+        im.seek(0)
+        out = io.BytesIO()
+        im.convert("RGBA").save(out, format="PNG")
+        return out.getvalue()
+
+
+def file_parts(files: list[FileInput]) -> tuple[list[types.Part], list[FileInput]]:
+    """Model input for the usable files: a label part (with the attachment number) and then the
+    file as inline bytes (text files as text). Returns (parts, files that could not be read)."""
+    parts: list[types.Part] = []
+    bad: list[FileInput] = []
+    for f in files:
+        label = f"[ไฟล์ #{f.index}: {f.filename}]"
+        try:
+            if f.mime == "text/plain":
+                body = f.data.decode("utf-8", errors="replace")
+                parts.append(types.Part(text=f"{label}\n{body}"))
+                continue
+            data, mime = f.data, f.mime or ""
+            if mime == "image/gif":
+                data, mime = _gif_first_frame(data), "image/png"
+            parts.append(types.Part(text=label))
+            parts.append(types.Part.from_bytes(data=data, mime_type=mime))
+        except Exception:
+            f.skip = "could not be read"
+            bad.append(f)
+    return parts, bad
+
+
+def skipped_note(skipped: list[FileInput]) -> str:
+    return "\n".join(f"[file skipped: {f.filename}, {f.skip}]" for f in skipped)
+
+
+@dataclass
+class FileActions:
+    """What the file tools may do, bound by the bot to one message (guild, author, channel and
+    message ids are closed over there, never model input). `record_receipt` None = the receipts
+    feature is off; `start_deep_task` None = deep tasks are not available."""
+
+    record_receipt: Callable[[FileInput, str], object] | None = None  # -> extract.IngestResult
+    start_deep_task: Callable[[str], str] | None = None  # -> "started" or a reason
+
+
 PERSONA = {
     "th": (
         "คุณชื่อ “สลิด” เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
@@ -446,7 +763,9 @@ CAPABILITIES_PROMPT = (
     "1) ใบเสร็จและบัญชี: ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า ใบเสร็จ/receipt/invoice/ใบกำกับ/สลิป/slip/บิล/bill/expense/ค่าใช้จ่าย/เบิก หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
     "แล้วบันทึกลงบัญชี เตือนถ้าน่าจะซ้ำ แก้ข้อมูลได้โดยตอบกลับ (reply) ข้อความใบเสร็จของสลิด. "
     "ถามยอดใช้จ่ายได้ เช่น เดือนนี้จ่ายค่าอะไรไปเท่าไร แยกหมวด ใครส่ง รายการที่ต้องตรวจ "
-    "(ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นเฉพาะของตัวเอง). มีสรุปรายวันส่งเข้าห้องตามเวลาที่ตั้งไว้\n"
+    "(ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นเฉพาะของตัวเอง). "
+    "ตรวจหาบิลที่ส่งซ้ำ (เช่น PDF กับภาพหน้าจอของใบเดียวกัน) ได้ และหักออกจากยอดได้ (void ไม่ลบทิ้ง กู้คืนได้ ผู้บริหารสั่งหัก); "
+    "มีสรุปรายวันส่งเข้าห้องตามเวลาที่ตั้งไว้\n"
     "2) ความจำของทีม: สลิดจดข้อความและอ่านรูปทุกรูป (รวมตัวหนังสือในรูป) ในห้องที่ไม่ได้ตั้งเป็น 🔇 ปิด "
     "เก็บตามจำนวนวันที่แอดมินตั้ง (ค่าเริ่มต้น 90 วัน ดูหรือปรับด้วย /ความจำ หรือ /memory) "
     "และสรุปแต่ละห้องเป็นรายวัน จึงตอบได้ว่าเมื่อวานคุยอะไร ใครรับงานอะไร เรื่องไหนถึงไหน พร้อมลิงก์ไปที่ข้อความจริง. "
@@ -465,12 +784,49 @@ CAPABILITIES_PROMPT = (
     "(ไทย / English / อัตโนมัติ = ตอบตามภาษาที่พิมพ์มา) หรือแท็กแล้วพิมพ์ “speak English” / “พูดไทย”. "
     "คำสั่งทุกอย่างพิมพ์ได้ทั้งไทยและอังกฤษ\n"
     "6) งานใหญ่: พิมพ์ขึ้นต้นด้วย “งานใหญ่:” หรือ “deep task:” ตามด้วยงาน เช่น วิเคราะห์ค่าใช้จ่ายทั้งไตรมาส "
-    "สลิดจะทำงานเบื้องหลังแล้วส่งรายงานกลับมา\n"
-    "7) ผู้ช่วยทั่วไป: คุยเล่น ตอบความรู้ทั่วไป ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ\n"
+    "สลิดจะทำงานเบื้องหลังแล้วส่งรายงานกลับมา ยกเลิกงานที่กำลังทำได้ด้วย “@Salid ยกเลิกงาน” / “cancel task” หรือ /ยกเลิก /cancel "
+    "(คนที่สั่ง ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหาร)\n"
+    "7) ผู้ช่วยทั่วไป: คุยเล่น ตอบความรู้ทั่วไป ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
+    "ลบข้อความของสลิดได้โดยตอบกลับข้อความนั้นว่า “ลบ” / “delete” (ได้เฉพาะคนที่สลิดตอบ ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหาร; "
+    "คำตอบยาวที่แบ่งหลายข้อความจะถูกลบทั้งหมด) ส่วนตอบกลับใบเสร็จว่า “ลบ” คือยกเลิกใบเสร็จ (กู้คืนได้) และ “ลบข้อความ” ยกเลิกใบเสร็จพร้อมลบข้อความ\n"
     "8) ตั้งค่า: แอดมินพิมพ์ /ตั้งค่า หรือ /setup เพื่อรับลิงก์เข้าหน้าศูนย์บัญชาการ (Hub) บนเว็บ "
-    "ที่เปิดปิดความสามารถ ตั้งห้อง โหมด ภาษา ระยะเวลาความจำ และดูความเคลื่อนไหวได้.\n"
+    "ที่เปิดปิดความสามารถ ตั้งห้อง โหมด ภาษา ระยะเวลาความจำ และดูความเคลื่อนไหวได้\n"
+    "9) อ่านรูปและไฟล์ที่ส่งมา: ส่งรูป PDF หรือไฟล์ข้อความ (ไม่เกิน 4 ไฟล์) ให้สลิดโดยตรง (แท็ก เรียกชื่อ ตอบกลับสลิด ส่ง DM หรือส่งในห้องคุยกับสลิด) "
+    "สลิดอ่านแล้วบอกว่าในไฟล์มีอะไร แล้วตัดสินใจเองว่าจะทำอะไรต่อ: ใบเสร็จ/บิล/สลิปโอนเงินบันทึกลงบัญชีให้ "
+    "เอกสารหรือภาพหน้าจอสรุปประเด็นแล้วเสนอขั้นตอนต่อไป คำถามในรูปก็ตอบให้.\n"
     "ข้อจำกัด: ค้นอินเทอร์เน็ตไม่ได้ (ข่าวหรือข้อมูลล่าสุดอาจไม่อัปเดต) และตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ "
     "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
+)
+
+
+DUPLICATES_PROMPT = (
+    "\nบิลซ้ำ: เมื่อถูกถามเรื่องบิลซ้ำ/ส่งซ้ำ/หักซ้ำออก ให้เรียก find_duplicates ก่อน แล้วแสดงทีละกลุ่มให้ชัด "
+    "(ใบไหนเก็บไว้ ใบไหนจะถูกหักออก พร้อมเลข #, ร้าน, ยอด, วันที่, คนส่ง, ลิงก์ต้นทางถ้ามี) และยอดที่จะหักรวม "
+    "แล้วถามขอคำยืนยันก่อนเสมอ ห้ามเรียก void_receipts ในข้อความเดียวกับที่เพิ่งแสดงรายการ "
+    "เรียก void_receipts ได้ก็ต่อเมื่อผู้ใช้ยืนยันในข้อความถัดมา (เช่น “ยืนยัน”, “หักออกเลย”, “ok”, “yes”) "
+    "และส่งเฉพาะ id ของใบที่ซ้ำ (ไม่ใช่ใบที่เก็บไว้) หลังหักแล้วบอกยอดที่หักและว่ากู้คืนได้ (restore_receipts). "
+    "void_receipts / restore_receipts ใช้ได้เฉพาะผู้บริหาร ถ้าได้ not_allowed ให้บอกว่าต้องให้ผู้บริหารสั่ง. "
+    "คนทั่วไป (นอกจากผู้บริหาร) ดูได้เฉพาะบิลซ้ำของใบเสร็จที่ตัวเองส่ง. "
+    "ยอดสรุปทั้งหมดไม่นับใบที่ถูกหัก (void); ถ้าผู้ใช้อยากเห็นใบที่ถูกหักให้ใช้ list_receipts ด้วย include_void=true."
+)
+
+FILES_PROMPT = (
+    "\nไฟล์ที่ผู้ใช้ส่งมา: ข้อความล่าสุดมีไฟล์แนบ (รูป, PDF, ไฟล์ข้อความ) ที่แนบมาให้อ่านโดยตรง "
+    "ติดป้าย [ไฟล์ #N: ชื่อ] (N คือเลขไฟล์ที่ใช้กับเครื่องมือ). ทำตามนี้:\n"
+    "(ก) ก่อนอื่นบอกสั้นๆ ว่าแต่ละไฟล์คืออะไร: ประเภทเอกสาร และเนื้อหาสำคัญ (ตัวเลข วันที่ ชื่อ ยอดรวม ประเด็นหลัก).\n"
+    "(ข) แล้วตัดสินใจเองว่าควรทำอะไรต่อ และลงมือทำเลย: "
+    "ใบเสร็จ / ใบกำกับภาษี / บิล / สลิปโอนเงิน -> เรียก record_receipt (ไม่ต้องถามก่อน) แล้วรายงานผล "
+    "(สำเร็จ ซ้ำ หรืออ่านไม่ชัด ให้บอกตามจริง); "
+    "เอกสาร ภาพหน้าจอ แคปแชต ตาราง หรือกราฟ -> สรุปประเด็นสำคัญ เชื่อมกับความจำของทีมถ้าเกี่ยวข้อง (chat_search) "
+    "แล้วเสนอสิ่งที่ทำต่อได้ 1-3 ข้อที่เป็นรูปธรรม หรือถามคำถามเดียวที่ช่วยให้ไปต่อได้; "
+    "ถ้าในรูปเป็นคำถาม -> ตอบคำถามนั้น; "
+    "ถ้าเป็นรูปถ่ายหรือมีม -> ตอบเป็นธรรมชาติและสั้นๆ; "
+    "ถ้างานที่ไฟล์ต้องการเป็นการวิเคราะห์ขนาดใหญ่ที่ต้องใช้ข้อมูลบัญชีทั้งหมด -> เรียก start_deep_task.\n"
+    "(ค) ถ้าข้อความของผู้ใช้บอกว่าจะให้ทำอะไร ให้ทำตามนั้นแทน.\n"
+    "ป้าย [ไฟล์ #N: ...] มีไว้ให้เครื่องมือเท่านั้น ห้ามพิมพ์ป้ายนี้ในคำตอบ (ถ้ามีหลายไฟล์ให้เรียกว่า รูปแรก/ไฟล์ที่สอง หรือชื่อไฟล์) "
+    "และไม่ต้องทักทายหรือแนะนำตัว เริ่มที่เนื้อหาเลย. "
+    "ห้ามแต่งเนื้อหาที่อ่านไม่ได้ ถ้าส่วนไหนอ่านไม่ออกให้บอกว่าอ่านไม่ออกตรงไหน. "
+    "ไฟล์ที่ถูกข้ามจะมีหมายเหตุ [file skipped: ...] ให้แจ้งผู้ใช้สั้นๆ. ตอบให้กระชับ."
 )
 
 
@@ -495,6 +851,7 @@ def system_prompt(
     language: str = "th",
     memory: bool = False,
     interjection: bool = False,
+    files: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message."""
     now = now or settings.now()
@@ -506,16 +863,20 @@ def system_prompt(
         f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
         f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD\n"
         "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
-        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วย ฿. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
+        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วยสัญลักษณ์สกุลเงินของใบเสร็จนั้น (฿ = บาท, $ = USD). "
+        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยน: ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
         "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
+    p += DUPLICATES_PROMPT
     if scoped:
         p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
     if memory:
         p += MEMORY_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
+    if files:
+        p += FILES_PROMPT
     if language == "en":
         p += "\nLanguage: write your whole reply in English."
     elif language == "auto":
@@ -531,6 +892,7 @@ class Answer:
     rounds: int
     seconds: float
     tool_calls: list[tuple[str, dict]]
+    receipts: list[tuple[int, str | None]] = field(default_factory=list)  # (id, reaction) created
 
 
 def build_tools(
@@ -572,8 +934,10 @@ def build_tools(
         vendor_contains: str | None = None,
         submitter: str | None = None,
         limit: int = 20,
+        include_void: bool = False,
     ) -> dict:
-        """List individual receipts in a date range with optional filters.
+        """List individual receipts in a date range with optional filters. Void (deducted)
+        receipts are left out unless include_void is true; they are then marked status=void.
 
         Args:
             start_date: ISO date YYYY-MM-DD, inclusive.
@@ -582,6 +946,7 @@ def build_tools(
             vendor_contains: substring of the vendor name.
             submitter: substring of the submitter display name.
             limit: max rows, default 20.
+            include_void: also list void (deducted) receipts, marked status=void.
         """
         a = dict(
             start_date=start_date,
@@ -590,6 +955,7 @@ def build_tools(
             vendor_contains=vendor_contains,
             submitter=submitter,
             limit=limit,
+            include_void=include_void,
         )
         return safe("list_receipts", a, lambda: ledger.list_receipts(**a))
 
@@ -612,7 +978,50 @@ def build_tools(
         """Receipts needing attention: low confidence, missing total, or possible duplicates."""
         return safe("flagged_receipts", {}, ledger.flagged_receipts)
 
-    tools = [spending_summary, list_receipts, compare_periods, flagged_receipts]
+    def find_duplicates(start_date: str | None = None, end_date: str | None = None) -> dict:
+        """Find receipts that look like the same bill recorded twice (e.g. a PDF and a screenshot
+        of one invoice): same total and currency, dates within 3 days, similar vendor or same
+        invoice number. Read-only. Returns groups with which receipt would be kept, which would
+        be deducted, and the amount deducted per group and in total. Does not change anything.
+
+        Args:
+            start_date: optional ISO date YYYY-MM-DD, inclusive (give both dates or neither).
+            end_date: optional ISO date YYYY-MM-DD, inclusive.
+        """
+        a = dict(start_date=start_date, end_date=end_date)
+        return safe("find_duplicates", a, lambda: ledger.find_duplicates(**a))
+
+    def void_receipts(receipt_ids: list[int], reason: str) -> dict:
+        """Deduct receipts from all totals by voiding them (soft delete, reversible with
+        restore_receipts). Executives only. Call it ONLY after the user has confirmed, in a
+        later message, the exact receipts to deduct. At least one receipt of each duplicate
+        group stays active.
+
+        Args:
+            receipt_ids: ids of the receipts to void (the duplicates, not the one that stays).
+            reason: short reason, e.g. "duplicate of #12".
+        """
+        a = dict(receipt_ids=receipt_ids, reason=reason)
+        return safe("void_receipts", a, lambda: ledger.void_receipts(**a))
+
+    def restore_receipts(receipt_ids: list[int]) -> dict:
+        """Undo a void: count the receipts in the totals again. Executives only.
+
+        Args:
+            receipt_ids: ids of the void receipts to restore.
+        """
+        a = dict(receipt_ids=receipt_ids)
+        return safe("restore_receipts", a, lambda: ledger.restore_receipts(**a))
+
+    tools = [
+        spending_summary,
+        list_receipts,
+        compare_periods,
+        flagged_receipts,
+        find_duplicates,
+        void_receipts,
+        restore_receipts,
+    ]
     if memory is None:
         return tools
 
@@ -676,6 +1085,80 @@ def build_tools(
     return [*tools, chat_days, chat_messages, chat_search]
 
 
+def build_file_tools(
+    files: list[FileInput],
+    actions: FileActions,
+    calls: list[tuple[str, dict]],
+    created: list[tuple[int, str | None]],
+) -> list:
+    """record_receipt / start_deep_task for the files of one message. The attachment number is
+    the only model input that selects data; guild, author, channel and message are bound in
+    `actions`. Receipts created are appended to `created` as (receipt id, reaction)."""
+    by_index = {f.index: f for f in files}
+    started: list[str] = []
+
+    def record_receipt(file_index: int, note: str = "") -> dict:
+        """Record an attachment of this message as a receipt / tax invoice / bill / bank transfer
+        slip in the shop's expense ledger. Do not ask the user first. Returns the status
+        (created, duplicate, ignored = not a receipt, disabled) and the saved fields.
+
+        Args:
+            file_index: the attachment number N of the file ([ไฟล์ #N: ...]).
+            note: optional extra context from the user (what the expense was for).
+        """
+        calls.append(("record_receipt", {"file_index": file_index}))
+        if actions.record_receipt is None:
+            return {"status": "disabled"}
+        f = by_index.get(file_index)
+        if f is None:
+            return {"status": "error", "error": f"no file #{file_index} in this message"}
+        if f.mime not in _RECEIPT_MIMES and f.mime not in ("application/pdf", "image/gif"):
+            return {"status": "ignored", "reason": "only an image or PDF can be a receipt"}
+        try:
+            res = actions.record_receipt(f, note or "")
+        except Exception as e:  # a failed extraction must not kill the turn
+            logger.warning("record_receipt failed (%s)", type(e).__name__)
+            return {"status": "error", "error": "could not read this file as a receipt"}
+        out: dict = {"status": res.status}
+        r = res.receipt
+        if r is not None:
+            out.update(
+                receipt_id=r.id,
+                vendor=r.vendor,
+                total=r.total,
+                currency=r.currency or "THB",
+                total_fmt=money(r.total, r.currency) if r.total is not None else None,
+                date=r.receipt_date or r.effective_date,
+                category=r.category,
+                needs_check=res.reaction == "⚠️",
+            )
+        if res.reply:
+            out["reply_text"] = res.reply
+        if res.status == "created" and r is not None:
+            created.append((r.id, res.reaction))
+        return out
+
+    def start_deep_task(task: str) -> dict:
+        """Start a deep background analysis of the shop's ledger (executives only; the report is
+        posted in the channel later). Use only for a heavy analysis the file calls for, then tell
+        the user it has started.
+
+        Args:
+            task: what to analyse, in the user's language, including the relevant facts from the file.
+        """
+        calls.append(("start_deep_task", {}))
+        if actions.start_deep_task is None:
+            return {"status": "disabled"}
+        if started:
+            return {"status": "already_started"}
+        status = actions.start_deep_task(task)
+        if status == "started":
+            started.append(task)
+        return {"status": status}
+
+    return [record_receipt, start_deep_task]
+
+
 def _ensure_vertex_env(settings: Settings) -> None:
     # ADK reads these to route Gemini calls through Vertex AI (meeting_scribe sets them too).
     os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "TRUE")
@@ -694,6 +1177,7 @@ def build_agent(
     language: str = "th",
     memory: bool = False,
     interjection: bool = False,
+    files: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -704,6 +1188,7 @@ def build_agent(
         language=language,
         memory=memory,
         interjection=interjection,
+        files=files,
     )
     model_calls = 0
 
@@ -751,35 +1236,57 @@ async def ask_async(
     language: str = "th",
     memory: MemoryTools | None = None,
     interjection: bool = False,
+    files: list[FileInput] | None = None,
+    actions: FileActions | None = None,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
-    whose `forced_submitter_id` is the asker for non-executives."""
+    whose `forced_submitter_id` is the asker for non-executives. `files`: the message's attachments
+    (read by the model itself as multimodal parts, within the size limits); with `actions` the model
+    also gets record_receipt / start_deep_task for them."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
-    ledger = LedgerTools(store, guild_id, forced_submitter_id=None if is_exec else user_id)
+    created: list[tuple[int, str | None]] = []
+    ledger = LedgerTools(
+        store,
+        guild_id,
+        forced_submitter_id=None if is_exec else user_id,
+        actor=f"user {user_id}",
+    )
+    usable, skipped = select_files(list(files or []))
+    f_parts, unreadable = file_parts(usable)
+    usable = [f for f in usable if f not in unreadable]
+    skipped += unreadable
+    tools = build_tools(ledger, calls, memory)
+    if usable and actions is not None:
+        tools += build_file_tools(usable, actions, calls, created)
     agent = build_agent(
         settings,
-        build_tools(ledger, calls, memory),
+        tools,
         scoped=not is_exec,
         now=now,
         model=model,
         language=language,
         memory=memory is not None,
         interjection=interjection,
+        files=bool(usable or skipped),
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
     await runner.session_service.create_session(
         app_name=APP_NAME, user_id=adk_user, session_id=session_id
     )
+    if files and not question.strip():
+        question = NO_TEXT_TURN
     text_in = (
         f"บทสนทนาก่อนหน้าในห้องนี้ (หลายคนคุยกัน เรียงจากเก่าไปใหม่):\n{history}\n\n"
         f"ข้อความล่าสุดที่ต้องตอบ:\n{question}"
         if history
         else question
     )
-    message = types.Content(role="user", parts=[types.Part(text=text_in)])
+    if skipped:
+        text_in += "\n" + skipped_note(skipped)
+    message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
     async for event in runner.run_async(
         user_id=adk_user,
@@ -798,6 +1305,7 @@ async def ask_async(
         rounds,
         time.monotonic() - started,
         calls,
+        created,
     )
 
 
@@ -815,6 +1323,8 @@ def ask(
     language: str = "th",
     memory: MemoryTools | None = None,
     interjection: bool = False,
+    files: list[FileInput] | None = None,
+    actions: FileActions | None = None,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -831,5 +1341,7 @@ def ask(
             language=language,
             memory=memory,
             interjection=interjection,
+            files=files,
+            actions=actions,
         )
     )

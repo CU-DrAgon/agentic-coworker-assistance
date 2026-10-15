@@ -99,6 +99,8 @@ class Features(BaseModel):
 class Channel(BaseModel):
     id: str
     name: str
+    visible: bool = True  # Salid has View Channel here (synced by the bot)
+    readable_history: bool = True  # ... and Read Message History
 
 
 def _clean_ids(v) -> list[str]:

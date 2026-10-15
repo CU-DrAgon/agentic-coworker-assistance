@@ -28,13 +28,25 @@ No composite indexes are required: every query has a single equality filter.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from google.api_core.exceptions import AlreadyExists
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from .models import Receipt
-from .store import GROUPS, LOW_CONF, UPDATABLE
+from .store import (
+    ACTIVE,
+    GROUPS,
+    LOW_CONF,
+    UPDATABLE,
+    VOID,
+    build_summary,
+    cur_of,
+    find_duplicate_in,
+    group_duplicates,
+    is_active,
+)
 
 UNKNOWN_VENDOR = "(ไม่ทราบ)"
 
@@ -104,9 +116,16 @@ class FirestoreStore:
         return Receipt(**snap.to_dict()) if snap is not None else None
 
     def _in_range(
-        self, guild_id: int, start: str, end: str, submitter_id: int | None
+        self,
+        guild_id: int,
+        start: str,
+        end: str,
+        submitter_id: int | None,
+        include_void: bool = False,
     ) -> list[Receipt]:
         rows = [Receipt(**s.to_dict()) for s in self._guild(guild_id).stream()]
+        if not include_void:  # a missing `status` field means active
+            rows = [r for r in rows if is_active(r)]
         rows = [r for r in rows if start <= r.effective_date <= end]  # client-side: no index
         if submitter_id is not None:
             rows = [r for r in rows if r.submitter_id == submitter_id]
@@ -153,18 +172,39 @@ class FirestoreStore:
         return self._receipt(self._snap_by("reply_message_id", message_id))
 
     def find_possible_duplicate(self, r: Receipt) -> Receipt | None:
-        if not (r.vendor and r.receipt_date and r.total is not None):
+        if r.total is None:
             return None
-        same_day = (Receipt(**s.to_dict()) for s in self._guild(r.guild_id).stream())
-        hits = [
-            x
-            for x in same_day
-            if x.receipt_date == r.receipt_date
-            and x.sha256 != r.sha256
-            and x.total == r.total
-            and (x.vendor or "").casefold() == r.vendor.casefold()
-        ]
-        return min(hits, key=lambda x: x.id or 0, default=None)
+        return find_duplicate_in(
+            r, (Receipt(**s.to_dict()) for s in self._guild(r.guild_id).stream())
+        )
+
+    def duplicate_groups(
+        self,
+        guild_id: int,
+        start: str | None = None,
+        end: str | None = None,
+        submitter_id: int | None = None,
+    ) -> list[list[Receipt]]:
+        rows = self._in_range(guild_id, start or "", end or "\uffff", submitter_id)
+        return group_duplicates(rows)
+
+    def set_status(
+        self, receipt_id: int, status: str, reason: str | None = None, by: str | None = None
+    ) -> Receipt:
+        if status not in (ACTIVE, VOID):
+            raise ValueError(f"bad status {status}")
+        snap = self._snap_by("id", receipt_id)
+        if snap is None:
+            raise KeyError(f"receipt {receipt_id} not found")
+        void = status == VOID
+        f = {
+            "status": status,
+            "void_reason": reason if void else None,
+            "voided_by": by if void else None,
+            "voided_at": datetime.now(UTC).isoformat(timespec="seconds") if void else None,
+        }
+        snap.reference.update(f)
+        return Receipt(**{**snap.to_dict(), **f})
 
     # ------------------------------------------------------------ range reads
     def summarize(
@@ -177,21 +217,12 @@ class FirestoreStore:
     ) -> dict:
         if group_by not in GROUPS:
             raise ValueError(f"bad group_by {group_by}")
-        acc: dict[str, list[float]] = {}
+        acc: dict[tuple[str, str], list[float]] = {}
         for r in self._in_range(guild_id, start, end, submitter_id):
-            g = acc.setdefault(_group_key(r, group_by), [0.0, 0])
+            g = acc.setdefault((_group_key(r, group_by), cur_of(r)), [0.0, 0])
             g[0] += r.total or 0.0
             g[1] += 1
-        groups = [{"key": k, "total": round(t, 2), "count": c} for k, (t, c) in acc.items()]
-        groups.sort(key=(lambda g: g["key"]) if group_by == "day" else (lambda g: -g["total"]))
-        return {
-            "start": start,
-            "end": end,
-            "group_by": group_by,
-            "total": round(sum(g["total"] for g in groups), 2),
-            "count": sum(g["count"] for g in groups),
-            "groups": [] if group_by == "none" else groups,
-        }
+        return build_summary(start, end, group_by, [(k, c, t, n) for (k, c), (t, n) in acc.items()])
 
     def list_receipts(
         self,
@@ -203,8 +234,9 @@ class FirestoreStore:
         submitter: str | None = None,
         limit: int = 20,
         submitter_id: int | None = None,
+        include_void: bool = False,
     ) -> list[Receipt]:
-        rows = self._in_range(guild_id, start, end, submitter_id)
+        rows = self._in_range(guild_id, start, end, submitter_id, include_void)
         if category:
             rows = [r for r in rows if r.category == category]
         if vendor_contains:
@@ -220,11 +252,12 @@ class FirestoreStore:
         start: str | None = None,
         end: str | None = None,
         submitter_id: int | None = None,
+        include_void: bool = False,
     ) -> list[Receipt]:
         if start and end:
-            rows = self._in_range(guild_id, start, end, submitter_id)
+            rows = self._in_range(guild_id, start, end, submitter_id, include_void)
         else:  # the guild's whole ledger, see the scale note in the module docstring
-            rows = self._in_range(guild_id, "", "\uffff", submitter_id)
+            rows = self._in_range(guild_id, "", "\uffff", submitter_id, include_void)
         rows = [
             r
             for r in rows
@@ -240,13 +273,16 @@ class FirestoreStore:
         end: str,
         submitter_id: int | None = None,
         limit: int = 5000,
+        include_void: bool = False,
     ) -> list[Receipt]:
-        rows = self._in_range(guild_id, start, end, submitter_id)
+        rows = self._in_range(guild_id, start, end, submitter_id, include_void)
         rows.sort(key=lambda r: (r.effective_date, r.id or 0))
         return rows[:limit]
 
-    def recent(self, guild_id: int, limit: int = 20) -> list[Receipt]:
+    def recent(self, guild_id: int, limit: int = 20, include_void: bool = False) -> list[Receipt]:
         """Newest receipts first (by id). Reads the guild's ledger, see the scale note above."""
         rows = [Receipt(**s.to_dict()) for s in self._guild(guild_id).stream()]
+        if not include_void:
+            rows = [r for r in rows if is_active(r)]
         rows.sort(key=lambda r: r.id or 0, reverse=True)
         return rows[: max(1, min(int(limit), 100))]
