@@ -661,6 +661,7 @@ class MeetingManager:
         if not text:
             return
         s.transcript.add(self.bot.s.now(), name, text)
+        await self.bot.record_voice(s.voice_channel, seg.user_id, name, text, self.bot.s.now())
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
         if s.voice_mode == "live":
             return  # the Live session hears the room itself and answers; this is only the record

@@ -184,6 +184,8 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     del bot._answer  # use the real one
     m = Msg(world.b, world.b.text_channels[1], member(world.b, STAFF), "ยอดเท่าไร", mention=True)
     await bot._answer(m, world.b, m.author)
+    mem = seen[0].pop("memory")  # no read permissions in the fakes: only the channel itself
+    assert (mem.guild_id, mem.allowed) == (OTHER_GUILD, {21: "chat"})
     assert seen == [
         {
             "guild_id": OTHER_GUILD,
@@ -191,6 +193,7 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
             "user_id": STAFF,
             "history": "",
             "language": "th",
+            "interjection": False,
         }
     ]
     assert m.replies == ["ok"]
@@ -369,6 +372,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "mode",
         "ภาษา",
         "language",
+        "ความจำ",
+        "memory",
     }
     assert all(c.guild_only for c in cmds.values())
 
@@ -467,32 +472,39 @@ async def test_reply_to_a_salid_message_is_answered(bot, world):
     assert bot.calls == [("answer", GUILD)]
 
 
-async def test_recent_chat_keeps_only_this_person_and_salid(bot, world):
+async def test_recent_chat_follows_the_whole_room(bot, world):
     from datetime import UTC, datetime, timedelta
 
     now = datetime(2026, 10, 15, 10, 0, tzinfo=UTC)
     me = member(world.a, STAFF)
     me.display_name = "พี่"
     other = member(world.a, BOSS)
+    other.display_name = "บอส"
+    other_bot = SimpleNamespace(bot=True, display_name="อีกบอท")
 
     def line(author, text, ago):
         m = SimpleNamespace(author=author, content=text, created_at=now - timedelta(seconds=ago))
         m.role_mentions = []
+        m.attachments = []
         return m
 
     class Chan(FakeChannel):
         async def history(self, limit, before):
             for p in [
                 line(ME, "สวัสดีครับ", 10),
-                line(other, "เรื่องอื่น", 20),
+                line(other_bot, "ข้อความบอท", 15),
+                line(other, "เรื่องงบโฆษณา", 20),
                 line(me, "ทักครับ", 30),
-                line(me, "เก่าเกินไป", 3600),
+                line(me, "เก่าเกินไป", 4 * 3600),
             ]:
                 yield p
 
     msg = Msg(world.a, Chan(10), me, "คุยต่อ")
     msg.created_at = now
-    assert await bot._recent_chat(msg) == "พี่: ทักครับ\nสลิด: สวัสดีครับ"
+    msg.reference = None
+    got = await bot._recent_chat(msg)
+    assert got.endswith("[16:59] พี่: ทักครับ\n[16:59] บอส: เรื่องงบโฆษณา\n[16:59] สลิด: สวัสดีครับ")
+    assert "ข้อความบอท" not in got and "เก่าเกินไป" not in got
 
 
 async def test_join_creates_the_chat_channel_and_welcomes_there(bot, world):

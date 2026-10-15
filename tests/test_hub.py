@@ -1,6 +1,7 @@
 """Hub API tests: Google token verification is replaced by a fake, no network, no Firestore."""
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -257,7 +258,13 @@ def test_super_admin_can_open_any_guild(client):
 def test_settings_defaults_round_trip_and_layout(client):
     s = client.get(f"/api/hub/guilds/{A}/settings", headers=AUTH).json()
     assert s["features"] == dict(
-        receipts=True, qa=True, digest=True, deep_tasks=True, voice_meetings=True
+        receipts=True,
+        qa=True,
+        digest=True,
+        deep_tasks=True,
+        voice_meetings=True,
+        memory=True,
+        image_memory=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
@@ -463,5 +470,50 @@ def test_home_page_links_to_hub(client):
 def test_update_model_is_what_the_hub_writes():
     assert set(GuildSettingsUpdate.model_fields) == {
         "features", "receipt_channel_ids", "ask_channel_ids", "digest_channel_id",
-        "digest_time", "exec_role_names", "channel_modes", "default_mode", "channel_languages", "default_language",
+        "digest_time", "exec_role_names", "channel_modes", "default_mode", "channel_languages", "default_language", "memory_retention_days",
     }  # fmt: skip
+
+
+def test_hub_saves_and_validates_memory_retention(client):
+    url = f"/api/hub/guilds/{A}/settings"
+    assert client.get(url, headers=AUTH).json()["memory_retention_days"] == 90
+    put = client.put(
+        url, json={"memory_retention_days": 30, "features": {"memory": False}}, headers=AUTH
+    )
+    assert put.json()["memory_retention_days"] == 30 and put.json()["features"]["memory"] is False
+    assert client.guilds.get(A).memory_retention_days == 30
+    assert client.guilds.get(B).memory_retention_days == 90  # per guild
+    for bad in (0, 3651, -3, "abc", None):  # invalid values fall back to the default
+        got = client.put(url, json={"memory_retention_days": bad}, headers=AUTH).json()
+        assert got["memory_retention_days"] == 90
+    assert (
+        client.put(url, json={"memory_retention_days": "365"}, headers=AUTH).json()[
+            "memory_retention_days"
+        ]
+        == 365
+    )
+
+
+def test_hub_page_has_the_memory_controls(client):
+    html = (
+        __import__("pathlib").Path("src/meeting_scribe/static/hub.html").read_text(encoding="utf-8")
+    )
+    assert 'id="mem-days"' in html and 'id: "memory"' in html and "memory_retention_days" in html
+
+
+def test_hub_memory_status_shows_import_progress(client):
+    from salid.memory_store import ChannelState, GuildMemoryState, SQLiteMemoryStore
+
+    mem = SQLiteMemoryStore(":memory:")
+    mem.put_channel_state(ChannelState(guild_id=A, channel_id=1, complete=True, messages=8421))
+    mem.put_channel_state(ChannelState(guild_id=A, channel_id=2, messages=10))
+    today = datetime.now(UTC).date().isoformat()
+    mem.put_guild_state(GuildMemoryState(guild_id=A, day=today, images_done=120, channels_total=15))
+    app.dependency_overrides[hub.get_memory_store] = lambda: mem
+    app.dependency_overrides[hub.get_salid_runtime] = lambda: (SimpleNamespace(), client.sqlite)
+    url = f"/api/hub/guilds/{A}/memory-status"
+    got = client.get(url, headers=AUTH).json()
+    assert got["channels_done"] == 1 and got["channels_total"] == 15 and got["messages"] == 8431
+    assert got["images_cap"] == 300 and got["images_done"] == 120
+    assert client.get(url, headers=OTHER).status_code == 403  # other guild's admin
+    assert client.get(f"/api/hub/guilds/{B}/memory-status", headers=AUTH).status_code == 403

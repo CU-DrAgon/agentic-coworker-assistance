@@ -31,7 +31,13 @@ def install(store, gid=GUILD, name="ร้านกาแฟ", **kw):
 def test_missing_document_means_defaults(gstore):
     g = gstore.get(GUILD)
     assert g.features.model_dump() == dict(
-        receipts=True, qa=True, digest=True, deep_tasks=True, voice_meetings=True
+        receipts=True,
+        qa=True,
+        digest=True,
+        deep_tasks=True,
+        voice_meetings=True,
+        memory=True,
+        image_memory=True,
     )
     assert g.receipt_channel_ids == [] and g.digest_time == "18:00" and g.active
     assert g.exec_role_names == ["ผู้บริหาร", "Executive"] and g.admin_emails == []
@@ -66,7 +72,7 @@ def test_document_layout(gstore):
         "guild_name", "icon_url", "channels", "active", "installed_at", "features",
         "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "digest_time",
         "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
-        "channel_languages", "default_language",
+        "channel_languages", "default_language", "memory_retention_days",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
 
