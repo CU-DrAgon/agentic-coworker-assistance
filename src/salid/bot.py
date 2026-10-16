@@ -115,6 +115,7 @@ from .profiles import ProfileMixin, effective_language, profile_block
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .scheduling import DiscordCalendar, MeetingService
+from .search_bot import SearchMixin
 from .secretary import SecretaryContext, SecretaryState
 from .secretary_store import SecretaryStore, make_secretary_store, new_id
 from .store import Store
@@ -269,6 +270,7 @@ class SecretaryBot(
     ApprovalMixin,
     BroadcastMixin,
     PlacesMixin,
+    SearchMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -399,6 +401,7 @@ class SecretaryBot(
         self._wiki_init()  # company knowledge base (salid.wiki_bot)
         self._approval_init()  # approval requests (salid.approvals_bot)
         self._places_init()  # remembered places (salid.places_bot)
+        self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1842,6 +1845,10 @@ class SecretaryBot(
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
+        if not interjection:  # search_everything reads through the tools built above, then web
+            extra_tools += self._search_tools(
+                message, guild, asker, is_exec, memory, extra_tools, lang
+            )
         return {
             "language": setting,
             "memory": memory,
@@ -2001,7 +2008,8 @@ class SecretaryBot(
         Allowed for whoever started it, server managers and executives."""
         job = self._deep_jobs.get(guild_id)
         if job is None or job.task.done():
-            return t("cancel_none", lang)
+            stopped = self._research_cancel(guild_id, user, lang)  # a running deep_research
+            return stopped if stopped is not None else t("cancel_none", lang)
         if user.id != job.starter_id and not (
             hasattr(user, "guild_permissions") and self.is_exec_member(user)
         ):

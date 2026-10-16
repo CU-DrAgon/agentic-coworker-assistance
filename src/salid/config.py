@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     gemini_cli_path: str = ""
     deep_task_timeout: int = 600  # seconds
     deep_task_model: str = "gemini-3-flash-preview"  # see deep_task.build_cli_settings
+    research_daily_cap: int = 10  # deep_research runs per guild per day (salid.research)
     # Cheap model for the "is this addressed to Salid?" yes/no gates (see salid.gate).
     gate_model: str = "gemini-3.5-flash-lite"
     low_confidence: float = 0.7
