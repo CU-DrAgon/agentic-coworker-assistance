@@ -19,13 +19,13 @@ from google.adk.agents import LlmAgent
 from google.adk.agents.run_config import RunConfig
 from google.adk.models import Gemini
 from google.adk.runners import InMemoryRunner
+from google.adk.tools import FunctionTool
 from google.genai import types
 
 from .bizfin_tools import BIZFIN_PROMPT
 from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
-from .contests import CONTESTS_PROMPT
-from .currency import CURRENCY_PROMPT
+from .deck import MAX_DECK_BYTES, DeckSpec, Slide, chart_data, deck_filename, render_deck
 from .embed import NullEmbedder, cosine
 from .flights import FLIGHT_PROMPT
 from .freetime import FREETIME_PROMPT
@@ -1223,36 +1223,10 @@ CAPABILITIES_PROMPT = (
     "9) อ่านรูปและไฟล์ที่ส่งมา: ส่งรูป PDF หรือไฟล์ข้อความ (ไม่เกิน 4 ไฟล์) ให้สลิดโดยตรง (แท็ก เรียกชื่อ ตอบกลับสลิด ส่ง DM หรือส่งในห้องคุยกับสลิด) "
     "สลิดอ่านแล้วบอกว่าในไฟล์มีอะไร แล้วตัดสินใจเองว่าจะทำอะไรต่อ: ใบเสร็จ/บิล/สลิปโอนเงินบันทึกลงบัญชีให้ "
     "เอกสารหรือภาพหน้าจอสรุปประเด็นแล้วเสนอขั้นตอนต่อไป คำถามในรูปก็ตอบให้.\n"
-    "10) อ่านลิงก์ (เว็บ, YouTube) และค้นอินเทอร์เน็ตด้วย Google Search: แปะลิงก์หรือถามข่าว/ข้อมูลล่าสุด สลิดอ่านแล้วสรุปพร้อมแหล่งที่มา "
-    "(ข้อมูลบัญชีและแชตของทีมไม่ถูกส่งไปค้น แอดมินปิดได้ในหน้า Hub)\n"
-    "11) สรุปแชต: /สรุป หรือ /summary เลือกช่วง (วันนี้ เมื่อวาน 7 วัน 30 วัน) ห้อง หรือทุกห้องที่ผู้สั่งเห็น พร้อมหัวข้อที่เน้น "
-    "(ตามสิทธิ์การเห็นห้อง); ตอบกลับข้อความไหนด้วยคำว่า “สรุป” / “summarize” (พร้อมแท็กหรือเรียกชื่อสลิด) หรือคลิกขวาที่ข้อความแล้วเลือก "
-    "“สรุปด้วยสลิด” (Summarize with Salid) เพื่อสรุปข้อความนั้น รวมไฟล์แนบและลิงก์\n"
-    "12) นัดประชุมและนัดหมาย: บอกสลิดว่าจะนัดใคร เมื่อไร (เช่น “นัดประชุมกับคุณเอ พรุ่งนี้บ่ายสอง”) "
-    "สลิดสรุปให้ดูแล้วสร้างกิจกรรมนัดใน Discord หลังผู้ใช้ยืนยัน ส่ง DM เชิญ เตือนก่อนเริ่ม 10 นาทีและตอนเริ่ม พร้อมลิงก์เข้าห้อง "
-    "ทักคนที่ยังไม่เข้า (ห้องเสียง) และเข้ามาจดประชุมให้ตามนัด; ใช้ลิงก์ Google Meet/Zoom/Teams ได้ ดู ยกเลิก หรือเลื่อนนัดได้ "
-    "(ต้องให้บอตมีสิทธิ์ Manage Events)\n"
-    "13) เอกสารเป็น PDF: ขอรายงานค่าใช้จ่าย รายการใบเสร็จ หรือรายงานการประชุมเป็นไฟล์ PDF สลิดแนบไฟล์ให้ในแชต "
-    "(ผู้บริหารได้ข้อมูลทั้งทีม คนอื่นได้เฉพาะของตัวเอง ยอดแยกตามสกุลเงิน)\n"
-    "14) อีเมล: ผู้บริหารหรือผู้จัดการให้สลิดร่างอีเมล (แนบ PDF ได้) สลิดแสดงร่างให้ดูก่อนและส่งเฉพาะหลังยืนยัน "
-    "ถ้ายังไม่ได้ตั้งค่าบัญชี Gmail สลิดจะบันทึกร่างไว้และบอกว่ายังส่งจริงไม่ได้\n"
-    "15) ผู้ประสานงานของทีม: สลิดดูเองว่าใครทำอะไร จดงานที่ใครรับปาก ติดตามความคืบหน้าทาง DM ทุกเช้า (ปิดได้ใน Hub) "
-    "ส่งรายงานเย็นเข้าห้องส่วนตัว “รายงานจากสลิด” สำหรับเจ้าของ/แอดมิน/ผู้บริหาร (หรือสั่งเองด้วย /รายงาน หรือ /report) "
-    "ใครก็ DM มาบอกเรื่องงานได้ (ผู้ที่ตำแหน่งสูงกว่าเห็น เว้นแต่บอกว่า “เรื่องนี้เก็บเป็นความลับ”) "
-    "และถามว่าวันนี้ตัวเองทำอะไรไปบ้าง (/รายงาน ของฉัน) ได้ ข้อมูลเปิดตามลำดับ role: คนตำแหน่งสูงกว่าเห็นงานของคนต่ำกว่า "
-    "ข้อมูลที่ยังไม่มีสิทธิ์เห็น สลิดขออนุญาตเจ้าของให้ได้\n"
-    "16) สรุปส่วนตัวทาง DM: สรุปเช้า (ปกติ 08:30 วันทำงาน: นัดประชุมวันนี้พร้อมลิงก์ งานที่ครบกำหนด เอกสารสำคัญที่ได้รับ เรื่องที่มีคนฝากไว้และยังไม่ได้ตอบ) "
-    "และสรุปเย็น (ปกติ 18:00) แทน DM ติดตามงานเดิม ไม่ส่งถ้าไม่มีอะไรจะสรุป; แจ้งเตือนทันทีเมื่อมีเอกสารสำคัญ (สัญญา ใบแจ้งหนี้/ใบเสนอราคายอดสูง หนังสือราชการ "
-    "หรือเอกสารที่ระบุถึงคนนั้น) ในห้องที่เขาอ่านได้ (ไม่เกิน 10 ครั้งต่อวัน); ถ้ามีคนแท็กฝากเรื่องไว้แล้วผ่านไป 2 ชั่วโมงยังไม่ตอบ จะเตือนเบาๆ ครั้งเดียว. "
-    "ทุกคนปรับของตัวเองได้ด้วยการพูด (เวลา เปิด/ปิด รวมเสาร์อาทิตย์ ระดับแจ้งเตือนเอกสาร) แอดมินเปิดปิดทั้งเซิร์ฟเวอร์ได้ใน Hub "
-    "และบอกความชอบส่วนตัวให้สลิดจำได้ (ชื่อที่ให้เรียก ความยาวคำตอบ ภาษาใน DM เรื่องที่สนใจ หน้าที่ สไตล์) ใช้กับตัวเองเท่านั้น สั่งลืมได้\n"
-    "17) ส่งไฟล์ต่อให้คน: ตอบกลับไฟล์หรือเอกสารแล้วบอกให้ส่งต่อ เช่น “ส่งไฟล์นี้ไปห้อง… แล้วแท็กคุณ…” สลิดโพสต์ไฟล์พร้อมข้อความสั้นสุภาพและลิงก์ต้นฉบับในห้องปลายทาง "
-    "(ผู้สั่งต้องอ่านห้องต้นทางและพิมพ์ในห้องปลายทางได้; ถ้าคนในห้องปลายทางยังมองไม่เห็นห้องต้นทางจะขอให้ยืนยันก่อน) หรือส่ง DM หรือร่างอีเมลแนบไฟล์\n"
-    "18) โพสต์โปรโมทจากรูปสินค้า: ส่งรูปสินค้าให้สลิดพร้อมบอกโปร (ราคา ข้อความ ชื่อร้าน) สลิดทำภาพโพสต์ 3 ขนาด "
-    "(1:1 ฟีด/LINE, 4:5 Facebook/Instagram, 9:16 Story/Reels/TikTok) พร้อมแคปชัน ตัวสินค้าคงเดิม พื้นหลังสร้างด้วย AI; "
-    "ขอแก้ได้ภายใน 30 นาทีโดยไม่ต้องส่งรูปใหม่\n"
-    "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
-    "ถ้าไม่แน่ใจให้ดูสถานะด้วย show_settings (หรือ /โหมด /ภาษา /ความจำ เป็นทางลัด)"
+    "10) สไลด์นำเสนอ: ขอให้ทำสไลด์ได้ เช่น “ทำสไลด์สรุปค่าใช้จ่ายเดือนนี้” หรือ “ทำสไลด์สรุปประชุมเมื่อวาน” "
+    "สลิดส่งไฟล์ PowerPoint (.pptx) ที่แก้ต่อได้ กราฟใช้ตัวเลขจริงจากบัญชี\n"
+    "ข้อจำกัด: ค้นอินเทอร์เน็ตไม่ได้ (ข่าวหรือข้อมูลล่าสุดอาจไม่อัปเดต) และตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ "
+    "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
 )
 
 
@@ -1344,56 +1318,20 @@ def is_no_reply(text: str | None) -> bool:
     return len(s) <= 20 and NO_REPLY.casefold() in s.casefold().replace(" ", "_")
 
 
-_Q_PARTICLE = re.compile(r"คะ(?![\u0e00-\u0e7f])")
+DECK_PROMPT = (
+    "\nสไลด์นำเสนอ: เรียก create_deck เฉพาะเมื่อผู้ใช้ขอสไลด์ งานนำเสนอ พรีเซนต์ หรือ slides / deck / presentation. "
+    "ถ้าเป็นเรื่องข้อมูลของทีม ให้เก็บข้อมูลด้วยเครื่องมือไม่เกิน 2 รอบ แล้วเรียก create_deck. "
+    "หน้าปกระบบสร้างให้เอง: ใส่สไลด์เนื้อหา 4-8 หน้า หน้าละหนึ่งประเด็น bullet ไม่เกิน 5 ข้อ ข้อละสั้นๆ รายละเอียดใส่ใน notes. "
+    "เรื่องค่าใช้จ่ายให้ใช้สไลด์ชนิด chart (ระบบเติมตัวเลขจากบัญชีเอง) ห้ามพิมพ์ตัวเลขของร้านลงในกราฟเอง. "
+    "เขียนข้อความในสไลด์เป็นภาษาเดียวกับคำตอบ. ถ้าได้ error ให้แก้ตามที่บอกแล้วเรียกใหม่. "
+    "เมื่อสร้างเสร็จ ตอบสั้นๆ ว่าสไลด์มีอะไรบ้าง (ไฟล์แนบไปกับคำตอบแล้ว)."
+)
 
 
-def apply_particle(text: str, particle: str) -> str:
-    """The prompt is written with the default female particles (ค่ะ / คะ); swap them for the
-    configured persona particle. Only the sentence particle: คะ followed by a Thai letter
-    (คะแนน) is left alone."""
-    if not particle or particle == "ค่ะ":
-        return text
-    return _Q_PARTICLE.sub(particle, text.replace("ค่ะ", particle))
-
-
-def particle_of(settings: Settings) -> str:
-    return str(getattr(settings, "persona_particle", "") or "ค่ะ")
-
-
-def tool_files(tools: list) -> list[tuple[str, bytes]]:
-    """Files the extra tools made for the reply (a tool function's `outbox` list; each list once)."""
-    seen: list[list] = []
-    for f in tools:
-        box = getattr(f, "outbox", None)
-        if isinstance(box, list) and not any(box is s for s in seen):
-            seen.append(box)
-    return [item for box in seen for item in box]
-
-
-def stable_prompt(
-    language: str,
-    memory: bool,
-    *,
-    coo: bool = False,
-    freetime: bool = False,
-    wiki: bool = False,
-    places: bool = False,
-    maps: bool = False,
-    search: bool = False,
-    travel: bool = False,
-    markets: bool = False,
-    ideas: bool = False,
-    contests: bool = False,
-    bizfin: bool = False,
-    web: bool = False,
-    secretary: bool = False,
-    chat: bool = False,
-    particle: str = "ค่ะ",
-) -> str:
-    """The part of the system prompt that is identical for every request in one language and
-    tool set (persona, rules, capabilities, duplicate rules, memory guidance, and the guidance of
-    each tool family that is registered). It comes first so Gemini's implicit prefix cache can
-    reuse it across requests and tool rounds. `particle`: the persona's politeness particle."""
+def stable_prompt(language: str, memory: bool, deck: bool = False) -> str:
+    """The part of the system prompt that is identical for every request in one language (persona,
+    rules, capabilities, duplicate rules, memory guidance). It comes first so Gemini's implicit
+    prefix cache can reuse it across requests and tool rounds."""
     p = (
         PERSONA[language if language in PERSONA else "th"]
         + HUMAN_STYLE_PROMPT
@@ -1410,35 +1348,9 @@ def stable_prompt(
     p += DUPLICATES_PROMPT
     if memory:
         p += MEMORY_PROMPT
-    if coo:
-        p += COO_PROMPT
-    if freetime:
-        p += FREETIME_PROMPT
-    if wiki:
-        p += WIKI_PROMPT
-    if places:
-        p += PLACES_PROMPT
-    if maps:
-        p += MAPS_PROMPT
-    if search:
-        p += SEARCH_PROMPT
-    if travel:
-        p += CURRENCY_PROMPT + FLIGHT_PROMPT
-    if markets:
-        p += MARKETS_PROMPT
-    if ideas:
-        p += IDEAS_PROMPT
-    if contests:
-        p += CONTESTS_PROMPT
-    if bizfin:
-        p += BIZFIN_PROMPT
-    if web:
-        p += WEB_PROMPT
-    if secretary:
-        p += SECRETARY_PROMPT
-    if chat:
-        p += CHAT_TOOLS_PROMPT
-    return apply_particle(p, particle)
+    if deck:
+        p += DECK_PROMPT
+    return p
 
 
 def volatile_prompt(
@@ -1491,57 +1403,25 @@ def system_prompt(
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
-    web: bool = False,
-    secretary: bool = False,
-    chat: bool = False,
-    people: list[str] | None = None,
-    coo: bool = False,
-    profile: str = "",
-    company: str = "",  # salid.company_brain.company_block
-    freetime: bool = False,
-    wiki: bool = False,
-    places: bool = False,
-    maps: bool = False,
-    search: bool = False,
-    travel: bool = False,
-    markets: bool = False,
-    ideas: bool = False,
-    contests: bool = False,
-    bizfin: bool = False,
+    deck: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
     tagging, e.g. a DM). Stable part first, per-request part last (see `stable_prompt`)."""
     now = now or settings.now()
-    return stable_prompt(
-        language,
-        memory,
-        coo=coo,
-        freetime=freetime,
-        wiki=wiki,
-        places=places,
-        maps=maps,
-        search=search,
-        travel=travel,
-        markets=markets,
-        ideas=ideas,
-        contests=contests,
-        bizfin=bizfin,
-        web=web,
-        secretary=secretary,
-        chat=chat,
-        particle=particle_of(settings),
-    ) + volatile_prompt(
-        settings,
-        now,
-        scoped=scoped,
-        interjection=interjection,
-        language=language,
-        files=files,
-        profile=profile,
-        company=company,
-        people=people,
+    return stable_prompt(language, memory, deck) + volatile_prompt(
+        settings, now, scoped=scoped, interjection=interjection, language=language, files=files
     )
+
+
+@dataclass
+class DeckSink:
+    """Where `create_deck` leaves the rendered file for the answer (at most one deck), plus the
+    language and date its fixed strings use."""
+
+    files: list[tuple[str, bytes]]
+    lang: str
+    today: date
 
 
 @dataclass
@@ -1551,9 +1431,7 @@ class Answer:
     seconds: float
     tool_calls: list[tuple[str, dict]]
     receipts: list[tuple[int, str | None]] = field(default_factory=list)  # (id, reaction) created
-    attachments: list[tuple[str, bytes]] = field(
-        default_factory=list
-    )  # PDFs to upload (name, data)
+    files: list[tuple[str, bytes]] = field(default_factory=list)  # (filename, data) to attach
     # Cost and latency (summed over every model call of the turn; 0 when not reported).
     model_calls: int = 0
     tokens_in: int = 0
@@ -1563,14 +1441,63 @@ class Answer:
     tool_ms: dict[str, float] = field(default_factory=dict)  # tool name -> total milliseconds
 
 
+class _RawArgsTool(FunctionTool):
+    """A tool that validates its own arguments: ADK still builds the declaration from the type
+    hints (the model sees the nested schema), but skips its own pydantic conversion, whose
+    failure warnings would log the argument values (slide text from the chat) verbatim."""
+
+    def _preprocess_args(self, args: dict) -> dict:
+        return dict(args)
+
+
+def _create_deck(
+    ledger: LedgerTools, sink: DeckSink, title: str, subtitle: str, slides: list
+) -> dict:
+    """create_deck's work: validate the outline, fetch chart numbers through the scoped ledger,
+    render, and leave the file in the sink (replacing an earlier deck of this answer)."""
+    started = time.monotonic()
+    raw = [s.model_dump() if hasattr(s, "model_dump") else s for s in slides or []]
+    try:
+        spec = DeckSpec.model_validate({"title": title, "subtitle": subtitle or "", "slides": raw})
+    except ValueError as e:  # pydantic's ValidationError names the field to fix
+        return {"error": f"invalid outline: {str(e)[:1500]}"}
+    charts = {
+        i: chart_data(
+            ledger.spending_summary(s.chart.start_date, s.chart.end_date, s.chart.group_by),
+            s.chart,
+            sink.lang,
+        )
+        for i, s in enumerate(spec.slides)
+        if s.kind == "chart" and s.chart is not None
+    }
+    try:
+        data = render_deck(spec, charts, lang=sink.lang, today=sink.today)
+    except Exception as e:  # never kill the turn; the model tells the user
+        logger.warning("deck render failed (%s)", type(e).__name__)
+        return {"error": "could not build the deck"}
+    if len(data) > MAX_DECK_BYTES:
+        logger.warning("deck too large (%d bytes)", len(data))
+        return {"error": "could not build the deck"}
+    name = deck_filename(spec.title, sink.today)
+    sink.files[:] = [(name, data)]
+    logger.info(
+        "deck guild=%s slides=%d charts=%d bytes=%d ms=%d",
+        ledger.guild_id, len(spec.slides) + 1, len(charts), len(data),
+        (time.monotonic() - started) * 1000,
+    )  # fmt: skip
+    return {"status": "created", "slides": len(spec.slides) + 1, "file": name}
+
+
 def build_tools(
     ledger: LedgerTools,
     calls: list[tuple[str, dict]] | None = None,
     memory: MemoryTools | None = None,
     timings: dict[str, float] | None = None,
+    deck: DeckSink | None = None,
 ) -> list:
     """The four ledger tools (plus the two memory tools when `memory` is given) as plain functions
-    bound to `ledger` / `memory` (ADK wraps them as FunctionTools).
+    bound to `ledger` / `memory` (ADK wraps them as FunctionTools). With `deck`, also
+    `create_deck`, which leaves the rendered `.pptx` in the sink.
 
     Permission scoping lives in `ledger.forced`: none of these signatures has a submitter
     parameter, so the model cannot pass one (ADK also drops undeclared arguments). Errors are
@@ -1696,6 +1623,24 @@ def build_tools(
         void_receipts,
         restore_receipts,
     ]
+
+    def create_deck(title: str, slides: list[Slide], subtitle: str = "") -> dict:
+        """Build a PowerPoint slide deck (.pptx) that is attached to your reply. A title slide is
+        added automatically. Slide kinds: section (a divider with a big title), bullets (up to 6
+        short bullets), two_column (bullets = left list, right = right list), chart (the
+        system fills the numbers from the shop's ledger for the given query; never type
+        amounts into a chart). Put details in each slide's notes.
+
+        Args:
+            title: deck title, at most 80 characters.
+            slides: 1-12 content slides.
+            subtitle: optional subtitle, at most 120 characters.
+        """
+        a = dict(title=title, subtitle=subtitle, slides=slides)
+        return safe("create_deck", a, lambda: _create_deck(ledger, deck, title, subtitle, slides))
+
+    if deck is not None:
+        tools.append(_RawArgsTool(create_deck))
     if memory is None:
         return tools
 
@@ -1890,25 +1835,7 @@ def build_agent(
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
-    web: bool = False,
-    secretary: bool = False,
-    chat: bool = False,
-    people: list[str] | None = None,
-    coo: bool = False,
-    profile: str = "",
-    company: str = "",  # salid.company_brain.company_block
-    freetime: bool = False,
-    wiki: bool = False,
-    thinking_level: str = "LOW",
-    places: bool = False,
-    maps: bool = False,
-    search: bool = False,
-    travel: bool = False,
-    markets: bool = False,
-    ideas: bool = False,
-    contests: bool = False,
-    bizfin: bool = False,
-    max_rounds: int = MAX_ROUNDS,
+    deck: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1920,23 +1847,7 @@ def build_agent(
         memory=memory,
         interjection=interjection,
         files=files,
-        web=web,
-        secretary=secretary,
-        chat=chat,
-        people=people,
-        coo=coo,
-        profile=profile,
-        company=company,
-        freetime=freetime,
-        wiki=wiki,
-        places=places,
-        maps=maps,
-        search=search,
-        travel=travel,
-        markets=markets,
-        ideas=ideas,
-        contests=contests,
-        bizfin=bizfin,
+        deck=deck,
     )
     model_calls = 0
 
@@ -2037,24 +1948,14 @@ async def ask_async(
     interjection: bool = False,
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
-    web_client=None,
-    secretary: SecretaryContext | None = None,
-    chat_actions: ChatActions | None = None,
-    people: list[str] | None = None,
-    extra_tools: list | None = None,
-    profile: str = "",
-    company: str = "",  # salid.company_brain.company_block
-    spoken: bool = False,
-    tool_overrides: list | None = None,
+    deck: bool = False,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
     whose `forced_submitter_id` is the asker for non-executives. `files`: the message's attachments
     (read by the model itself as multimodal parts, within the size limits); with `actions` the model
-    also gets record_receipt / start_deep_task for them. `web_client` (a genai client): registers
-    read_web (links + Google Search; see salid.web_read), fed only by `question` and the model's
-    short request. `extra_tools`: the coordinator tools (see salid.coo_tools), registered with
-    their prompt section."""
+    also gets record_receipt / start_deep_task for them. `deck`: offer create_deck; the deck it
+    builds comes back in `Answer.files`."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
     tool_ms: dict[str, float] = {}
@@ -2076,9 +1977,12 @@ async def ask_async(
     f_parts, unreadable = file_parts(usable)
     usable = [f for f in usable if f not in unreadable]
     skipped += unreadable
-    if memory is not None and usable and is_file_only_question(question):
-        memory = None  # the question is about the attached file only: no chat-memory tools
-    tools = build_tools(ledger, calls, memory, tool_ms)
+    sink = (
+        DeckSink([], resolve_lang(language, question), (now or settings.now()).date())
+        if deck
+        else None
+    )
+    tools = build_tools(ledger, calls, memory, tool_ms, sink)
     if usable and actions is not None:
         tools += build_file_tools(usable, actions, calls, created)
     if web_client is not None:
@@ -2107,26 +2011,7 @@ async def ask_async(
         memory=memory is not None,
         interjection=interjection,
         files=bool(usable or skipped),
-        web=web_client is not None,
-        secretary=bool(secretary_tools),
-        chat=bool(chat_tools),
-        people=people,
-        coo="list_tasks" in tool_names,
-        profile=profile,
-        company=company,
-        freetime="find_free_time" in tool_names,
-        wiki="wiki_search" in tool_names,
-        # Spoken answers sit between a person and the sound of silence: think as little as possible.
-        thinking_level=SPOKEN_THINKING if spoken else "LOW",
-        places="find_place" in tool_names,
-        maps="travel_time" in tool_names or "weather" in tool_names,
-        search="search_everything" in tool_names,
-        travel="convert_currency" in tool_names,
-        markets="stock_quote" in tool_names,
-        ideas="idea_save" in tool_names,
-        contests="contest_add" in tool_names,
-        bizfin="unit_economics" in tool_names,
-        max_rounds=max_rounds,
+        deck=sink is not None,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -2184,7 +2069,7 @@ async def ask_async(
         time.monotonic() - started,
         calls,
         created,
-        [*(secretary.attachments if secretary is not None else []), *tool_files(tools)],
+        files=sink.files if sink is not None else [],
         model_calls=model_calls,
         tool_ms=tool_ms,
         **tokens,
@@ -2207,15 +2092,7 @@ def ask(
     interjection: bool = False,
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
-    web_client=None,
-    secretary: SecretaryContext | None = None,
-    chat_actions: ChatActions | None = None,
-    people: list[str] | None = None,
-    extra_tools: list | None = None,
-    profile: str = "",
-    company: str = "",  # salid.company_brain.company_block
-    spoken: bool = False,
-    tool_overrides: list | None = None,
+    deck: bool = False,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -2234,14 +2111,6 @@ def ask(
             interjection=interjection,
             files=files,
             actions=actions,
-            web_client=web_client,
-            secretary=secretary,
-            chat_actions=chat_actions,
-            people=people,
-            extra_tools=extra_tools,
-            profile=profile,
-            company=company,
-            spoken=spoken,
-            tool_overrides=tool_overrides,
+            deck=deck,
         )
     )

@@ -930,6 +930,18 @@
   "th": "เฉพาะผู้บริหาร",
   "en": "Executives only"
  },
+ "f_decks_n": {
+  "th": "สไลด์นำเสนอ",
+  "en": "Slide decks"
+ },
+ "f_decks_d": {
+  "th": "ขอให้สลิดทำสไลด์ PowerPoint จากข้อมูลของทีมหรือหัวข้อใดก็ได้ กราฟใช้ตัวเลขจริงจากบัญชี ไฟล์ไม่ถูกเก็บไว้",
+  "en": "Ask Salid for a PowerPoint deck from team data or any topic. Charts use real ledger numbers. Files are not stored."
+ },
+ "f_decks_w": {
+  "th": "แท็กสลิดแล้วพิมพ์ “ทำสไลด์…”",
+  "en": "Tag Salid and ask “make slides…”"
+ },
  "f_memory_n": {
   "th": "องค์ความรู้ของทีม",
   "en": "Team knowledge"
@@ -1396,6 +1408,7 @@ const FEATURES = [
   { id: "auto_join_meetings" },
   { id: "digest" },
   { id: "deep_tasks" },
+  { id: "decks" },
   { id: "memory" },
   { id: "image_memory" },
   { id: "media_memory" },
@@ -1427,7 +1440,7 @@ const FEATURES = [
   { id: "promo" },
   { id: "link_guard" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, promo: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, decks: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;

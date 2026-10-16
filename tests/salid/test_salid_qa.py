@@ -1,9 +1,11 @@
+import io
 import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
 from conftest import ALICE, BOB, EXEC_ID, GUILD, fc_resp, scripted, text_resp, usage
+from pptx import Presentation
 
 from salid.digest import build_daily_digest
 from salid.qa import (
@@ -338,3 +340,92 @@ def test_prompt_prefix_is_identical_across_times_and_askers(settings, lang):
     assert stable.endswith(MEMORY_PROMPT) and CAPABILITIES_PROMPT in stable
     assert "2026-10-14" not in stable and a.index("2026-10-14") > len(stable)
     assert "ผู้ถามไม่ใช่ผู้บริหาร" in b[len(stable) :] and NO_REPLY in b[len(stable) :]
+
+
+# ------------------------------------------------------------------ slide decks
+DECK = {
+    "title": "สรุปค่าใช้จ่าย",
+    "slides": [
+        {
+            "kind": "chart",
+            "title": "ตามหมวด",
+            "chart": {"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31"},
+        }
+    ],
+}
+
+
+def deck_ask(settings, store, *script, is_exec=True, user_id=EXEC_ID,
+             question="ทำสไลด์สรุปค่าใช้จ่ายเดือนนี้", language="th"):  # fmt: skip
+    llm = scripted(*script)
+    a = ask(settings, store, question, guild_id=GUILD, is_exec=is_exec, user_id=user_id,
+            model=llm, deck=True, language=language)  # fmt: skip
+    return llm, a
+
+
+def chart_values(data):
+    prs = Presentation(io.BytesIO(data))
+    chart = next(s.chart for sl in prs.slides for s in sl.shapes if s.has_chart)
+    return dict(zip(chart.plots[0].categories, chart.plots[0].series[0].values, strict=True))
+
+
+def test_create_deck_attaches_a_pptx_with_ledger_numbers(settings, seeded):
+    _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("ทำสไลด์ให้แล้วครับ"))
+    [(name, data)] = a.files
+    assert name.endswith(".pptx") and data[:2] == b"PK"
+    assert chart_values(data) == {"วัตถุดิบ": 10120.0, "ค่าเดินทาง": 250.5}
+
+
+def test_a_non_executive_chart_covers_only_their_own_receipts(settings, seeded):
+    _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("ok"),
+                    is_exec=False, user_id=ALICE)  # fmt: skip
+    assert chart_values(a.files[0][1]) == {"วัตถุดิบ": 1000.0, "ค่าเดินทาง": 250.5}
+
+
+def test_an_invalid_outline_returns_an_error_and_a_fixed_call_succeeds(settings, seeded):
+    bad = {"title": "t", "slides": [{"kind": "chart", "title": "c"}]}
+    llm, a = deck_ask(settings, seeded, fc_resp(("create_deck", bad)),
+                      fc_resp(("create_deck", DECK)), text_resp("ok"))  # fmt: skip
+    first = [
+        p.function_response.response
+        for c in llm.requests[1].contents
+        for p in c.parts or []
+        if p.function_response
+    ][0]
+    blob = json.dumps(first, ensure_ascii=False)
+    assert "chart" in blob and "error" in blob
+    assert len(a.files) == 1
+
+
+def test_invalid_outline_text_never_reaches_the_logs(settings, seeded, caplog):
+    bad = {"title": "t", "slides": [{"kind": "chart", "title": "c", "notes": "ลับมาก"}]}
+    with caplog.at_level("DEBUG"):
+        deck_ask(settings, seeded, fc_resp(("create_deck", bad)), text_resp("ok"))
+    assert not [r.name for r in caplog.records if "ลับมาก" in r.getMessage()]
+
+
+def test_a_second_create_deck_replaces_the_first(settings, seeded):
+    other = {"title": "Second", "slides": [{"kind": "bullets", "title": "b", "bullets": ["x"]}]}
+    _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)),
+                    fc_resp(("create_deck", other)), text_resp("ok"))  # fmt: skip
+    assert [n.split("-")[0] for n, _ in a.files] == ["second"]
+
+
+def test_deck_fixed_strings_follow_the_reply_language(settings, seeded):
+    _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("done"),
+                    question="make slides of this month's spending", language="auto")  # fmt: skip
+    cover = Presentation(io.BytesIO(a.files[0][1])).slides[0]
+    words = " ".join(s.text_frame.text for s in cover.shapes if s.has_text_frame)
+    assert "Made with Salid" in words
+
+
+def test_no_deck_tool_without_deck_and_prompt_only_with_it(settings, seeded):
+    llm = scripted(text_resp("hi"))
+    ask(settings, seeded, "hi", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
+    names = {d.name for t_ in llm.requests[0].config.tools for d in t_.function_declarations}
+    assert "create_deck" not in names
+    assert "create_deck" not in llm.requests[0].config.system_instruction
+    llm2, _ = deck_ask(settings, seeded, text_resp("hi"))
+    decls = {d.name: d for t_ in llm2.requests[0].config.tools for d in t_.function_declarations}
+    assert '"kind"' in json.dumps(decls["create_deck"].parameters_json_schema)  # nested schema
+    assert "create_deck" in llm2.requests[0].config.system_instruction

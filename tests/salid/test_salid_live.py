@@ -181,31 +181,37 @@ def test_live_memory_store_queries():
                 snap.reference.delete()
 
 
-def test_live_promo_kit(tmp_path):
-    """One real Nano Banana scene (about $0.05): the model id, location and request config are
-    accepted, and a kit comes out. Open the printed folder to check the product is unchanged."""
-    from salid import cards, promo
+def test_live_deck_request(tmp_path):
+    """Real Gemini builds a spending deck through create_deck (also proves Gemini accepts the
+    tool's nested schema). Local throwaway SQLite ledger only; nothing is posted or stored."""
+    from pptx import Presentation
 
-    img = Image.new("RGB", (900, 900), (150, 150, 150))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle(
-        (330, 260, 570, 680), radius=30, fill="white", outline=(60, 60, 60), width=6
+    from salid.models import Receipt
+    from salid.qa import ask
+    from salid.store import SQLiteStore
+
+    store = SQLiteStore(str(tmp_path / "ledger.db"))
+    for n, (vendor, day, total, cat) in enumerate(
+        [("Makro", "2026-10-03", 4200.0, "วัตถุดิบ"), ("Grab", "2026-10-05", 350.0, "ค่าเดินทาง")]
+    ):
+        store.add_receipt(
+            Receipt(
+                guild_id=GUILD, submitter_id=1, submitter_name="Exec", sha256=f"live-deck-{n}",
+                vendor=vendor, receipt_date=day, effective_date=day, total=total, category=cat,
+                confidence=0.95, created_at=day,
+            )
+        )  # fmt: skip
+    ans = ask(
+        Settings.from_env(),
+        store,
+        "ทำสไลด์สรุปค่าใช้จ่ายเดือนตุลาคม 2026 แยกตามหมวด",
+        guild_id=GUILD,
+        is_exec=True,
+        user_id=1,
+        deck=True,
     )
-    d.ellipse((560, 380, 680, 540), outline=(60, 60, 60), width=14)
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    s = Settings.from_env()
-    photo = promo.prepare_photo(buf.getvalue())
-    t = time.monotonic()
-    scene, reason = promo.generate_scene(
-        make_client(s), s.promo_image_model, photo, "wooden cafe table, soft morning light"
-    )
-    print(f"\n{time.monotonic() - t:.1f}s scene={'AI' if scene is not None else reason}")
-    spec = promo.merge_spec(None, headline="ลาเต้เย็น ลด 20%", scene="cafe", price="59.-")
-    files = promo.render_kit(scene or promo.fallback_scene(photo), spec, cards.card_fonts())
-    for name, data in files:
-        (tmp_path / name).write_bytes(data)
-    print(f"kit: {tmp_path}")
-    assert scene is not None, f"no AI scene: {reason}"
-    sizes = [Image.open(io.BytesIO(data)).size for _, data in files]
-    assert sizes == [f.size for f in promo.FORMATS]
+    print(ans.text, ans.tool_calls)
+    [(name, data)] = ans.files
+    prs = Presentation(io.BytesIO(data))
+    assert name.endswith(".pptx") and len(prs.slides) >= 2
+    assert any(s.has_chart for slide in prs.slides for s in slide.shapes)
