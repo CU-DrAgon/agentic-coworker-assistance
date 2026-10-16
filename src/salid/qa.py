@@ -1543,6 +1543,7 @@ def build_agent(
     profile: str = "",
     freetime: bool = False,
     wiki: bool = False,
+    thinking_level: str = "LOW",
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1590,10 +1591,13 @@ def build_agent(
         instruction=lambda _ctx: prompt,
         tools=tools,
         generate_content_config=types.GenerateContentConfig(
-            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level="LOW")
+            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
         ),
         before_model_callback=before_model,
     )
+
+
+SPOKEN_THINKING = "MINIMAL"  # ThinkingLevel for answers that are read aloud in a voice room
 
 
 def spoken_hint(particle: str = "") -> str:
@@ -1658,6 +1662,7 @@ async def ask_async(
     extra_tools: list | None = None,
     profile: str = "",
     spoken: bool = False,
+    tool_overrides: list | None = None,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -1696,6 +1701,9 @@ async def ask_async(
     chat_tools = build_chat_tools(chat_actions, calls) if chat_actions is not None else []
     tools += chat_tools
     tools += extra_tools or []
+    if tool_overrides:  # same-named tools bound to someone else (voice: the speaker's actions)
+        swap = {getattr(f, "__name__", ""): f for f in tool_overrides}
+        tools = [swap.get(getattr(f, "__name__", ""), f) for f in tools]
     tool_names = {getattr(f, "__name__", "") for f in tools}  # prompt sections follow the tools
     agent = build_agent(
         settings,
@@ -1715,6 +1723,8 @@ async def ask_async(
         profile=profile,
         freetime="find_free_time" in tool_names,
         wiki="wiki_search" in tool_names,
+        # Spoken answers sit between a person and the sound of silence: think as little as possible.
+        thinking_level=SPOKEN_THINKING if spoken else "LOW",
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -1735,6 +1745,7 @@ async def ask_async(
         text_in += "\n" + spoken_hint(str(getattr(settings, "voice_particle", "") or ""))
     message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
+    first_call_s = last_call_s = 0.0
     async for event in runner.run_async(
         user_id=adk_user,
         session_id=session_id,
@@ -1743,8 +1754,20 @@ async def ask_async(
     ):
         if event.get_function_calls():
             rounds += 1
+            last_call_s = time.monotonic() - started
+            first_call_s = first_call_s or last_call_s
         elif event.is_final_response() and event.content and event.content.parts:
             text = "".join(p.text or "" for p in event.content.parts if not p.thought).strip()
+    total_s = time.monotonic() - started
+    if spoken:  # timing only, no content
+        logger.info(
+            "qa spoken timing: first tool call %.1fs, last tool call %.1fs, total %.1fs, "
+            "%d tool rounds",
+            first_call_s,
+            last_call_s,
+            total_s,
+            rounds,
+        )
     if not text and interjection:
         text = NO_REPLY  # an unprompted answer that failed is never worth posting
     return Answer(
@@ -1780,6 +1803,7 @@ def ask(
     extra_tools: list | None = None,
     profile: str = "",
     spoken: bool = False,
+    tool_overrides: list | None = None,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1805,5 +1829,6 @@ def ask(
             extra_tools=extra_tools,
             profile=profile,
             spoken=spoken,
+            tool_overrides=tool_overrides,
         )
     )

@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
     # (VAD silence + thinking); a cue sent earlier replaced a real answer with a generic greeting.
     live_force_reply_seconds: float = 5.0
+    # The name seen in the Live session's own input transcript (fast path, no classic transcription
+    # needed): force a turn this long after the speaker went quiet if the model has not answered.
+    live_name_reply_seconds: float = 1.5
+    # A spoken "one moment" clip while a slow tool (ask_salid) runs; a second line if still waiting.
+    live_filler: bool = True
+    live_filler_again_seconds: float = 8.0
     # After the cue: no audio within this long -> the cue is sent once more; still nothing after
     # `live_fallback_seconds` more -> the classic path (agent + TTS) answers that utterance.
     live_cue_retry_seconds: float = 6.0

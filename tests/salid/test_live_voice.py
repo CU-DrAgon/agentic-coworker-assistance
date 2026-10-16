@@ -161,7 +161,7 @@ def test_instruction_answers_general_questions_without_tools_and_never_raises_mo
     th = build_instruction(FixedClockSettings(), "th")
     assert "ตอบเองตรง ๆ ห้ามเรียกเครื่องมือ" in th  # general knowledge, opinions, small talk
     assert "ห้ามพูดถึงเงิน ใบเสร็จ หรือค่าใช้จ่ายเองเด็ดขาด" in th
-    assert "แป๊บนึงนะคะ" in th  # a short natural filler while ask_salid runs
+    assert "ห้ามพูดคำเติมเองก่อนหรือระหว่างเรียก ask_salid" in th  # the system speaks the filler
     assert "spending_summary" not in th
 
 
@@ -209,6 +209,10 @@ class FakeLive:
         self.stream_ends = 0
         self.tool_responses: list = []
         self.closed = False
+        self.notes: list[tuple[str, bool]] = []
+
+    async def send_client_content(self, turns=None, turn_complete=True):
+        self.notes.append((turns.parts[0].text, turn_complete))
 
     def push(self, *msgs):
         for m in msgs:
@@ -282,6 +286,8 @@ def lv(monkeypatch, tmp_path):
     monkeypatch.setattr(lvm, "SEND_INTERVAL_S", 0.01)
     monkeypatch.setattr(lvm, "STREAM_IDLE_S", 0.06)
     monkeypatch.setattr(lvm, "BACKOFF_S", (0.0, 0.0, 0.0, 0.0))
+    monkeypatch.setattr(lvm, "say", lambda *a, **k: bytes(4800))  # no Cloud TTS offline
+    monkeypatch.setattr(lvm, "pitch_pcm", lambda pcm, pitch=1.0: pcm)
     vc = FakeVC()
     connect = FakeConnect()
 
@@ -330,8 +336,8 @@ async def test_join_connects_live_at_once_and_builds_the_session_config(lv):
     assert cfg.context_window_compression.sliding_window is not None
     names = [d.name for d in cfg.tools[0].function_declarations]
     assert names == [
-        "ask_salid", "set_minutes_destination", "post_note", "ask_consent", "set_recording",
-        "set_captions",
+        "ask_salid", "answer_privately", "set_minutes_destination", "post_note", "ask_consent",
+        "set_recording", "set_captions",
     ]  # fmt: skip
     assert "spending_summary" not in names  # no raw ledger tools in Live mode
     assert "2026-10-14" in cfg.system_instruction
@@ -842,4 +848,318 @@ async def test_close_releases_owned_genai_transports_once(lv):
     await s.live.close()
     await s.live.close()
     assert client.async_closes == client.sync_closes == 1
+    await lv.mgr.end((1000, 77))
+
+
+# ------------------------------------------------------------------ fast name detection
+def heard_msg(text):
+    sc = types.LiveServerContent(input_transcription=types.Transcription(text=text))
+    return types.LiveServerMessage(server_content=sc)
+
+
+def capture_cues(live):
+    sent = []
+
+    async def send_client_content(turns=None, turn_complete=True):
+        sent.append((turns.parts[0].text, turn_complete))
+
+    live.send_client_content = send_client_content
+    return sent
+
+
+async def test_name_in_the_live_input_transcript_forces_one_turn_and_dedupes_classic(lv):
+    s, live = await lv.join(5)
+    lv.bot.s.live_name_reply_seconds = 0.05
+    sent = capture_cues(live)
+    live.push(heard_msg("ช่วยสรุปหน่อย"), heard_msg("สลิด "), heard_msg("วันนี้มีนัดอะไรบ้าง"))
+    await until(lambda: any(t[1] for t in sent))
+    cue = [t for t in sent if t[1]]
+    assert len(cue) == 1 and "สลิด" in cue[0][0] and s.engaged is True
+    # the classic transcription of the same utterance arrives later: no second forced turn
+    s.live.ensure_reply(time.monotonic(), "สลิด วันนี้มีนัดอะไรบ้าง", user_id=5, question="q")
+    await asyncio.sleep(0.2)
+    assert len([t for t in sent if t[1]]) == 1
+    assert s.live._fallback == (5, "q")  # but it is kept as the classic fallback
+    await lv.mgr.end((1000, 77))
+
+
+async def test_other_speech_in_the_input_transcript_does_nothing(lv):
+    s, live = await lv.join(5)
+    lv.bot.s.live_name_reply_seconds = 0.05
+    sent = capture_cues(live)
+    live.push(heard_msg("เขาสนิทกันมาก"), heard_msg(" แล้วก็ไปกินข้าว"), heard_msg(" สลิด ออกประชุม"))
+    await asyncio.sleep(0.25)
+    assert sent == [] and s.engaged is False  # leaving is the meeting manager's job
+    await lv.mgr.end((1000, 77))
+
+
+async def test_dismissal_in_the_input_transcript_puts_salid_back_to_listening(lv):
+    s, live = await lv.join(5)
+    lv.mgr._set_engaged(s, True)
+    live.push(heard_msg("ขอบคุณครับ พอแล้ว"), done_msg())
+    await until(lambda: s.engaged is False)
+    await lv.mgr.end((1000, 77))
+
+
+# ------------------------------------------------------------------ filler while a tool runs
+@pytest.fixture
+def slow_tool(monkeypatch):
+    gate = asyncio.Event()
+
+    async def run_tool(self, name, args):
+        if name == "ask_salid":
+            await gate.wait()
+        return {"answer": "ok"}
+
+    monkeypatch.setattr(LiveVoice, "_run_tool", run_tool)
+    return gate
+
+
+REAL = 7680  # a 1920-byte 24 kHz model chunk after upsampling to 48 kHz stereo
+
+
+async def test_filler_plays_on_a_slow_tool_and_is_cut_when_the_answer_audio_arrives(lv, slow_tool):
+    s, live = await lv.join(5)
+    await until(lambda: len(s.live._filler_pcm) == 5)  # prerendered at startup
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await until(lambda: lv.vc.played)
+    src = play_source(lv)
+    assert src.buffered_bytes > 0 and s.live._turn_audio is False  # filler, not model audio
+    slow_tool.set()
+    await until(lambda: live.tool_responses)
+    live.push(audio_msg())
+    await until(lambda: s.live._turn_audio)
+    assert src.buffered_bytes == REAL and len(lv.vc.played) == 1  # filler dropped, same stream
+    await lv.mgr.end((1000, 77))
+
+
+async def test_filler_is_skipped_when_the_model_already_started_speaking(lv, slow_tool):
+    s, live = await lv.join(5)
+    live.push(audio_msg())
+    await until(lambda: lv.vc.played)
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await asyncio.sleep(0.15)
+    assert play_source(lv).buffered_bytes == REAL  # nothing added
+    slow_tool.set()
+    await lv.mgr.end((1000, 77))
+
+
+async def test_no_filler_for_fast_tools_and_a_second_line_if_still_waiting(lv, slow_tool):
+    s, live = await lv.join(5)
+    await until(lambda: len(s.live._filler_pcm) == 5)
+    lv.bot.s.live_filler_again_seconds = 0.05
+    live.push(tool_msg("post_note", {"text": "x"}))
+    await asyncio.sleep(0.15)
+    assert not lv.vc.played
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await until(lambda: lv.vc.played)
+    one = play_source(lv).buffered_bytes
+    await until(lambda: play_source(lv).buffered_bytes > one)  # "almost there"
+    slow_tool.set()
+    await lv.mgr.end((1000, 77))
+
+
+async def test_filler_does_not_repeat_twice_in_a_row(lv):
+    s, live = await lv.join(5)
+    picks = [s.live._pick_filler("th") for _ in range(40)]
+    assert all(a != b for a, b in zip(picks, picks[1:], strict=False))
+    await lv.mgr.end((1000, 77))
+
+
+async def test_spoken_questions_use_minimal_thinking_chat_keeps_low(monkeypatch, tmp_path):
+    from salid import qa
+    from salid.store import SQLiteStore
+
+    seen = []
+
+    def grab(settings, tools, **kw):
+        seen.append(kw.get("thinking_level"))
+        raise _Stop
+
+    monkeypatch.setattr("salid.qa.build_agent", grab)
+    store = SQLiteStore(str(tmp_path / "q.db"))
+    for spoken in (True, False):
+        await asyncio.to_thread(
+            _swallow, qa.ask, FixedClockSettings(), store, "q", guild_id=1, is_exec=True,
+            user_id=5, spoken=spoken,
+        )  # fmt: skip
+    assert seen == ["MINIMAL", "LOW"]
+
+
+# ------------------------------------------------------------------ who is talking / who asked
+async def test_speaker_note_is_sent_only_on_change_and_throttled(lv, monkeypatch):
+    monkeypatch.setattr(lvm, "SPEAKER_NOTE_MIN_S", 0.3)
+    s, live = await lv.join(5, 11)
+    pcm = pcm48(1000)
+    s.live.feed(5, pcm)
+    await until(lambda: live.notes)
+    assert live.notes == [("(ตอนนี้ m5 กำลังพูด)", False)]  # context only: the turn stays open
+    s.live.feed(5, pcm)  # same speaker again: nothing
+    s.live.feed(11, pcm)  # changed, but too soon after the last note: held back
+    await asyncio.sleep(0.1)
+    assert len(live.notes) == 1
+    await asyncio.sleep(0.3)
+    s.live.feed(11, pcm)  # the held-back change goes out on the next frame
+    await until(lambda: len(live.notes) == 2)
+    assert live.notes[1][0] == "(ตอนนี้ m11 กำลังพูด)"
+    s.live.feed(11, pcm)
+    await asyncio.sleep(0.1)
+    assert len(live.notes) == 2
+    await lv.mgr.end((1000, 77))
+
+
+async def test_recent_speakers_single_then_overlapping(lv):
+    s, live = await lv.join(5, 12, 11)
+    pcm = pcm48(1000)
+    assert s.live.recent_speakers() == []
+    s.live.feed(12, pcm)
+    assert s.live.recent_speakers() == [12]
+    for uid in (5, 12, 5, 12):  # two people talking over each other
+        s.live.feed(uid, pcm)
+        await asyncio.sleep(0.01)
+    assert s.live.recent_speakers() == [5, 12]
+    assert s.live.recent_speakers(time.monotonic() + 60) == []  # too long ago: unknown
+    await lv.mgr.end((1000, 77))
+
+
+async def test_exec_speaker_with_a_junior_present_reads_as_junior_and_acts_as_exec(
+    lv, asked, monkeypatch
+):
+    s, live = await lv.join(5, 11)  # 5 is an executive, 11 is not
+    chat_calls = []
+    orig = lv.bot._chat_actions
+
+    def rec(message, guild, member, is_exec, *a, **k):
+        chat_calls.append((member.id, is_exec))
+        return orig(message, guild, member, is_exec, *a, **k)
+
+    monkeypatch.setattr(lv.bot, "_chat_actions", rec)
+
+    def coo(guild, asker, is_exec, memory, question, lang):
+        def list_tasks():
+            return asker.id
+
+        def update_task():
+            return asker.id
+
+        return [list_tasks, update_task]
+
+    monkeypatch.setattr(lv.bot, "_coo_tools", coo)
+    monkeypatch.setattr(lv.bot, "_room_secretary", lambda *a: None)
+    s.live.feed(5, pcm48(1000))
+    live.push(tool_msg("ask_salid", {"question": "ส่งนัดให้หน่อย"}))
+    await until(lambda: live.tool_responses)
+    assert chat_calls == [(11, False), (5, True)]  # the room agent, then the speaker's actions
+    reads = {
+        f.__name__: f() for f in asked["extra_tools"] if f.__name__ in ("list_tasks", "update_task")
+    }
+    assert reads == {"list_tasks": 11, "update_task": 11}  # every read is built for the junior
+    over = {f.__name__: f for f in asked["tool_overrides"]}
+    assert over["update_task"]() == 5 and "send_dm" in over  # actions: the exec speaker
+    assert "list_tasks" not in over
+    assert asked["memory"] == "MEM"
+    assert asked["is_exec"] is False and asked["user_id"] == 0  # no ledger: 11 is not an exec
+    assert "ไม่ใช่ผู้บริหาร" in asked["question"] and "DM" in asked["question"]
+    await lv.mgr.end((1000, 77))
+
+
+async def test_single_human_room_is_unchanged_no_rebinding(lv, asked):
+    s, live = await lv.join(5)
+    s.live.feed(5, pcm48(1000))
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert "tool_overrides" not in asked and asked["sec_args"][:2] == (5, True)
+    await lv.mgr.end((1000, 77))
+
+
+async def test_answer_privately_dms_the_speaker_and_returns_no_content(lv, asked, monkeypatch):
+    from salid.dm import DMResult
+
+    sent = []
+
+    async def fake_dm(member, text, files=()):
+        sent.append((member.id, text))
+        return DMResult(True)
+
+    async def mem(message, guild, member):
+        asked["private_for"] = (message.guild, member.id)
+        return "PMEM"
+
+    monkeypatch.setattr("salid.dm.send_dm", fake_dm)
+    monkeypatch.setattr(lv.bot, "_memory_tools", mem)
+    s, live = await lv.join(5, 11)
+    s.live.feed(5, pcm48(1000))
+    live.push(tool_msg("answer_privately", {"question": "ยอดใช้จ่ายเดือนนี้"}))
+    await until(lambda: live.tool_responses)
+    resp = live.tool_responses[0][0].response
+    assert resp == {"status": "sent"}  # nothing of the answer reaches the voice model
+    assert sent and sent[0][0] == 5 and sent[0][1].startswith("xxx")
+    assert asked["is_exec"] is True and asked["user_id"] == 5  # the speaker's own full rights
+    assert asked["memory"] == "PMEM" and asked["private_for"] == (None, 5)
+    assert "spoken" not in asked
+    await lv.mgr.end((1000, 77))
+
+
+async def test_answer_privately_needs_a_known_speaker(lv, asked):
+    s, live = await lv.join(5, 11)
+    live.push(tool_msg("answer_privately", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert "error" in live.tool_responses[0][0].response
+    await lv.mgr.end((1000, 77))
+
+
+def test_rebind_actions_swaps_only_whitelisted_names_and_never_adds():
+    from salid.voice_actions import rebind_actions
+
+    def mk(tag, *names):
+        out = []
+        for n in names:
+            f = lambda tag=tag: tag  # noqa: E731
+            f.__name__ = n
+            out.append(f)
+        return out
+
+    room = {"extra_tools": mk("room", "list_tasks", "request_approval"), "x": 1}
+    speaker = {"extra_tools": mk("spk", "list_tasks", "request_approval", "set_availability")}
+    out = rebind_actions(room, speaker, {"request_approval", "set_availability"})
+    assert out["x"] == 1 and [f() for f in out["tool_overrides"]] == ["spk", "spk"]
+
+    from salid import qa
+
+    seen = {}
+
+    def grab(settings, tools, **kw):
+        seen["tools"] = tools
+        raise _Stop
+
+    import pytest as _p
+
+    mp = _p.MonkeyPatch()
+    mp.setattr("salid.qa.build_agent", grab)
+    try:
+        from conftest import FixedClockSettings as S
+
+        from salid.store import SQLiteStore
+
+        store = SQLiteStore(":memory:")
+        _swallow(qa.ask, S(), store, "q", guild_id=1, is_exec=False, user_id=1,
+                 extra_tools=room["extra_tools"], tool_overrides=out["tool_overrides"])  # fmt: skip
+    finally:
+        mp.undo()
+    got = {
+        f.__name__: f() for f in seen["tools"] if f.__name__ in ("list_tasks", "request_approval")
+    }
+    assert got == {"list_tasks": "room", "request_approval": "spk"}
+
+
+async def test_overlapping_speakers_act_as_the_lowest_ranked_of_them(lv, asked):
+    s, live = await lv.join(5, 12, 11)  # ranks 9, 4, 1; 11 stayed quiet
+    pcm = pcm48(1000)
+    for uid in (5, 12, 5, 12):
+        s.live.feed(uid, pcm)
+        await asyncio.sleep(0.01)
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert asked["sec_args"][0] == 12 and asked["sec_args"][1] is False
+    assert "profile" not in asked
     await lv.mgr.end((1000, 77))
