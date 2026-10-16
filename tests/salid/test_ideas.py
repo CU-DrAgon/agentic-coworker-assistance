@@ -123,10 +123,12 @@ def test_per_user_cap(repo):
 # ------------------------------------------------------------------ visibility
 def test_pure_visibility_rules():
     d = IdeaDoc(slug="x", title="X", owner_id=STAFF)
-    assert can_read(d, STAFF) and not can_read(d, PEER) and not can_read(d, BOSS)
-    assert can_read(d, BOSS, {STAFF})  # outranks the owner: like a DM note
-    d.visibility = "private"
-    assert can_read(d, STAFF) and not can_read(d, BOSS, {STAFF})  # marked private: owner only
+    assert d.visibility == "private"  # default: owner only, not even higher roles
+    assert can_read(d, STAFF) and not can_read(d, BOSS, {STAFF})
+    d.visibility = "normal"  # shared with superiors
+    assert not can_read(d, PEER) and can_read(d, BOSS, {STAFF})
+    d.visibility, d.shared_with = "private", [PEER]  # a named person, still private otherwise
+    assert can_read(d, PEER) and not can_read(d, BOSS, {STAFF})
     d.visibility, d.shared_with = "normal", [PEER]
     assert can_read(d, PEER) and not can_read(d, INTERN)
     d.shared_with, d.visibility = [], "team"
@@ -147,10 +149,12 @@ def test_only_the_owner_sees_an_idea_by_default_peers_and_juniors_get_nothing(re
         assert other.idea_export("Secret plan")["status"] == "not_found"
 
 
-def test_a_higher_role_sees_it_unless_the_owner_marked_it_private(repo):
+def test_a_higher_role_sees_it_only_after_the_owner_shares_with_superiors(repo):
     owner = ctx_for(repo)
     owner.idea_save("Plan", "x")
     boss = ctx_for(repo, BOSS, "Boss", outranked={STAFF})
+    assert boss.idea_get("Plan")["status"] == "not_found"  # private by default
+    assert owner.idea_share("Plan", "หัวหน้า")["visibility"] == "normal"
     assert (
         boss.idea_get("Plan")["status"] == "ok"
         and boss.idea_list()["ideas"][0]["owner"] == "Somchai"
@@ -158,8 +162,8 @@ def test_a_higher_role_sees_it_unless_the_owner_marked_it_private(repo):
     assert owner.idea_share("Plan", "private")["visibility"] == "private"
     assert boss.idea_get("Plan")["status"] == "not_found"
     assert owner.idea_get("Plan")["status"] == "ok"
-    assert owner.idea_share("Plan", "me")["visibility"] == "normal"
-    assert boss.idea_get("Plan")["status"] == "ok"
+    assert owner.idea_share("Plan", "me")["visibility"] == "private"
+    assert boss.idea_get("Plan")["status"] == "not_found"
 
 
 def test_sharing_with_a_person_and_with_the_team_never_lets_them_edit(repo):
@@ -490,6 +494,7 @@ async def test_bot_context_knows_ranks_privacy_and_people(bot, world):
         bot._ideas_tools(TMsg(world.g, world.pub, staff, "x"), world.g, staff, False, "th")
     )
     tools["idea_save"]("Plan", "secret text")
+    tools["idea_share"]("Plan", "superiors")
     # a public channel is not private: the owner is told to use a private chat
     assert tools["idea_get"]("Plan")["status"] == "use_private_chat"
     dm_msg = TMsg(None, world.pub, staff, "x")  # a DM

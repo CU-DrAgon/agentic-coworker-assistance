@@ -110,7 +110,7 @@ class IdeaDoc(BaseModel):
     owner_id: int
     owner_name: str = ""
     sections: dict[str, IdeaSection] = Field(default_factory=dict)
-    visibility: str = "normal"
+    visibility: str = "private"  # owner only until they share it
     shared_with: list[int] = Field(default_factory=list)
     shared_names: list[str] = Field(default_factory=list)
     created_at: str = ""
@@ -132,12 +132,12 @@ def can_read(
     doc: IdeaDoc, user_id: int, outranked: frozenset[int] | set[int] = frozenset()
 ) -> bool:
     """May `user_id` read the idea? `outranked`: the owners whose notes this user outranks."""
-    if doc.owner_id == user_id:
+    if doc.owner_id == user_id or user_id in doc.shared_with:
         return True
-    if doc.visibility == "private":
+    if doc.visibility == "team":
+        return True
+    if doc.visibility == "private":  # the default: owner (and people they named) only
         return False
-    if doc.visibility == "team" or user_id in doc.shared_with:
-        return True
     return doc.owner_id in outranked
 
 
@@ -413,8 +413,11 @@ class IdeasCtx:
             doc.visibility, doc.shared_with, doc.shared_names = "private", [], []
             note = "only you can read it now; not even people with a higher role"
         elif low in ("me", "none", "default", "ฉัน", "ผม", "เฉพาะฉัน", "reset"):
-            doc.visibility, doc.shared_with, doc.shared_names = "normal", [], []
-            note = "back to the default: you and people with a higher role"
+            doc.visibility, doc.shared_with, doc.shared_names = "private", [], []
+            note = "back to the default: only you can read it"
+        elif low in ("superiors", "boss", "หัวหน้า", "ผู้บริหาร", "managers", "higher roles"):
+            doc.visibility = "normal"
+            note = "you and people with a higher role can read it"
         else:
             found = [p for p in self.resolve_person(who) if p[0] != self.asker_id]
             if not found:
@@ -602,13 +605,13 @@ def ideas_tools(ctx: IdeasCtx) -> list[Callable]:
 
     def idea_share(title: str, to: str) -> dict:
         """Change who can read the user's own idea document. Only its owner can. Nobody is
-        notified; tell the owner that. By default an idea is visible to its owner and to people
-        with a higher role, like a DM note.
+        notified; tell the owner that. By default an idea is visible to its owner only.
 
         Args:
             title: the idea's title.
-            to: "team" (everyone in the server), a person's name (read access for them), "private"
-                (only the owner, not even higher roles) or "me" (back to the default).
+            to: "team" (everyone in the server), "superiors" (people with a higher role), a
+                person's name (read access for them), or "private" / "me" (owner only, the
+                default).
         """
         return safe(lambda: ctx.idea_share(title, to))
 
