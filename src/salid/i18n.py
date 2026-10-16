@@ -1133,6 +1133,63 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ปรับหรือปิดสรุปนี้ได้โดยบอกสลิด เช่น “ไม่ต้องส่งสรุปเย็น”",
         "en": "To change or stop these briefs just tell Salid, e.g. “no evening brief”.",
     },
+    # ---------------------------------------------------------------- catch-up ("what did I miss")
+    "cu_title": {
+        "th": "**สิ่งที่คุณพลาดไปตั้งแต่ {since}**",
+        "en": "**What you missed since {since}**",
+    },
+    "cu_none": {
+        "th": "ตั้งแต่ {since} ยังไม่มีอะไรใหม่ที่เกี่ยวกับคุณในห้องที่คุณอ่านได้ค่ะ",
+        "en": "Nothing new for you since {since} in the channels you can read.",
+    },
+    "cu_mentions": {"th": "**มีคนแท็กหรือพูดถึงคุณ**", "en": "**Mentions of you**"},
+    "cu_mention_line": {
+        "th": "• {who} ({channel}): {text} {link}",
+        "en": "• {who} ({channel}): {text} {link}",
+    },
+    "cu_tasks": {"th": "**งานของคุณ**", "en": "**Your tasks**"},
+    "cu_task_line": {
+        "th": "• #{id} {title} (กำหนด {due}) {flag} {link}",
+        "en": "• #{id} {title} (due {due}) {flag} {link}",
+    },
+    "cu_late": {"th": "เลยกำหนด", "en": "overdue"},
+    "cu_new": {"th": "ใหม่", "en": "new"},
+    "cu_decisions": {"th": "**มติและเรื่องที่ตกลงกัน**", "en": "**Decisions and agreements**"},
+    "cu_missed": {"th": "**ประชุมที่คุณไม่ได้เข้า**", "en": "**Meetings you missed**"},
+    "cu_upcoming": {"th": "**นัดที่กำลังจะถึง**", "en": "**Coming up**"},
+    "cu_meeting_line": {"th": "• {time} {title} {link}", "en": "• {time} {title} {link}"},
+    "cu_no_minutes": {"th": "(ยังไม่มีสรุปประชุม)", "en": "(no minutes yet)"},
+    "cu_channels": {"th": "**ไฮไลต์รายห้อง**", "en": "**Highlights by channel**"},
+    "cu_channel_line": {
+        "th": "• {channel} ({n} ข้อความ): {text} {link}",
+        "en": "• {channel} ({n} messages): {text} {link}",
+    },
+    "cu_files": {"th": "**ไฟล์ที่เกี่ยวกับคุณ**", "en": "**Files for you**"},
+    "cu_ask_more": {
+        "th": "อยากดูละเอียดห้องไหนบอกได้นะคะ",
+        "en": "Tell me which channel you want in detail.",
+    },
+    "cu_s_mentions": {"th": "แท็กคุณ {n}", "en": "{n} mention(s)"},
+    "cu_s_tasks": {"th": "งาน {n}", "en": "{n} task(s)"},
+    "cu_s_missed": {"th": "ประชุมที่พลาด {n}", "en": "{n} missed meeting(s)"},
+    "cu_s_decisions": {"th": "มติ {n}", "en": "{n} decision(s)"},
+    "cu_off": {
+        "th": "ตอนนี้ปิดสรุปสิ่งที่พลาดหรือความจำอยู่ค่ะ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
+        "en": "Catch-up or memory is switched off. You can turn it on in Salid's command center.",
+    },
+    "cu_failed": {
+        "th": "สรุปสิ่งที่พลาดไม่สำเร็จ ลองใหม่ภายหลังนะคะ",
+        "en": "Could not build your catch-up. Please try again later.",
+    },
+    "cu_bad_since": {
+        "th": "ไม่เข้าใจช่วงเวลานี้ค่ะ ลองเช่น “เมื่อวาน” “3 วัน” “จันทร์” หรือ 2026-10-12",
+        "en": "I did not understand that period. Try “yesterday”, “3 days”, “monday” or 2026-10-12.",
+    },
+    "cmd_catchup": _bi("สรุปสิ่งที่คุณพลาดไป", "Catch up on what you missed"),
+    "cmd_catchup_since": _bi(
+        "ตั้งแต่เมื่อไร เช่น เมื่อวาน, 3 วัน, จันทร์ (ไม่ใส่ = ตั้งแต่ที่คุณหายไป)",
+        "Since when, e.g. yesterday, 3 days, monday (empty = since you were last around)",
+    ),
     "alert_doc": {
         "th": "**เอกสารสำคัญ** ({kind}): {summary}\nห้อง {channel} · {link}",
         "en": "**Important document** ({kind}): {summary}\nChannel {channel} · {link}",

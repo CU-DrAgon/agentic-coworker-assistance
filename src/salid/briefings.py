@@ -460,10 +460,11 @@ class BriefInput:
     done: list[str] = field(default_factory=list)  # evening: titles done today
     still_open: list[dict] = field(default_factory=list)  # evening: {id, title, due}
     tomorrow: list[dict] = field(default_factory=list)  # evening: {time, title, link}
+    catchup: str = ""  # morning: short "while you were away" text, appended after the brief
 
     def is_empty(self) -> bool:
         if self.kind == "morning":
-            return not (self.meetings or self.tasks_due or self.docs or self.asks)
+            return not (self.meetings or self.tasks_due or self.docs or self.asks or self.catchup)
         # open tasks alone do not make an evening brief (they are listed when something else is)
         return not (self.attended or self.new_tasks or self.done or self.tomorrow or self.asks)
 

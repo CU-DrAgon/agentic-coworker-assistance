@@ -21,6 +21,7 @@ from .ack import Ack, ack_flavor, ack_text
 from .archive import make_archive
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
+from .catchup_bot import CatchupMixin
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
 from .chat_tools import ChatActions
 from .config import Settings
@@ -248,7 +249,9 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client):
+class SecretaryBot(
+    CooMixin, BriefingMixin, CatchupMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client
+):
     def __init__(
         self,
         settings: Settings,
@@ -1783,6 +1786,8 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             if memory is not None and not interjection
             else []
         )
+        if not interjection:  # catch_up ("what did I miss"): same tool in chat and in voice
+            coo_tools = [*coo_tools, *self._catchup_tools(guild, asker, memory)]
         chat_actions = self._chat_actions(
             message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
         )
@@ -2168,6 +2173,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
                     app_commands.Command(name=name, description=desc, callback=cb)
                 )
         self._register_coo_commands()  # /รายงาน /report
+        self._register_catchup_commands()  # /ตามทัน /catchup
 
     async def handle_summary(
         self,

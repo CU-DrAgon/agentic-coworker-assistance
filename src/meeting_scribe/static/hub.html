@@ -1038,6 +1038,18 @@
   "th": "DM ส่วนตัว ปรับได้รายคน",
   "en": "Private DMs, adjustable per person"
  },
+ "f_catchup_n": {
+  "th": "สรุปสิ่งที่พลาดไป (“ช่วงที่ไม่อยู่มีอะไรบ้าง”)",
+  "en": "Catch-up on what you missed"
+ },
+ "f_catchup_d": {
+  "th": "สมาชิกถามสลิดว่า “มีอะไรที่ผมพลาดไปบ้าง” หรือใช้ /ตามทัน /catchup สลิดสรุปเฉพาะห้องที่เขาอ่านได้: คนแท็กเขา งานของเขา ประชุมที่พลาด ไฮไลต์รายห้อง และใส่ส่วนสั้นๆ ในสรุปเช้าเมื่อเขาหายไปเกิน 1 วันทำการ",
+  "en": "Members ask Salid “what did I miss” or use /catchup. Salid summarises only channels that person can read: mentions, their tasks, missed meetings, channel highlights, plus a short section in the morning brief after a working day away."
+ },
+ "f_catchup_w": {
+  "th": "ส่วนตัว เห็นเฉพาะห้องที่อ่านได้",
+  "en": "Private, only channels they can read"
+ },
  "morning_time_l": {
   "th": "เวลาสรุปเช้า (DM)",
   "en": "Morning brief time (DM)"
@@ -1192,8 +1204,9 @@ const FEATURES = [
   { id: "followups" },
   { id: "reports" },
   { id: "briefings" },
+  { id: "catchup" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1426,7 +1439,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1510,7 +1523,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
