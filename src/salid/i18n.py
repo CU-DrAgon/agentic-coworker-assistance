@@ -727,6 +727,41 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ยกเลิกงานใหญ่ที่กำลังทำอยู่แล้วค่ะ",
         "en": "The running big task has been cancelled.",
     },
+    "research_ack": {
+        "th": "กำลังค้นข้อมูลให้นะคะ ประมาณ 1–2 นาที เสร็จแล้วสลิดส่งรายงานพร้อมไฟล์ PDF ให้ที่ห้องนี้ค่ะ (สั่ง “ยกเลิกงาน” ได้ถ้าไม่ต้องการแล้ว)",
+        "en": "I'm researching this now, about 1-2 minutes. I'll post a report with a PDF here when it's done (say “cancel task” to stop).",
+    },
+    "research_busy": {
+        "th": "ตอนนี้สลิดกำลังค้นข้อมูลเชิงลึกเรื่องอื่นอยู่ค่ะ รอให้เสร็จก่อนนะคะ",
+        "en": "I'm already running another deep research here. Please wait until it finishes.",
+    },
+    "research_limit": {
+        "th": "วันนี้ค้นข้อมูลเชิงลึกครบ {n} ครั้งแล้วค่ะ ลองใหม่พรุ่งนี้ หรือให้สลิดค้นแบบสั้นๆ (web_search) แทนก็ได้นะคะ",
+        "en": "The daily limit of {n} deep researches has been reached. Try again tomorrow, or I can do a quick web search instead.",
+    },
+    "research_done": {
+        "th": "ค้นข้อมูลเสร็จแล้วค่ะ รายงานฉบับเต็มอยู่ในไฟล์ PDF:",
+        "en": "The research is done. The full report is in the attached PDF:",
+    },
+    "research_failed": {
+        "th": "ขอโทษค่ะ ค้นข้อมูลไม่สำเร็จ ลองใหม่อีกครั้งนะคะ",
+        "en": "Sorry, the research failed. Please try again.",
+    },
+    "research_cancelled": {
+        "th": "หยุดการค้นข้อมูลให้แล้วค่ะ",
+        "en": "Research stopped.",
+    },
+    "research_nothing": {
+        "th": "## สรุป\nค้นเว็บแล้วไม่ได้ข้อมูลที่ใช้ได้ค่ะ ลองถามให้เฉพาะเจาะจงขึ้นอีกนิดนะคะ",
+        "en": "## Summary\nThe web search returned nothing usable. Try a more specific question.",
+    },
+    "research_sources": {"th": "แหล่งอ้างอิง", "en": "Sources"},
+    "research_raw_head": {
+        "th": "ผลการค้นหา (ยังไม่ได้สรุป)",
+        "en": "Search results (not summarised)",
+    },
+    "research_title": {"th": "รายงานการค้นคว้า", "en": "Research report"},
+    "research_dated": {"th": "ข้อมูล ณ วันที่ {at}", "en": "Information as of {at}"},
     "cancel_none": {
         "th": "ตอนนี้ไม่มีงานใหญ่ที่กำลังทำอยู่ค่ะ",
         "en": "There is no big task running right now.",

@@ -4,8 +4,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
 
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
-                         followups, reports, briefings, catchup, freetime, polls, wiki, approvals, private_channels}: bool, all
-                         default true
+                         followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
+                         private_channels, maps, search}: bool, all default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -89,6 +89,7 @@ FEATURES = (
     "places",
     "private_channels",
     "maps",
+    "search",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -150,6 +151,7 @@ class Features(BaseModel):
     approvals: bool = True  # request_approval & co: approval requests with Approve / Decline DMs
     places: bool = True  # remembers head office / branches / consented personal places
     maps: bool = True  # travel time / routes / weather (also needs SALID_MAPS_ENABLED)
+    search: bool = True  # search_everything + web_search + deep_research (the last two need `web`)
 
 
 class Channel(BaseModel):

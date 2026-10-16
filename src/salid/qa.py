@@ -28,6 +28,7 @@ from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
 from .places import PLACES_PROMPT
+from .search import SEARCH_PROMPT
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
 from .web_read import make_read_web
@@ -1171,6 +1172,7 @@ def system_prompt(
     wiki: bool = False,
     places: bool = False,
     maps: bool = False,
+    search: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1206,6 +1208,8 @@ def system_prompt(
         p += PLACES_PROMPT
     if maps:
         p += MAPS_PROMPT
+    if search:
+        p += SEARCH_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1555,6 +1559,7 @@ def build_agent(
     thinking_level: str = "LOW",
     places: bool = False,
     maps: bool = False,
+    search: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1576,6 +1581,7 @@ def build_agent(
         wiki=wiki,
         places=places,
         maps=maps,
+        search=search,
     )
     model_calls = 0
 
@@ -1740,6 +1746,7 @@ async def ask_async(
         thinking_level=SPOKEN_THINKING if spoken else "LOW",
         places="find_place" in tool_names,
         maps="travel_time" in tool_names or "weather" in tool_names,
+        search="search_everything" in tool_names,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
