@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from google.adk.agents import LlmAgent
 from google.adk.agents.run_config import RunConfig
@@ -445,6 +445,13 @@ class MemoryTools:
     def _by_person(self, m: MemoryMessage, ids: set[int], text: str) -> bool:
         return not text or m.author_id in ids or text in m.author_name.casefold()
 
+    def _local_time(self, text: str | None) -> datetime | None:
+        """A local (guild time zone) ISO date-time from the model -> aware datetime."""
+        if not text or not str(text).strip():
+            return None
+        d = datetime.fromisoformat(str(text).strip())
+        return d.replace(tzinfo=self.s.zone) if d.tzinfo is None else d
+
     def _hide(self, m: MemoryMessage) -> None:
         if self.vis is None or not hidden_but_askable(m, self.vis.scope):
             return
@@ -463,9 +470,13 @@ class MemoryTools:
             else ""
         )
         return (
-            f"{n} more matching record(s) exist that this person is NOT allowed to see (content "
-            "withheld; never guess it). Tell them you cannot share that yet and offer to ask the "
-            f"owner for permission with request_disclosure.{hint}"
+            f"{n} other matching record(s) (private notes or private channels) are left out of "
+            "these results. This is only a footnote: everything returned here IS shareable, so "
+            "answer the question fully from it first (never refuse or say you cannot summarise "
+            "because of this). Then add at most one short sentence that some private notes exist "
+            "and offer to ask the owner with request_disclosure; never guess, describe or call them "
+            "meeting records."
+            f"{hint}"
         )
 
     def _msg(self, m: MemoryMessage) -> dict:
@@ -492,12 +503,16 @@ class MemoryTools:
             out.append(it)
         return out, False
 
-    def chat_days(self, start_date: str, end_date: str) -> dict:
+    def chat_days(self, start_date: str, end_date: str, channel_name: str | None = None) -> dict:
         start, end = self._range(start_date, end_date)
+        shown = self._shown()
+        if channel_name:
+            want = channel_name.strip().lstrip("#").casefold()
+            shown = {i: n for i, n in shown.items() if n.casefold() == want}
+            if not shown:
+                return {"count": 0, "days": [], "note": f"no channel named {channel_name!r}"}
         sums = [
-            x
-            for x in self.store.summaries(self.guild_id, self._shown(), start, end)
-            if x.message_count > 0
+            x for x in self.store.summaries(self.guild_id, shown, start, end) if x.message_count > 0
         ]
         # Messages newer than the (living) summary, so nothing between updates is missed.
         today = self.s.now().date()
@@ -508,7 +523,7 @@ class MemoryTools:
             if not start <= d <= end:
                 continue
             for cid in self.store.day_channels(self.guild_id, d):
-                if cid not in self._shown():
+                if cid not in shown:
                     continue
                 x = covered.get((cid, d))
                 if x is not None and x.final:
@@ -644,9 +659,12 @@ class MemoryTools:
         keyword: str | None = None,
         limit: int = 50,
         person: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> dict:
         start, end = self._range(start_date, end_date)
         pids, ptext = self._person_ids(person)
+        t0, t1 = self._local_time(since), self._local_time(until)
         channel_id = None
         if channel_name:
             want = channel_name.strip().lstrip("#").casefold()
@@ -658,7 +676,7 @@ class MemoryTools:
                     "note": f"no channel named {channel_name!r} available",
                 }
         limit = max(1, min(int(limit), MAX_MESSAGE_LIMIT))
-        if self.vis is None and not ptext:
+        if self.vis is None and not ptext and not (t0 or t1):
             rows = self.store.messages(
                 self.guild_id,
                 self.allowed,
@@ -684,11 +702,18 @@ class MemoryTools:
         for m in rows:
             if not self._by_person(m, pids, ptext):
                 continue
+            if (t0 and m.created_at < t0) or (t1 and m.created_at >= t1):
+                continue
             if self._visible(m):
                 shown.append(m)
             elif keyword or ptext:
                 self._hide(m)
         out: dict = {"count": len(shown[:limit]), "messages": [self._msg(m) for m in shown[:limit]]}
+        if len(shown) > limit:
+            out["note"] = (
+                f"{len(shown) - limit} older message(s) in this range were not returned: narrow "
+                "with since/until (local date-time) or channel_name to read the whole period"
+            )
         if self._hidden_note():
             out["withheld"] = self._hidden_note()
         return out
@@ -943,6 +968,9 @@ MEMORY_PROMPT = (
     "ตอบโดยระบุห้องและวันที่ที่มา และถ้าอ้างข้อความจริงให้แนบลิงก์ (link). "
     "ถ้าไม่พบข้อมูลให้บอกตรงๆ ว่าไม่พบ ห้ามเดา และห้ามพูดถึงห้องที่เครื่องมือไม่ได้คืนมา. "
     "แปลงคำอย่าง 'เมื่อวาน' หรือ 'สัปดาห์ที่แล้ว' เป็นช่วงวันที่ YYYY-MM-DD จากวันนี้ในเขตเวลาที่ระบุ "
+    "('เมื่อคืน' / 'last night' = ช่วงเย็นของเมื่อวานถึงเช้านี้ ให้ค้นทั้งวันที่เมื่อวานและวันนี้ เพราะประชุมหลังเที่ยงคืนถูกเก็บเป็นวันนี้ "
+    "และใช้ chat_days(channel_name=ห้องเสียง) และ chat_messages ใส่ since=เมื่อวานT18:00 until=วันนี้T06:00 เพื่อได้ช่วงกลางคืนจริง ไม่ใช่แค่ข้อความล่าสุด; "
+    "ประชุม/คุยในห้องเสียงอยู่ในแชตของห้องเสียงนั้น เช่น General แต่ละข้อความมี kind=voice) "
     "(chat_days/chat_messages รับช่วงละไม่เกิน 31 วัน ผลลัพธ์ถูกตัดความยาว ถ้ามี note ให้ย่อช่วงหรือใช้ chat_search). ผลลัพธ์ newer_than_summary คือข้อความของวันนี้ที่ใหม่กว่าสรุป."
 )
 
@@ -959,8 +987,10 @@ COO_PROMPT = (
     "ถามว่า “วันนี้ผมทำอะไรไปบ้าง” ให้เรียก my_day. ถามว่า “ช่วงที่ไม่อยู่มีอะไรบ้าง” “what did I miss” “เมื่อวานเกิดอะไรขึ้น” ให้เรียก catch_up (ใส่ since ถ้าระบุช่วงเวลา) แล้วตอบสั้นๆ เฉพาะรายการสำคัญพร้อมลิงก์ (ไม่ใส่อีโมจิหน้ารายการ ทั้งข้อความไม่เกิน 1 ตัว) และชวนว่า “อยากดูละเอียดห้องไหนบอกได้นะคะ”. ถามถึงงานของคนใดคนหนึ่งให้ใส่ person ใน chat_messages / chat_search.\n"
     "ความลับตามลำดับชั้น: เห็นข้อมูลเฉพาะที่เครื่องมือคืนมา ผู้ที่ตำแหน่ง (role) สูงกว่าเห็นงานของผู้ที่ต่ำกว่าได้ "
     "แต่ผู้ที่ต่ำกว่าหรือเท่ากันไม่เห็นงานของผู้ที่สูงกว่า และห้องส่วนตัวไม่เปิดให้คนนอกห้อง ข้อมูลที่พูดในห้องสาธารณะบอกใครก็ได้. "
-    "ถ้าผลลัพธ์มี withheld แปลว่ามีข้อมูลที่เกี่ยวข้องแต่ผู้ถามยังไม่มีสิทธิ์เห็น: บอกตรงๆ อย่างสุภาพว่าตอนนี้ยังบอกไม่ได้ "
-    "(ห้ามบอกเนื้อหา ห้ามเดา ห้ามบอกว่าใครเป็นเจ้าของ) และเสนอว่า “ให้สลิดไปขออนุญาตเจ้าของข้อมูลไหมคะ” "
+    "ถ้าผลลัพธ์มี withheld แปลว่ามีบันทึกส่วนตัว/ห้องส่วนตัวอีกบางส่วนที่ไม่ได้อยู่ในผลลัพธ์ แต่ผลลัพธ์ที่ได้มาแสดงให้ผู้ถามได้ทั้งหมด: "
+    "ให้ตอบ/สรุปจากผลลัพธ์ให้ครบก่อนเสมอ ห้ามปฏิเสธทั้งคำตอบหรือบอกว่าสรุปไม่ได้เพราะเรื่องนี้ (ห้องสาธารณะและห้องเสียงที่ทุกคนอ่านได้ สรุปให้ใครก็ได้ ไม่ว่าใครเป็นคนพูด) "
+    "แล้วค่อยต่อท้ายสั้นๆ ประโยคเดียวว่ายังมีบันทึกส่วนตัวบางส่วนที่แชร์ไม่ได้ (ห้ามบอกเนื้อหา ห้ามเดา ห้ามบอกว่าใครเป็นเจ้าของ) "
+    "และเสนอว่า “ให้สลิดไปขออนุญาตเจ้าของข้อมูลไหมคะ” "
     "เมื่อผู้ถามตอบตกลงแล้วเท่านั้น ให้เรียก request_disclosure(topic) แล้วแจ้งว่าส่งคำขอแล้ว "
     "ถ้าเจ้าของอนุญาต สลิดจะส่งคำตอบให้ทาง DM เอง ถ้าถูกปฏิเสธจะแจ้งให้ทราบ. "
     "ข้อมูลที่เจ้าของอนุญาตแล้วจะปรากฏในผลลัพธ์ของเครื่องมือตามปกติ คุยต่อกับคนนั้นได้ แต่ห้ามเล่าต่อให้คนอื่น.\n"
@@ -1367,7 +1397,7 @@ def build_tools(
     if memory is None:
         return tools
 
-    def chat_days(start_date: str, end_date: str) -> dict:
+    def chat_days(start_date: str, end_date: str, channel_name: str | None = None) -> dict:
         """What was discussed: per-channel day summaries (overview, topics, decisions, action items,
         numbers, open questions) for a date range, in the channels the asker may see. For today it
         also returns the raw messages newer than the summary (newer_than_summary).
@@ -1375,8 +1405,9 @@ def build_tools(
         Args:
             start_date: ISO date YYYY-MM-DD, inclusive.
             end_date: ISO date YYYY-MM-DD, inclusive (at most 31 days from start_date).
+            channel_name: only this channel, e.g. a voice room such as General (no #), optional.
         """
-        a = dict(start_date=start_date, end_date=end_date)
+        a = dict(start_date=start_date, end_date=end_date, channel_name=channel_name)
         return safe("chat_days", a, lambda: memory.chat_days(**a))
 
     def chat_messages(
@@ -1386,6 +1417,8 @@ def build_tools(
         keyword: str | None = None,
         limit: int = 50,
         person: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> dict:
         """Raw chat messages (newest first) with author, local time, channel, text and link.
 
@@ -1397,6 +1430,10 @@ def build_tools(
             limit: max messages, default 50.
             person: only messages written by this person (name or @mention), optional. Also
                 finds what a person told Salid in a DM when the asker may see it.
+            since: local date-time YYYY-MM-DDTHH:MM, optional: only messages at/after it (e.g.
+                "last night" = yesterday T18:00 .. today T06:00; a voice meeting is in the voice
+                channel's chat, kind=voice).
+            until: local date-time YYYY-MM-DDTHH:MM, optional: only messages before it.
         """
         a = dict(
             start_date=start_date,
@@ -1405,6 +1442,8 @@ def build_tools(
             keyword=keyword,
             limit=limit,
             person=person,
+            since=since,
+            until=until,
         )
         return safe("chat_messages", a, lambda: memory.chat_messages(**a))
 
@@ -1580,9 +1619,16 @@ def build_agent(
         if on_model_call:
             on_model_call(model_calls)
         if model_calls > MAX_ROUNDS:
+            # No tool declarations, but tools_dict stays: a model that still emits a call (its
+            # history is full of them) would otherwise crash ADK with "Tool 'x' not found.
+            # Available tools: " (empty). before_tool answers such a call without running it.
             llm_request.config.tools = None
-            llm_request.tools_dict.clear()
             llm_request.append_instructions([ROUNDS_EXHAUSTED])
+        return None
+
+    def before_tool(tool, args, tool_context):
+        if model_calls > MAX_ROUNDS:
+            return {"error": ROUNDS_EXHAUSTED}  # skip the call; the model must now just answer
         return None
 
     return LlmAgent(
@@ -1601,6 +1647,7 @@ def build_agent(
             temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
         ),
         before_model_callback=before_model,
+        before_tool_callback=before_tool,
     )
 
 
