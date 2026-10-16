@@ -406,6 +406,13 @@ CATALOG: dict[str, dict[str, str]] = {
     "period_7d": _bi("7 วัน", "Last 7 days"),
     "period_30d": _bi("30 วัน", "Last 30 days"),
     "menu_summarize": {"th": "สรุปด้วยสลิด", "en": "Summarize with Salid"},
+    "menu_translate": {"th": "แปลด้วยสลิด", "en": "Translate with Salid"},
+    "translate_nothing": _bi(
+        "ข้อความนี้ไม่มีตัวอักษรให้แปลค่ะ", "There is no text in that message to translate."
+    ),
+    "translate_failed": _bi(
+        "แปลไม่สำเร็จค่ะ ลองใหม่อีกครั้งนะคะ", "I couldn't translate that, please try again."
+    ),
     "summary_q_channel": {
         "th": "สรุปสิ่งที่คุยกันใน #{channel} ช่วง {dates}: หัวข้อ, สิ่งที่ตัดสินใจ, ใครรับงานอะไร, "
         "ตัวเลขสำคัญ, เรื่องที่ค้าง",

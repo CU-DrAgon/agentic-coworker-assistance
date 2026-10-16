@@ -117,6 +117,7 @@ from .summary import (
     message_summary_question,
     summary_question,
 )
+from .translate_bot import TranslateMixin
 from .voice_pool import VoicePool
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,7 @@ LEAVE_COMMANDS = ("ออกประชุม", "leave-meeting")
 CANCEL_COMMANDS = ("ยกเลิก", "cancel")
 SUMMARY_COMMANDS = ("สรุป", "summary")
 MENU_SUMMARIZE = "Summarize with Salid"  # context menu; Thai name via SalidTranslator
+MENU_TRANSLATE = "Translate with Salid"  # context menu; Thai name via SalidTranslator
 
 
 def chunks(text: str, n: int = 1900):
@@ -218,6 +220,8 @@ class SalidTranslator(app_commands.Translator):
     async def translate(self, string, locale, context):
         if str(string) == MENU_SUMMARIZE and str(locale.value).startswith("th"):
             return t("menu_summarize", "th")
+        if str(string) == MENU_TRANSLATE and str(locale.value).startswith("th"):
+            return t("menu_translate", "th")
         return None
 
 
@@ -248,7 +252,9 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client):
+class SecretaryBot(
+    CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, TranslateMixin, discord.Client
+):
     def __init__(
         self,
         settings: Settings,
@@ -366,6 +372,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
+        self._translate_init()  # translation + auto-translate (salid.translate_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -568,6 +575,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
                 return
             if mode == "off":
                 return
+            await self._autotranslate_maybe(message)  # per-channel auto-translate, off by default
             if await self.meetings.on_chat_text(message):  # "ไม่ต้องจด" answering the notes question
                 return
             await self._asks_observe(message)  # pending asks (answers and new requests)
@@ -1794,7 +1802,16 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             **({"profile": profile_block(profile)} if profile is not None else {}),
             **self._web_kw(guild.id),
             **({"secretary": secretary} if secretary is not None else {}),
-            **({"extra_tools": coo_tools} if coo_tools else {}),
+            "extra_tools": [
+                *coo_tools,
+                *(
+                    []
+                    if interjection
+                    else self._translate_tools(
+                        message, guild, asker, is_exec, asyncio.get_running_loop()
+                    )
+                ),
+            ],
         }
 
     @staticmethod
@@ -2155,6 +2172,14 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         summarize_menu = app_commands.guild_only()(summarize_menu)
         self.tree.add_command(
             app_commands.ContextMenu(name=MENU_SUMMARIZE, callback=summarize_menu)
+        )
+
+        async def translate_menu(interaction: discord.Interaction, message: discord.Message):
+            await self.handle_translate_menu(interaction, message)
+
+        translate_menu = app_commands.guild_only()(translate_menu)
+        self.tree.add_command(
+            app_commands.ContextMenu(name=MENU_TRANSLATE, callback=translate_menu)
         )
         for names, handler, desc in (
             (CANCEL_COMMANDS, self.handle_cancel, t("cmd_cancel")),

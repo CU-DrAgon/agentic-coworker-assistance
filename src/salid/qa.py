@@ -1672,7 +1672,7 @@ async def ask_async(
         secretary=bool(secretary_tools),
         chat=bool(chat_tools),
         people=people,
-        coo=bool(extra_tools),
+        coo=any(not getattr(f, "_not_coo", False) for f in extra_tools or []),
         profile=profile,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
