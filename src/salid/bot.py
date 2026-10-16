@@ -18,6 +18,7 @@ from discord import app_commands
 
 from . import gate
 from .ack import Ack, ack_flavor, ack_text
+from .approvals_bot import ApprovalButton, ApprovalMixin
 from .archive import make_archive
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
@@ -263,6 +264,7 @@ class SecretaryBot(
     PollsMixin,
     CatchupMixin,
     WikiMixin,
+    ApprovalMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -391,6 +393,7 @@ class SecretaryBot(
         self._translate_init()  # translation + auto-translate (salid.translate_bot)
         self._freetime_init()  # find a time everyone is free (salid.freetime)
         self._wiki_init()  # company knowledge base (salid.wiki_bot)
+        self._approval_init()  # approval requests (salid.approvals_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -409,6 +412,7 @@ class SecretaryBot(
         self.voice_pool.start()  # voice helpers log in in the background
         self._register_commands()
         self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
+        self.add_dynamic_items(ApprovalButton)  # same for approval requests
         await self.tree.set_translator(SalidTranslator())
         try:
             await self.tree.sync()  # global commands; Discord may take a while to show them
@@ -1828,6 +1832,7 @@ class SecretaryBot(
             ),
             *([] if interjection else self._catchup_tools(guild, asker, memory)),
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
+            *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
         ]
         return {
             "language": setting,

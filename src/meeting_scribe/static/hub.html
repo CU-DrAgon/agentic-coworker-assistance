@@ -1050,6 +1050,54 @@
   "th": "ส่วนตัว เห็นเฉพาะห้องที่อ่านได้",
   "en": "Private, only channels they can read"
  },
+ "f_approvals_n": {
+  "th": "คำขออนุมัติ (เบิก ซื้อ ลา)",
+  "en": "Approval requests (expense, purchase, leave)"
+ },
+ "f_approvals_d": {
+  "th": "สมาชิกขอให้สลิดส่งคำขออนุมัติ เช่น ขอเบิกค่าแท็กซี่ ขอซื้อของ ขอลา ไปให้หัวหน้า (ตามลำดับ role ของเซิร์ฟเวอร์ หรือคนที่ระบุ) สลิดถามยืนยันก่อนส่ง หัวหน้ากดอนุมัติหรือไม่อนุมัติใน DM และผู้ขอได้รับแจ้งผล มีสรุปในรายงานเย็นและเตือนหัวหน้าในสรุปเช้าถ้าค้างเกิน 1 วัน",
+  "en": "Members ask Salid to send an approval request (expense claim, purchase, leave) to their manager (by the server's role hierarchy, or a named person). Salid confirms before sending, the approver taps Approve or Decline in a DM and the requester is told the outcome. Counts appear in the evening report and approvers are reminded in the morning brief when something has waited over a day."
+ },
+ "f_approvals_w": {
+  "th": "ต้องยืนยันก่อนส่งทุกครั้ง",
+  "en": "Always confirmed before sending"
+ },
+ "f_freetime_n": {
+  "th": "หาเวลาว่างตรงกัน",
+  "en": "Find a time everyone is free"
+ },
+ "f_freetime_d": {
+  "th": "สมาชิกขอให้สลิดหาเวลาประชุมที่ทุกคนว่าง โดยดูจากเวลาทำงานที่แต่ละคนตั้งไว้ ปฏิทิน และวันลาที่อนุมัติแล้ว",
+  "en": "Members ask Salid to find a meeting time when everyone is free, using each person's work hours, calendar events and approved leave."
+ },
+ "f_freetime_w": {
+  "th": "ใช้เฉพาะข้อมูลว่าง/ไม่ว่าง ไม่เปิดเผยรายละเอียดนัด",
+  "en": "Only free/busy, never event details"
+ },
+ "f_polls_n": {
+  "th": "โพลและแบบสอบถาม",
+  "en": "Polls and forms"
+ },
+ "f_polls_d": {
+  "th": "สมาชิกขอให้สลิดสร้างโพลในห้อง หรือส่งแบบสอบถามทาง DM แล้วสลิดสรุปผลให้",
+  "en": "Members ask Salid to run a poll in a channel or collect answers by DM form, then summarise the results."
+ },
+ "f_polls_w": {
+  "th": "ผู้ตอบแบบสอบถามปฏิเสธได้ทุกเมื่อ",
+  "en": "Respondents can opt out any time"
+ },
+ "f_wiki_n": {
+  "th": "วิกิบริษัท",
+  "en": "Company wiki"
+ },
+ "f_wiki_d": {
+  "th": "สลิดเขียนและค้นหาหน้าความรู้ของบริษัท (เช่น ขั้นตอนเบิกเงิน) จากความจำที่อ่านได้ และตอบจากวิกิก่อน",
+  "en": "Salid writes and searches company knowledge pages (e.g. how to claim expenses) from memory it can read, and consults the wiki first."
+ },
+ "f_wiki_w": {
+  "th": "ต้องเปิดความจำ (memory) ด้วย",
+  "en": "Needs memory turned on"
+ },
  "morning_time_l": {
   "th": "เวลาสรุปเช้า (DM)",
   "en": "Morning brief time (DM)"
@@ -1205,8 +1253,12 @@ const FEATURES = [
   { id: "reports" },
   { id: "briefings" },
   { id: "catchup" },
+  { id: "approvals" },
+  { id: "freetime" },
+  { id: "polls" },
+  { id: "wiki" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1439,7 +1491,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1523,7 +1575,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup , approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

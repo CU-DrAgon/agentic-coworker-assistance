@@ -595,6 +595,7 @@ class CooMixin:
             voice_ids=voice,
             people=self._people(guild),
             scope=scope,
+            approvals=self._approval_counts(guild.id, day),
         )
         return reports.build_company_report(self.llm, self.s.gemini_model, inp, lang)
 

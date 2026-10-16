@@ -18,6 +18,7 @@ from datetime import UTC, date, datetime, timedelta
 
 from google.genai import types
 
+from . import approvals as _approvals  # noqa: F401  (registers its i18n strings)
 from .i18n import t
 from .llm import generate
 from .memory_access import Scope, dm_scope, is_dm_scope
@@ -61,6 +62,7 @@ class CompanyInput:
     channels: list[dict]  # {name, meeting, summary}
     people: list[PersonDay]
     unassigned_open: list[str]
+    approvals: dict = field(default_factory=dict)  # {pending, stale, approved, declined}
 
 
 def _local_day(iso_ts: str, zone) -> str:
@@ -105,6 +107,7 @@ def collect_company(
     voice_ids: set[int],
     people: dict[int, str],
     scope: Scope,
+    approvals: dict | None = None,
 ) -> CompanyInput:
     """`channels`: channels every report reader may read; `scope`: the report audience's scope
     (which DM notes and task sources they may see)."""
@@ -177,6 +180,7 @@ def collect_company(
         channels=ch_rows,
         people=active[:MAX_PEOPLE],
         unassigned_open=unassigned[:10],
+        approvals=approvals or {},
     )
 
 
@@ -200,6 +204,8 @@ def compact_text(inp: CompanyInput) -> str:
                 bits.append(f"{label}: " + "; ".join(rows[:MAX_TASK_LINES]))
         bits.append(f"open tasks: {p.open_n}")
         parts.append(f"PERSON {p.name}: " + "; ".join(bits))
+    if inp.approvals:
+        parts.append("APPROVAL REQUESTS " + json.dumps(inp.approvals))
     if inp.unassigned_open:
         parts.append("UNASSIGNED OPEN TASKS: " + "; ".join(inp.unassigned_open))
     out, used = [], 0
@@ -218,7 +224,7 @@ never invent facts, names, amounts or dates; leave out sections that have no dat
 **bold** headings and bullet lines, no tables, at most about 3000 characters.
 Sections:
 1. **Company brief**: spending today and this month per currency (never add different currencies), \
-receipts needing review, possible duplicates pending.
+receipts needing review, possible duplicates pending, approval requests pending and approved today.
 2. **People**: for each person 2-4 lines: what they worked on today, tasks opened/done/overdue. \
 Skip people with nothing to say.
 3. **Meetings**: meetings today with their decisions and action items.
@@ -247,6 +253,11 @@ def render_plain(inp: CompanyInput, lang: str = "th") -> str:
         ),
         t("rep_review", lang, n=L["review"], d=L["duplicates"]),
     ]
+    A = inp.approvals
+    if A and (A.get("pending") or A.get("approved") or A.get("declined")):
+        lines.append(
+            t("rep_approvals", lang, pending=A["pending"], stale=A["stale"], approved=A["approved"])
+        )
     meetings = [c for c in inp.channels if c["meeting"]]
     if meetings:
         lines += ["", t("rep_meetings", lang)]

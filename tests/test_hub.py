@@ -280,6 +280,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         polls=True,
         catchup=True,
         wiki=True,
+        approvals=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
@@ -664,3 +665,16 @@ def test_activity_item_carries_currency(client, env):
     from meeting_scribe.hub import ActivityItem
 
     assert ActivityItem(kind="receipt", title="x", at="t", status="ok").currency is None
+
+
+def test_hub_page_lists_every_guild_feature_flag():
+    import re
+    from pathlib import Path
+
+    from salid.guild_settings import FEATURES
+
+    html = (Path(__file__).parent.parent / "src/meeting_scribe/static/hub.html").read_text()
+    ids = set(re.findall(r'\{ id: "(\w+)"', html))
+    assert set(FEATURES) <= ids, set(FEATURES) - ids
+    for f in FEATURES:  # a save sends every flag, so the page must carry each one through
+        assert f"{f}: features.{f}" in html, f
