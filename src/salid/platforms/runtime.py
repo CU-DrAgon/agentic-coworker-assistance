@@ -17,6 +17,7 @@ from ..memory import MemoryScheduler, MemoryService
 from ..memory_index import IndexedMemoryStore
 from ..memory_store import make_memory_store
 from ..store import make_store
+from . import ids
 from .config import PlatformSettings
 from .core import Assistant, safe_exc
 
@@ -132,7 +133,7 @@ async def run_slack(a: Assistant, ps: PlatformSettings) -> None:
         wake = asyncio.Event()
         adapter.on_joined = lambda _channel: wake.set()
         tasks.append(asyncio.create_task(import_loop(SlackImporter(a, port), wake)))
-    logger.info("slack ready team=%s", port.team_id)
+    logger.info("slack ready team=%s tenant=%d", port.team_id, ids.tenant_id("slack", port.team_id))
     await asyncio.gather(*tasks)
 
 
@@ -149,7 +150,10 @@ async def run_line(a: Assistant, ps: PlatformSettings) -> None:
     config = uvicorn.Config(
         app, host=ps.line_host, port=ps.line_port, log_config=None, access_log=False
     )
-    logger.info("line webhook on %s:%d%s", ps.line_host, ps.line_port, line.WEBHOOK_PATH)
+    logger.info(
+        "line webhook on %s:%d%s tenant=%d",
+        ps.line_host, ps.line_port, line.WEBHOOK_PATH, ids.tenant_id("line", info["user_id"]),
+    )  # fmt: skip
     await uvicorn.Server(config).serve()
 
 

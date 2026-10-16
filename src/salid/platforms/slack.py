@@ -375,7 +375,7 @@ async def connect(ps: PlatformSettings, assistant: Assistant):
     `await handler.start_async()`. Tokens are only handed to Slack's SDK."""
     from slack_bolt.adapter.socket_mode.aiohttp import AsyncSocketModeHandler
     from slack_bolt.async_app import AsyncApp
-    from slack_sdk.http_retry.async_handler import AsyncRateLimitErrorRetryHandler
+    from slack_sdk.http_retry.builtin_async_handlers import AsyncRateLimitErrorRetryHandler
     from slack_sdk.web.async_client import AsyncWebClient
 
     client = AsyncWebClient(token=ps.slack_bot_token)
@@ -386,7 +386,7 @@ async def connect(ps: PlatformSettings, assistant: Assistant):
     token = ps.slack_bot_token
 
     adapter = SlackAdapter(assistant, port, lambda url: download(token, url))
-    app = AsyncApp(token=ps.slack_bot_token)
+    app = AsyncApp(client=client)
 
     @app.event("message")
     async def _message(event, context):
