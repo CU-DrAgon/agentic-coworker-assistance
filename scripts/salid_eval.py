@@ -37,7 +37,7 @@ def table(rows: list[dict], width: int = 44) -> str:
     for r in rows:
         mark = "PASS" if r["passed"] else "FAIL"
         lines.append(
-            f"{r['suite']:5} {cell(r['id'], 26):26} {mark:6} {r['latency_s']:>5.1f}s  "
+            f"{r['suite']:5} {cell(r['id'], 26):26} {mark:6} {(r['latency_s'] if r['latency_s'] is not None else float('nan')):>5.1f}s  "
             f"{cell(r['expected'], width):{width}} | {cell(r['got'], 110)}"
         )
         if not r["passed"]:

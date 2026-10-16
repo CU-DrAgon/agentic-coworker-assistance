@@ -468,7 +468,8 @@ def catchup_tools(src: Sources, now: Callable[[], datetime], calls: list | None 
         their new or overdue tasks and decisions, meetings they missed (with minutes links) or
         have coming, highlights per channel and files meant for them, each with a link. Use for
         "what did I miss", "ช่วงที่ผมลาไปมีอะไรบ้าง", "สรุปให้หน่อยว่าเมื่อวานเกิดอะไรขึ้น". Reply
-        short (top items only) and offer to go into detail for any channel.
+        short (top items only, plain sentences, at most one emoji) and offer to go into detail for
+        any channel.
 
         Args:
             since: optional start: "yesterday", "monday", "3 days", "เมื่อวาน", "ช่วง 3 วัน" or
@@ -480,4 +481,5 @@ def catchup_tools(src: Sources, now: Callable[[], datetime], calls: list | None 
         except (TypeError, ValueError) as e:
             return {"error": str(e)}
 
+    catch_up_tool.__name__ = "catch_up"  # the name the prompt and the voice tool list use
     return [catch_up_tool]

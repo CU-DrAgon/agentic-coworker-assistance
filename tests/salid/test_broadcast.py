@@ -363,3 +363,17 @@ def test_old_voice_particle_env_still_works(monkeypatch):
     assert Settings().persona_particle == "ครับ"
     monkeypatch.setenv("SALID_PERSONA_PARTICLE", "ค่ะ")
     assert Settings().voice_particle == "ค่ะ"
+
+
+def test_find_role_any_matches_team_phrasing_uniquely():
+    from types import SimpleNamespace as NS
+
+    from salid.broadcast import find_role_any
+
+    mkt, dev = NS(name="การตลาด"), NS(name="Dev Team")
+    g = NS(roles=[mkt, dev])
+    assert find_role_any(g, "ทีมการตลาด") is mkt
+    assert find_role_any(g, "dev team") is dev
+    assert find_role_any(g, "dev") is dev
+    assert find_role_any(g, "บัญชี") is None
+    assert find_role_any(NS(roles=[mkt, NS(name="การตลาดออนไลน์")]), "ทีมการตลาด") is False

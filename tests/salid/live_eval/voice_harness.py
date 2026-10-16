@@ -482,6 +482,8 @@ def steps():
             state="engaged",
             answer_has=tomorrow,
         ),
+        # a lookup that needs ask_salid (ledger tool) -> the spoken filler comes first
+        dict(id="v06b", text="สลิด เดือนนี้ใช้จ่ายไปเท่าไหร่", reset=False, respond=True, state="engaged"),
         dict(id="v07", text="โอเค ขอบคุณครับ", reset=False, respond=None, state="listening"),
         dict(id="v08", text="เมื่อวานกินข้าวที่ไหน", voice="B", uid=11, respond=False, state="listening"),
         dict(id="v09", text="เรากับเขาสนิทกันมาก", respond=False, state="listening"),

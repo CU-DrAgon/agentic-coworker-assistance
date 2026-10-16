@@ -12,6 +12,7 @@ from .text_world import (
     JEMM,
     SECRET_FACT,
     SOMCHAI,
+    FMsg,
     StepResult,
     World,
     build_world,
@@ -108,6 +109,38 @@ def summarise(steps: list[StepResult]) -> str:
     r = final(steps).replace("\n", " ")
     bits.append("reply=" + (r[:160] + ("..." if len(r) > 160 else "")))
     return "; ".join(bits)
+
+
+# ------------------------------------------------------------------ persona helpers (round 3)
+MALE_SELF = re.compile(r"ครับ|(?:^|[\s,.!])ผม(?=\s*(?:จะ|ได้|ขอ|ส่ง|โพสต์|ช่วย|ทำ|พร้อม|เป็น)|$)")
+FEM = re.compile(r"ค่ะ|คะ|นะคะ|ค่า")
+
+
+def persona(st, need_particle=True) -> list[str]:
+    r = replies(st)
+    out = []
+    if MALE_SELF.search(r):
+        out.append(f"male self-reference in reply: {MALE_SELF.search(r).group(0)!r}")
+    if need_particle and r and not FEM.search(r):
+        out.append("reply has no ค่ะ/คะ")
+    last: dict[str, dict] = {}
+    for s in st:
+        for t in s.tools:
+            last[t["tool"]] = t
+    for name, t in last.items():
+        if not ok_result(t):
+            out.append(f"tool {name} ended in an error: {(t.get('result') or '')[:100]}")
+    return out
+
+
+def tool_args(st, name) -> dict:
+    c = calls(st, name)
+    return c[0]["args"] if c else {}
+
+
+def result_text(st, name) -> str:
+    c = calls(st, name)
+    return (c[0].get("result") or "") if c else ""
 
 
 # ------------------------------------------------------------------ scenario bodies
@@ -216,7 +249,7 @@ def build_scenarios() -> list[Scn]:
         if w.guild.created:
             out.append("created the event without confirmation")
         r = final(st)
-        if not re.search(r"ยืนยัน|ตกลง|โอเค|ใช่|confirm", r):
+        if not re.search(r"ยืนยัน|ตกลง|โอเค|ใช่|confirm|คอนเฟิร์ม", r):
             out.append("reply does not ask for confirmation")
         return out
 
@@ -489,6 +522,217 @@ def build_scenarios() -> list[Scn]:
                 lambda w: one(w, "pas", "general", "ขอดูบิล NVIDIA ที่จ่ายล่าสุดหน่อย", mention=True),
                 lambda w, st: ([] if (calls(st, "list_receipts") or calls(st, "spending_summary")) else ["no ledger tool called"])
                 + ([] if "NVIDIA" in final(st) else ["reply does not mention NVIDIA"])))  # fmt: skip
+
+    # ================================================================== round 3 features
+    # 34 post to the general channel ---------------------------------------------------------
+    def chk_post(w, st):
+        out = persona(st)
+        c = calls(st, "post_message")
+        if not c:
+            out.append("post_message not called")
+        else:
+            a = c[0]["args"]
+            if not re.search(r"ทั่วไป|general|กลาง", str(a.get("channel", "")), re.I):
+                out.append(f"channel arg not the general channel: {a.get('channel')!r}")
+            if "ประชุม" not in str(a.get("text", "")):
+                out.append(f"text arg lost the message: {a.get('text')!r}")
+            r = result_text(st, "post_message")
+            if "needs_confirmation" not in r and "posted" not in r and "'ok'" not in r:
+                out.append(f"unexpected post_message result: {r[:120]}")
+        return out
+
+    sc.append(S("post_general", "Announce to the general room", "post_message(channel=general); preview/confirm or posted; no 'can't'",
+                lambda w: one(w, "pas", "chat", "ส่งข้อความไปจนถึงห้องกลางว่า ผมมีประชุมเร่งด่วนตอน 9 โมงให้ทุกคนรู้", mention=True),
+                chk_post))  # fmt: skip
+
+    # 35 DM a role ---------------------------------------------------------------------------
+    def chk_dm_many(w, st):
+        out = persona(st)
+        c = calls(st, "send_dm_many")
+        if not c:
+            out.append("send_dm_many not called")
+        else:
+            a = c[0]["args"]
+            if not (a.get("role") or a.get("people")):
+                out.append(f"no recipients group: {a}")
+            if "หยุด" not in str(a.get("text", "")):
+                out.append(f"text arg lost the message: {a.get('text')!r}")
+        if "needs_confirmation" not in result_text(st, "send_dm_many"):
+            out.append("no confirm step for a 4-person DM")
+        if any(v for s in st for v in s.dms.values()):
+            out.append("DMs were sent before confirmation")
+        return out
+
+    sc.append(S("dm_team", "DM the whole marketing team", "send_dm_many(role=การตลาด) -> needs_confirmation, nothing sent yet",
+                lambda w: one(w, "pas", "general", "DM บอกทุกคนในทีมการตลาดว่าพรุ่งนี้หยุด", mention=True),
+                chk_dm_many))  # fmt: skip
+
+    # 36 expense approval --------------------------------------------------------------------
+    def chk_expense(w, st):
+        out = persona(st)
+        c = calls(st, "request_approval")
+        if not c:
+            return out + ["request_approval not called"]
+        a = c[0]["args"]
+        if a.get("kind") != "expense":
+            out.append(f"kind={a.get('kind')!r}")
+        if float(a.get("amount") or 0) != 350:
+            out.append(f"amount={a.get('amount')!r}")
+        if (a.get("currency") or "THB").upper() != "THB":
+            out.append(f"currency={a.get('currency')!r}")
+        if "needs_confirmation" not in result_text(
+            st, "request_approval"
+        ) and "reason" not in result_text(st, "request_approval"):
+            out.append(f"no confirm step: {result_text(st, 'request_approval')[:100]}")
+        return out
+
+    sc.append(S("expense_approval", "Expense claim 350 THB", "request_approval(expense, 350, THB) -> confirm step",
+                lambda w: one(w, "somchai", "general", "ขอเบิกค่าแท็กซี่ 350 บาท ไปหาลูกค้า", mention=True),
+                chk_expense))  # fmt: skip
+
+    # 37 free time ---------------------------------------------------------------------------
+    def chk_free(w, st):
+        out = persona(st)
+        c = calls(st, "find_free_time")
+        if not c:
+            return out + ["find_free_time not called"]
+        a = c[0]["args"]
+        ppl = " ".join(a.get("people") or []).lower()
+        if "somchai" not in ppl or "jemm" not in ppl:
+            out.append(f"people arg missing someone: {a.get('people')}")
+        if int(a.get("duration_minutes") or 60) != 60:
+            out.append(f"duration={a.get('duration_minutes')}")
+        if "week" not in str(a.get("within", "")).lower() and ".." not in str(a.get("within", "")):
+            out.append(f"within={a.get('within')!r} (expected this week)")
+        return out
+
+    sc.append(S("free_time", "Find a free hour with two people", "find_free_time(people=[Somchai,Jemm], 60, this week)",
+                lambda w: one(w, "pas", "general", "หาเวลาว่างประชุมกับ Somchai และ Jemm สัก 1 ชม. อาทิตย์นี้", mention=True),
+                chk_free))  # fmt: skip
+
+    # 38 translate a replied-to message --------------------------------------------------------
+    async def tr(w):
+        src = FMsg(
+            w.guild,
+            w.chans["general"],
+            w.people["ploy"],
+            "Hi team, the supplier confirmed the delivery will arrive on Thursday morning before 10am.",
+        )
+        return [await say(w, "somchai", "general", "แปลอันนี้เป็นไทย", mention=True, reply_to=src)]
+
+    def chk_tr(w, st):
+        out = persona(st, need_particle=False)
+        if not calls(st, "translate"):
+            out.append("translate not called")
+        if not re.search(r"พฤหัส|ซัพพลายเออร์|ผู้จัดจำหน่าย|ส่งของ|จัดส่ง", final(st)):
+            out.append("reply does not contain the Thai translation")
+        return out
+
+    sc.append(S("translate_reply", "Translate the replied-to message", "translate(target=Thai) and shows the Thai text", tr, chk_tr))  # fmt: skip
+
+    # 39 catch up ----------------------------------------------------------------------------
+    sc.append(S("catch_up", "What did I miss", "catch_up called; short digest",
+                lambda w: one(w, "pas", "general", "ช่วงที่ผมไม่อยู่มีอะไรบ้าง", mention=True),
+                lambda w, st: persona(st) + ([] if calls(st, "catch_up") else ["catch_up not called"]),
+                max_chars=1200))  # fmt: skip
+
+    # 40 wiki write --------------------------------------------------------------------------
+    sc.append(S("wiki_write", "Write a wiki page", "wiki_write(topic about expense claims)",
+                lambda w: one(w, "pas", "general", "ทำหน้าความรู้เรื่องวิธีเบิกเงินให้หน่อย", mention=True),
+                lambda w, st: persona(st) + ([] if calls(st, "wiki_write") else ["wiki_write not called"])
+                + ([] if not calls(st, "wiki_write") or "เบิก" in str(tool_args(st, "wiki_write").get("topic")) else ["topic arg off"]),
+                max_chars=1200))  # fmt: skip
+
+    # 41 poll --------------------------------------------------------------------------------
+    def chk_poll(w, st):
+        out = persona(st)
+        c = calls(st, "create_poll")
+        if not c:
+            return out + ["create_poll not called"]
+        opts = c[0]["args"].get("options") or []
+        if len(opts) != 3:
+            out.append(f"options={opts}")
+        if not c[0]["args"].get("question"):
+            out.append("no question")
+        if not ok_result(c[0]):
+            out.append(f"create_poll error: {(c[0].get('result') or '')[:120]}")
+        return out
+
+    sc.append(S("poll", "Quick poll with 3 options", "create_poll(options=[A,B,C])",
+                lambda w: one(w, "somchai", "general", "โหวตหน่อยว่าจะกินข้าวร้านไหน A B C", mention=True),
+                chk_poll, casual=True))  # fmt: skip
+
+    # 42 remember a company place, then find it ---------------------------------------------
+    async def place_company(w):
+        a = await say(w, "pas", "general", "จำไว้นะ สาขาบางนาอยู่ที่ 123 ถ.บางนา-ตราด", mention=True)
+        b = await say(w, "somchai", "general", "สาขาบางนาอยู่ไหน", mention=True)
+        return [a, b]
+
+    def chk_place_company(w, st):
+        out = persona(st)
+        c = calls([st[0]], "remember_place")
+        if not c:
+            out.append("step 1: remember_place not called")
+        else:
+            if c[0]["args"].get("personal"):
+                out.append("step 1: stored as personal")
+            if "บางนา" not in str(c[0]["args"].get("address", "")) + str(
+                c[0]["args"].get("name", "")
+            ):
+                out.append("step 1: address/name lost")
+        if not calls([st[1]], "find_place"):
+            out.append("step 2: find_place not called")
+        r = st[1].replies[-1] if st[1].replies else ""
+        if "123" not in r:
+            out.append("step 2: reply lacks the address")
+        if "maps" not in r.lower():
+            out.append("step 2: reply lacks the maps link")
+        return out
+
+    sc.append(S("place_company", "Remember a branch, then ask where it is", "remember_place(company); find_place -> address + maps link",
+                place_company, chk_place_company, max_chars=700))  # fmt: skip
+
+    # 43 remember a personal place -------------------------------------------------------------
+    def chk_place_home(w, st):
+        out = persona(st)
+        c = calls(st, "remember_place")
+        if not c:
+            return out + ["remember_place not called"]
+        if not c[0]["args"].get("personal"):
+            out.append("home not stored with personal=True")
+        return out
+
+    sc.append(S("place_home", "Remember my home address", "remember_place(personal=True)",
+                lambda w: one(w, "somchai", "general", "จำไว้ว่าบ้านผมอยู่ซอยลาดพร้าว 71", mention=True),
+                chk_place_home, max_chars=700))  # fmt: skip
+
+    # 44 captions from a member in the meeting channel -------------------------------------
+    async def caps(w):
+        room = w.chans["room"]
+        w.people["somchai"].voice = type("V", (), {"channel": room})()
+        w.meetings.sessions[(GUILD_ID, room.id)] = True
+        return await one(w, "somchai", "general", "เปิดซับแปลเป็นอังกฤษ", mention=True)
+
+    def chk_caps(w, st):
+        out = persona(st)
+        if not calls(st, "set_captions"):
+            out.append("set_captions not called")
+        elif (
+            tool_args(st, "set_captions").get("language") != "en"
+            or tool_args(st, "set_captions").get("on") is False
+        ):
+            out.append(f"bad args {tool_args(st, 'set_captions')}")
+        if not w.meetings.captions:
+            out.append("meeting captions not switched")
+        return out
+
+    sc.append(S("captions_en", "Captions translated to English", "set_captions(on, en) for someone in the meeting", caps, chk_caps, casual=True))  # fmt: skip
+
+    # 45 greeting persona --------------------------------------------------------------------
+    sc.append(S("greeting_persona", "Greeting 'หวัดดีสลิด'", "short reply with ค่ะ/คะ, never ครับ, no tools",
+                lambda w: one(w, "pas", "general", "หวัดดีสลิด", mention=True),
+                lambda w, st: persona(st) + ([] if not tools_of(st) else [f"used tools {tools_of(st)}"]),
+                casual=True))  # fmt: skip
 
     return sc
 

@@ -257,7 +257,17 @@ def resolve_recipients(
     if role:
         r = find_role_any(guild, role)
         if r is None:
-            return Recipients(error={"error": "role_not_found", "role": role})
+            return Recipients(
+                error={
+                    "error": "role_not_found",
+                    "role": role,
+                    "roles": [
+                        x.name
+                        for x in getattr(guild, "roles", [])[:30]
+                        if not getattr(x, "is_default", lambda: False)()
+                    ],
+                }
+            )
         if r is False:
             return Recipients(error={"error": "ambiguous_role", "role": role})
         for m in pool:
@@ -305,6 +315,17 @@ def find_role_any(guild, name: str):
         if str(getattr(r, "name", "")).casefold() == want
         and not getattr(r, "is_default", lambda: False)()
     ]
+    if not roles and want:
+        # "ทีมการตลาด" / "marketing team" for a role called "การตลาด" / "Marketing": a unique
+        # containment match after dropping the filler word
+        core = re.sub(r"^(ทีม|team)\s*|\s*team$", "", want).strip()
+        roles = [
+            r
+            for r in getattr(guild, "roles", [])
+            if core
+            and core in str(getattr(r, "name", "")).casefold()
+            and not getattr(r, "is_default", lambda: False)()
+        ]
     if not roles:
         return None
     return roles[0] if len(roles) == 1 else False
@@ -338,7 +359,9 @@ def broadcast_tools(actions: BroadcastActions) -> list[Callable]:
             text: the announcement, in the requester's wording (may tag people with @[name]).
             mention: "none" (default), "everyone", "here", "role:<role name>", or people's
                 display names to tag, comma-separated (e.g. "Jemm, Mew"). Use everyone / here /
-                role only when the requester asked to notify everyone / that group. For "tag the
+                role only when the requester explicitly asked to ping / tag everyone or that group
+                ("@everyone", "แท็กทุกคน"); "ให้ทุกคนรู้" / "let everyone know" just means post it
+                in the channel, so keep "none". For "tag the
                 relevant people" ("แท็กคนที่เกี่ยวข้อง", "บอกคนที่ทำโปรเจกต์ X") work out the names
                 from team memory, tasks or meeting attendees, put them here and set tag_inferred.
             tag_inferred: true when YOU chose the people to tag (not the requester by name).

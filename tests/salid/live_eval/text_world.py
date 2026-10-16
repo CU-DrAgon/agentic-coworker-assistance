@@ -53,7 +53,8 @@ class FMember(Hashable):
     def __init__(self, guild, uid, name, pos=1, roles=(), admin=False, manage=False):
         super().__init__(
             id=uid, guild=guild, name=name.lower(), display_name=name, global_name=None, bot=False,
-            roles=[SimpleNamespace(name="@everyone"), *(SimpleNamespace(name=r) for r in roles)],
+            roles=[SimpleNamespace(name="@everyone"),
+                   *(r if not isinstance(r, str) else SimpleNamespace(name=r) for r in roles)],
             guild_permissions=SimpleNamespace(administrator=admin, manage_guild=manage),
             top_role=SimpleNamespace(position=pos), voice=None, dms=[], mention=f"<@{uid}>",
         )  # fmt: skip
@@ -76,6 +77,7 @@ class FChannel(Hashable):
             ok = self.readers is None or m.id in self.readers
         return SimpleNamespace(
             read_messages=ok, read_message_history=ok, view_channel=ok, send_messages=ok,
+            send_polls=ok,
             attach_files=ok, add_reactions=ok, embed_links=ok,
         )  # fmt: skip
 
@@ -220,7 +222,7 @@ class FakeMeetings:
     """Stands in for MeetingManager (the voice side has its own suite)."""
 
     def __init__(self):
-        self.joins, self.leaves, self.sessions = [], [], {}
+        self.joins, self.leaves, self.sessions, self.captions = [], [], {}, []
 
     async def join(self, member, **kw):
         ch = member.voice.channel if member.voice else None
@@ -233,6 +235,10 @@ class FakeMeetings:
     async def leave(self, member, **kw):
         self.leaves.append(member.display_name)
         return "ออกจากห้องแล้วค่ะ"
+
+    def set_captions(self, session, on, language="original"):
+        self.captions.append({"on": on, "language": language})
+        return {"status": "on" if on else "off", "language": language}
 
     def session_in(self, gid, cid):
         return self.sessions.get((gid, cid))
@@ -311,12 +317,19 @@ def build_world(*, llm_client=None, copy_ledger: bool = True) -> World:
         ask_channel_ids=set(), exec_user_ids={PAS},
     )  # fmt: skip
     g = FGuild()
+    mkt = Hashable(id=7001, name="การตลาด", mentionable=True)
+    g.roles = [mkt]
     people = {
         "pas": FMember(g, PAS, "Pas", 9, admin=True),
         "boss": FMember(g, BOSS, "Boss", 5, roles=["Executive"]),
         "somchai": FMember(g, SOMCHAI, "Somchai", 2),
         "jemm": FMember(g, JEMM, "Jemm", 2),
         "ploy": FMember(g, PLOY, "Ploy", 1),
+        # the marketing team (role "การตลาด"), for the bulk-DM / poll / free-time scenarios
+        "mint": FMember(g, 31, "Mint", 2, roles=[mkt]),
+        "fon": FMember(g, 32, "Fon", 2, roles=[mkt]),
+        "bank": FMember(g, 33, "Bank", 2, roles=[mkt]),
+        "nok": FMember(g, 34, "Nok", 2, roles=[mkt]),
     }
     g.members = {p.id: p for p in people.values()}
     everyone = None

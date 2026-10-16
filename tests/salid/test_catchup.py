@@ -165,7 +165,7 @@ def test_render_is_bilingual_and_short_form_is_two_to_three_lines(bot, world):
 async def test_agent_kwargs_register_catch_up_and_the_flag_turns_it_off(bot, world):
     mem = MemoryTools(bot.memory_store, GUILD, {PUBLIC: "ทั่วไป"}, bot.s, 30)
     names = lambda: {f.__name__ for f in bot._catchup_tools(world.g, world.staff, mem)}  # noqa: E731
-    assert names() == {"catch_up_tool"}
+    assert names() == {"catch_up"}
     set_features(bot, catchup=False)
     assert names() == set()
     assert bot._catchup_tools(world.g, world.staff, None) == []

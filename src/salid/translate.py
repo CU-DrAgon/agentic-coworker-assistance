@@ -254,7 +254,9 @@ def _call(client, model: str, prompt: str, schema: type[BaseModel], max_tokens: 
         prompt,
         types.GenerateContentConfig(
             temperature=0,
-            max_output_tokens=max_tokens,
+            # thinking tokens count against the cap: a short text used to come back empty
+            max_output_tokens=max_tokens + 1024,
+            thinking_config=types.ThinkingConfig(thinking_level="LOW"),
             response_mime_type="application/json",
             response_schema=schema,
         ),

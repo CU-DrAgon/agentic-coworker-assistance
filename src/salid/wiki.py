@@ -243,7 +243,8 @@ def make_keywords(client, model: str, topic: str, instructions: str) -> list[str
                 prompt,
                 types.GenerateContentConfig(
                     temperature=0,
-                    max_output_tokens=200,
+                    max_output_tokens=1200,  # thinking tokens count against the cap
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
                     response_mime_type="application/json",
                     response_schema=_Keywords,
                 ),
