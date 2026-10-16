@@ -1326,7 +1326,7 @@ async def test_filler_is_written_for_the_question_and_again_line_is_generated_to
 async def test_slow_or_failing_line_plays_a_prerendered_fallback_only(tts_spy, slow_tool, stub):
     lv = tts_spy
     lv.bot.fillers = stub
-    lv.bot.s.ack_llm_timeout_s = 0.05
+    lv.bot.s.voice_ack_timeout_s = 0.05
     s, live = await lv.join(5)
     await until(lambda: len(s.live._filler_pcm) == 6)
     before = list(lv.said)

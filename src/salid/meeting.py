@@ -1791,7 +1791,7 @@ class MeetingManager:
 
     async def acknowledge(self, s: MeetingSession, question: str = "") -> None:
         """Play a short "one sec" right away, while the answer is being worked out. The line is
-        written for the question (cheap model + TTS, raced against `ack_llm_timeout_s`); when it is
+        written for the question (cheap model + TTS, raced against `voice_ack_timeout_s`); when it is
         not ready in time a cached hand-written line plays instead (never one of the last 3 said in
         this meeting) and the generated one is dropped: one acknowledgement only."""
         if not self.bot.s.voice_reply or s.ending or s.speaking:
@@ -1823,7 +1823,7 @@ class MeetingManager:
                 task = asyncio.create_task(generate_clip())
             made = None
             if task is not None:
-                timeout = float(getattr(self.bot.s, "ack_llm_timeout_s", 2.0))
+                timeout = float(getattr(self.bot.s, "voice_ack_timeout_s", 3.0))
                 done, _ = await asyncio.wait({task}, timeout=timeout)
                 if task in done and not task.cancelled() and task.exception() is None:
                     made = task.result()

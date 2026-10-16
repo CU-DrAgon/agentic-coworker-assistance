@@ -217,7 +217,7 @@ def ask_salid(question: str) -> dict:
 HEARD_GAP_S = 3.0  # input-transcript text after this much quiet starts a new utterance
 NAME_DEDUPE_S = 10.0  # a classic name hit this soon after a Live-transcript hit is the same call
 # Hand-written fallback pools (i18n ack_voice_* / ack_again_*): a line written for the question is
-# used when it is ready in time (`Settings.ack_llm_timeout_s`), otherwise one of these.
+# used when it is ready in time (`Settings.voice_ack_timeout_s`), otherwise one of these.
 FILLERS = {
     lang: [catalog(f"ack_voice_{n}", lang) for n in range(1, POOL_SIZE + 1)]
     for lang in ("th", "en")
@@ -1475,7 +1475,7 @@ class LiveVoice:
         again: asyncio.Task | None = None
         try:
             started = time.monotonic()
-            timeout = float(getattr(self.bot.s, "ack_llm_timeout_s", 2.0))
+            timeout = float(getattr(self.bot.s, "voice_ack_timeout_s", 3.0))
             if writer.enabled():
                 first = asyncio.create_task(self._generated_clip(question, lang))
                 again = asyncio.create_task(  # ready by the time it is needed

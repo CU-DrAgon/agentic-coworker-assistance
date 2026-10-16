@@ -134,6 +134,11 @@ class Settings(BaseSettings):
     ack_llm_timeout_s: float = Field(
         2.0, validation_alias=AliasChoices("SALID_ACK_LLM_TIMEOUT", "ack_llm_timeout_s")
     )
+    # Voice waits a little longer: the written line also needs a Cloud TTS call (~1.5 s), and the
+    # tool it covers takes several seconds anyway.
+    voice_ack_timeout_s: float = Field(
+        3.0, validation_alias=AliasChoices("SALID_VOICE_ACK_TIMEOUT", "voice_ack_timeout_s")
+    )
     # After the cue: no audio within this long -> the cue is sent once more; still nothing after
     # `live_fallback_seconds` more -> the classic path (agent + TTS) answers that utterance.
     live_cue_retry_seconds: float = 6.0

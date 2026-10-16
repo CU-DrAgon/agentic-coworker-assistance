@@ -374,7 +374,8 @@ class FillerWriter:
                 limit_words=45 if facts else 12,
                 stage_rule=_STAGE_EN.get(stage, ""),
                 facts_rule=(
-                    "\n- The line must also tell them, naturally: " + "; ".join(facts)
+                    "\n- The line must also tell them, naturally (keep numbers as digits, e.g. 1-5): "
+                    + "; ".join(facts)
                     if facts
                     else ""
                 ),
@@ -390,7 +391,10 @@ class FillerWriter:
             limit=limit,
             stage_rule=_STAGE_TH.get(stage, ""),
             facts_rule=(
-                "\n- ต้องบอกเรื่องเหล่านี้ให้ครบด้วย อย่างเป็นธรรมชาติ: " + "; ".join(facts) if facts else ""
+                "\n- ต้องบอกเรื่องเหล่านี้ให้ครบด้วย อย่างเป็นธรรมชาติ (ตัวเลขเขียนเป็นเลขอารบิกตามนี้ เช่น 1-5): "
+                + "; ".join(facts)
+                if facts
+                else ""
             ),
             avoid_rule=("\n- อย่าขึ้นต้นเหมือนประโยคล่าสุดเหล่านี้: " + " | ".join(av) if av else ""),
             question=q,

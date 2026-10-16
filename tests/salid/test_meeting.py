@@ -744,7 +744,7 @@ async def test_acknowledgment_uses_the_line_written_for_the_question(voice):
 @pytest.mark.parametrize("writer", [FakeWriter("ช้าไปค่ะ", delay=1.0), FakeWriter(boom=True)])
 async def test_slow_or_failing_line_falls_back_and_plays_one_clip(voice, writer):
     s = await start(voice)
-    voice.bot.s.ack_llm_timeout_s = 0.05
+    voice.bot.s.voice_ack_timeout_s = 0.05
     voice.bot.fillers = writer
     await ack_once(voice, s, "q")
     lines = [c[2] for c in voice.calls if c[0] == "tts"]
