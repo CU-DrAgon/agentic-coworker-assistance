@@ -4,7 +4,8 @@ Reuses `salid.memory_import.MemoryImporter` (resumable per-channel state, idempo
 message id, retention window, per-run cap, throttled pages, past-day summaries). Slack's history
 call returns newest messages first, so `SlackHistory` reads a channel's whole window once (cached
 for the run) and then serves the importer's oldest-first pages from it. A window bigger than
-`MAX_WINDOW` messages is skipped for the run (logged) instead of being imported with a hole.
+`MAX_WINDOW` messages (or with more than `MAX_THREADS` threads, or a thread that could not be read
+completely) is skipped for the run (logged) instead of being imported with a hole.
 
 Only conversations Salid is a member of are read (that is all Slack allows), 1:1 chats with people
 are not. Counts only in the logs.
@@ -68,16 +69,28 @@ class SlackHistory:
                 break
             await self._sleep(self._page_sleep)
         threads = [m["ts"] for m in raw if (m.get("reply_count") or 0) > 0 and m.get("ts")]
-        for ts in threads[:MAX_THREADS]:
-            try:
+        if len(threads) > MAX_THREADS:
+            raise WindowTooLarge()  # importing only some threads would mark the window complete
+        for ts in threads:
+            # Every page of every thread, or the channel is not imported this run (an unread
+            # thread must never leave a permanent hole behind a "complete" window). A failed
+            # read raises and is retried on the next run.
+            cursor = ""
+            while True:
                 resp = await client.conversations_replies(
-                    channel=self.channel, ts=ts, oldest=f"{oldest.timestamp():.6f}", limit=PAGE
+                    channel=self.channel,
+                    ts=ts,
+                    oldest=f"{oldest.timestamp():.6f}",
+                    limit=PAGE,
+                    **({"cursor": cursor} if cursor else {}),
                 )
-            except Exception as e:
-                logger.warning("could not read a Slack thread (%s)", safe_exc(e))
-                continue
-            raw.extend(m for m in resp.get("messages") or [] if m.get("ts") != ts)
-            await self._sleep(self._page_sleep)
+                raw.extend(m for m in resp.get("messages") or [] if m.get("ts") != ts)
+                if len(raw) > MAX_WINDOW:
+                    raise WindowTooLarge()
+                await self._sleep(self._page_sleep)
+                cursor = ((resp.get("response_metadata") or {}).get("next_cursor")) or ""
+                if not cursor:
+                    break
         rows, seen = [], set()
         for m in raw:
             ts = m.get("ts")

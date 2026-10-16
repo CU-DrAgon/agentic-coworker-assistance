@@ -21,7 +21,12 @@ class FakeSlack:
         }
         self.channels = {
             "C1": {"id": "C1", "name": "general", "is_private": True, "members": ["U1", "U2", BOT]},
-            "C2": {"id": "C2", "name": "leads", "is_private": True, "members": ["U1", "U2", "U3", BOT]},
+            "C2": {
+                "id": "C2",
+                "name": "leads",
+                "is_private": True,
+                "members": ["U1", "U2", "U3", BOT],
+            },
             "C3": {"id": "C3", "name": "secret", "is_private": True, "members": ["U1", "U9", BOT]},
         }
         self.posts: list[dict] = []
@@ -31,6 +36,8 @@ class FakeSlack:
         self.fail_update = False
         self.history: dict[str, list[dict]] = {}
         self.replies: dict[str, list[dict]] = {}
+        self.reply_page = 1000  # replies per conversations.replies page
+        self.broken_threads: set[str] = set()
         self.member_pages = 1
 
     async def users_info(self, user):
@@ -93,8 +100,17 @@ class FakeSlack:
             "response_metadata": {"next_cursor": str(nxt) if nxt < len(rows) else ""},
         }
 
-    async def conversations_replies(self, channel, ts, limit=100, oldest=None):
-        return {"messages": self.replies.get(ts, [])}
+    async def conversations_replies(self, channel, ts, limit=100, oldest=None, cursor=None):
+        if ts in self.broken_threads:
+            raise RuntimeError("ratelimited")
+        rows = self.replies.get(ts, [])
+        start = int(cursor or 0)
+        page = rows[start : start + self.reply_page]
+        nxt = start + self.reply_page
+        return {
+            "messages": page,
+            "response_metadata": {"next_cursor": str(nxt) if nxt < len(rows) else ""},
+        }
 
 
 @pytest.fixture
@@ -439,6 +455,40 @@ async def test_import_includes_thread_replies_and_skips_off_channels(fx):
         )  # fmt: skip
     }
     assert texts == {"root", "a reply"}
+
+
+async def test_long_threads_are_read_page_by_page(fx):
+    client, a, port, adapter = fx
+    from datetime import UTC, datetime
+
+    a._now = lambda: datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+    root_ts = "1791946000.000100"
+    root = {"ts": root_ts, "user": "U1", "text": "root", "reply_count": 5, "thread_ts": root_ts}
+    replies = [
+        {"ts": f"17919460{10 + i}.000100", "user": "U2", "text": f"r{i}", "thread_ts": root_ts}
+        for i in range(5)
+    ]
+    client.history["C1"] = [root]
+    client.replies[root_ts] = [root, *replies]
+    client.reply_page = 2  # 3 pages
+    assert await slack_import.SlackImporter(a, port, page_sleep=0).run() == 6
+
+
+async def test_a_thread_that_cannot_be_read_skips_the_channel_for_this_run(fx):
+    client, a, port, adapter = fx
+    from datetime import UTC, datetime
+
+    a._now = lambda: datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+    root_ts = "1791946000.000100"
+    client.history["C1"] = [
+        {"ts": root_ts, "user": "U1", "text": "root", "reply_count": 1, "thread_ts": root_ts}
+    ]
+    client.broken_threads.add(root_ts)
+    imp = slack_import.SlackImporter(a, port, page_sleep=0)
+    assert await imp.run() == 0  # nothing marked complete with a missing thread
+    client.broken_threads.clear()
+    client.replies[root_ts] = [client.history["C1"][0]]
+    assert await imp.run() == 1  # retried next run
 
 
 async def test_a_window_too_large_is_skipped_not_imported_with_a_hole(fx, monkeypatch):

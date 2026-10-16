@@ -9,7 +9,10 @@ input always gives the same id.
   October 2049, so ids at or above `2**62` are never Discord guilds. Bits 60-61 hold the platform
   (1 Slack, 2 LINE), the other 60 bits a SHA-256 prefix of the workspace / channel key (a collision
   among N tenants has probability about N**2 / 2**61: negligible). The value fits a signed int64
-  (Firestore, SQLite).
+  (Firestore, SQLite). Collisions are still refused, not trusted away: the tenant's settings document
+  records its owner (`guild_name`, see core.tenant_label) and a message from a different owner whose
+  key hashes to an id already taken is dropped (core.Assistant._owner_ok, fail closed).
+  Before 2049 this layout must move (Discord snowflakes reach 2**62 then).
 * **User / room / message** ids are positive and below `2**62`. They only need to be unique inside
   one tenant (stores always filter by tenant). Negative ids are never produced here: they are
   reserved for the private "DM notes" scope (`memory_access.dm_scope`).

@@ -262,6 +262,11 @@ class RoomBuffer:
 # ------------------------------------------------------------------ the assistant
 
 
+def tenant_label(platform: str, tenant: str) -> str:
+    """The owner recorded in a tenant's settings document (its `guild_name`)."""
+    return f"{platform.title()} {tenant}"
+
+
 class Assistant:
     def __init__(
         self,
@@ -349,8 +354,27 @@ class Assistant:
         if self._queue is not None:
             await self._queue.join()
 
-    def _register(self, msg: Incoming, gid: int) -> None:
+    def _owner_ok(self, msg: Incoming, gid: int) -> bool:
+        """The tenant id is a 60-bit hash of the workspace / channel key. The settings document
+        records which key owns it (`guild_name`); a different owner (a hash collision, or a Discord
+        guild) is refused so two tenants never share a ledger or memory. Blocking."""
+        expected = tenant_label(msg.platform, msg.tenant)
+        known = self.tenants.get(gid)
+        if known is not None:
+            return known == (msg.platform, msg.tenant)
+        if self.guilds_store is not None:
+            try:
+                doc = self.guilds_store.find(gid)
+            except Exception as e:
+                logger.warning("could not check tenant %s (%s)", gid, safe_exc(e))
+                return False  # fail closed: unknown owner
+            if doc is not None and doc.guild_name and doc.guild_name != expected:
+                logger.error("tenant id %s already belongs to another tenant: refused", gid)
+                return False
         self.tenants[gid] = (msg.platform, msg.tenant)
+        return True
+
+    def _register(self, msg: Incoming, gid: int) -> None:
         if gid in self._registered or self.guilds_store is None:
             return
         self._registered.add(gid)
@@ -359,7 +383,7 @@ class Assistant:
             try:
                 self.guilds_store.upsert_guild(
                     gid,
-                    name=f"{msg.platform.title()} {msg.tenant}",
+                    name=tenant_label(msg.platform, msg.tenant),
                     icon_url="",
                     channels=[],
                     installed=True,
@@ -404,6 +428,8 @@ class Assistant:
             return
         gid = ids.tenant_id(msg.platform, msg.tenant)
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
+        if not await asyncio.to_thread(self._owner_ok, msg, gid):
+            return
         self.names[(gid, rid)] = msg.room_name or msg.room
         self._register(msg, gid)
         await asyncio.to_thread(self.team.current, gid)  # refresh the cache off the loop

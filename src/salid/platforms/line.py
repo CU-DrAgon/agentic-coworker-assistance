@@ -21,6 +21,7 @@ import hmac
 import json
 import logging
 import time
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
@@ -71,6 +72,13 @@ class LineApi(Protocol):
     def bot_info(self) -> dict: ...
 
 
+def reply_rejected(e: Exception) -> bool:
+    """True when LINE definitely did not deliver a reply: an HTTP 4xx answer (invalid or expired
+    reply token, bad request). Anything else (timeouts, 5xx, connection errors) is ambiguous."""
+    status = getattr(e, "status", None)
+    return isinstance(status, int) and 400 <= status < 500
+
+
 class SdkLineApi:
     """`LineApi` over line-bot-sdk v3."""
 
@@ -98,7 +106,11 @@ class SdkLineApi:
     def push(self, to: str, texts: list[str]) -> list[str]:
         from linebot.v3.messaging import PushMessageRequest
 
-        r = self.api.push_message(PushMessageRequest(to=to, messages=self._messages(texts)))
+        # A retry key makes a retried push idempotent on LINE's side (no duplicate messages).
+        r = self.api.push_message(
+            PushMessageRequest(to=to, messages=self._messages(texts)),
+            x_line_retry_key=str(uuid.uuid4()),
+        )
         return [m.id for m in (r.sent_messages or [])]
 
     def loading(self, chat_id: str, seconds: int) -> None:
@@ -207,9 +219,14 @@ class LinePort:
             first, rest = rest[:REPLY_MAX], rest[REPLY_MAX:]
             try:
                 sent += await asyncio.to_thread(self.api.reply, msg.reply_token, first)
-            except Exception as e:  # expired or already used: push instead
-                logger.warning("LINE reply failed, pushing (%s)", safe_exc(e))
-                rest = first + rest
+            except Exception as e:
+                if not reply_rejected(e):
+                    # Timeout / network error: LINE may have delivered it. Pushing the same text
+                    # again could duplicate the answer, so only the remaining batches go out.
+                    logger.warning("LINE reply outcome unknown, not re-sending (%s)", safe_exc(e))
+                else:  # LINE refused the token (expired / used): push instead
+                    logger.warning("LINE reply refused, pushing (%s)", safe_exc(e))
+                    rest = first + rest
         while rest:
             batch, rest = rest[:REPLY_MAX], rest[REPLY_MAX:]
             sent += await asyncio.to_thread(self.api.push, msg.room, batch)

@@ -381,3 +381,27 @@ async def test_fast_answer_posts_no_acknowledgement(s, tmp_path):
     await run(a, port, mentions_bot=True)
     assert port.acks == [] and port.delivered[0][2] is None
     assert not any(not t.done() for t in a._bg)
+
+
+async def test_tenant_id_owned_by_another_tenant_is_refused(s, tmp_path):
+    """A tenant id is a hash: if its settings document already names a different owner
+    (a collision), the message is dropped instead of sharing that tenant's ledger and memory."""
+    a, port = make_assistant(s, tmp_path), FakePort()
+    a.guilds_store = a.team.store
+    gid = ids.tenant_id("slack", "T1")
+    a.guilds_store.upsert_guild(gid, name="Slack TOTHER", icon_url="", channels=[])
+    await run(a, port, is_direct=True, text="what did we spend?")
+    assert not a.ask_fn.calls and not port.delivered
+
+
+async def test_tenant_owner_is_recorded_and_accepted_next_time(s, tmp_path):
+    a, port = make_assistant(s, tmp_path), FakePort()
+    a.guilds_store = a.team.store
+    await run(a, port, is_direct=True, text="hi")
+    await a.drain()
+    gid = ids.tenant_id("slack", "T1")
+    assert a.guilds_store.find(gid).guild_name == "Slack T1"
+    b, port2 = make_assistant(s, tmp_path), FakePort()
+    b.guilds_store = a.guilds_store
+    await run(b, port2, is_direct=True, text="hi again")
+    assert b.ask_fn.calls

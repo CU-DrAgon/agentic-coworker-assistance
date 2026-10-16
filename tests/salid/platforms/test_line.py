@@ -29,8 +29,12 @@ class FakeLineApi:
         self.names = {"Ualice": "Alice", "Ubob": "Bob"}
 
     def reply(self, token, texts):
+        if self.fail_reply == "timeout":
+            raise TimeoutError("read timed out")
         if self.fail_reply:
-            raise RuntimeError("Invalid reply token")
+            from linebot.v3.messaging import ApiException
+
+            raise ApiException(status=400, reason="Invalid reply token")
         self.replies.append((token, list(texts)))
         return [f"r{i}" for i in range(len(texts))]
 
@@ -301,6 +305,15 @@ async def test_an_expired_token_error_falls_back_to_push_without_losing_messages
     msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
     await port.deliver(msg, ["a", "b", "c"], None)
     assert api.pushes == [("Cgroup", ["a", "b", "c"])]
+
+
+async def test_an_ambiguous_reply_failure_is_not_pushed_again(fx):
+    """A timeout may mean LINE delivered it: re-pushing would duplicate the answer."""
+    api, a, port, adapter, clock = fx
+    api.fail_reply = "timeout"
+    msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
+    await port.deliver(msg, [str(i) for i in range(7)], None)
+    assert [x for _to, t in api.pushes for x in t] == ["5", "6"]  # only what the reply never held
 
 
 async def test_at_most_five_messages_per_call(fx):
