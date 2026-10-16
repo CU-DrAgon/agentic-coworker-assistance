@@ -1658,6 +1658,7 @@ async def ask_async(
     chat_tools = build_chat_tools(chat_actions, calls) if chat_actions is not None else []
     tools += chat_tools
     tools += extra_tools or []
+    tool_names = {getattr(f, "__name__", "") for f in tools}  # prompt sections follow the tools
     agent = build_agent(
         settings,
         tools,
@@ -1672,7 +1673,7 @@ async def ask_async(
         secretary=bool(secretary_tools),
         chat=bool(chat_tools),
         people=people,
-        coo=bool(extra_tools),
+        coo="list_tasks" in tool_names,
         profile=profile,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
