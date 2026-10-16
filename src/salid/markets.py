@@ -32,7 +32,9 @@ from urllib.parse import quote, quote_plus
 from zoneinfo import ZoneInfo
 
 import httpx
+from google.genai import types
 
+from . import llm
 from .i18n import CATALOG, t
 
 logger = logging.getLogger(__name__)
@@ -447,6 +449,179 @@ def unavailable(what: str, why: str) -> dict:
     return {"status": "unavailable", "what": what, "reason": why, "hint": UNAVAILABLE_HINT}
 
 
+SOURCE_GROUNDED = "Google Search (grounded)"
+BREAKER_S = 600.0  # Yahoo is skipped this long after a 429
+GROUNDED_POLL_PER_HOUR = 30  # alert polling budget per process
+GROUNDED_ASK_PER_HOUR = 60  # interactive budget per process
+GROUNDED_PROMPT = (
+    "You look up current market prices on the web with Google Search. Reply with ONLY a JSON "
+    "array, no prose and no code fence, one object per item below, in this shape: "
+    '{{"symbol": str, "name": str, "price": number, "currency": str, "change": number or null, '
+    '"change_pct": number or null, "as_of": "exchange local date and time of the price, e.g. '
+    '2026-10-16 10:30 ICT", "source_title": str, "source_url": str}}. '
+    "Use only numbers you actually found on a page; never estimate or calculate a price. If you "
+    "cannot find an item, omit it. Prices may be delayed. Items:\n{items}"
+)
+GROUNDED_HISTORY_PROMPT = (
+    "You look up price history on the web with Google Search. Reply with ONLY a JSON array with one "
+    'object: {{"symbol": str, "name": str, "currency": str, "start": number, "end": number, '
+    '"high": number, "low": number, "change_pct": number or null, "from": "YYYY-MM-DD", "to": '
+    '"YYYY-MM-DD", "as_of": str, "source_title": str, "source_url": str}} for the period '
+    "below. Use only numbers found on a page; never estimate. If you cannot find them reply []. "
+    "Prices may be delayed. Item: {item}, period: {period}"
+)
+SEARCH_LABELS = {
+    "GC=F": "gold futures GC=F, price in USD per troy ounce",
+    "THB=X": "USD/THB exchange rate (Thai baht per 1 US dollar)",
+    "CL=F": "WTI crude oil futures CL=F in USD per barrel",
+    "^SET.BK": "SET Index (Stock Exchange of Thailand main index)",
+    "^SET50.BK": "SET50 Index (Thailand)",
+    "^GSPC": "S&P 500 index",
+    "^IXIC": "Nasdaq Composite index",
+    "^N225": "Nikkei 225 index",
+}
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}|\d{1,2}[/.]\d{1,2}[/.]\d{2,4}")
+_RANGE_TEXT = {"1mo": "the last 1 month", "6mo": "the last 6 months", "1y": "the last 1 year"}
+
+
+def _json_array(text: str) -> list[dict]:
+    t0 = (text or "").strip()
+    for a, b in (("[", "]"), ("{", "}")):
+        i, j = t0.find(a), t0.rfind(b)
+        if i != -1 and j > i:
+            try:
+                v = json.loads(t0[i : j + 1])
+            except ValueError:
+                continue
+            return [x for x in (v if isinstance(v, list) else [v]) if isinstance(x, dict)]
+    return []
+
+
+class Grounded:
+    """Last-resort prices from Gemini with Google Search grounding (the read_web mechanism),
+    validated strictly: a result needs a positive price and a time, else it is dropped."""
+
+    def __init__(self, client, model: str, clock: Callable[[], float] = time.monotonic):
+        self.client, self.model, self._clock = client, model, clock
+        self._used: dict[str, list[float]] = {"poll": [], "ask": []}
+        self._lock = threading.Lock()
+
+    def _allow(self, kind: str) -> bool:
+        cap = GROUNDED_POLL_PER_HOUR if kind == "poll" else GROUNDED_ASK_PER_HOUR
+        now = self._clock()
+        with self._lock:
+            used = [x for x in self._used[kind] if now - x < 3600]
+            self._used[kind] = used
+            if len(used) >= cap:
+                return False
+            used.append(now)
+            return True
+
+    def _call(self, prompt: str, kind: str) -> tuple[list[dict], list[dict]]:
+        if self.client is None or not self._allow(kind):
+            raise MarketError("grounded search unavailable")
+        cfg = types.GenerateContentConfig(
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+            temperature=0.0,
+            max_output_tokens=2048,
+        )
+        try:
+            resp = llm.generate(
+                self.client,
+                self.model,
+                [types.Content(role="user", parts=[types.Part(text=prompt)])],
+                cfg,
+            )
+        except Exception as e:
+            raise MarketError(f"grounded {type(e).__name__}") from e
+        from .web_read import _sources
+
+        return _json_array(getattr(resp, "text", "") or ""), _sources(resp)[0]
+
+    @staticmethod
+    def _src(row: dict, chunks: list[dict]) -> dict:
+        return {
+            "source_title": str(row.get("source_title") or (chunks[0]["title"] if chunks else ""))[
+                :120
+            ],
+            "source_url": str(row.get("source_url") or (chunks[0]["uri"] if chunks else ""))[:300],
+        }
+
+    def quotes(self, items: list[tuple[str, str]], kind: str = "ask") -> dict[str, dict]:
+        """items: (key, search label). One search call for all of them. Returns key -> quote
+        result (same shape as Yahoo's, minus the trend) for the items that validated."""
+        if not items:
+            return {}
+        rows, chunks = self._call(
+            GROUNDED_PROMPT.format(items="\n".join(f"- {label}" for _, label in items)), kind
+        )
+        out: dict[str, dict] = {}
+        for row in rows:
+            price, as_of = _num(row.get("price")), str(row.get("as_of") or "").strip()
+            if price is None or price <= 0 or not _DATE.search(as_of):
+                continue
+            key = self._match(row, items, out)
+            if key is None:
+                continue
+            chg, pct = _num(row.get("change")), _num(row.get("change_pct"))
+            if pct is None and chg is not None and price - chg:
+                pct = chg / (price - chg) * 100
+            out[key] = {
+                "status": "ok",
+                "symbol": str(row.get("symbol") or key),
+                "name": str(row.get("name") or ""),
+                "price": _rd(price),
+                "previous_close": _rd(price - chg) if chg is not None else None,
+                "change": _rd(chg),
+                "change_pct": _rd(pct, 2),
+                "currency": str(row.get("currency") or ""),
+                "as_of": as_of,
+                "market_time_utc": "",
+                "source": SOURCE_GROUNDED,
+                "confidence": "web",
+                "note": DELAY_NOTE + "; from a web search, verify before relying on it",
+                **self._src(row, chunks),
+            }
+        return out
+
+    @staticmethod
+    def _match(row: dict, items, taken: dict) -> str | None:
+        sym = re.sub(r"[^A-Z0-9]", "", str(row.get("symbol") or "").upper())
+        name = str(row.get("name") or "").casefold()
+        for key, label in items:
+            if key in taken:
+                continue
+            k = re.sub(r"[^A-Z0-9]", "", key.upper().removesuffix(".BK"))
+            if sym and (sym == k or sym == re.sub(r"[^A-Z0-9]", "", key.upper())):
+                return key
+            if name and label.casefold() in name:
+                return key
+        free = [k for k, _ in items if k not in taken]
+        return free[0] if len(items) == 1 and free else None
+
+    def history(self, label: str, rng: str) -> dict | None:
+        rows, chunks = self._call(
+            GROUNDED_HISTORY_PROMPT.format(item=label, period=_RANGE_TEXT.get(rng, rng)), "ask"
+        )
+        for row in rows:
+            vals = [_num(row.get(k)) for k in ("start", "end", "high", "low")]
+            if any(v is None or v <= 0 for v in vals) or not str(row.get("as_of") or "").strip():
+                continue
+            start, end, high, low = vals
+            pct = _num(row.get("change_pct"))
+            return {
+                "status": "ok", "symbol": str(row.get("symbol") or label), "name": str(row.get("name") or ""),
+                "range": rng, "from": str(row.get("from") or ""), "to": str(row.get("to") or ""),
+                "start": start, "end": end, "high": high, "low": low,
+                "change_pct": _rd(pct if pct is not None else (end - start) / start * 100, 2),
+                "currency": str(row.get("currency") or ""), "as_of": str(row["as_of"]),
+                "source": SOURCE_GROUNDED, "confidence": "web",
+                "note": DELAY_NOTE + "; from a web search, verify before relying on it",
+                **self._src(row, chunks),
+            }  # fmt: skip
+        return None
+
+
 class MarketData:
     """The sources behind the tools, with a 60 s quote cache and a 10 min news cache."""
 
@@ -454,8 +629,10 @@ class MarketData:
         self,
         get: Callable[[str], str] = http_get,
         clock: Callable[[], float] = time.monotonic,
+        grounded: Grounded | None = None,
     ):
-        self._get, self._clock = get, clock
+        self._get, self._clock, self.grounded = get, clock, grounded
+        self._blocked_until = -1e12  # Yahoo circuit breaker (set after a 429)
         self._cache: dict[str, tuple[float, float, object]] = {}  # key -> (at, ttl, value)
         self._lock = threading.Lock()
 
@@ -481,6 +658,8 @@ class MarketData:
 
     def _chart(self, symbol: str, rng: str, interval: str) -> dict:
         def load():
+            if self._clock() < self._blocked_until:
+                raise MarketError("yahoo paused after http 429")
             err: MarketError | None = None
             for host in YAHOO_HOSTS:
                 url = (
@@ -491,29 +670,87 @@ class MarketData:
                     return parse_yahoo_chart(self._get(url))
                 except MarketError as e:
                     err = e
+                    if "429" in str(e):  # circuit breaker: leave Yahoo alone for a while
+                        self._blocked_until = self._clock() + BREAKER_S
+                        break
                     if str(e) in ("no data", "unexpected payload") or "Not Found" in str(e):
                         break  # the symbol is wrong, not the host
             raise err or MarketError("unreachable")
 
         return self._cached(f"y:{symbol}:{rng}:{interval}", QUOTE_TTL_S, load)  # type: ignore[return-value]
 
+    def _peek(self, key: str):
+        with self._lock:
+            hit = self._cache.get(key)
+        return hit[2] if hit and self._clock() - hit[0] < hit[1] else None
+
+    def _put(self, key: str, ttl: float, value) -> None:
+        with self._lock:
+            self._cache[key] = (self._clock(), ttl, value)
+
+    def quotes(self, inputs: list[str], market: str = "auto", poll: bool = False) -> list[dict]:
+        """Quotes for several names, in order. Yahoo first; whatever it cannot give is looked up
+        together in ONE grounded Google Search call; else `unavailable`."""
+        out: list[dict | None] = [None] * len(inputs)
+        pending: dict[str, list[int]] = {}  # first candidate -> positions
+        labels: dict[str, str] = {}
+        whys: dict[str, str] = {}
+        for i, text in enumerate(inputs):
+            names = candidates(text, market)
+            if not names:
+                out[i] = {
+                    "status": "unknown_symbol",
+                    "input": text,
+                    "hint": "Ask for the ticker, e.g. PTT, AAPL, or ^GSPC.",
+                }
+                continue
+            last: MarketError | None = None
+            for sym in names:
+                try:
+                    out[i] = {**_quote_result(self._chart(sym, "5d", "1d")), "input": text}
+                    break
+                except MarketError as e:
+                    last = e
+            if out[i] is None:
+                key = names[0]
+                hit = self._peek(f"g:{key}")
+                if hit is not None:
+                    out[i] = {**hit, "input": text} if hit else None
+                    if not hit:
+                        out[i] = {**unavailable(text, str(last)), "input": text}
+                else:
+                    pending.setdefault(key, []).append(i)
+                    labels[key] = SEARCH_LABELS.get(key) or (
+                        text if text.isascii() and text.upper() == key else f"{text} ({key})"
+                    )
+                    whys[key] = str(last)
+        if pending:
+            found: dict[str, dict] = {}
+            why = "; ".join(sorted(set(whys.values())))
+            if self.grounded is not None:
+                try:
+                    found = self.grounded.quotes(
+                        [(k, labels[k]) for k in pending], "poll" if poll else "ask"
+                    )
+                except MarketError as e:
+                    why = f"{why}; {e}"
+                    logger.info("grounded lookup failed: %s", e)
+            if self.grounded is not None and not found and "grounded" not in why:
+                why += "; grounded search found no valid price"
+            for key, positions in pending.items():
+                res = found.get(key)
+                self._put(f"g:{key}", QUOTE_TTL_S if res else FAIL_TTL_S, res or {})
+                for i in positions:
+                    out[i] = (
+                        {**res, "input": inputs[i]}
+                        if res
+                        else {**unavailable(inputs[i], why), "input": inputs[i]}
+                    )
+        return out  # type: ignore[return-value]
+
     def quote(self, symbol: str, market: str = "auto") -> dict:
-        """One quote for a name or ticker (tries the candidates of `candidates`)."""
-        names = candidates(symbol, market)
-        if not names:
-            return {
-                "status": "unknown_symbol",
-                "input": symbol,
-                "hint": "Ask for the ticker, e.g. PTT, AAPL, or ^GSPC.",
-            }
-        last: MarketError | None = None
-        for sym in names:
-            try:
-                out = _quote_result(self._chart(sym, "5d", "1d"))
-                return {**out, "input": symbol}
-            except MarketError as e:
-                last = e
-        return {**unavailable(symbol, str(last)), "input": symbol}
+        """One quote for a name or ticker (Yahoo, then grounded search, then unavailable)."""
+        return self.quotes([symbol], market)[0]
 
     def history(self, symbol: str, rng: str = "1mo", market: str = "auto") -> dict:
         if rng not in HISTORY_RANGES:
@@ -527,6 +764,17 @@ class MarketData:
                 return {**history_summary(self._chart(sym, rng, "1d"), rng), "input": symbol}
             except MarketError as e:
                 last = e
+        if self.grounded is not None:
+            key = f"gh:{names[0]}:{rng}"
+            res = self._peek(key)
+            if res is None:
+                try:
+                    res = self.grounded.history(f"{symbol} ({names[0]})", rng) or {}
+                except MarketError as e:
+                    res, last = {}, e
+                self._put(key, QUOTE_TTL_S if res else FAIL_TTL_S, res)
+            if res:
+                return {**res, "input": symbol}
         return {**unavailable(symbol, str(last)), "input": symbol}
 
     def thai_gold(self) -> dict:
@@ -538,10 +786,11 @@ class MarketData:
             return unavailable("thai gold", str(e))
 
     def gold(self) -> dict:
+        world, fx = self.quotes(["GC=F", "THB=X"])
         return {
             "thai_gold": self.thai_gold(),
-            "world_gold_usd_per_oz": self.quote("GC=F"),
-            "usd_thb": self.quote("THB=X"),
+            "world_gold_usd_per_oz": world,
+            "usd_thb": fx,
             "note": "Thai prices are the association announcement; world gold is a futures quote.",
         }
 
@@ -687,25 +936,34 @@ class Poller:
         self._clock = clock
         self._last: dict[str, float] = {}
 
-    def snapshot(self, symbol: str) -> tuple[float | None, float | None, str, str, str]:
-        """(price, change %, currency, as_of, source) or raises MarketError."""
+    @staticmethod
+    def _snap(q: dict) -> tuple | None:
+        if q.get("status") != "ok":
+            return None
+        return (
+            q["price"], q["change_pct"], q["currency"],
+            q.get("market_time_utc") or q.get("as_of", ""), q.get("source", SOURCE_YAHOO),
+        )  # fmt: skip
+
+    def snapshot(self, symbol: str) -> tuple | None:
+        """(price, change %, currency, as_of, source) or None when no source has it."""
         if symbol == "gold":
             g = self.data.thai_gold()
             if g.get("status") != "ok":
-                raise MarketError(g.get("reason", "gold"))
+                return None
             return g["bar_sell"], None, "THB/บาททอง", g.get("announced_at", ""), SOURCE_GOLD
-        q = self.data.quote(symbol)
-        if q.get("status") != "ok":
-            raise MarketError(q.get("reason", "quote"))
-        return q["price"], q["change_pct"], q["currency"], q["market_time_utc"], SOURCE_YAHOO
+        return self._snap(self.data.quote(symbol))
 
     def due(self, guild_ids: list[int], now: datetime) -> list[Alert]:
-        """Alerts that fire now (each condition at most once per Bangkok day). Blocking."""
+        """Alerts that fire now (each condition at most once per Bangkok day). Blocking. Quotes
+        come from the same chain as the tools (Yahoo, then ONE batched grounded search call for
+        everything Yahoo missed, capped per hour)."""
         today = now.astimezone(BKK).date().isoformat()
         by_guild = {g: [w for w in self.repo.all(g) if w.fired_day != today] for g in guild_ids}
         wanted = {w.symbol for ws in by_guild.values() for w in ws}
         t0 = self._clock()
         snaps: dict[str, tuple | None] = {}
+        quote_syms: list[str] = []
         for sym in sorted(wanted):
             kind = market_kind(sym)
             if not is_open(kind, now):
@@ -714,11 +972,17 @@ class Poller:
             if t0 - self._last.get(sym, -1e9) < every:
                 continue
             self._last[sym] = t0
-            try:
+            if sym == "gold":
                 snaps[sym] = self.snapshot(sym)
-            except MarketError as e:
-                logger.info("market poll failed: %s (%s)", sym, e)
-                snaps[sym] = None
+            else:
+                quote_syms.append(sym)
+        if quote_syms:
+            for sym, q in zip(quote_syms, self.data.quotes(quote_syms, poll=True), strict=True):
+                snaps[sym] = self._snap(q)
+                if snaps[sym] is None:
+                    logger.info(
+                        "market poll failed: %s (%s)", sym, q.get("reason", q.get("status"))
+                    )
         out: list[Alert] = []
         for gid, ws in by_guild.items():
             for w in ws:
@@ -847,7 +1111,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
         names = resolve_names(symbols)
         if not names:
             return {"status": "error", "error": "no_symbol"}
-        return {"quotes": [ctx.data.quote(n, market) for n in names]}
+        return {"quotes": ctx.data.quotes(names, market)}
 
     def stock_history(symbol: str, range: str = "1mo", market: str = "auto") -> dict:  # noqa: A002
         """Price history summary of one symbol: start, end, % change, high and low with dates over

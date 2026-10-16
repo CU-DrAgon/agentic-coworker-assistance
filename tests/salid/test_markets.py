@@ -151,7 +151,7 @@ def test_second_host_is_tried_when_the_first_fails(clock):
     def get(url):
         calls.append(url)
         if "query1" in url:
-            raise mk.MarketError("http 429")
+            raise mk.MarketError("http 503")
         return fx("yahoo_ptt_bk.json")
 
     q = mk.MarketData(get=get, clock=clock).quote("PTT.BK")
@@ -170,7 +170,7 @@ def test_quote_cache_is_60_seconds(clock):
 
 
 def test_failures_are_cached_briefly(clock):
-    net = Net({"yahoo": mk.MarketError("http 429")})
+    net = Net({"yahoo": mk.MarketError("http 503")})
     d = mk.MarketData(get=net, clock=clock)
     d.quote("PTT.BK")
     n = len(net.urls)
@@ -555,3 +555,158 @@ async def test_company_news_section_is_in_the_report_text_when_topics_exist(bot,
     assert sec.startswith(t("mk_news_head", "th")) and "[ABC]" in sec
     set_features(bot, markets=False)
     assert bot._company_news_section(world.g, "th") == ""
+
+
+# ------------------------------------------------------------------ grounded fallback
+class GClient:
+    """A fake Gemini client: records calls and returns canned text."""
+
+    def __init__(self, *texts):
+        self.texts, self.calls = list(texts), []
+        self.models = self
+
+    def generate_content(self, model, contents, config):
+        self.calls.append((model, contents[0].parts[0].text, config))
+        text = self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
+        if isinstance(text, Exception):
+            raise text
+        return SimpleNamespace(text=text, candidates=[])
+
+
+def gq(symbol, price=30.5, as_of="2026-10-16 10:30 ICT", **kw):
+    return {
+        "symbol": symbol, "name": symbol, "price": price, "currency": "THB", "change": -0.25,
+        "change_pct": None, "as_of": as_of, "source_title": "SET", "source_url": "https://set.or.th/x",
+        **kw,
+    }  # fmt: skip
+
+
+def blocked_data(clock, client, extra=None):
+    net = Net({"yahoo": mk.MarketError("http 429"), **(extra or {})})
+    return mk.MarketData(get=net, clock=clock, grounded=mk.Grounded(client, "m", clock)), net
+
+
+def test_yahoo_429_falls_back_to_one_grounded_call_and_trips_the_breaker(clock):
+    client = GClient(json.dumps([gq("PTT.BK"), gq("GC=F", 4170.5, currency="USD")]))
+    d, net = blocked_data(clock, client)
+    res = d.quotes(["PTT", "GC=F"])
+    assert len(client.calls) == 1  # batched
+    cfg = client.calls[0][2]
+    assert cfg.temperature == 0.0 and cfg.tools[0].google_search is not None
+    assert "delayed" in client.calls[0][1] and "never estimate" in client.calls[0][1]
+    a, b = res
+    assert a["status"] == "ok" and a["price"] == 30.5 and a["source"] == "Google Search (grounded)"
+    assert a["confidence"] == "web" and a["source_url"] == "https://set.or.th/x"
+    assert a["change_pct"] == round(-0.25 / 30.75 * 100, 2) and a["as_of"].startswith("2026-10-16")
+    assert b["price"] == 4170.5 and b["currency"] == "USD"
+    n = len(net.urls)
+    clock.t += 100  # inside the 10 minute breaker: Yahoo is not even tried
+    d.quotes(["AAPL"])
+    assert len(net.urls) == n
+
+
+def test_breaker_expires_after_ten_minutes(clock):
+    client = GClient(json.dumps([gq("PTT.BK")]))
+    d, net = blocked_data(clock, client)
+    d.quote("PTT.BK")
+    n = len(net.urls)
+    clock.t += 601
+    d._cache.clear()
+    d.quote("PTT.BK")
+    assert len(net.urls) > n
+
+
+def test_grounded_result_is_cached_for_a_minute(clock):
+    client = GClient(json.dumps([gq("PTT.BK")]))
+    d, _ = blocked_data(clock, client)
+    d.quote("PTT.BK")
+    d.quote("PTT.BK")
+    assert len(client.calls) == 1
+    clock.t += 61
+    d.quote("PTT.BK")
+    assert len(client.calls) == 2
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        json.dumps([gq("PTT.BK", as_of="")]),  # no time
+        json.dumps([gq("PTT.BK", price=None)]),  # no number
+        json.dumps([gq("PTT.BK", price="n/a")]),
+        json.dumps([gq("PTT.BK", price=-3)]),
+        "I could not find it",  # prose
+        "[]",
+        RuntimeError("vertex down"),
+    ],
+)
+def test_invalid_grounded_answers_are_unavailable(clock, bad):
+    d, _ = blocked_data(clock, GClient(bad))
+    q = d.quote("PTT.BK")
+    assert q["status"] == "unavailable" and "price" not in q
+
+
+def test_grounded_json_in_a_code_fence_is_accepted(clock):
+    fenced = "```json\n" + json.dumps([gq("PTT.BK")]) + "\n```"
+    d, _ = blocked_data(clock, GClient(fenced))
+    assert d.quote("PTT.BK")["price"] == 30.5
+
+
+def test_yahoo_ok_never_calls_the_grounded_client(clock):
+    client = GClient("[]")
+    d = mk.MarketData(get=Net(routes()), clock=clock, grounded=mk.Grounded(client, "m", clock))
+    assert d.quote("PTT.BK")["source"] == "Yahoo Finance" and client.calls == []
+
+
+def test_mixed_batch_asks_grounded_only_for_what_yahoo_missed(clock):
+    client = GClient(json.dumps([gq("NOPE.BK", 12.0)]))
+    net = Net(routes(**{"NOPE": mk.MarketError("http 404")}))
+    d = mk.MarketData(get=net, clock=clock, grounded=mk.Grounded(client, "m", clock))
+    res = d.quotes(["PTT.BK", "NOPE.BK"])
+    assert [r["source"] for r in res] == ["Yahoo Finance", "Google Search (grounded)"]
+    assert (
+        len(client.calls) == 1
+        and "NOPE.BK" in client.calls[0][1]
+        and "PTT.BK" not in client.calls[0][1]
+    )
+
+
+def test_history_and_world_gold_fall_back_too(clock):
+    hist = {
+        "symbol": "PTT.BK", "name": "PTT", "currency": "THB", "start": 30.0, "end": 33.0,
+        "high": 34.0, "low": 29.5, "change_pct": None, "from": "2026-09-16", "to": "2026-10-16",
+        "as_of": "2026-10-16 16:30 ICT", "source_title": "SET", "source_url": "https://set.or.th",
+    }  # fmt: skip
+    client = GClient(json.dumps([hist]), json.dumps([gq("GC=F", 4170.5), gq("THB=X", 32.4)]))
+    d, _ = blocked_data(clock, client, {"goldtraders": fx("goldtraders_classic.html")})
+    h = d.history("PTT.BK", "1mo")
+    assert h["status"] == "ok" and h["change_pct"] == 10.0 and h["confidence"] == "web"
+    g = d.gold()
+    assert g["world_gold_usd_per_oz"]["price"] == 4170.5 and g["usd_thb"]["price"] == 32.4
+    assert g["thai_gold"]["status"] == "ok"
+    bad = blocked_data(clock, GClient(json.dumps([{**hist, "as_of": ""}])))[0]
+    assert bad.history("PTT.BK")["status"] == "unavailable"
+
+
+def test_grounded_hourly_caps(clock):
+    client = GClient(json.dumps([gq("PTT.BK")]))
+    g = mk.Grounded(client, "m", clock)
+    for _ in range(mk.GROUNDED_POLL_PER_HOUR):
+        g.quotes([("PTT.BK", "PTT")], "poll")
+    with pytest.raises(mk.MarketError):
+        g.quotes([("PTT.BK", "PTT")], "poll")
+    g.quotes([("PTT.BK", "PTT")], "ask")  # interactive budget is separate
+    clock.t += 3601
+    g.quotes([("PTT.BK", "PTT")], "poll")
+    assert len(client.calls) == mk.GROUNDED_POLL_PER_HOUR + 2
+
+
+def test_poller_batches_grounded_symbols_and_alerts_from_them(docs, clock):
+    client = GClient(json.dumps([gq("PTT.BK", 29.0), gq("KBANK.BK", 150.0)]))
+    d, _ = blocked_data(clock, client)
+    repo, poller = make_poller(docs, d, clock)
+    repo.add(GUILD, mk.Watch("a", STAFF, "PTT.BK", "PTT", "below", 30))
+    repo.add(GUILD, mk.Watch("b", STAFF, "KBANK.BK", "KBANK", "above", 140))
+    fired = poller.due([GUILD], FRI_10AM)
+    assert sorted(a.watch.id for a in fired) == ["a", "b"] and len(client.calls) == 1
+    assert fired[0].source == "Google Search (grounded)"
+    assert "Google Search (grounded)" in mk.format_alert(fired[0], "th")

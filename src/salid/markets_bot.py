@@ -22,7 +22,8 @@ POLL_TICK_S = 60.0  # how often the watchlists are looked at (each market has it
 
 class MarketsMixin:
     def _markets_init(self) -> None:
-        self.market_data = mk.MarketData()
+        grounded = mk.Grounded(self.llm, self.s.gemini_model) if self.llm is not None else None
+        self.market_data = mk.MarketData(grounded=grounded)  # Yahoo, then grounded search
         self.market_watches = mk.WatchRepo(self.docs)
         self.market_poller = mk.Poller(self.market_watches, self.market_data, self.docs)
         self._markets_last = -1e9
