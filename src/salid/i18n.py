@@ -1803,4 +1803,74 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "งานใหญ่ใช้เวลานานเกิน {seconds} วินาที จึงยกเลิก",
         "en": "The big task ran longer than {seconds} seconds, so it was cancelled",
     },
+    # ---------------------------------------------------------------- meeting votes (votes.py)
+    "vote_ballot": {
+        "th": "🗳️ มติ: {question} — จากการประชุม {room}, ปิดโหวต {time}",
+        "en": "🗳️ Vote: {question} — from the meeting in {room}, closes {time}",
+    },
+    "vote_ballot_chat": {
+        "th": "🗳️ มติ: {question} — ขอโดย {opener}, ปิดโหวต {time}",
+        "en": "🗳️ Vote: {question} — asked by {opener}, closes {time}",
+    },
+    "vote_chosen": {
+        "th": "🗳️ {question}\n✅ คุณเลือก: {option} (เปลี่ยนได้จนถึง {time})",
+        "en": "🗳️ {question}\n✅ You chose: {option} (you can change it until {time})",
+    },
+    "vote_you_chose": {"th": "คุณเลือก: {option}", "en": "You chose: {option}"},
+    "vote_you_skipped": {"th": "คุณไม่ได้ลงคะแนน", "en": "You did not vote"},
+    "vote_ballot_closed": {
+        "th": "🔒 ปิดโหวตแล้ว: {question} — {choice}",
+        "en": "🔒 Voting closed: {question} — {choice}",
+    },
+    "vote_press_closed": {"th": "โหวตนี้ปิดแล้วค่ะ", "en": "This vote is closed."},
+    "vote_press_not_voter": {
+        "th": "คุณไม่ได้อยู่ในรายชื่อผู้ลงคะแนนของมตินี้ค่ะ",
+        "en": "You are not on the voter list for this vote.",
+    },
+    "vote_press_unknown": {"th": "ไม่พบมตินี้แล้วค่ะ", "en": "That vote no longer exists."},
+    "vote_tally": {
+        "th": "🗳️ มติ: {question} — โหวตแล้ว {done}/{total} ({counts}) ปิด {time}",
+        "en": "🗳️ Vote: {question} — {done}/{total} voted ({counts}) closes {time}",
+    },
+    "vote_tally_closed": {
+        "th": "🔒 มติ: {question} — ปิดแล้ว โหวต {done}/{total} ({counts})",
+        "en": "🔒 Vote: {question} — closed, {done}/{total} voted ({counts})",
+    },
+    "vote_result": {
+        "th": "{icon}มติ: {question} → {counts} ({verdict}, เสียงข้างมากของผู้ลงคะแนน)",
+        "en": "{icon}Vote: {question} → {counts} ({verdict}, simple majority of ballots cast)",
+    },
+    "vote_v_pass": {"th": "ผ่าน", "en": "passed"},
+    "vote_v_fail": {"th": "ไม่ผ่าน", "en": "rejected"},
+    "vote_v_tie": {"th": "ไม่ได้ข้อสรุป", "en": "no conclusion"},
+    "vote_v_none": {"th": "ไม่มีผู้ลงคะแนน", "en": "nobody voted"},
+    "vote_v_win": {"th": "{option} ชนะ", "en": "{option} wins"},
+    "vote_anon_tag": {"th": "[ไม่เปิดเผยชื่อ]", "en": "[anonymous]"},
+    "vote_names": {"th": "{option}: {names}", "en": "{option}: {names}"},
+    "vote_nonvoters": {"th": "ไม่ได้ลงคะแนน: {names}", "en": "Did not vote: {names}"},
+    "vote_say": {
+        "th": "ส่งปุ่มโหวตให้ทุกคนแล้วค่ะ กดได้เลย ปิดใน {minutes} นาทีนะคะ",
+        "en": "I sent everyone the vote buttons. Press one any time, it closes in {minutes} minutes.",
+    },
+    "vote_cue": {
+        "th": "(ปิดโหวตแล้ว — แจ้งผลสั้น ๆ โดยพูดตามนี้ ห้ามเรียบเรียงใหม่: {line})",
+        "en": "(The vote has closed. Announce the result briefly, say it as given, do not rephrase: {line})",
+    },
+    "vote_unreached": {
+        "th": "ส่งปุ่มโหวตให้ไม่ถึง: {names} ค่ะ",
+        "en": "Could not reach: {names}.",
+    },
+    "vote_minutes_header": {"th": "🗳️ มติที่ลงคะแนน", "en": "🗳️ Votes taken"},
+    "vote_offer": {
+        "th": "🗳️ ให้สลิดเปิดโหวตเรื่อง “{question}” ไหมคะ ({options})",
+        "en": "🗳️ Shall I open a vote on “{question}”? ({options})",
+    },
+    "vote_offer_open": {"th": "เปิดโหวต", "en": "Open vote"},
+    "vote_offer_no": {"th": "ไม่ต้อง", "en": "No need"},
+    "vote_offer_opened": {
+        "th": "🗳️ เปิดโหวตเรื่อง “{question}” แล้วค่ะ ส่งปุ่มไปที่ห้องส่วนตัวของแต่ละคน",
+        "en": "🗳️ Vote on “{question}” is open. Buttons went to everyone's private channel.",
+    },
+    "vote_offer_declined": {"th": "ได้ค่ะ ไม่เปิดโหวต", "en": "Okay, no vote."},
+    "vote_offer_gone": {"th": "ข้อเสนอนี้หมดอายุแล้วค่ะ", "en": "That offer is no longer valid."},
 }

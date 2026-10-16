@@ -611,6 +611,7 @@ class MeetingSession:
     first_speech_at: float = 0.0
     introduced: bool = False  # Salid was addressed or has spoken: no need to ask who it is
     notes_posted: list[str] = field(default_factory=list)
+    votes_taken: list[str] = field(default_factory=list)  # result lines of closed votes (minutes)
     last_note_at: float = 0.0
     last_note_pass: datetime | None = None
     note_pass_at: float = 0.0
@@ -963,6 +964,22 @@ class MeetingManager:
         s.last_note_at = now
         await self._post(s, f"📌 {text}")
         return {"status": "posted"}
+
+    def record_vote(self, s: MeetingSession, line: str) -> None:
+        """A closed vote's result line goes into the minutes (summary and minutes document)."""
+        if line and line not in s.votes_taken:
+            s.votes_taken.append(line)
+
+    @staticmethod
+    def votes_block(s: MeetingSession) -> str:
+        if not s.votes_taken:
+            return ""
+        return (
+            "\n\n"
+            + t("vote_minutes_header", s.lang)
+            + "\n"
+            + "\n".join(f"- {x}" for x in s.votes_taken)
+        )
 
     async def _note_pass(self, s: MeetingSession) -> None:
         """Classic mode: the cheap gate reads the transcript since the last pass and posts one
@@ -1725,6 +1742,8 @@ class MeetingManager:
         if said is not None and not self._real_call(s, seg, text, said):
             said = None  # noise the transcriber turned into a greeting: not a call
         called = said is not None
+        if not called and s.recording != "not_recording" and not self._is_echo(s, seg):
+            self._spawn(s, self.bot.vote_offer_from_room(s, name, text))  # text offer only
         if called and parse_meeting_command(said) == "leave":
             self._spawn(s, self._leave_politely(s))  # "สลิด ออกประชุม"
             return
@@ -2362,8 +2381,9 @@ class MeetingManager:
 
         if reason == "declined" or s.recording == "not_recording":
             return
+        votes = self.votes_block(s)
         if not len(s.transcript):
-            await self._post_minutes(s, t("meet_no_transcript", s.lang))
+            await self._post_minutes(s, t("meet_no_transcript", s.lang) + votes)
             return
         try:
             body = await asyncio.to_thread(
@@ -2381,6 +2401,7 @@ class MeetingManager:
             return
         why = t(f"end_{reason}", s.lang) if reason in END_REASONS else reason
         header = t("meet_summary_header", s.lang, reason=why)
+        body += votes
         s.summary_text = body
         ended = self.bot.s.now()
         doc = await self._minutes_doc_file(s, ended)

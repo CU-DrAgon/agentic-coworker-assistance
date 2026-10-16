@@ -1455,8 +1455,14 @@ class LiveVoice:
         else:
             say = str(res.get("say") or catalog("voice_tool_failed_say", self._filler_lang()))
             cue = (FAILED_CUE_EN if en else FAILED_CUE).format(job=job.id, question=q, answer=say)
+        await self.announce_cue(cue, f"job {job.id}")
+
+    async def announce_cue(self, cue: str, tag: str = "cue") -> None:
+        """Tell the Live model, at the next pause, to say a prepared cue (a job result, a vote
+        result). The room asked for it, so the mouth gate lets that audio by. No pause within
+        `live_result_wait_seconds`: nothing is spoken (the chat has it)."""
         if not await self._wait_for_pause():
-            logger.info("live: job %s result not spoken: no pause in time (chat has it)", job.id)
+            logger.info("live: %s not spoken: no pause in time (chat has it)", tag)
             return
         live = self._live
         if live is None or self._closing or self.session.ending:
@@ -1464,7 +1470,7 @@ class LiveVoice:
         now = time.monotonic()
         self._announce_until = now + ANNOUNCE_AUTH_S  # the room asked for this: the gate lets it by
         self._last_engaged_at = now  # like a name hit: follow-ups work for the grace window
-        logger.info("live: announcing job %s", job.id)
+        logger.info("live: announcing %s", tag)
         await live.send_client_content(
             turns=types.Content(role="user", parts=[types.Part(text=cue)]), turn_complete=True
         )
