@@ -734,6 +734,25 @@ def build_scenarios() -> list[Scn]:
                 lambda w, st: persona(st) + ([] if not tools_of(st) else [f"used tools {tools_of(st)}"]),
                 casual=True))  # fmt: skip
 
+    # 46-48 currency, gold and cross-source search --------------------------------------------
+    def need_tool(name):
+        def chk(w, st):
+            return persona(st) + (
+                [] if calls(st, name) else [f"{name} not called ({tools_of(st)})"]
+            )
+
+        return chk
+
+    sc.append(S("fx_usd_thb", "100 ดอลลาร์กี่บาท", "convert_currency",
+                lambda w: one(w, "somchai", "general", "100 ดอลลาร์กี่บาท", mention=True),
+                need_tool("convert_currency"), casual=True))  # fmt: skip
+    sc.append(S("gold_today", "ราคาทองวันนี้", "gold_price",
+                lambda w: one(w, "somchai", "general", "ราคาทองวันนี้", mention=True),
+                need_tool("gold_price"), max_chars=900))  # fmt: skip
+    sc.append(S("search_quote", "ใบเสนอราคา ABC อยู่ไหน", "search_everything",
+                lambda w: one(w, "somchai", "general", "ใบเสนอราคา ABC อยู่ไหน", mention=True),
+                need_tool("search_everything"), max_chars=900))  # fmt: skip
+
     return sc
 
 
