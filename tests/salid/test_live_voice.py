@@ -1176,3 +1176,98 @@ async def test_overlapping_speakers_act_as_the_lowest_ranked_of_them(lv, asked):
     assert asked["sec_args"][0] == 12 and asked["sec_args"][1] is False
     assert "profile" not in asked
     await lv.mgr.end((1000, 77))
+
+
+# ------------------------------------------------------------------ intentional barge-in
+def test_realtime_input_never_lets_noise_interrupt_unless_configured():
+    on = lvm.build_realtime_input(SimpleNamespace())
+    assert on.activity_handling == types.ActivityHandling.NO_INTERRUPTION
+    old = lvm.build_realtime_input(SimpleNamespace(live_barge_in="any"))
+    assert old.activity_handling is None
+
+
+@pytest.mark.parametrize(
+    "text, stop",
+    [
+        ("สลิด หยุดก่อน", True), ("เดี๋ยวก่อนนะ", True), ("พอแล้ว", True), ("ขอแทรกหน่อย", True),
+        ("Salid", True), ("wait, stop", True), ("hold on", True),
+        ("วันนี้ฝนตกหนักเลย", False), ("เอกสารอยู่ในโฟลเดอร์ไหน", False), ("the stopwatch", False),
+        ("", False),
+    ],
+)  # fmt: skip
+def test_stop_phrases(text, stop):
+    assert lvm.is_stop_request(text) is stop
+
+
+async def test_side_talk_does_not_stop_salid_but_stop_does_and_drops_the_rest(lv):
+    s, live = await lv.join(5, 11)
+    s.live._partners = {5}
+    live.push(audio_msg(), said_msg("คำตอบยาวๆ"))
+    await until(lambda: lv.vc.played and s.speaking)
+    s.live._partners = {5}  # set again: the first audio of the turn recomputed it
+    s.live._turn_open = True
+    live.push(heard_msg("ไปกินข้าวที่ไหนกันดี"))  # someone else chatting nearby
+    await asyncio.sleep(0.05)
+    assert lv.vc.playing
+    live.push(heard_msg(" สลิด หยุดก่อน"))
+    await until(lambda: lv.vc.playing is False)
+    live.push(audio_msg())  # the rest of the stopped answer never plays
+    await asyncio.sleep(0.05)
+    assert len(lv.vc.played) == 1
+    live.push(done_msg())
+    await asyncio.sleep(0.03)
+    assert all("คำตอบยาวๆ" not in m for m in lv.chan.sent)
+    live.push(audio_msg())  # the next answer plays again
+    await until(lambda: len(lv.vc.played) == 2)
+    await lv.mgr.end((1000, 77))
+
+
+async def test_only_the_partner_talking_over_salid_stops_her(lv):
+    s, live = await lv.join(5, 11)
+    live.push(audio_msg())
+    await until(lambda: lv.vc.played and s.speaking)
+    v = s.live
+    v._partners, v._turn_open = {5}, True
+    loud, quiet = pcm48(8000), pcm48(50)
+    t0 = 1000.0
+    for i in range(150):  # 3 s of loud talk from a bystander (id 11): ignored
+        v._check_talkover(11, loud, t0 + i * 0.02)
+    for i in range(150):  # 3 s of the partner's mic noise below the voice threshold: ignored
+        v._check_talkover(5, quiet, t0 + i * 0.02)
+    await asyncio.sleep(0.02)
+    assert lv.vc.playing
+    for i in range(30):  # 0.6 s of the partner talking, no words heard yet: not enough
+        v._check_talkover(5, loud, t0 + 10 + i * 0.02)
+    assert lv.vc.playing
+    v._heard_while_speaking = "เดี๋ยวนะ ผมถามว่า"
+    for i in range(30, 45):  # with words, 0.8 s of talking over her: stop
+        v._check_talkover(5, loud, t0 + 10 + i * 0.02)
+    await until(lambda: lv.vc.playing is False)
+    assert v._muted_turn
+    await lv.mgr.end((1000, 77))
+
+
+async def test_stop_after_the_turn_finished_does_not_mute_the_next_answer(lv):
+    s, live = await lv.join(5)
+    live.push(audio_msg(48000), said_msg("ยาว"), done_msg())  # whole turn received, still playing
+    await until(lambda: lv.vc.played and s.speaking)
+    assert s.live._turn_open is False
+    live.push(heard_msg("หยุดก่อน"))
+    await until(lambda: lv.vc.playing is False)
+    assert s.live._muted_turn is False
+    live.push(audio_msg())
+    await until(lambda: len(lv.vc.played) == 2)
+    await lv.mgr.end((1000, 77))
+
+
+async def test_any_mode_keeps_the_old_server_barge_in(lv):
+    lv.bot.s.live_barge_in = "any"
+    s, live = await lv.join(5)
+    live.push(audio_msg())
+    await until(lambda: lv.vc.played and s.speaking)
+    live.push(heard_msg("หยุดก่อน"))  # no local stop in "any" mode; the server decides
+    await asyncio.sleep(0.05)
+    assert lv.vc.playing
+    live.push(interrupted_msg())
+    await until(lambda: lv.vc.playing is False)
+    await lv.mgr.end((1000, 77))

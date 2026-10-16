@@ -22,6 +22,7 @@ import asyncio
 import contextlib
 import logging
 import random
+import re
 import threading
 import time
 from array import array
@@ -40,6 +41,7 @@ from .meeting import (
     _stop_playback,
     parse_meeting_command,
     parse_wake,
+    rms,
 )
 from .mentions import tag_candidates
 from .qa import THAI_DAYS
@@ -82,10 +84,38 @@ def _sensitivity(enum_cls, name: str, default: str):
     )
 
 
+def intentional_barge_in(settings: Any) -> bool:
+    return str(getattr(settings, "live_barge_in", "intentional") or "").lower() != "any"
+
+
+# Said to Salid while she talks = "stop now". Short, explicit phrases (or her name) only, so a noisy
+# room, a side conversation or a cough never cuts her off mid-sentence.
+_STOP = re.compile(
+    r"(?:สลิด|salid|ซาลิด)"
+    r"|หยุด|พอ\s*(?:แล้ว|ก่อน|ละ)|เดี๋ยว\s*(?:ก่อน|ๆ|เดี๋ยว)|ขอ\s*(?:แทรก|พูด|ขัด)|เงียบ|ฟังก่อน"
+    r"|รอ\s*ก่อน"
+    r"|\b(?:stop|wait|hold on|hang on|enough|be quiet|quiet please|excuse me|sorry to interrupt)\b",
+    re.I,
+)
+
+
+def is_stop_request(text: str) -> bool:
+    """Is this (partial) utterance, heard while Salid speaks, a deliberate interruption?"""
+    return bool(_STOP.search(" ".join(str(text or "").split())))
+
+
 def build_realtime_input(settings: Any) -> types.RealtimeInputConfig:
     """Turn-taking for natural Thai talk: short greetings start a turn quickly (start sensitivity
-    high), a mid-sentence pause does not end it (end sensitivity low, long silence_duration_ms)."""
+    high), a mid-sentence pause does not end it (end sensitivity low, long silence_duration_ms).
+    With intentional barge-in the server never interrupts Salid for incoming audio
+    (NO_INTERRUPTION); `LiveVoice._on_heard` stops her when someone deliberately asks."""
+    extra = (
+        {"activity_handling": types.ActivityHandling.NO_INTERRUPTION}
+        if intentional_barge_in(settings)
+        else {}
+    )
     return types.RealtimeInputConfig(
+        **extra,
         automatic_activity_detection=types.AutomaticActivityDetection(
             start_of_speech_sensitivity=_sensitivity(
                 types.StartSensitivity, getattr(settings, "live_start_sensitivity", "high"), "high"
@@ -95,7 +125,7 @@ def build_realtime_input(settings: Any) -> types.RealtimeInputConfig:
             ),
             prefix_padding_ms=int(getattr(settings, "live_prefix_padding_ms", 300)),
             silence_duration_ms=int(getattr(settings, "live_silence_ms", 1200)),
-        )
+        ),
     )
 
 
@@ -196,7 +226,13 @@ FILLER_TOOLS = {
 SPEAKER_NOTE_MIN_S = 1.0  # speaker-change notes are at least this far apart
 BURST_GAP_S = 1.0  # a speaker's frames this close together are one stretch of speech
 SPEAKER_KEEP_S = 120.0  # how long speech stretches are remembered
-ASKER_MAX_AGE_S = 30.0  # the last utterance counts as "who asked" if it ended this recently
+ASKER_MAX_AGE_S = 30.0
+# Intentional barge-in: the person Salid is answering talks over her for this long (loud frames,
+# short gaps allowed) = a real interruption. Other people's side talk and noise never count.
+TALKOVER_S = 0.8
+TALKOVER_NO_WORDS_S = 1.6  # ... or this long when the Live transcript has no words for it yet
+TALKOVER_GAP_S = 0.35
+TALKOVER_RMS = 500.0  # the last utterance counts as "who asked" if it ended this recently
 ROOM_NOTE = (
     "(ผู้ถามคือ {asker}. คำตอบนี้จะถูกพูดให้ทุกคนในห้องเสียงฟัง: การกระทำ (นัด อีเมล DM โพสต์ อนุมัติ งาน) "
     "ทำในนามผู้ถามด้วยสิทธิ์ของเขา แต่ข้อมูลที่พูดต้องเป็นสิ่งที่ทุกคนในห้องดูได้เท่านั้น. "
@@ -475,6 +511,11 @@ class LiveVoice:
         self._said: list[str] = []
         self._turn_audio = False
         self._awaiting_answer = False  # a tool call was answered: its spoken answer comes next
+        self._muted_turn = False  # someone said "stop": drop the rest of this model turn
+        self._turn_open = False  # the server is still sending the current model turn
+        self._partners: set[int] = set()  # who Salid is answering (talking over her stops her)
+        self._talkover: dict[int, list[float]] = {}  # partner id -> [start, last] loud speech
+        self._heard_while_speaking = ""
         self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
         self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
@@ -533,7 +574,26 @@ class LiveVoice:
         session is still connecting, so a greeting right after joining is not lost."""
         if not self._closing:
             self.mixer.feed(user_id, pcm)
-            self._track_speaker(user_id, time.monotonic())
+            now = time.monotonic()
+            self._track_speaker(user_id, now)
+            self._check_talkover(user_id, pcm, now)
+
+    def _check_talkover(self, uid: int, pcm: bytes, now: float) -> None:
+        """Stop when the person Salid is answering clearly talks over her. Anyone else (a side
+        conversation, a TV, a noisy mic) is ignored; they can still say "สลิด หยุด" / "stop"."""
+        if uid not in self._partners or not self._speaking():
+            self._talkover.pop(uid, None)
+            return
+        if not intentional_barge_in(self.bot.s) or rms(pcm) < TALKOVER_RMS:
+            return
+        cur = self._talkover.get(uid)
+        if cur is None or now - cur[1] > TALKOVER_GAP_S:
+            cur = self._talkover[uid] = [now, now]
+        cur[1] = now
+        words = len(self._heard_while_speaking.strip()) >= 2
+        if cur[1] - cur[0] >= (TALKOVER_S if words else TALKOVER_NO_WORDS_S):
+            self._talkover.clear()
+            self._stop_requested()
 
     # ---- who is talking / who asked
     def _track_speaker(self, uid: int, now: float) -> None:
@@ -743,6 +803,16 @@ class LiveVoice:
             self._flush_heard()
         self._heard_at = now
         self._heard_buf += text
+        if self._speaking():
+            self._heard_while_speaking += text
+        if (
+            self._speaking()
+            and intentional_barge_in(self.bot.s)
+            and is_stop_request(self._heard_buf)
+        ):
+            self._stop_requested()
+            if not parse_wake(self._heard_buf):
+                return  # "หยุด" / "stop": just stop; a name call goes on to be answered
         if self._heard_hit:
             return
         said = parse_wake(self._heard_buf)  # the same detector as the classic path
@@ -902,6 +972,8 @@ class LiveVoice:
         if sc.interrupted:
             self._interrupt()
         if sc.model_turn is not None:
+            self._turn_open = True
+        if sc.model_turn is not None and not self._muted_turn:
             for part in sc.model_turn.parts or []:
                 data = part.inline_data.data if part.inline_data is not None else None
                 if data:
@@ -1114,6 +1186,10 @@ class LiveVoice:
             return
         if not self._turn_audio:
             self._turn_audio = True
+            # the people this answer is for: whoever spoke just before it (and overlapped them)
+            self._partners = set(self.recent_speakers())
+            self._talkover.clear()
+            self._heard_while_speaking = ""
             if self._latency_pending:
                 logger.info(
                     "live: user audio ended -> first audio %.1fs",
@@ -1251,6 +1327,11 @@ class LiveVoice:
         s.speaking_until = time.monotonic() + SPEAK_COOLDOWN_S
 
     def _turn_complete(self) -> None:
+        self._turn_open = False
+        if self._muted_turn:  # the rest of a turn somebody stopped: never posted or played
+            self._muted_turn = False
+            self._said.clear()
+            return
         text = "".join(self._said).strip()
         self._said.clear()
         if text:
@@ -1260,6 +1341,19 @@ class LiveVoice:
         self._turn_audio = False
         if self._source is not None:
             self._source.finish()
+
+    def _speaking(self) -> bool:
+        """Salid's own voice is playing (or queued) right now."""
+        return self._playing_src is not None or (self._source is not None and self._turn_audio)
+
+    def _stop_requested(self) -> None:
+        """Someone deliberately talked over Salid: stop now and drop the rest of this answer (the
+        server keeps generating it because it never interrupts with NO_INTERRUPTION)."""
+        logger.info("live: stopped on request")
+        self._interrupt()
+        # only the turn still being generated is dropped; if it already finished (its audio was
+        # just playing out of the buffer) the next turn is the answer to whoever stopped her
+        self._muted_turn = self._turn_open
 
     def _interrupt(self) -> None:
         """Barge-in: somebody talked over Salid. Drop queued audio and stop playing now."""

@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     live_start_sensitivity: str = "high"  # high | low
     live_end_sensitivity: str = "low"  # high | low
     live_proactive_audio: bool = True  # the model may stay silent when not addressed
+    # Barge-in: "intentional" (default) = background noise or someone else talking never cuts Salid
+    # off; she stops only when told to ("สลิด หยุด", "เดี๋ยวก่อน", "stop", "wait", or her name).
+    # "any" = the old behaviour: any detected speech interrupts her (good in quiet rooms only).
+    live_barge_in: str = "intentional"  # intentional | any
     # Voice meetings stay voice: no "🔊" echoes, per-answer text or join announcement in the text
     # chat (the end-of-meeting summary and replies to messages typed to Salid are always posted).
     meeting_text_echo: bool = False

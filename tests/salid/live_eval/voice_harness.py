@@ -488,6 +488,7 @@ def steps():
         dict(id="v08", text="เมื่อวานกินข้าวที่ไหน", voice="B", uid=11, respond=False, state="listening"),
         dict(id="v09", text="เรากับเขาสนิทกันมาก", respond=False, state="listening"),
         dict(id="v10", kind="bargein"),
+        dict(id="v12", kind="sidetalk"),
         dict(id="v11", text="สลิด ออกประชุม", respond=None, ends=True),
     ]
 
@@ -564,6 +565,37 @@ async def _bargein(rig: Rig, step) -> dict:
     }
 
 
+async def _sidetalk(rig: Rig, step) -> dict:
+    """Noisy room: while Salid answers Ann, Boy chats about lunch nearby (must NOT cut her off);
+    then Ann herself talks over her ("เดี๋ยวก่อน ...") and Salid stops."""
+    rig.reset_listening()
+    _, pl0, _ = rig.snapshot()
+    await rig.speak(synth("สลิด เล่าประวัติกรุงเทพให้ฟังหน่อย ขอยาวๆ ละเอียดๆ เลยนะ", "A"), 10)
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 40:
+        await asyncio.sleep(0.1)
+        if rig.vc.playing and any(p["first_audio"] for p in rig.vc.plays[pl0:]):
+            break
+    started = rig.vc.playing
+    stops0 = rig.vc.stop_playing_calls
+    await rig.speak(synth("เที่ยงนี้ไปกินข้าวที่ไหนกันดี ร้านข้างล่างคนเยอะมากเลย", "B"), 11)
+    await asyncio.sleep(1.0)
+    kept = rig.vc.playing and rig.vc.stop_playing_calls == stops0
+    await rig.speak(synth("เดี๋ยวก่อนนะ ขอถามอีกเรื่องหนึ่ง", "A"), 10)
+    t1 = time.monotonic()
+    while rig.vc.stop_playing_calls == stops0 and time.monotonic() - t1 < 8:
+        await asyncio.sleep(0.1)
+    stopped = rig.vc.stop_playing_calls > stops0
+    ok = started and kept and stopped
+    got = f"talked={started}, kept_talking_over_side_chat={kept}, stopped_when_partner_cut_in={stopped}"
+    t2 = time.monotonic()
+    while (rig.vc.playing or rig.s.speaking) and time.monotonic() - t2 < 30:
+        await asyncio.sleep(0.2)
+    await asyncio.sleep(1.0)
+    return {"ok": ok, "exp": "ignores side chat; stops when the person she answers cuts in",
+            "got": got, "obs": {"first_audio_s": None}, "transcript": []}  # fmt: skip
+
+
 async def _run_mode(mode: str, report: list[dict], only: set[str] | None, alt: bool):
     rig = Rig(mode)
     await rig.open()
@@ -575,8 +607,8 @@ async def _run_mode(mode: str, report: list[dict], only: set[str] | None, alt: b
                 continue
             sid = f"{mode}:{step['id']}"
             try:
-                if step.get("kind") == "bargein":
-                    r = await _bargein(rig, step)
+                if step.get("kind") in ("bargein", "sidetalk"):
+                    r = await (_bargein if step["kind"] == "bargein" else _sidetalk)(rig, step)
                     row = dict(suite="voice", id=sid, scenario=f"[{mode}] barge-in then name call",
                                expected=r["exp"], got=r["got"], passed=bool(r["ok"]),
                                latency_s=r["obs"]["first_audio_s"],
