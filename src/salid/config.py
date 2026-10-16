@@ -110,8 +110,8 @@ class Settings(BaseSettings):
     notes_batch_seconds: float = 60.0  # classic mode: how often the gate looks for decisions
     # Two states: listening (speaks only when its name is called) and engaged (answers every
     # utterance). Engaged falls back to listening after this long without anyone addressing it
-    # (or sooner: two utterances in a row that are not addressed to Salid).
-    engaged_timeout_seconds: float = 30.0
+    # (or sooner: three utterances in a row that are not addressed to Salid).
+    engaged_timeout_seconds: float = 45.0
     # Every listening <-> engaged change (and the join) is shown as one short line in the meeting's
     # text chat; a flip back within 15 s edits the previous line instead of posting a new one.
     voice_state_posts: bool = True
@@ -133,11 +133,15 @@ class Settings(BaseSettings):
     # up in that window. Off = v0.8.0 behaviour.
     live_mouth_gate: bool = True  # SALID_LIVE_MOUTH_GATE
     live_call_grace_seconds: float = 2.5
+    # Engaged this recently counts as engaged for the mouth gate and the tool gate (SALID_LIVE_REENGAGE_GRACE_SECONDS).
+    live_reengage_grace_seconds: float = 60.0
     # A name hit (either detector) counts only if real speech is behind it: noise / an unmuted mic
     # makes the transcriber hallucinate "หวัดดีครับ สลิด". Frames with RMS >= `name_min_rms` are
-    # voiced; the Live path needs `name_min_voiced_seconds` of them in the last 3 s (0 = off), the
-    # classic path (greeting-only utterances) needs >= 0.8 s and 30% voiced frames.
-    name_min_voiced_seconds: float = 0.4  # SALID_NAME_MIN_VOICED_SECONDS
+    # voiced. Both detectors (bare greeting / name only) apply the same speech-likeness rule:
+    # `name_min_voiced_seconds` of voiced audio (0 = gate off), 30% voiced frames, frame-RMS
+    # coefficient of variation >= `name_min_cv` (stationary noise is flat), overall RMS >= floor.
+    name_min_voiced_seconds: float = 0.35  # SALID_NAME_MIN_VOICED_SECONDS
+    name_min_cv: float = 0.25  # SALID_NAME_MIN_CV
     name_min_rms: float = 250.0  # SALID_NAME_MIN_RMS
     # A spoken "one moment" clip while a slow tool (ask_salid) runs; a second line if still waiting.
     live_filler: bool = True

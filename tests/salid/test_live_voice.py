@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from conftest import ALICE, FakeClient, FixedClockSettings, mk
 from google.genai import types
-from test_meeting import FakeGuild, FakeVC, FakeVoiceChannel, make_member
+from test_meeting import SPEECH_PCM, FakeGuild, FakeVC, FakeVoiceChannel, make_member
 
 from salid import live_voice as lvm
 from salid import meeting as mt
@@ -766,7 +766,7 @@ async def test_connect_failure_falls_back_to_classic_wake_words(lv, monkeypatch)
 
     monkeypatch.setattr(salid.qa, "ask", lambda *a, **kw: SimpleNamespace(text="ได้เลยนะ"))
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, mdl, pcm: "สลิด สรุปให้หน่อย")
-    await lv.mgr.handle_segment(s, mt.Segment(5, pcm48(800) * 100, 0.0, 2.0))
+    await lv.mgr.handle_segment(s, mt.Segment(5, SPEECH_PCM, 0.0, 2.0))
     assert lv.chan.sent[-1] == "<@5> ได้เลยนะ"
     await lv.mgr.end((1000, 77))
 
@@ -898,8 +898,8 @@ async def test_name_in_the_live_input_transcript_forces_one_turn_and_dedupes_cla
     s, live = await lv.join(5)
     lv.bot.s.live_name_reply_seconds = 0.05
     sent = capture_cues(live)
-    for _ in range(30):
-        s.live.feed(5, pcm48(800))  # real speech behind the name (energy gate)
+    for i in range(0, len(SPEECH_PCM), 3840):
+        s.live.feed(5, SPEECH_PCM[i : i + 3840])  # real speech behind the name (energy gate)
     live.push(heard_msg("ช่วยสรุปหน่อย"), heard_msg("สลิด "), heard_msg("วันนี้มีนัดอะไรบ้าง"))
     await until(lambda: any(t[1] for t in sent))
     cue = [t for t in sent if t[1]]

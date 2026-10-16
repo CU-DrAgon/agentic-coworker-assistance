@@ -62,16 +62,16 @@ async def quiet_session(env, **settings):
     return await start(env)
 
 
-def test_default_engaged_timeout_is_30_seconds():
+def test_default_engaged_timeout_is_45_seconds():
     from salid.config import Settings
 
-    assert Settings.model_fields["engaged_timeout_seconds"].default == 30.0
+    assert Settings.model_fields["engaged_timeout_seconds"].default == 45.0
     assert Settings.model_fields["live_ask_timeout_seconds"].default == 150.0
     assert Settings.model_fields["live_slow_answer_seconds"].default == 40.0
     assert Settings.model_fields["voice_state_posts"].default is True
 
 
-async def test_two_unaddressed_utterances_drop_back_to_listening(env, monkeypatch):
+async def test_three_unaddressed_utterances_drop_back_to_listening(env, monkeypatch):
     s = await quiet_session(env)
     env.mgr._set_engaged(s, True)
     s.called_at = time.monotonic() - 60  # the call is long ago, Salid is not speaking
@@ -80,8 +80,25 @@ async def test_two_unaddressed_utterances_drop_back_to_listening(env, monkeypatc
     await env.mgr.handle_segment(s, segment(10))
     assert s.engaged is True and s.unaddressed == 1
     await env.mgr.handle_segment(s, segment(11))
+    assert s.engaged is True and s.unaddressed == 2
+    await env.mgr.handle_segment(s, segment(12))
     assert s.engaged is False  # silently: nothing was said
     assert env.vc.played == [] and env.chan.sent == []
+    await env.mgr.end((1000, 77), "shutdown")
+
+
+async def test_callers_own_utterances_are_never_unaddressed(env, monkeypatch):
+    s = await quiet_session(env)
+    env.mgr._set_engaged(s, True, by=10)
+    assert s.called_by == 10
+    s.called_at = time.monotonic() - 60
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "เมื่อวานไปกินข้าวมา")
+    monkeypatch.setattr(env.mgr, "answer", lambda *a, **k: asyncio.sleep(0))
+    for _ in range(5):
+        await env.mgr.handle_segment(s, segment(10))
+    assert s.engaged is True and s.unaddressed == 0
+    await env.mgr.handle_segment(s, segment(11))  # someone else: counts
+    assert s.unaddressed == 1
     await env.mgr.end((1000, 77), "shutdown")
 
 
@@ -113,13 +130,13 @@ async def test_a_question_soon_after_she_spoke_counts_as_addressed(env):
     await env.mgr.end((1000, 77), "shutdown")
 
 
-async def test_engaged_times_out_after_30_seconds_by_default(env):
+async def test_engaged_times_out_after_45_seconds_by_default(env):
     s = await quiet_session(env)
-    assert env.mgr._engage_s() == 30.0
+    assert env.mgr._engage_s() == 45.0
     env.mgr._set_engaged(s, True)
-    env.mgr._consent_tick(s, time.monotonic() + 20)
+    env.mgr._consent_tick(s, time.monotonic() + 30)
     assert s.engaged is True
-    env.mgr._consent_tick(s, time.monotonic() + 40)
+    env.mgr._consent_tick(s, time.monotonic() + 60)
     assert s.engaged is False
     await env.mgr.end((1000, 77), "shutdown")
 

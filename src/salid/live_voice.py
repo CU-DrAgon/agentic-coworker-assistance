@@ -40,11 +40,15 @@ from .i18n import resolve_lang
 from .i18n import t as catalog
 from .meeting import (
     SPEAK_COOLDOWN_S,
+    SpeechStats,
     _connected,
     _stop_playback,
+    looks_like_speech,
     parse_meeting_command,
     parse_wake,
     rms,
+    stats_from_frame_rms,
+    stats_line,
 )
 from .mentions import tag_candidates
 from .qa import THAI_DAYS
@@ -739,7 +743,8 @@ class LiveVoice:
         self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
         self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
-        self._voiced: list[float] = []  # arrival times of recent voiced frames
+        self._last_engaged_at = -1e9  # monotonic: engaged last (grace window for the gates)
+        self._frames: list[tuple[float, float]] = []  # (arrival time, RMS) of the last 3 s
         self._rejected_logged = False
         # mouth gate (see `_gate_audio`)
         self._held: list[
@@ -810,14 +815,15 @@ class LiveVoice:
             now = time.monotonic()
             self._track_speaker(user_id, now)
             self._check_talkover(user_id, pcm, now)
-            floor = float(getattr(getattr(self.bot, "s", None), "name_min_rms", 250.0))
-            if rms(pcm) >= floor:
-                self._voiced.append(now)  # a voiced 20 ms frame (see `_voiced_s`)
+            self._frames.append((now, rms(pcm)))  # see `_speech_stats`
+            if len(self._frames) > 400:  # ~8 s of frames: keep the ring short
+                self._frames = [f for f in self._frames if now - f[0] <= HEARD_GAP_S]
 
-    def _voiced_s(self, now: float) -> float:
-        """Seconds of voiced audio (frames with RMS >= `name_min_rms`) in the last 3 s, any speaker."""
-        self._voiced = [t for t in self._voiced if now - t <= HEARD_GAP_S]
-        return len(self._voiced) * FRAME_S
+    def _speech_stats(self, now: float) -> SpeechStats:
+        """Energy statistics of the frames received in the last 3 s, any speaker."""
+        self._frames = [f for f in self._frames if now - f[0] <= HEARD_GAP_S]
+        floor = float(getattr(getattr(self.bot, "s", None), "name_min_rms", 250.0))
+        return stats_from_frame_rms([r for _, r in self._frames], floor)
 
     def _check_talkover(self, uid: int, pcm: bytes, now: float) -> None:
         """Stop when the person Salid is answering clearly talks over her. Anyone else (a side
@@ -1005,6 +1011,7 @@ class LiveVoice:
         """Tell the model whether it is engaged in a conversation or only listening."""
         self._engaged = engaged
         if engaged:
+            self._last_engaged_at = time.monotonic()
             self._release_held()  # the name arrived while the first words were being held back
         self._spawn(self._send_state())
 
@@ -1065,14 +1072,18 @@ class LiveVoice:
         said = parse_wake(self._heard_buf)  # the same detector as the classic path
         if said is None:
             return
-        need = float(getattr(self.bot.s, "name_min_voiced_seconds", 0.4))
-        if need > 0 and self._voiced_s(now) < need:
-            # noise / an unmuted mic hallucinated into a greeting: not a call (a later part of the
-            # same utterance with real speech can still be one)
-            if not self._rejected_logged:
-                self._rejected_logged = True
-                logger.info("live: name hit rejected: no voiced audio")
-            return
+        if float(getattr(self.bot.s, "name_min_voiced_seconds", 0.35)) > 0:
+            stats = self._speech_stats(now)
+            ok, reason = looks_like_speech(stats, self.bot.s)
+            if not ok:
+                # noise / an unmuted mic hallucinated into a greeting: not a call (a later part of
+                # the same utterance with real speech can still be one)
+                if not self._rejected_logged:
+                    self._rejected_logged = True
+                    logger.info("live: name hit rejected: %s %s", reason, stats_line(stats))
+                return
+            logger.info("live: name hit accepted %s", stats_line(stats))
+        self._last_engaged_at = now
         self._heard_hit = True
         if parse_meeting_command(said) == "leave":
             return  # "สลิด ออกประชุม": the meeting manager leaves; no reply to force
@@ -1084,7 +1095,10 @@ class LiveVoice:
         logger.info("live: name heard in the live transcript")
         who = self.recent_speakers()
         self.bot.meetings._set_engaged(
-            s, True, name=self.speaker_name(who[0]) if len(who) == 1 else ""
+            s,
+            True,
+            name=self.speaker_name(who[0]) if len(who) == 1 else "",
+            by=who[0] if len(who) == 1 else 0,
         )
         self._spawn(
             self._force_reply(
@@ -1495,7 +1509,7 @@ class LiveVoice:
     async def _on_tool_call(self, live: Any, tool_call: Any) -> None:
         """The tools run in the background: the receiver keeps handling audio, transcripts and
         interruptions while the brain works (a re-asked question can then join / replace it)."""
-        engaged = self._gate_open()
+        engaged = self._authorize_tools([fc.name for fc in tool_call.function_calls or []])
         self._answer_auth = engaged  # a spoken answer to a call made while engaged may be heard
         if any(
             self._refusal(fc.name, dict(fc.args or {}), engaged) is None
@@ -1509,8 +1523,33 @@ class LiveVoice:
         task.add_done_callback(self._bg.discard)
 
     def _gate_open(self) -> bool:
-        """Someone called Salid (or the mouth gate is off): she may speak and act."""
-        return not getattr(self.bot.s, "live_mouth_gate", True) or bool(self.session.engaged)
+        """Someone called Salid (or the mouth gate is off) or she was engaged within
+        `live_reengage_grace_seconds` (a lively room drops the state while a question is open)."""
+        if not getattr(self.bot.s, "live_mouth_gate", True) or self.session.engaged:
+            return True
+        grace = float(getattr(self.bot.s, "live_reengage_grace_seconds", 60.0))
+        return time.monotonic() - self._last_engaged_at <= grace
+
+    def _authorize_tools(self, names: list[str]) -> bool:
+        """The gate for a tool call batch. Passing only thanks to the grace re-engages in code (the
+        state line in chat is right). `ask_salid` / `answer_privately` while not engaged is
+        evidence: if the last 3 s of user audio is real speech, someone did ask, so engage."""
+        if self._gate_open():
+            if (
+                not self.session.engaged
+                and getattr(self.bot.s, "live_mouth_gate", True)
+                and any(n != "post_note" for n in names)  # a note alone is not a conversation
+            ):
+                self.bot.meetings._set_engaged(self.session, True)
+            return True
+        if any(n in ("ask_salid", "answer_privately") for n in names):
+            stats = self._speech_stats(time.monotonic())
+            ok, _ = looks_like_speech(stats, self.bot.s)
+            if ok:
+                logger.info("live: ask_salid accepted: speech heard, engaging")
+                self.bot.meetings._set_engaged(self.session, True)
+                return True
+        return False
 
     @staticmethod
     def _refusal(name: str, args: dict, engaged: bool) -> dict | None:
@@ -1561,7 +1600,7 @@ class LiveVoice:
         if not getattr(self.bot.s, "live_mouth_gate", True):
             self._on_audio(data)
             return
-        if self._turn_ok or self.session.engaged or (self._awaiting_answer and self._answer_auth):
+        if self._turn_ok or self._gate_open() or (self._awaiting_answer and self._answer_auth):
             self._turn_ok = True
             self._release_held()
             self._on_audio(data)

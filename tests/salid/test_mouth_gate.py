@@ -4,6 +4,9 @@ The shared `lv` fixture has the gate OFF (other suites test playback mechanics);
 
 import asyncio
 import logging
+import math
+import random
+import re
 import time
 from array import array
 
@@ -184,6 +187,143 @@ async def test_joining_does_not_engage_or_cue(gl):
 
 
 # ------------------------------------------------------------------ energy gate for name hits
+FRAME = 3840  # 20 ms, 48 kHz stereo s16le
+
+
+def _pcm(values):
+    return array("h", [max(-32768, min(32767, int(v))) for v in values for _ in (0, 1)]).tobytes()
+
+
+def frames_of(pcm):
+    return [pcm[i : i + FRAME] for i in range(0, len(pcm) - FRAME + 1, FRAME)]
+
+
+def noise(seconds, rms_=250.0, seed=1):
+    r = random.Random(seed)
+    return _pcm(r.gauss(0, rms_) for _ in range(int(48000 * seconds)))
+
+
+def hum(seconds, seed=2):  # 50 Hz hum + hiss, quiet
+    r = random.Random(seed)
+    return _pcm(
+        330 * math.sin(2 * math.pi * 50 * i / 48000) + r.gauss(0, 12)
+        for i in range(int(48000 * seconds))
+    )
+
+
+def bursts(seconds, seed=3):  # steady noise bursts: 100 ms at RMS ~600 every 200 ms-ish
+    r = random.Random(seed)
+    out = []
+    for i in range(int(48000 * seconds)):
+        loud = (i // 4800) % 2 == 0
+        out.append(r.gauss(0, 330 if loud else 20))
+    return _pcm(out)
+
+
+def click(seconds=1.2, seed=4):  # one 30 ms click in hiss
+    r = random.Random(seed)
+    n = int(48000 * seconds)
+    return _pcm(r.gauss(0, 3000 if 20000 <= i < 21440 else 40) for i in range(n))
+
+
+def speechlike(seconds, seed=5):
+    """Bursts of 60-150 ms with short gaps and varied amplitude (900-5000)."""
+    r = random.Random(seed)
+    out = []
+    n = int(48000 * seconds)
+    while len(out) < n:
+        amp = r.uniform(900, 5000)
+        for _ in range(int(48000 * r.uniform(0.06, 0.15))):
+            out.append(r.gauss(0, amp / 1.2))
+        out.extend(r.gauss(0, 40) for _ in range(int(48000 * 0.03)))
+    return _pcm(out[:n])
+
+
+def verdict(pcm):
+    stats = mt.speech_stats(pcm)
+    return mt.looks_like_speech(stats, Settings(_env_file=None)), stats
+
+
+@pytest.mark.parametrize(
+    "name,pcm,ok",
+    [
+        ("white noise", noise(0.9), False),
+        ("hum + hiss", hum(1.5), False),
+        ("noise bursts", bursts(1.0), False),
+        ("mic click", click(), False),
+        ("speech-like sentence", speechlike(2.0), True),
+        ("speech-like bare name 0.5 s", speechlike(0.5, seed=7), True),
+    ],
+)
+def test_looks_like_speech_table(name, pcm, ok):
+    (got, reason), stats = verdict(pcm)
+    assert got is ok, (name, reason, stats)
+    assert (reason == "") is ok
+
+
+def test_speech_stats_basics():
+    z = mt.speech_stats(b"")
+    assert z == mt.SpeechStats(0.0, 0.0, 0.0, 0.0, 0.0)
+    q = mt.speech_stats(bytes(FRAME * 10))
+    assert q.cv == 0.0 and q.voiced_s == 0.0 and q.duration_s == pytest.approx(0.2)
+    c = mt.speech_stats(SPEECH_FRAME * 25)
+    assert c.voiced_s == pytest.approx(0.5) and c.voiced_fraction == 1.0 and c.cv < 0.01
+
+
+def test_gate_off_setting_is_zero_voiced_seconds():
+    assert Settings(_env_file=None, name_min_voiced_seconds=0).name_min_voiced_seconds == 0
+
+
+async def test_classic_decision_log_has_numbers_and_no_text(lv, monkeypatch, caplog):  # noqa: F811
+    caplog.set_level(logging.INFO, logger="salid.meeting")
+    s, live = await lv.join(5)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด")
+    await lv.mgr.handle_segment(s, mt.Segment(5, speechlike(0.5, seed=7), time.monotonic(), 0.5))
+    assert s.engaged is True
+    await lv.mgr.end((1000, 77))
+    line = next(r.getMessage() for r in caplog.records if "name hit" in r.getMessage())
+    assert re.fullmatch(
+        r"meeting \d+: name hit accepted dur=0\.50 rms=\d+ voiced=[\d.]+ vf=[\d.]+ cv=[\d.]+", line
+    ), line
+    assert "สลิด" not in line
+
+
+async def test_classic_steady_noise_is_rejected_with_reason(lv, monkeypatch, caplog):  # noqa: F811
+    caplog.set_level(logging.INFO, logger="salid.meeting")
+    s, live = await lv.join(5)
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด")
+    await lv.mgr.handle_segment(s, mt.Segment(5, noise(0.9, 400), time.monotonic(), 0.9))
+    assert s.engaged is False
+    assert "name hit rejected: steady noise dur=0.90" in caplog.text
+    await lv.mgr.end((1000, 77))
+
+
+async def test_live_steady_noise_is_rejected_and_logged(lv, caplog):  # noqa: F811
+    caplog.set_level(logging.INFO, logger="salid.live_voice")
+    s, live = await lv.join(5)
+    for f in frames_of(noise(0.9, 400)):
+        s.live.feed(5, f)
+    live.push(heard_msg("สลิด"))
+    await settle(0.3)
+    assert s.engaged is False
+    assert re.search(r"live: name hit rejected: steady noise dur=0\.\d+ rms=\d+ ", caplog.text)
+    await lv.mgr.end((1000, 77))
+
+
+async def test_live_accept_log_shape(lv, caplog):  # noqa: F811
+    caplog.set_level(logging.INFO, logger="salid.live_voice")
+    s, live = await lv.join(5)
+    lv.bot.s.live_name_reply_seconds = 0.05
+    for f in frames_of(speechlike(0.5, seed=7)):
+        s.live.feed(5, f)
+    live.push(heard_msg("สลิด"))
+    await until(lambda: s.engaged)
+    assert re.search(
+        r"live: name hit accepted dur=0\.50 rms=\d+ voiced=[\d.]+ vf=[\d.]+ cv=[\d.]+", caplog.text
+    )
+    await lv.mgr.end((1000, 77))
+
+
 def test_voiced_fraction_silence_noise_and_speech():
     assert mt.voiced_fraction(b"") == 0.0
     assert mt.voiced_fraction(bytes(3840 * 50)) == 0.0
@@ -201,7 +341,8 @@ def test_transcription_prompt_no_longer_primes_the_greeting():
 
 def test_energy_settings_defaults():
     s = Settings(_env_file=None)
-    assert s.name_min_voiced_seconds == 0.4 and s.name_min_rms == 250.0
+    assert s.name_min_voiced_seconds == 0.35 and s.name_min_rms == 250.0
+    assert s.name_min_cv == 0.25
     assert s.live_mouth_gate is True and s.live_call_grace_seconds == 2.5
 
 
@@ -214,14 +355,14 @@ async def test_classic_greeting_on_low_energy_audio_does_not_engage(lv, monkeypa
     await lv.mgr.handle_segment(s, mt.Segment(5, quiet, time.monotonic(), 2.0))
     await settle()
     assert s.engaged is False and not [t for t in sent if t[1]]
-    assert "name hit rejected: no voiced audio" in caplog.text
+    assert "name hit rejected: too little voiced audio" in caplog.text
     await lv.mgr.end((1000, 77))
 
 
 async def test_classic_greeting_on_real_speech_engages(lv, monkeypatch):  # noqa: F811
     s, live = await lv.join(5)
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "หวัดดีครับ สลิด")
-    await lv.mgr.handle_segment(s, mt.Segment(5, SPEECH_FRAME * 100, time.monotonic(), 2.0))
+    await lv.mgr.handle_segment(s, mt.Segment(5, speechlike(1.5), time.monotonic(), 1.5))
     assert s.engaged is True
     await lv.mgr.end((1000, 77))
 
@@ -236,15 +377,15 @@ async def test_live_name_hit_without_voiced_audio_is_ignored(lv, caplog):  # noq
     live.push(heard_msg("หวัดดีครับ สลิด"))
     await settle(0.3)
     assert s.engaged is False and not [t for t in sent if t[1]]  # no cue
-    assert "live: name hit rejected: no voiced audio" in caplog.text
+    assert "live: name hit rejected: too little voiced audio" in caplog.text
     await lv.mgr.end((1000, 77))
 
 
 async def test_live_name_hit_with_voiced_audio_engages(lv):  # noqa: F811
     s, live = await lv.join(5)
     lv.bot.s.live_name_reply_seconds = 0.05
-    for _ in range(30):
-        s.live.feed(5, pcm48(800))  # 0.6 s of speech
+    for f in frames_of(speechlike(0.5)):  # a bare "สลิด": 0.5 s
+        s.live.feed(5, f)
     live.push(heard_msg("หวัดดีครับ สลิด"))
     await until(lambda: s.engaged)
     await lv.mgr.end((1000, 77))
@@ -252,3 +393,71 @@ async def test_live_name_hit_with_voiced_audio_engages(lv):  # noqa: F811
 
 def test_min_rms_is_raised():
     assert mt.MIN_RMS == 120 and lvm.FRAME_S == 0.02
+
+
+# ------------------------------------------------------------------ re-engage grace, ask_salid evidence
+async def test_recently_engaged_grace_opens_gates_and_reengages(gl):
+    s, live = await gl.join(5)
+    gl.mgr._set_engaged(s, True)
+    gl.mgr._set_engaged(s, False)  # the room kept talking: dropped back to listening
+    assert s.engaged is False and s.live._gate_open()
+    live.push(tool_msg("set_captions", {"on": True}))
+    await until(lambda: live.tool_responses)
+    assert s.captions.on and s.engaged is True  # re-engaged in code
+    await gl.mgr.end((1000, 77))
+
+
+async def test_grace_expires(gl):
+    s, live = await gl.join(5)
+    gl.mgr._set_engaged(s, True)
+    gl.mgr._set_engaged(s, False)
+    s.live._last_engaged_at = time.monotonic() - 61
+    assert not s.live._gate_open()
+    live.push(tool_msg("set_captions", {"on": True}))
+    await until(lambda: live.tool_responses)
+    assert live.tool_responses[-1][0].response == {"error": "nobody asked: stay silent"}
+    await gl.mgr.end((1000, 77))
+
+
+async def test_grace_also_opens_the_mouth_gate(gl):
+    s, live = await gl.join(5)
+    gl.mgr._set_engaged(s, True)
+    gl.mgr._set_engaged(s, False)
+    live.push(audio_msg(), said_msg("ค่ะ"), done_msg())
+    await until(lambda: gl.vc.played)
+    await gl.mgr.end((1000, 77))
+
+
+async def test_ask_salid_with_real_speech_engages(gl, caplog):
+    caplog.set_level(logging.INFO, logger="salid.live_voice")
+    s, live = await gl.join(5)
+
+    async def fake_run(name, args):
+        return {"answer": "ok"}
+
+    s.live._run_tool = fake_run
+    for f in frames_of(speechlike(1.5)):
+        s.live.feed(5, f)
+    live.push(tool_msg("ask_salid", {"question": "งานอะไรค้าง"}))
+    await until(lambda: live.tool_responses)
+    assert live.tool_responses[-1][0].response != {"error": "nobody asked: stay silent"}
+    assert s.engaged is True
+    assert "live: ask_salid accepted: speech heard, engaging" in caplog.text
+    await gl.mgr.end((1000, 77))
+
+
+async def test_ask_salid_with_noise_is_refused_and_side_effects_stay_gated(gl):
+    s, live = await gl.join(5)
+    for f in frames_of(noise(1.0, 400)):
+        s.live.feed(5, f)
+    live.push(tool_msg("ask_salid", {"question": "x"}, id="a"))
+    await until(lambda: len(live.tool_responses) == 1)
+    assert live.tool_responses[-1][0].response == {"error": "nobody asked: stay silent"}
+    assert s.engaged is False
+    for f in frames_of(speechlike(1.5)):
+        s.live.feed(5, f)
+    live.push(tool_msg("set_captions", {"on": True}, id="b"))
+    await until(lambda: len(live.tool_responses) == 2)
+    assert live.tool_responses[-1][0].response == {"error": "nobody asked: stay silent"}
+    assert not s.captions.on and s.engaged is False
+    await gl.mgr.end((1000, 77))

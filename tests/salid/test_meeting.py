@@ -311,9 +311,16 @@ async def test_leave_denied_for_outsiders(env):
 SPEECH_FRAME = array("h", [800] * (PCM_BYTES_PER_SECOND // 100)).tobytes()  # 20 ms, RMS 800
 
 
+LOUD_FRAME = array("h", [2400] * (PCM_BYTES_PER_SECOND // 100)).tobytes()
+
+
+SPEECH_PCM = (SPEECH_FRAME + LOUD_FRAME) * 50  # 2 s, varying energy
+
+
 def segment(uid):
-    # real speech (RMS 800): name hits behind silent audio are rejected by the energy gate
-    return mt.Segment(uid, SPEECH_FRAME * 100, 0.0, 2.0)
+    # speech-like energy (frames alternate RMS 800 / 2400): name hits behind silent or steady
+    # audio are rejected by the energy gate
+    return mt.Segment(uid, SPEECH_PCM, 0.0, 2.0)
 
 
 async def start(env):
@@ -820,10 +827,10 @@ async def test_echo_guard_uses_the_audio_timestamps_when_transcription_lags(voic
     now = time.monotonic()
     # Salid spoke from now-20 to now-6 (cooldown over); the segment was heard at now-15.
     s.speaking_since, s.speaking_until = now - 20, now - 6
-    echo = mt.Segment(11, SPEECH_FRAME * 100, now - 15, 2.0)
+    echo = mt.Segment(11, SPEECH_PCM, now - 15, 2.0)
     await voice.mgr.handle_segment(s, echo)
     assert asked == []
-    later = mt.Segment(11, SPEECH_FRAME * 100, now - 4, 2.0)  # after the cooldown: a real question
+    later = mt.Segment(11, SPEECH_PCM, now - 4, 2.0)  # after the cooldown: a real question
     await voice.mgr.handle_segment(s, later)
     assert asked == ["สรุปให้หน่อย"]
     await voice.mgr.end((1000, 77))
