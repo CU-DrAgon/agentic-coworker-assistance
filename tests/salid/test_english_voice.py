@@ -33,10 +33,10 @@ def test_en_notes_and_cues_have_no_thai():
     for text in (
         lv.ROOM_NOTE_EN, lv.LEDGER_NOTE_EN, lv.STATE_LISTENING_EN, lv.STATE_ENGAGED_EN,
         lv.FORCE_CUE_EN, lv.HEARD_EN, lv.NO_ROOM_EN, lv.QA_OFF_EN, *lv.FILLERS["en"],
-        lv.FILLER_AGAIN["en"], mt.ACK_TEXT["en"], mt.SUMMARY_PROMPT_EN, speech.SPOKEN_PROMPT_EN,
+        *lv.FILLER_AGAIN["en"], mt.ACK_TEXT["en"], mt.SUMMARY_PROMPT_EN, speech.SPOKEN_PROMPT_EN,
     ):  # fmt: skip
         assert not THAI.search(text)
-    assert lv.FILLERS["th"] and lv.FILLER_AGAIN["th"] == "ใกล้เสร็จแล้วค่ะ"
+    assert lv.FILLERS["th"] and "ใกล้เสร็จแล้ว" not in "".join(lv.FILLER_AGAIN["th"])
 
 
 def test_spoken_text_uses_english_prompt_for_en():

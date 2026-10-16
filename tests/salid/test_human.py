@@ -386,12 +386,14 @@ def test_ack_flavor_by_content():
     assert ackmod.ack_flavor(msg_with(), "ดูนี่ https://example.com/x") == "link"
     assert ackmod.ack_flavor(msg_with(), "เดือนนี้จ่ายไปเท่าไร") is None
     assert ackmod.ack_flavor(msg_with(), "x", deep=True) == "deep"
-    assert ackmod.ack_text("doc", "th", lambda xs: xs[0]) == (
-        "ขอเวลาแป๊บนึงนะคะ ขออ่านเอกสารให้เข้าใจก่อน 📄"
+    assert ackmod.ack_text("doc", "th", lambda xs: xs[0]) == t("ack_doc_1", "th")
+    assert ackmod.ack_text("doc", "th", lambda xs: xs[0], avoid=[t("ack_doc_1", "th")]) == t(
+        "ack_doc_2", "th"
     )
 
 
 def test_every_ack_has_both_languages_and_variants():
+    assert ackmod.VARIANTS >= 8
     for flavor in ackmod.FLAVORS:
         for n in range(1, ackmod.VARIANTS + 1):
             for lang in ("th", "en"):
@@ -524,6 +526,93 @@ async def test_slow_plain_question_is_acked_after_six_seconds(bot, world, monkey
     slow.release.set()
     await task
     assert m.replies == ["เสร็จแล้ว"]  # the ack became the answer
+
+
+class WriterStub:
+    """Stands in for FillerWriter: a fixed line after `delay` seconds, or an error."""
+
+    def __init__(self, line=None, delay=0.0, boom=False):
+        self.line, self.delay, self.boom, self.calls = line, delay, boom, []
+
+    def enabled(self):
+        return True
+
+    async def write(self, **kw):
+        self.calls.append(kw)
+        await asyncio.sleep(self.delay)
+        if self.boom:
+            raise RuntimeError("model down")
+        return self.line
+
+
+async def doc_message(world):
+    return TMsg(
+        world.g,
+        world.chat,
+        member(world.g, STAFF),
+        "ช่วยสรุปไฟล์นี้",
+        attachments=[att("a.pdf", "application/pdf")],
+    )
+
+
+@pytest.mark.parametrize(
+    ("writer", "expected"),
+    [
+        (WriterStub("ขออ่านไฟล์นี้ก่อนนะคะ"), "ขออ่านไฟล์นี้ก่อนนะคะ"),  # fast: the model's line
+        (WriterStub("ช้าไปค่ะ", delay=1.0), None),  # slow: the fallback, the late line is dropped
+        (WriterStub(boom=True), None),  # failing: the fallback
+        (WriterStub(None), None),  # nothing usable: the fallback
+    ],
+)
+async def test_instant_ack_is_one_message_whether_the_model_is_fast_slow_or_failing(
+    bot, world, monkeypatch, writer, expected
+):
+    wire(bot, monkeypatch)
+    bot.fillers = writer
+    bot.s.ack_llm_timeout_s = 0.1
+    m = await doc_message(world)
+    rec = recording(m)
+    await bot.on_message(m)
+    assert len(rec.texts) == 1 and m.replies == ["agent says"]  # ONE ack, edited into the answer
+    pool = [t(f"ack_doc_{n}", "th") for n in range(1, 9)]
+    assert rec.texts[0] == expected if expected else rec.texts[0] in pool
+    assert writer.calls[0]["kind"] == "doc" and writer.calls[0]["question"] == "ช่วยสรุปไฟล์นี้"
+
+
+async def test_slow_ack_line_is_written_while_the_timer_runs(bot, world, monkeypatch):
+    wire(bot, monkeypatch)
+    slow = Slow()
+    monkeypatch.setattr(botmod, "ask", slow)
+    bot.fillers = WriterStub("ขอเช็กยอดเดือนนี้แป๊บนะคะ")
+    gate = asyncio.Event()
+
+    async def fake_sleep(seconds):
+        await gate.wait()
+
+    bot._sleep = fake_sleep
+    m = TMsg(world.g, world.chat, member(world.g, STAFF), "เดือนนี้จ่ายไปเท่าไร")
+    rec = recording(m)
+    task = asyncio.create_task(bot.on_message(m))
+    await until(slow.started.is_set)
+    assert bot.fillers.calls and rec.texts == []  # generation started with the timer
+    gate.set()
+    await until(lambda: rec.texts == ["ขอเช็กยอดเดือนนี้แป๊บนะคะ"])
+    slow.release.set()
+    await task
+    assert m.replies == ["เสร็จแล้ว"] and bot.recent_acks.get(world.chat.id)
+
+
+async def test_consecutive_acks_in_a_channel_avoid_the_last_lines(bot, world, monkeypatch):
+    wire(bot, monkeypatch)
+    bot.fillers = WriterStub(None)
+    bot._choose = lambda xs: xs[0]  # the first free line each time
+    seen = []
+    for _ in range(3):
+        m = await doc_message(world)
+        rec = recording(m)
+        await bot.on_message(m)
+        seen += rec.texts
+    assert len(set(seen)) == 3
 
 
 async def test_quick_answer_gets_no_ack(bot, world, monkeypatch):

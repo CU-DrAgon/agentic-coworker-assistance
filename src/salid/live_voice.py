@@ -34,7 +34,9 @@ import discord
 from google.genai import types
 
 from .captions import normalize_language
+from .fillers import POOL_SIZE, ClipCache, FillerWriter, within, write_line
 from .i18n import resolve_lang
+from .i18n import t as catalog
 from .meeting import (
     SPEAK_COOLDOWN_S,
     _connected,
@@ -214,11 +216,18 @@ def ask_salid(question: str) -> dict:
 
 HEARD_GAP_S = 3.0  # input-transcript text after this much quiet starts a new utterance
 NAME_DEDUPE_S = 10.0  # a classic name hit this soon after a Live-transcript hit is the same call
+# Hand-written fallback pools (i18n ack_voice_* / ack_again_*): a line written for the question is
+# used when it is ready in time (`Settings.ack_llm_timeout_s`), otherwise one of these.
 FILLERS = {
-    "th": ["แป๊บนึงนะคะ", "ขอดูให้แป๊บนึงนะคะ", "เดี๋ยวสลิดเช็กให้ค่ะ", "รอสักครู่นะคะ"],
-    "en": ["One moment.", "One moment, let me check.", "Let me look that up.", "Give me a second."],
+    lang: [catalog(f"ack_voice_{n}", lang) for n in range(1, POOL_SIZE + 1)]
+    for lang in ("th", "en")
 }
-FILLER_AGAIN = {"th": "ใกล้เสร็จแล้วค่ะ", "en": "Almost there."}
+FILLER_AGAIN = {
+    lang: [catalog(f"ack_again_{n}", lang) for n in range(1, POOL_SIZE + 1)]
+    for lang in ("th", "en")
+}
+PRERENDER_FIRST, PRERENDER_AGAIN = 4, 2  # clips synthesized ahead per language (bounded TTS cost)
+FILLER_MEMORY = 3  # the last lines said in this session are not picked again
 FILLER_TOOLS = {
     "ask_salid",
     "answer_privately",
@@ -651,7 +660,8 @@ class LiveVoice:
         self._fallback: tuple[int, str] | None = None  # who/what to answer if the model stays mute
         # filler clips ("one moment") for slow tools
         self._filler_pcm: dict[str, bytes] = {}
-        self._filler_last: dict[str, str] = {}
+        self._filler_used: list[str] = []  # the last lines said (generated or fallback)
+        self._again_used: set[str] = set()  # "still on it" lines already said this session
         self._filler_until = 0.0  # monotonic: filler audio may still sit in the playback buffer
         self._filler_task: asyncio.Task | None = None
         # who is talking (Discord gives one stream per user)
@@ -1302,7 +1312,7 @@ class LiveVoice:
         responses = []
         for fc in tool_call.function_calls or []:
             logger.info("live: tool call %s", fc.name)  # name only: arguments may hold PII
-            filler = self._start_filler(fc.name)
+            filler = self._start_filler(fc.name, dict(fc.args or {}))
             try:
                 result = await self._run_tool(fc.name, dict(fc.args or {}))
             finally:
@@ -1356,10 +1366,23 @@ class LiveVoice:
     def _filler_lang(self) -> str:
         return "en" if self._en() else "th"
 
+    def _particle(self) -> str:
+        return str(getattr(self.bot.s, "voice_particle", "") or "")
+
+    def _pool(self, kind: str, lang: str) -> list[str]:
+        """The fallback lines of a pool as they are spoken (Thai with the persona particle)."""
+        pool = FILLER_AGAIN[lang] if kind == "again" else FILLERS[lang]
+        return [with_particle(x, self._particle()) for x in pool]
+
     async def _prerender_fillers(self) -> None:
-        """Synthesize the clips once (Cloud TTS, the classic voice) so they are ready when needed."""
+        """Synthesize a few fallback clips once (Cloud TTS, the classic voice) so one is ready when
+        a generated line is not. Bounded: not the whole pool, to save TTS calls."""
         lang = self._filler_lang()
-        for text in [*FILLERS[lang], FILLER_AGAIN[lang]]:
+        picks = [
+            *random.sample(self._pool("first", lang), PRERENDER_FIRST),
+            *random.sample(self._pool("again", lang), PRERENDER_AGAIN),
+        ]
+        for text in picks:
             try:
                 await self._filler_clip(text, lang)
             except asyncio.CancelledError:
@@ -1367,24 +1390,49 @@ class LiveVoice:
             except Exception:
                 logger.warning("live: filler clip failed", exc_info=True)
 
+    async def _render(self, text: str, lang: str, cache: bool = False) -> bytes:
+        """Cloud TTS + pitch. `cache`: a reusable line, its clip is loaded from / saved to disk."""
+        line = with_particle(text, self._particle())
+        clips = ClipCache.for_settings(self.bot.s) if cache else None
+        if clips is not None:
+            pcm = await asyncio.to_thread(clips.get, lang, line)
+            if pcm:
+                return pcm
+        pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, line, lang)
+        pcm = await asyncio.to_thread(pitch_pcm, pcm, getattr(self.bot.s, "tts_pitch", 1.0))
+        if clips is not None:
+            await asyncio.to_thread(clips.put, lang, line, pcm)
+        return pcm
+
     async def _filler_clip(self, text: str, lang: str) -> bytes:
+        """A cached clip of a fallback line."""
         key = f"{lang}:{text}"
         pcm = self._filler_pcm.get(key)
         if pcm is None:
-            line = with_particle(text, str(getattr(self.bot.s, "voice_particle", "") or ""))
-            pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, line, lang)
-            pcm = await asyncio.to_thread(pitch_pcm, pcm, getattr(self.bot.s, "tts_pitch", 1.0))
-            self._filler_pcm[key] = pcm
+            pcm = self._filler_pcm[key] = await self._render(text, lang, cache=True)
         return pcm
 
-    def _pick_filler(self, lang: str) -> str:
-        options = [t for t in FILLERS[lang] if t != self._filler_last.get(lang)]
-        text = random.choice(options)
-        self._filler_last[lang] = text
+    def _pick_fallback(self, lang: str, kind: str = "first") -> str:
+        """A fallback line: not one of the last 3 said (and, for "again", never one said before in
+        this session), preferring the ones whose clip is already rendered."""
+        pool = self._pool(kind, lang)
+        avoid = set(self._filler_used[-FILLER_MEMORY:])
+        if kind == "again":
+            avoid |= self._again_used
+        fresh = [x for x in pool if x not in avoid] or pool
+        ready = [x for x in fresh if f"{lang}:{x}" in self._filler_pcm]
+        text = random.choice(ready or fresh)
+        self._remember(text, kind)
         return text
 
-    def _start_filler(self, tool: str) -> asyncio.Task | None:
-        """A slow tool starts and Salid has not spoken in this turn: say "one moment" at once."""
+    def _remember(self, text: str, kind: str) -> None:
+        self._filler_used = [*self._filler_used, text][-FILLER_MEMORY:]
+        if kind == "again":
+            self._again_used.add(text)
+
+    def _start_filler(self, tool: str, args: dict | None = None) -> asyncio.Task | None:
+        """A slow tool starts and Salid has not spoken in this turn: say "one moment" at once.
+        `args` carry the question the line is written for."""
         s = self.session
         if (
             tool not in FILLER_TOOLS
@@ -1394,24 +1442,91 @@ class LiveVoice:
             or s.leaving
         ):
             return None
-        task = self._filler_task = asyncio.create_task(self._filler_run())
+        question = str((args or {}).get("question") or "")
+        task = self._filler_task = asyncio.create_task(self._filler_run(question))
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
         return task
 
-    async def _filler_run(self) -> None:
+    def _writer(self) -> FillerWriter:
+        return getattr(self.bot, "fillers", None) or FillerWriter(
+            getattr(self.bot, "llm", None), self.bot.s
+        )
+
+    async def _generated_clip(self, question: str, lang: str) -> tuple[str, bytes] | None:
+        """A line written for this question and its clip (None: nothing usable)."""
+        got = await write_line(
+            self._writer(),
+            kind="voice",
+            question=question,
+            lang=lang,
+            particle=self._particle() or "ค่ะ",
+            stage="first",
+            avoid=self._filler_used,
+        )
+        if got is None or got.text in self._filler_used:
+            return None
+        return got.text, await self._render(got.text, lang, cache=got.generic)
+
+    async def _filler_run(self, question: str = "") -> None:
         lang = self._filler_lang()
+        writer = self._writer()
+        first: asyncio.Task | None = None
+        again: asyncio.Task | None = None
         try:
             started = time.monotonic()
-            if not await self._play_filler(await self._filler_clip(self._pick_filler(lang), lang)):
+            timeout = float(getattr(self.bot.s, "ack_llm_timeout_s", 2.0))
+            if writer.enabled():
+                first = asyncio.create_task(self._generated_clip(question, lang))
+                again = asyncio.create_task(  # ready by the time it is needed
+                    write_line(
+                        writer,
+                        kind="voice",
+                        question=question,
+                        lang=lang,
+                        particle=self._particle() or "ค่ะ",
+                        stage="again",
+                        avoid=self._filler_used,
+                    )
+                )
+            made = None
+            if first is not None:
+                done, _ = await asyncio.wait({first}, timeout=timeout)
+                if first in done and not first.cancelled() and first.exception() is None:
+                    made = first.result()
+                if made is None:
+                    first.cancel()  # a late line is dropped: one filler only
+            if made is not None:
+                text, pcm = made
+                self._remember(text, "first")
+            else:
+                text = self._pick_fallback(lang)
+                pcm = await self._filler_clip(text, lang)
+            if not await self._play_filler(pcm):
                 return
-            again = float(getattr(self.bot.s, "live_filler_again_seconds", 8.0))
-            await asyncio.sleep(max(0.0, again - (time.monotonic() - started)))
-            await self._play_filler(await self._filler_clip(FILLER_AGAIN[lang], lang))
+            wait = float(getattr(self.bot.s, "live_filler_again_seconds", 8.0))
+            await asyncio.sleep(max(0.0, wait - (time.monotonic() - started)))
+            got = await within(again, 0.5)
+            line = got.text if got else None
+            if line and line not in self._again_used and line not in self._filler_used:
+                self._remember(line, "again")
+                pcm = await self._render(line, lang, cache=got.generic)
+            else:
+                pcm = await self._filler_clip(self._pick_fallback(lang, "again"), lang)
+            await self._play_filler(pcm)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.warning("live: filler failed", exc_info=True)
+        finally:
+            for tk in (first, again):
+                if tk is None:
+                    continue
+                if not tk.done():
+                    tk.cancel()
+                else:
+                    with contextlib.suppress(BaseException):
+                        tk.exception()  # a failed line is already logged / ignored
 
     async def _play_filler(self, pcm: bytes) -> bool:
         """Queue a filler clip on the Live playback path. False when the model started to speak."""

@@ -581,6 +581,7 @@ PCM = bytes(24000 * 2)  # 1 s of 24 kHz mono silence
 def voice(env, monkeypatch):
     """voice_reply on, with speech.py's Vertex/ffmpeg parts faked."""
     env.bot.s.voice_reply = True
+    env.bot.s.ack_llm = False  # no model-written acknowledgement racing the other clips
     calls = []
     monkeypatch.setattr(
         mt, "spoken_text", lambda c, m, q, a, *_: calls.append(("spoken", m, q, a)) or "พูดสั้น ๆ"
@@ -671,7 +672,7 @@ async def test_answer_posts_text_then_speaks(voice, monkeypatch):
         if voice.vc.played:
             break
     # First the instant acknowledgment, then the shortened answer.
-    assert voice.calls[0] == ("tts", "th", mt.ACK_TEXT["th"])
+    assert voice.calls[0][:2] == ("tts", "th") and voice.calls[0][2] in ACK_POOL_TH
     assert voice.vc.played == [("source", len(PCM))]
     voice.vc.playing = False
     voice.vc.after(None)  # acknowledgment finished
@@ -681,25 +682,74 @@ async def test_answer_posts_text_then_speaks(voice, monkeypatch):
             break
     spoken = [c for c in voice.calls if c[0] == "spoken"]
     assert spoken[0][2:] == ("เมื่อกี้ตกลงอะไรกัน", "ตกลงเลื่อนเป็นวันศุกร์ครับ")
-    assert len(voice.vc.played) == 2
+    # the acknowledgment is skipped when the answer is already speakable by the time it is ready
+    assert len(voice.vc.played) in (1, 2)
     voice.vc.playing = False
     voice.vc.after(None)
     await voice.mgr.end((1000, 77))
 
 
-async def test_acknowledgment_audio_is_synthesized_once_per_language(voice):
+ACK_POOL_TH = [t(f"ack_voice_{n}", "th") for n in range(1, 9)]
+
+
+async def ack_once(voice, s, question=""):
+    task = asyncio.create_task(voice.mgr.acknowledge(s, question))
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if s.speaking or task.done():
+            break
+    voice.vc.playing = False
+    voice.vc.after(None)
+    await task
+
+
+class FakeWriter:
+    def __init__(self, line=None, delay=0.0, boom=False):
+        self.line, self.delay, self.boom, self.questions = line, delay, boom, []
+
+    def enabled(self):
+        return True
+
+    async def write(self, **kw):
+        self.questions.append(kw["question"])
+        await asyncio.sleep(self.delay)
+        if self.boom:
+            raise RuntimeError("model down")
+        return self.line
+
+
+async def test_acknowledgment_never_repeats_the_last_three_lines(voice):
     s = await start(voice)
-    for _ in range(2):
-        task = asyncio.create_task(voice.mgr.acknowledge(s))
-        for _ in range(50):
-            await asyncio.sleep(0.01)
-            if s.speaking:
-                break
-        voice.vc.playing = False
-        voice.vc.after(None)
-        await task
-    assert [c for c in voice.calls if c[0] == "tts"] == [("tts", "th", mt.ACK_TEXT["th"])]
-    assert len(voice.vc.played) == 2
+    voice.bot.fillers = FakeWriter(None)  # the model says nothing: hand-written pool
+    lines, add = [], voice.mgr._ack_recent.add
+    voice.mgr._ack_recent.add = lambda key, line: (lines.append(line), add(key, line))
+    for _ in range(6):
+        await ack_once(voice, s)
+    assert len(lines) == 6 and all(x in ACK_POOL_TH for x in lines)
+    for i, x in enumerate(lines):
+        assert x not in lines[max(0, i - 3) : i]
+    assert len(voice.vc.played) == 6
+    await voice.mgr.end((1000, 77))
+
+
+async def test_acknowledgment_uses_the_line_written_for_the_question(voice):
+    s = await start(voice)
+    voice.bot.fillers = FakeWriter("ขอเช็กยอดเดือนนี้แป๊บนะคะ")
+    await ack_once(voice, s, "ยอดเดือนนี้เท่าไร")
+    assert voice.bot.fillers.questions == ["ยอดเดือนนี้เท่าไร"]
+    assert [c for c in voice.calls if c[0] == "tts"] == [("tts", "th", "ขอเช็กยอดเดือนนี้แป๊บนะคะ")]
+    await voice.mgr.end((1000, 77))
+
+
+@pytest.mark.parametrize("writer", [FakeWriter("ช้าไปค่ะ", delay=1.0), FakeWriter(boom=True)])
+async def test_slow_or_failing_line_falls_back_and_plays_one_clip(voice, writer):
+    s = await start(voice)
+    voice.bot.s.ack_llm_timeout_s = 0.05
+    voice.bot.fillers = writer
+    await ack_once(voice, s, "q")
+    lines = [c[2] for c in voice.calls if c[0] == "tts"]
+    assert len(lines) == 1 and lines[0] in ACK_POOL_TH  # the late line is dropped
+    assert len(voice.vc.played) == 1
     await voice.mgr.end((1000, 77))
 
 

@@ -144,9 +144,50 @@ class SearchMixin:
                 lang,
                 ctx,
             )
-            return {"status": "started", "say": t("research_ack", lang)}
+            return {"status": "started", "say": self._research_say(question, lang, loop)}
 
         return deep_research
+
+    def _research_say(self, question: str, lang: str, loop) -> str:
+        """The line the agent says when a research starts: written for this question, keeping the
+        facts (about 1-2 minutes, report + PDF here, how to cancel); the catalog wording when the
+        model is slow or fails. Runs in the tool's worker thread, never on the event loop."""
+        fallback = t("research_ack", lang)
+        writer = getattr(self, "fillers", None)
+        try:
+            asyncio.get_running_loop()
+            return fallback  # on the event loop thread: never block it
+        except RuntimeError:
+            pass
+        if writer is None or not writer.enabled():
+            return fallback
+        facts = (
+            (
+                "it takes about 1-2 minutes",
+                "a report with a PDF will be posted in this channel",
+                "say “cancel task” to stop it",
+            )
+            if lang == "en"
+            else (
+                "ใช้เวลาประมาณ 1-2 นาที",
+                "เสร็จแล้วส่งรายงานพร้อมไฟล์ PDF ที่ห้องนี้",
+                "สั่ง “ยกเลิกงาน” ได้ถ้าไม่ต้องการแล้ว",
+            )
+        )
+        try:
+            fut = asyncio.run_coroutine_threadsafe(
+                writer.write(
+                    kind="research",
+                    question=question,
+                    lang=lang,
+                    particle=str(getattr(self.s, "persona_particle", "ค่ะ") or "ค่ะ"),
+                    facts=facts,
+                ),
+                loop,
+            )
+            return fut.result(float(getattr(self.s, "ack_llm_timeout_s", 2.0))) or fallback
+        except Exception:
+            return fallback
 
     # ------------------------------------------------------------- the background job
     def _launch_research(self, message, guild, asker, question, depth, lang, ctx) -> None:

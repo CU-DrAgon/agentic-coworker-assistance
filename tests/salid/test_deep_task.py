@@ -285,6 +285,55 @@ async def test_bot_acks_then_posts_result_in_background(bot, monkeypatch):
     assert "# ผล" in m.replies[1][0] and "tokens 10" in m.replies[1][0]
 
 
+class Writer:
+    def __init__(self, line=None, delay=0.0):
+        self.line, self.delay, self.calls = line, delay, []
+
+    def enabled(self):
+        return True
+
+    async def write(self, **kw):
+        import asyncio
+
+        self.calls.append(kw)
+        await asyncio.sleep(self.delay)
+        return self.line
+
+
+async def test_deep_ack_is_written_for_the_task_and_keeps_the_facts(bot, monkeypatch):
+    import asyncio
+
+    from salid.deep_task import DeepResult
+
+    monkeypatch.setattr(
+        "salid.bot.run_deep_task", lambda *a, **k: DeepResult(text="x", report="x", seconds=1)
+    )
+    bot.fillers = Writer("เดี๋ยวไล่ดูยอดขายให้นะคะ ใช้เวลาประมาณ 1-5 นาที ส่งผลในห้องนี้ค่ะ")
+    m = FakeMessage()
+    await bot._deep(m, GUILD, "ทำรายงานยอดขาย", is_exec=True)
+    assert m.replies[0][0].startswith("เดี๋ยวไล่ดูยอดขาย")
+    facts = " ".join(bot.fillers.calls[0]["facts"])
+    assert "1-5" in facts and "ห้องนี้" in facts and bot.fillers.calls[0]["kind"] == "deep"
+    await asyncio.gather(*bot._deep_tasks)
+
+
+async def test_deep_ack_falls_back_to_the_catalog_line_when_the_model_is_slow(bot, monkeypatch):
+    import asyncio
+
+    from salid.deep_task import DeepResult
+    from salid.i18n import t
+
+    monkeypatch.setattr(
+        "salid.bot.run_deep_task", lambda *a, **k: DeepResult(text="x", report="x", seconds=1)
+    )
+    bot.s = bot.s.model_copy(update={"ack_llm_timeout_s": 0.05})
+    bot.fillers = Writer("ช้าไปค่ะ", delay=1.0)
+    m = FakeMessage()
+    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=True)
+    assert m.replies[0][0] == t("deep_ack", "th")
+    await asyncio.gather(*bot._deep_tasks)
+
+
 async def test_bot_rejects_second_concurrent_task_and_reports_failure(bot, monkeypatch):
     import asyncio
     import threading

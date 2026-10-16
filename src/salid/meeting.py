@@ -40,6 +40,7 @@ from meeting_scribe.audio import to_flac
 from . import meeting_doc as md
 from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
+from .fillers import POOL_SIZE, ClipCache, FillerWriter, RecentLines, write_line
 from .gate import GateLine, notes_from_transcript
 from .i18n import resolve_lang, t
 from .llm import generate
@@ -596,6 +597,7 @@ class MeetingManager:
         self._sleep = asyncio.sleep
         self._stt_client: Any = None
         self._ack_pcm: dict[str, bytes] = {}
+        self._ack_recent = RecentLines(keep=3)  # last lines said per meeting
 
     @property
     def stt_client(self) -> Any:
@@ -1605,7 +1607,7 @@ class MeetingManager:
         s.pending_wake.pop(seg.user_id, None)
         if self.bot.s.voice_reply and member is not None:
             s.tasks = [t for t in s.tasks if not t.done()]
-            s.tasks.append(asyncio.create_task(self.acknowledge(s)))
+            s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
         await self.answer(s, member, name, question)
 
     # ---- listening / engaged
@@ -1784,28 +1786,88 @@ class MeetingManager:
             await self._say_text(s, self._sp(s, "meet_greet_spoken"))
             return
         s.tasks = [x for x in s.tasks if not x.done()]
-        s.tasks.append(asyncio.create_task(self.acknowledge(s)))
+        s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
         await self.answer(s, member, member.display_name, question)
 
-    async def acknowledge(self, s: MeetingSession) -> None:
-        """Play a short cached "one sec" right away, while the answer is being worked out."""
+    async def acknowledge(self, s: MeetingSession, question: str = "") -> None:
+        """Play a short "one sec" right away, while the answer is being worked out. The line is
+        written for the question (cheap model + TTS, raced against `ack_llm_timeout_s`); when it is
+        not ready in time a cached hand-written line plays instead (never one of the last 3 said in
+        this meeting) and the generated one is dropped: one acknowledgement only."""
         if not self.bot.s.voice_reply or s.ending or s.speaking:
             return
         lang = s.lang if s.lang in ACK_TEXT else "th"
+        particle = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
+        key = getattr(s, "key", id(s))
+        recent = self._ack_recent.get(key)
+        task = None
         try:
-            pcm = self._ack_pcm.get(lang)
-            if pcm is None:
-                line = with_particle(
-                    ACK_TEXT[lang], str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
-                )
-                pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, line, lang)
-                self._ack_pcm[lang] = pcm
+            writer = getattr(self.bot, "fillers", None) or FillerWriter(
+                getattr(self.bot, "llm", None), self.bot.s
+            )
+            if writer.enabled():
+
+                async def generate_clip():
+                    got = await write_line(
+                        writer,
+                        kind="voice",
+                        question=question,
+                        lang=lang,
+                        particle=particle,
+                        avoid=recent,
+                    )
+                    if got is None or got.text in recent:
+                        return None
+                    return got.text, await self._ack_clip(got.text, lang, got.generic)
+
+                task = asyncio.create_task(generate_clip())
+            made = None
+            if task is not None:
+                timeout = float(getattr(self.bot.s, "ack_llm_timeout_s", 2.0))
+                done, _ = await asyncio.wait({task}, timeout=timeout)
+                if task in done and not task.cancelled() and task.exception() is None:
+                    made = task.result()
+                if made is None:
+                    task.cancel()
+            if made is not None:
+                text, pcm = made
+            else:
+                text = self._ack_fallback(lang, particle, recent)
+                pcm = self._ack_pcm.get(f"{lang}:{text}")
+                if pcm is None:
+                    pcm = await self._ack_clip(text, lang, True)
+                    if len(self._ack_pcm) < 64:
+                        self._ack_pcm[f"{lang}:{text}"] = pcm
+            self._ack_recent.add(key, text)
             if not s.speech_ready:
                 await self._play(s, pcm)
         except asyncio.CancelledError:
+            if task is not None:
+                task.cancel()
             raise
         except Exception:
             logger.warning("acknowledgment failed", exc_info=True)
+
+    async def _ack_clip(self, text: str, lang: str, reusable: bool) -> bytes:
+        """TTS of an acknowledgement; a reusable line is loaded from / saved to the disk cache."""
+        clips = ClipCache.for_settings(self.bot.s, pitch=0.0) if reusable else None  # raw clips
+        if clips is not None:
+            pcm = await asyncio.to_thread(clips.get, lang, text)
+            if pcm:
+                return pcm
+        pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, text, lang)
+        if clips is not None:
+            await asyncio.to_thread(clips.put, lang, text, pcm)
+        return pcm
+
+    def _ack_fallback(self, lang: str, particle: str, recent) -> str:
+        """A hand-written line not said in the last 3, preferring ones whose clip is cached."""
+        lines = [t(f"ack_voice_{n}", lang) for n in range(1, POOL_SIZE + 1)]
+        if lang == "th":
+            lines = [with_particle(x, particle) for x in lines]
+        fresh = [x for x in lines if x not in recent] or lines
+        ready = [x for x in fresh if f"{lang}:{x}" in self._ack_pcm]
+        return random.choice(ready or fresh)
 
     async def speak(self, s: MeetingSession, text: str, question: str = "") -> None:
         """Say a short spoken version of `text` in the voice channel. The written answer is

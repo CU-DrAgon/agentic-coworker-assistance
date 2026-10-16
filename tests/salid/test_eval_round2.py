@@ -205,7 +205,7 @@ async def test_live_fallback_answers_through_the_agent_and_tts(env, monkeypatch)
         answered.append(text)
 
     monkeypatch.setattr(type(env.mgr), "speak", fake_speak)
-    monkeypatch.setattr(type(env.mgr), "acknowledge", lambda self_, sess: asyncio.sleep(0))
+    monkeypatch.setattr(type(env.mgr), "acknowledge", lambda self_, sess, q="": asyncio.sleep(0))
     from test_meeting import make_member
 
     make_member(env.guild, 10, "แอน", env.chan)
@@ -245,7 +245,7 @@ async def test_classic_greeting_is_a_fixed_line_without_ack_or_agent(env, monkey
     async def fake_say(self_, sess, text):
         said.append(text)
 
-    async def fake_ack(self_, sess):
+    async def fake_ack(self_, sess, question=""):
         acks.append(1)
 
     monkeypatch.setattr(type(env.mgr), "_say_text", fake_say)

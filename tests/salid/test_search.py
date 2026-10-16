@@ -536,6 +536,43 @@ async def test_deep_research_runs_in_the_background_and_posts_text_and_pdf(bot, 
     assert GUILD not in bot._research_jobs
 
 
+async def test_research_start_line_is_written_for_the_question_with_the_facts(bot, world):
+    calls = []
+
+    class Writer:
+        def enabled(self):
+            return True
+
+        async def write(self, **kw):
+            calls.append(kw)
+            return "เดี๋ยวค้นเรื่อง POS ให้ ประมาณ 1-2 นาที ส่งรายงานพร้อม PDF ที่ห้องนี้ค่ะ"
+
+    bot.llm = Dispatch()
+    bot.fillers = Writer()
+    fns, _out = await start(bot, world)
+    res = await asyncio.to_thread(fns["deep_research"], "เปรียบเทียบ POS")
+    assert res["say"].startswith("เดี๋ยวค้นเรื่อง POS")
+    assert calls[0]["kind"] == "research" and any("1-2" in f for f in calls[0]["facts"])
+    assert any("ยกเลิกงาน" in f for f in calls[0]["facts"])
+    await finish(bot)
+
+
+async def test_research_start_line_falls_back_to_the_catalog_wording(bot, world):
+    class Boom:
+        def enabled(self):
+            return True
+
+        async def write(self, **kw):
+            raise RuntimeError("down")
+
+    bot.llm = Dispatch()
+    bot.fillers = Boom()
+    fns, _out = await start(bot, world)
+    res = await asyncio.to_thread(fns["deep_research"], "เปรียบเทียบ POS")
+    assert res["say"] == __import__("salid.i18n", fromlist=["t"]).t("research_ack", "th")
+    await finish(bot)
+
+
 async def test_a_second_research_waits_and_the_daily_cap_is_per_guild(bot, world):
     bot.s.research_daily_cap = 2
     bot._research_budget = type(bot._research_budget)(2)

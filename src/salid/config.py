@@ -121,6 +121,19 @@ class Settings(BaseSettings):
     # A spoken "one moment" clip while a slow tool (ask_salid) runs; a second line if still waiting.
     live_filler: bool = True
     live_filler_again_seconds: float = 8.0
+    # "One moment" lines (chat, Live voice, classic meeting) are written by the cheap model so they
+    # fit the request; this long is the most we wait for one before a hand-written line goes out.
+    ack_llm: bool = True  # SALID_ACK_LLM
+    # Reusable ("generic") lines are kept in a pool (DocStore) with their voice clips on local disk;
+    # below `filler_pool_min` lines every request generates a fresh line, after that only
+    # `filler_fresh_ratio` of them do and the rest pick the least-used pooled line.
+    filler_pool_min: int = 20
+    filler_pool_max: int = 200  # lines per (kind, language, stage)
+    filler_fresh_ratio: float = 0.25
+    filler_cache_dir: str = ""  # SALID_FILLER_CACHE_DIR; empty = <db dir>/fillers (sqlite) or /tmp
+    ack_llm_timeout_s: float = Field(
+        2.0, validation_alias=AliasChoices("SALID_ACK_LLM_TIMEOUT", "ack_llm_timeout_s")
+    )
     # After the cue: no audio within this long -> the cue is sent once more; still nothing after
     # `live_fallback_seconds` more -> the classic path (agent + TTS) answers that utterance.
     live_cue_retry_seconds: float = 6.0

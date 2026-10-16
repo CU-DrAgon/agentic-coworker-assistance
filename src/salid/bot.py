@@ -39,6 +39,7 @@ from .company_brain_bot import CompanyMixin, PlaybookButton
 from .config import Settings
 from .contests_bot import ContestsMixin
 from .coo import CooMixin, DisclosureButton
+from .coo_store import make_doc_store
 from .deep_task import (
     REPORT_NAME,
     DeepCancelled,
@@ -62,6 +63,7 @@ from .extract import (
     ingest_attachment,
     parse_void_command,
 )
+from .fillers import FillerPool, FillerWriter, RecentLines, within
 from .freetime_bot import FreetimeMixin
 from .gate import GateLine, is_join_candidate
 from .guild_settings import (
@@ -394,6 +396,10 @@ class SecretaryBot(
         )  # guilds where the chat channel needs a permission
         self._perm_noted: dict[tuple[int, str], float] = {}  # (guild, what) -> last notice time
         self._choose = random.choice  # variants of fixed lines (greeting, acknowledgement)
+        self.fillers = FillerWriter(  # model-written "one moment" lines + their generic-line pool
+            llm, settings, FillerPool(make_doc_store(settings, store), settings)
+        )
+        self.recent_acks = RecentLines()  # the last lines said per channel, so they do not repeat
         self._sleep = asyncio.sleep  # injectable: the "still working" timer needs no real wait
         self._recent_authors: dict[int, list[str]] = {}  # message id -> people in recent chat
         self._dm_sent: dict[int, list[float]] = {}  # guild id -> times of DM-tool messages
@@ -1724,16 +1730,52 @@ class SecretaryBot(
         them, the replied-to one for "summarise"), or after SLOW_AFTER_S seconds without an
         answer. The Ack is stopped by `_deliver` / `_ack_failed`."""
         flavor = ack_flavor(target or message, text)
+        kind = flavor or "slow"
+        key = getattr(message.channel, "id", None)
+        particle = str(getattr(self.s, "persona_particle", "ค่ะ") or "ค่ะ")
+        avoid = self.recent_acks.get(key)
+        pending = None
+        if self.fillers.enabled():  # written while the timer runs / the answer starts
+            pending = asyncio.create_task(
+                self.fillers.write(
+                    kind=kind, question=text, lang=lang, particle=particle, avoid=avoid
+                )
+            )
         ack = Ack(
             message,
-            ack_text(flavor or "slow", lang, self._choose),
+            ack_text(kind, lang, self._choose, avoid, particle),
             sleep=self._sleep,
+            pending=pending,
+            timeout=float(getattr(self.s, "ack_llm_timeout_s", 2.0)),
+            on_text=lambda line: self.recent_acks.add(key, line),
         )
         if flavor:
             await ack.now()
         else:
             ack.after()
         return ack
+
+    async def _deep_ack_text(self, message, task: str, lang: str) -> str:
+        """The "big task started" reply: a line for this task that still says how long it takes and
+        that the result comes here; the catalog wording when the model is slow or fails."""
+        facts = (
+            ("a big job: it may take 1-5 minutes", "the result will be posted right here")
+            if lang == "en"
+            else ("งานใหญ่ อาจใช้เวลา 1-5 นาที", "เสร็จแล้วจะส่งผลในห้องนี้")
+        )
+        line = await within(
+            asyncio.create_task(
+                self.fillers.write(
+                    kind="deep",
+                    question=task,
+                    lang=lang,
+                    particle=str(getattr(self.s, "persona_particle", "ค่ะ") or "ค่ะ"),
+                    facts=facts,
+                )
+            ),
+            float(getattr(self.s, "ack_llm_timeout_s", 2.0)),
+        )
+        return line or t("deep_ack", lang)
 
     async def _ack_failed(self, ack: Ack | None, lang: str) -> None:
         """The answer blew up: do not leave "one moment..." hanging."""
@@ -2390,7 +2432,7 @@ class SecretaryBot(
         reply = message.reply
         status = self._deep_status(guild_id, task, is_exec)
         if status == "ok":
-            await reply(t("deep_ack", lang), mention_author=False)
+            await reply(await self._deep_ack_text(message, task, lang), mention_author=False)
             self._launch_deep(message, guild_id, task, setting)
         else:
             key = {
