@@ -106,6 +106,7 @@ from .permissions import (
     guild_missing,
     permission_message,
 )
+from .polls_bot import PollsMixin
 from .profiles import ProfileMixin, effective_language, profile_block
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
@@ -257,6 +258,7 @@ class _DeepJob:
 class SecretaryBot(
     TranslateMixin,
     FreetimeMixin,
+    PollsMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -379,6 +381,7 @@ class SecretaryBot(
         self._seen_mode: dict[int, str] = {}  # channel -> last mode seen (off -> on notice)
         self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
+        self._polls_init()  # polls and DM forms (salid.polls_bot)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
         self._translate_init()  # translation + auto-translate (salid.translate_bot)
@@ -944,6 +947,8 @@ class SecretaryBot(
         ack = await self.scheduler.handle_dm_reply(message.author.id, message.content)
         if ack:  # (b) the reason an attendee gave after a meeting reminder / no-show nudge
             await message.reply(ack, mention_author=False)
+            return
+        if await self._form_dm_answer(message, guild, member):  # an answer to a form question
             return
         try:  # (c) every other DM is work information: noted for the team (salid.coo)
             handled, note = await self._coo_dm_record(message, guild, member)
@@ -1811,6 +1816,11 @@ class SecretaryBot(
             *(self._captions_tools(asker) if coo_tools else []),  # only with the COO/memory setup
             *([] if interjection else self._translate_tools(message, guild, asker, is_exec, loop)),
             *self._freetime_tools(guild, asker, lang),
+            *(
+                []
+                if interjection
+                else self._poll_form_tools(message, guild, asker, is_exec, lang, new_id())
+            ),
         ]
         return {
             "language": setting,
@@ -2523,6 +2533,7 @@ class SecretaryBot(
         await self._memory_due()
         await self._scheduler_due()
         await self._coo_due()
+        await self._polls_forms_due()
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""

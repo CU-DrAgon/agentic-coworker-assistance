@@ -81,6 +81,7 @@ FEATURES = (
     "reports",
     "briefings",
     "freetime",
+    "polls",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -133,6 +134,7 @@ class Features(BaseModel):
     email: bool = True  # draft_email / send_email (still needs confirmation and a role)
     followups: bool = True  # daily DM to members with open tasks (needs `memory`)
     reports: bool = True  # evening report to the private reports channel (needs `memory`)
+    polls: bool = True  # create_poll / DM forms (start_form)
     briefings: bool = True  # personal morning / evening briefs, doc alerts, ask reminders (DM)
     freetime: bool = True  # find_free_time / set_availability: find a time everyone is free
 
