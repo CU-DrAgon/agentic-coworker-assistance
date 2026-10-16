@@ -471,6 +471,20 @@ async def test_room_scope_uses_the_live_voice_chat_audience(bot, rworld):
     assert 13 not in again.allowed and 10 in again.allowed
 
 
+async def test_room_scope_includes_the_wider_fallback_audience(bot, rworld):
+    """Narrow voice room, wider fallback channel the answer may be typed into: a source only the
+    narrow audience can read is excluded as soon as the fallback is passed in `also`."""
+    w = stale_world(rworld)
+    fb = RChan(14, "fallback", {STAFF, MANAGER, EXEC})
+    fb.guild = w.g
+    w.g.text_channels.append(fb)
+    bot._viewers.clear()
+    narrow = await bot._room_memory_tools(w.g, w.gen, [w.staff], asker=w.staff)
+    assert 13 in narrow.allowed  # fine when the answer only reaches the voice chat
+    wide = await bot._room_memory_tools(w.g, w.gen, [w.staff], fb.id, asker=w.staff)
+    assert 13 not in wide.allowed and 12 in wide.allowed
+
+
 def _ev(guild, **kw):
     return SimpleNamespace(guild=guild, **kw)
 
@@ -1168,6 +1182,21 @@ async def test_shortening_retention_purges_the_guild_and_drops_its_index(bot, wo
     assert bot.memory_store.summaries(GUILD, {10}, "2026-08-01", "2026-08-31") == []
     # another guild's data is untouched by this guild's purge
     assert bot.memory_store.messages(other, {10}, "2026-01-01", "2026-12-31")
+
+
+async def test_hub_shortening_applies_to_live_tools_before_the_settings_cache_expires(bot, world):
+    """The hub writes the guild store directly; the bot's cached settings stay at 90 days for
+    up to the TTL. A tool must still clamp to the shortened window at once (fail closed)."""
+    topic_day(bot.memory_store, "2026-10-08", 10, "ประชุมเก่า")  # 6 days before "today"
+    assert bot.team.memory_retention_days(GUILD) == 90  # primes the cache
+    tools = await bot._memory_tools_for(world.g, member(world.g, MANAGER, manage_guild=True), 10)
+    assert tools.chat_days("2026-10-01", "2026-10-14")["count"] == 1
+    bot.team.store.set_memory_retention_days(GUILD, 1)  # what the hub does: bypasses the cache
+    assert tools.chat_days("2026-10-01", "2026-10-14")["count"] == 0
+    bot._memory_cfg_seen[GUILD] = (True, 90)
+    bot._memory_triggers()  # the purge detector must see the hub change too
+    await asyncio.gather(*bot._bg_tasks)
+    assert bot.memory_store.summaries(GUILD, {10}, "2026-10-01", "2026-10-31") == []
 
 
 async def test_a_retention_change_seen_by_the_tick_also_purges(bot, world):

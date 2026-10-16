@@ -413,7 +413,7 @@ class SecretaryBot(
                 llm,
                 now=settings.now,
                 lang_of=lambda gid: resolve_lang(self.team.current(gid).default_language),
-                retention_of=self.team.memory_retention_days,
+                retention_of=self.team.fresh_memory_retention_days,
                 channel_name_of=self._channel_name,
                 enabled=lambda gid: self.team.enabled(gid, "memory"),
                 embedder=self.embedder,
@@ -3165,7 +3165,10 @@ class SecretaryBot(
         """Start an import when memory was switched on or retention lengthened (hub or
         command), and resume a run the guild cap stopped."""
         for guild in self.guilds:
-            now = (self.team.enabled(guild.id, "memory"), self.team.memory_retention_days(guild.id))
+            now = (
+                self.team.enabled(guild.id, "memory"),
+                self.team.fresh_memory_retention_days(guild.id),
+            )
             before = self._memory_cfg_seen.get(guild.id)
             self._memory_cfg_seen[guild.id] = now
             if before is not None and now[1] < before[1]:  # shortened (e.g. in the hub)
@@ -3498,7 +3501,7 @@ class SecretaryBot(
             opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
             visibility=vis,
             embedder=self.embedder,
-            retention_of=lambda gid=guild.id: self.team.memory_retention_days(gid),
+            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(gid),
         )
 
     def _room_scope(self, guild, voice_channel, humans) -> dict[int, str]:
@@ -3559,7 +3562,7 @@ class SecretaryBot(
             opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
             visibility=vis,
             embedder=self.embedder,
-            retention_of=lambda gid=guild.id: self.team.memory_retention_days(gid),
+            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(gid),
         )
 
     # ------------------------------------------------------------- digest

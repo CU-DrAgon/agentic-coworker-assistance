@@ -962,11 +962,6 @@ class LiveVoice:
         if not humans:
             return {"error": NO_ROOM}
         guild = getattr(humans[0], "guild", None)
-        memory = (
-            await bot._room_memory_tools(guild, s.voice_channel, humans)
-            if guild is not None
-            else None
-        )
         everyone_exec = all(bot.is_exec_member(m) for m in humans)
         if everyone_exec or len(humans) == 1:  # one identified person: their own receipts only
             user_id = humans[0].id
@@ -982,6 +977,15 @@ class LiveVoice:
         if len(humans) > 1 and guild is not None:
             ranks = await asyncio.to_thread(bot._ranks, guild)
             asker = min(humans, key=lambda h: ranks.get(h.id, -1))
+        # The answer may be typed into the meeting chat or the fallback channel (text echo), so
+        # memory is also limited to what everyone reading those places can see, for this asker.
+        fallback = s.fallback_channel
+        also = (bot._answering_id(fallback),) if fallback is not None else ()
+        memory = (
+            await bot._room_memory_tools(guild, s.voice_channel, humans, *also, asker=asker)
+            if guild is not None
+            else None
+        )
         recent = set(self.recent_speakers())
         speakers = [h for h in humans if h.id in recent]
         speaker = min(speakers, key=lambda h: ranks.get(h.id, -1)) if speakers else asker

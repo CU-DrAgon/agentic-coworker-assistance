@@ -477,8 +477,9 @@ def asked(monkeypatch, lv):
         seen.update(kw, question=a[2])
         return SimpleNamespace(text="x" * 900, seconds=1.5, rounds=2)
 
-    async def room_memory(guild, voice_channel, humans):
+    async def room_memory(guild, voice_channel, humans, *also, asker=None):
         seen["room"] = sorted(h.id for h in humans)
+        seen["mem_asker"], seen["mem_also"] = getattr(asker, "id", None), also
         return "MEM"
 
     monkeypatch.setattr("salid.qa.ask", fake_ask)
@@ -514,6 +515,18 @@ async def test_ask_salid_runs_the_text_agent_scoped_to_the_room(lv, asked):
     assert asked["is_exec"] is True and asked["spoken"] is True
     assert "คุยเรื่องแผนไตรมาสสี่" in asked["history"]  # this meeting's transcript is visible
     assert asked["language"] == s.language
+    await lv.mgr.end((1000, 77))
+
+
+async def test_ask_salid_memory_is_bound_to_the_text_echo_audience(lv, asked):
+    """The spoken answer is also typed into the meeting chat / fallback channel (text echo), so
+    memory must be limited to what the effective asker and everyone reading those can see."""
+    s, live = await lv.join(5, 11, 12)
+    s.fallback_channel = SimpleNamespace(id=4242, guild=lv.guild)
+    live.push(tool_msg("ask_salid", {"question": "งบโฆษณา"}))
+    await until(lambda: live.tool_responses)
+    assert asked["mem_asker"] == 11  # the lowest-ranked human present (ranks 5:9, 11:1, 12:4)
+    assert asked["mem_also"] == (lv.bot._answering_id(s.fallback_channel),)
     await lv.mgr.end((1000, 77))
 
 
@@ -567,7 +580,7 @@ async def test_chat_and_voice_build_the_same_agent_tools(lv, tool_names, monkeyp
     s, live = await lv.join(5)
     mem = MemoryTools(bot.memory_store, 1000, {}, bot.s, 30)
 
-    async def room_memory(guild, voice_channel, humans):
+    async def room_memory(guild, voice_channel, humans, *also, asker=None):
         return mem
 
     monkeypatch.setattr(bot, "_room_memory_tools", room_memory)
