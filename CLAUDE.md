@@ -155,6 +155,11 @@ curl -s localhost:8080/health
 ```
 
 Requires Python 3.12 (uv installs it), ffmpeg, and ADC for anything that touches GCP.
+Salid PDF tests (`tests/salid/test_secretary.py`) need a Thai TrueType font: `pdf_report.find_fonts`
+only knows the Linux paths that `Dockerfile.salid` installs (`fonts-thai-tlwg`). On macOS run them with
+`SALID_PDF_FONT=/System/Library/Fonts/Supplemental/Ayuthaya.ttf` (built in); without it 6 PDF tests fail
+with "no TrueType font found for PDFs". Promo-kit text needs the system `libfribidi`
+(`brew install fribidi`, and `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` when uv runs pytest).
 
 ## Known limitations — do not "fix" without asking
 
