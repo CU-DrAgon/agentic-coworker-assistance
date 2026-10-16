@@ -236,6 +236,8 @@ function el(tag, attrs, ...kids) {
   for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(String(c)));
   return n;
 }
+// replaceChildren that tolerates arrays / null / false (so conditional children never render as text)
+{ const rc = Element.prototype.replaceChildren; Element.prototype.replaceChildren = function (...k) { rc.apply(this, k.flat(Infinity).filter((x) => x != null && x !== false)); }; }
 const items = (x, k = "items") => Array.isArray(x) ? x : (x && Array.isArray(x[k]) ? x[k] : []);
 
 /* ---------- i18n ---------- */
@@ -248,17 +250,17 @@ th: {
   org:"องค์กร", new_org:"สร้างองค์กรใหม่", org_name:"ชื่อองค์กร", cancel:"ยกเลิก", create:"สร้าง", signout:"ออกจากระบบ", save:"บันทึก", remove:"ลบ", close:"ปิด", retry:"ลองอีกครั้ง", loading:"กำลังโหลด…",
   err_generic:"เกิดข้อผิดพลาด ({status})", err_net:"เชื่อมต่อไม่ได้ ลองอีกครั้ง", saved:"บันทึกแล้ว", copied:"คัดลอกแล้ว", copy:"คัดลอก",
   n_overview:"ภาพรวม", n_docs:"เอกสาร", n_chat:"คุยกับสลิด", n_ws:"พื้นที่ทำงาน", n_apps:"เชื่อมต่อแอป", n_members:"สมาชิก", n_license:"แพ็กเกจ", n_settings:"ตั้งค่าเซิร์ฟเวอร์",
-  no_org_h:"ยังไม่มีองค์กร", no_org_p:"สร้างองค์กรแรกของคุณเพื่อเริ่มต้นใช้งาน", role_owner:"เจ้าของ", role_admin:"ผู้ดูแล", role_member:"สมาชิก",
+  no_org_h:"ยังไม่มีองค์กร", no_org_p:"สร้างองค์กรแรกของคุณเพื่อเริ่มต้นใช้งาน", role_owner:"เจ้าของ", role_admin:"ผู้ดูแล", role_member:"สมาชิก", role_super:"ผู้ดูแลระบบ",
   plan_trial:"ทดลองใช้", plan_monthly:"รายเดือน", plan_yearly:"รายปี", plan_enterprise:"องค์กร",
   st_active:"ใช้งานอยู่", st_past_due:"ค้างชำระ", st_expired:"หมดอายุ", st_suspended:"ถูกระงับ",
-  days_left:"เหลือ {n} วัน", days_over:"หมดอายุแล้ว {n} วัน", license:"แพ็กเกจ", workspaces:"พื้นที่ทำงาน", docs:"เอกสาร", members:"สมาชิก", recent:"กิจกรรมล่าสุด", no_activity:"ยังไม่มีกิจกรรม",
+  tasks:"งาน", no_tasks:"ยังไม่มีงาน", assignee:"ผู้รับผิดชอบ", due:"กำหนด", status:"สถานะ", download:"ดาวน์โหลดไฟล์", reindex:"จัดทำดัชนีค้นหาใหม่", reindexed:"จัดทำดัชนีแล้ว {n} รายการ", shared_from:"แชร์จาก {n}", total_n:"ทั้งหมด {n} รายการ", conn_ok:"เชื่อมต่อ {p} สำเร็จ", conn_err:"เชื่อมต่อไม่สำเร็จ ({e})", approve:"อนุมัติ", reject:"ปฏิเสธ", pending_req:"คำขอแพ็กเกจที่รออยู่", all_orgs:"ทุกองค์กร", no_req:"ไม่มีคำขอ", days_left:"เหลือ {n} วัน", days_over:"หมดอายุแล้ว {n} วัน", license:"แพ็กเกจ", workspaces:"พื้นที่ทำงาน", docs:"เอกสาร", members:"สมาชิก", recent:"กิจกรรมล่าสุด", no_activity:"ยังไม่มีกิจกรรม",
   onboard:"เริ่มต้นใช้งาน", ob1:"สร้างองค์กร", ob2:"เพิ่มสลิดเข้าเซิร์ฟเวอร์ Discord ของคุณ", ob3:"พิมพ์ /ตั้งค่า ใน Discord แล้ววางรหัสที่ได้ในหน้า พื้นที่ทำงาน", ob4:"เลือกว่าจะแชร์ข้อมูลระหว่างเซิร์ฟเวอร์หรือไม่", ob_go:"ไปที่ พื้นที่ทำงาน", invite:"ลิงก์เชิญสลิด",
   cat_all:"ทั้งหมด", cat_receipts:"ใบเสร็จ/ใบแจ้งหนี้", cat_contracts_docs:"สัญญาและเอกสาร", cat_minutes:"บันทึกประชุม", cat_reports:"รายงาน", cat_wiki:"ฐานความรู้", cat_uploads:"อัปโหลด",
   cat_places:"สถานที่", cat_ledger:"บัญชีรายรับรายจ่าย", cat_tasks:"งาน", cat_documents:"เอกสาร",
   f_ws:"พื้นที่ทำงาน", f_all_ws:"ทั้งหมด", f_from:"ตั้งแต่", f_to:"ถึง", f_search:"ค้นหา", f_search_ph:"ค้นหาชื่อหรือเนื้อหา",
   c_title:"ชื่อ", c_ws:"พื้นที่", c_date:"วันที่", c_who:"โดย", c_size:"ขนาด", no_docs:"ยังไม่มีเอกสารในหมวดนี้", no_docs_hint:"เอกสารที่สลิดอ่านใน Discord หรือที่คุณอัปโหลดจะแสดงที่นี่",
   upload:"อัปโหลดเอกสาร", drop_here:"ลากไฟล์มาวางที่นี่ หรือกดเลือกไฟล์", uploading:"กำลังอัปโหลด {name}", upload_done:"อัปโหลดแล้ว", open_source:"เปิดใน Discord", more:"โหลดเพิ่ม", preview:"ตัวอย่าง", no_preview:"ไม่มีตัวอย่าง",
-  chat_ph:"พิมพ์ข้อความถึงสลิด…", send:"ส่ง", scope:"ขอบเขต", scope_all:"ทุกพื้นที่ที่ฉันเข้าถึงได้", chat_empty:"ถามสลิดได้เลย เช่น “สรุปค่าใช้จ่ายเดือนนี้”", typing:"สลิดกำลังพิมพ์",
+  chat_ph:"พิมพ์ข้อความถึงสลิด…", send:"ส่ง", scope:"ขอบเขต", scope_all:"เว็บ (เอกสารที่อัปโหลด)", chat_empty:"ถามสลิดได้เลย เช่น “สรุปค่าใช้จ่ายเดือนนี้”", typing:"สลิดกำลังพิมพ์",
   ws_h:"พื้นที่ทำงาน", ws_empty:"ยังไม่มีพื้นที่ทำงานที่เชื่อมต่อ", st_connected:"เชื่อมต่อแล้ว", st_pending:"รอยืนยัน", st_disconnected:"ตัดการเชื่อมต่อ", disconnect:"ตัดการเชื่อมต่อ", confirm_disc:"ตัดการเชื่อมต่อ “{n}” ใช่ไหม?",
   add_discord:"เพิ่มเซิร์ฟเวอร์ Discord", add_d1:"1. เชิญสลิดเข้าเซิร์ฟเวอร์", add_d2:"2. พิมพ์ /ตั้งค่า ใน Discord แล้วคัดลอกรหัสที่ได้", add_d3:"3. วางรหัสที่นี่", code:"รหัสเชื่อมต่อ", link:"เชื่อมต่อ", invite_btn:"เปิดลิงก์เชิญ", linked:"เชื่อมต่อเซิร์ฟเวอร์แล้ว",
   share_h:"การแชร์ข้อมูลระหว่างพื้นที่", share_warn:"แชร์ได้เฉพาะรายการที่มาจากช่องสาธารณะเท่านั้น ข้อมูลในช่องส่วนตัวจะไม่ถูกแชร์ และประวัติแชทจะไม่ถูกแชร์ข้ามพื้นที่เด็ดขาด", share_need2:"ต้องมีอย่างน้อย 2 พื้นที่ทำงานจึงจะตั้งค่าการแชร์ได้", share_sentence:"ให้ {b} เห็น {c} ของ {a}", share_only_admin:"เฉพาะเจ้าของและผู้ดูแลที่แก้ไขการแชร์ได้",
@@ -277,17 +279,17 @@ en: {
   org:"Organization", new_org:"Create organization", org_name:"Organization name", cancel:"Cancel", create:"Create", signout:"Sign out", save:"Save", remove:"Remove", close:"Close", retry:"Try again", loading:"Loading…",
   err_generic:"Something went wrong ({status})", err_net:"Could not connect. Try again.", saved:"Saved", copied:"Copied", copy:"Copy",
   n_overview:"Overview", n_docs:"Documents", n_chat:"Chat with Salid", n_ws:"Workspaces", n_apps:"Integrations", n_members:"Members", n_license:"License", n_settings:"Server settings",
-  no_org_h:"No organization yet", no_org_p:"Create your first organization to get started.", role_owner:"Owner", role_admin:"Admin", role_member:"Member",
+  no_org_h:"No organization yet", no_org_p:"Create your first organization to get started.", role_owner:"Owner", role_admin:"Admin", role_member:"Member", role_super:"Super admin",
   plan_trial:"Trial", plan_monthly:"Monthly", plan_yearly:"Yearly", plan_enterprise:"Enterprise",
   st_active:"Active", st_past_due:"Past due", st_expired:"Expired", st_suspended:"Suspended",
-  days_left:"{n} days left", days_over:"Expired {n} days ago", license:"License", workspaces:"Workspaces", docs:"Documents", members:"Members", recent:"Recent activity", no_activity:"No activity yet",
+  tasks:"Tasks", no_tasks:"No tasks yet", assignee:"Assignee", due:"Due", status:"Status", download:"Download file", reindex:"Rebuild search index", reindexed:"Indexed {n} items", shared_from:"Shared from {n}", total_n:"{n} items", conn_ok:"Connected {p}", conn_err:"Connection failed ({e})", approve:"Approve", reject:"Reject", pending_req:"Pending plan requests", all_orgs:"All organizations", no_req:"No requests", days_left:"{n} days left", days_over:"Expired {n} days ago", license:"License", workspaces:"Workspaces", docs:"Documents", members:"Members", recent:"Recent activity", no_activity:"No activity yet",
   onboard:"Get started", ob1:"Create an organization", ob2:"Add Salid to your Discord server", ob3:"Type /ตั้งค่า in Discord and paste the code on the Workspaces page", ob4:"Choose whether to share data between servers", ob_go:"Go to Workspaces", invite:"Salid invite link",
   cat_all:"All", cat_receipts:"Receipts/Invoices", cat_contracts_docs:"Contracts & docs", cat_minutes:"Meeting minutes", cat_reports:"Reports", cat_wiki:"Knowledge base", cat_uploads:"Uploads",
   cat_places:"Places", cat_ledger:"Ledger", cat_tasks:"Tasks", cat_documents:"Documents",
   f_ws:"Workspace", f_all_ws:"All", f_from:"From", f_to:"To", f_search:"Search", f_search_ph:"Search title or content",
   c_title:"Title", c_ws:"Workspace", c_date:"Date", c_who:"By", c_size:"Size", no_docs:"No documents in this category", no_docs_hint:"Documents Salid reads in Discord, or that you upload, appear here.",
   upload:"Upload a document", drop_here:"Drag a file here, or click to choose", uploading:"Uploading {name}", upload_done:"Uploaded", open_source:"Open in Discord", more:"Load more", preview:"Preview", no_preview:"No preview",
-  chat_ph:"Message Salid…", send:"Send", scope:"Scope", scope_all:"All workspaces I can access", chat_empty:"Just ask, e.g. “Summarize this month's expenses”", typing:"Salid is typing",
+  chat_ph:"Message Salid…", send:"Send", scope:"Scope", scope_all:"Web (uploaded documents)", chat_empty:"Just ask, e.g. “Summarize this month's expenses”", typing:"Salid is typing",
   ws_h:"Workspaces", ws_empty:"No connected workspaces yet", st_connected:"Connected", st_pending:"Pending", st_disconnected:"Disconnected", disconnect:"Disconnect", confirm_disc:"Disconnect “{n}”?",
   add_discord:"Add a Discord server", add_d1:"1. Invite Salid to your server", add_d2:"2. Type /ตั้งค่า in Discord and copy the code", add_d3:"3. Paste the code here", code:"Link code", link:"Link", invite_btn:"Open invite link", linked:"Server linked",
   share_h:"Sharing between workspaces", share_warn:"Only items that came from public channels can be shared. Private-channel items are never shared, and chat history is never shared across workspaces.", share_need2:"You need at least 2 workspaces to set up sharing.", share_sentence:"Let {b} see {c} of {a}", share_only_admin:"Only owners and admins can change sharing.",
@@ -361,8 +363,9 @@ function handleAuth(e) {
 let me = null, orgId = null, cur = null;
 const NAV = [["overview", "n_overview", "▦"], ["docs", "n_docs", "▤"], ["chat", "n_chat", "✉"], ["ws", "n_ws", "◫"], ["apps", "n_apps", "⚙"], ["members", "n_members", "☺"], ["license", "n_license", "★"], ["settings", "n_settings", "↗"]];
 const curOrg = () => me && me.orgs.find((o) => o.id === orgId);
-const role = () => { const o = curOrg(); return me && me.is_super && !o ? "admin" : (o && o.role) || "member"; };
-const isAdmin = () => role() === "owner" || role() === "admin" || (me && me.is_super);
+const role = () => { const o = curOrg(); return (o && o.role) || "member"; };
+const isAdmin = () => ["owner", "admin", "super"].includes(role());
+const isOwner = () => role() === "owner" || role() === "super";
 const O = (suffix = "") => "/api/center/orgs/" + encodeURIComponent(orgId) + suffix;
 
 function renderNav() {
@@ -445,25 +448,37 @@ function md(src) {
 }
 const field = (label, input) => el("label", { class: "f" }, el("span", {}, label), input);
 const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "";
-async function workspaces() { return items(await api(O("/workspaces"))); }
+async function downloadDoc(r) {
+  try {
+    if (MOCK) { toast("mock: no file", "error"); return; }
+    const res = await fetch(O("/documents/" + encodeURIComponent(r.id) + "/file"), { headers: { Authorization: "Bearer " + token } });
+    if (res.status === 401) { toLogin("err_expired"); return; }
+    if (!res.ok) throw new ApiError("", res.status);
+    const u = URL.createObjectURL(await res.blob()); const a = el("a", { href: u, download: r.title || "file" }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000);
+  } catch (e) { toast(errText(e), "error"); }
+}
+async function startConnector(p) {
+  try { const r = await api("/api/center/connectors/" + p + "/start" + q({ org: orgId })); if (MOCK) { toast("mock: " + r.url); return; } if (r.kind === "invite") window.open(r.url, "_blank", "noopener"); else location.href = r.url; }
+  catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
+}
+async function workspaces() { return await api(O("/workspaces")); }
 
 /* ---------- views ---------- */
 const VIEWS = {};
 
 VIEWS.overview = async (body, my) => {
-  const [ov, wsx] = await Promise.all([api(O("/overview")), workspaces()]);
+  const [ov, tk] = await Promise.all([api(O("/overview")), api(O("/tasks")).catch(() => null)]);
   if (stale(my)) return; done(body);
-  const lic = ov.license || curOrg().license, d = daysLeft(lic);
-  const wsc = ov.workspaces || {}; const wsTotal = typeof wsc === "number" ? wsc : Object.values(wsc).reduce((a, b) => a + b, 0);
-  const docs = ov.documents || {}; const docTotal = Object.values(docs).reduce((a, b) => a + b, 0);
-  const memberN = typeof ov.members === "number" ? ov.members : items(ov.members).length;
+  const lic = ov.license || curOrg().license, d = lic ? lic.days_left ?? ov.license_days_left : null;
+  const wsc = ov.workspaces || {}, byP = wsc.by_platform || {};
+  const docs = ov.documents || {}, byC = docs.by_category || {};
   const out = [];
-  const hasDiscord = (typeof wsc === "object" ? wsc.discord : wsx.filter((w) => w.platform === "discord").length) > 0;
-  if (!hasDiscord) {
+  const nDisc = byP.discord || 0;
+  if (!nDisc) {
     out.push(el("div", { class: "card" }, el("h2", { text: t("onboard") }),
       el("ol", { class: "steps" },
         el("li", { class: "done", text: t("ob1") }),
-        el("li", {}, el("div", {}, t("ob2"), INVITE_URL.startsWith("__") ? "" : [" ", el("a", { href: INVITE_URL, target: "_blank", rel: "noopener noreferrer" }, t("invite"))])),
+        el("li", {}, el("div", {}, t("ob2"), isAdmin() ? [" ", el("button", { class: "btn ghost sm", type: "button", onclick: () => startConnector("discord") }, t("invite"))] : "")),
         el("li", { text: t("ob3") }), el("li", { text: t("ob4") })),
       el("div", {}, el("a", { class: "btn", href: "#/ws", style: "display:inline-block;text-decoration:none" }, t("ob_go")))));
   }
@@ -471,21 +486,26 @@ VIEWS.overview = async (body, my) => {
     el("div", { class: "card" }, el("h2", { text: t("license") }), el("div", {}, el("span", { class: "chip", text: t("plan_" + (lic && lic.plan)) }), " ", licBadge(lic)), el("div", { class: "muted", text: daysText(d) }),
       d != null && d <= 7 ? el("div", { class: "notice " + (d < 0 ? "error" : ""), text: daysText(d) }) : null,
       el("a", { href: "#/license", text: t("n_license") })),
-    el("div", { class: "card" }, el("h2", { text: t("workspaces") }), el("div", { class: "stat", text: wsTotal }),
-      Object.entries(typeof wsc === "object" ? wsc : {}).map(([p, n]) => el("div", { class: "kv" }, el("span", {}, t("app_" + p) ? p : p), el("b", { text: n })))),
-    el("div", { class: "card" }, el("h2", { text: t("members") }), el("div", { class: "stat", text: memberN }), el("a", { href: "#/members", text: t("n_members") }))));
-  out.push(el("div", { class: "card" }, el("h2", {}, t("docs"), " ", el("span", { class: "muted", text: "(" + docTotal + ")" })),
-    docTotal || Object.keys(docs).length ? CATS.map((c) => el("div", { class: "kv" }, el("a", { href: "#/docs", onclick: () => { try { sessionStorage.setItem("center_cat", c); } catch { /* ignore */ } } }, t("cat_" + c)), el("b", { text: docs[c] || 0 }))) : el("div", { class: "empty", text: t("no_docs") })));
+    el("div", { class: "card" }, el("h2", { text: t("workspaces") }), el("div", { class: "stat", text: wsc.total ?? 0 }),
+      Object.entries(byP).map(([p, n]) => el("div", { class: "kv" }, el("span", { text: p }), el("b", { text: n })))),
+    el("div", { class: "card" }, el("h2", { text: t("members") }), el("div", { class: "stat", text: ov.members ?? 0 }), el("a", { href: "#/members", text: t("n_members") }))));
+  out.push(el("div", { class: "card" }, el("h2", {}, t("docs"), " ", el("span", { class: "muted", text: "(" + (docs.total ?? 0) + ")" })),
+    docs.total ? CATS.map((c) => el("div", { class: "kv" }, el("a", { href: "#/docs", onclick: () => { try { sessionStorage.setItem("center_cat", c); } catch { /* ignore */ } } }, t("cat_" + c)), el("b", { text: byC[c] || 0 }))) : el("div", { class: "empty", text: t("no_docs") })));
+  const tasks = tk ? items(tk, "tasks") : null;
+  if (tasks) out.push(el("div", { class: "card" }, el("h2", { text: t("tasks") }),
+    tasks.length ? el("div", { class: "tblwrap" }, el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, ["c_title", "assignee", "due", "status"].map((k) => el("th", { scope: "col", text: t(k) })))),
+      el("tbody", {}, tasks.slice(0, 10).map((k) => el("tr", {}, el("td", {}, safeUrl(k.url) ? el("a", { href: k.url, target: "_blank", rel: "noopener noreferrer", text: k.title }) : k.title, " ", el("span", { class: "chip", text: k.platform || "" })),
+        el("td", { text: k.assignee || (k.assignees || []).join(", ") }), el("td", { text: fmtDate(k.due) }), el("td", { text: k.status || "" })))))) : el("div", { class: "empty", text: t("no_tasks") })));
   const act = items(ov, "recent_activity");
   out.push(el("div", { class: "card" }, el("h2", { text: t("recent") }),
-    act.length ? act.map((a) => el("div", { class: "kv" }, el("span", { text: a.text || a.summary || a.title || "" }), el("span", { class: "muted small", text: fmtTime(a.ts || a.at || a.date) }))) : el("div", { class: "empty", text: t("no_activity") })));
+    act.length ? act.map((a) => el("div", { class: "kv" }, el("span", { text: [a.title, a.workspace_name, a.who].filter(Boolean).join(" · ") }), el("span", { class: "muted small", text: fmtTime(a.at) }))) : el("div", { class: "empty", text: t("no_activity") })));
   body.replaceChildren(...out);
 };
 
 VIEWS.docs = async (body, my) => {
   const wsx = await workspaces(); if (stale(my)) return; done(body);
   let cat = "all"; try { const c = sessionStorage.getItem("center_cat"); if (c) cat = c; sessionStorage.removeItem("center_cat"); } catch { /* ignore */ }
-  let rows = [], cursor = null, seq = 0;
+  let rows = [], cursor = null, seq = 0, total = 0;
   const tabs = el("div", { class: "tabs", role: "tablist", "aria-label": t("n_docs") });
   const wsSel = el("select", { id: "d-ws" }, el("option", { value: "" }, t("f_all_ws")), wsx.map((w) => el("option", { value: w.id }, w.name)));
   const from = el("input", { type: "date", id: "d-from" }), to = el("input", { type: "date", id: "d-to" });
@@ -499,34 +519,38 @@ VIEWS.docs = async (body, my) => {
   const drawList = (err) => {
     if (err) { list.replaceChildren(errBox(err, () => load(true))); return; }
     if (!rows.length) { list.replaceChildren(el("div", { class: "empty" }, el("p", { text: t("no_docs") }), el("p", { class: "small", text: t("no_docs_hint") }))); return; }
+    const f0 = from.value, t0 = to.value;
+    const vis = rows.filter((r) => { const dd = (r.date || "").slice(0, 10); return (!f0 || dd >= f0) && (!t0 || dd <= t0); });
+    if (!vis.length) { list.replaceChildren(el("div", { class: "empty", text: t("no_docs") }), cursor ? el("p", {}, el("button", { class: "btn ghost", type: "button", onclick: () => load(false) }, t("more"))) : null); return; }
     const tb = el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, ["c_title", "c_ws", "c_date", "c_who", "c_size"].map((k) => el("th", { scope: "col", text: t(k) })))),
-      el("tbody", {}, rows.map((r) => el("tr", { class: "click" },
+      el("tbody", {}, vis.map((r) => el("tr", { class: "click" },
         el("td", {}, el("button", { class: "btn ghost sm", type: "button", style: "text-align:left;border:0;padding:0;font-weight:600;color:var(--link)", onclick: () => openDoc(r) }, r.title || "(untitled)"), " ", el("span", { class: "chip", text: t("cat_" + r.category) })),
-        el("td", { text: r.workspace_name || r.workspace || "" }), el("td", { text: fmtDate(r.date || r.created_at) }), el("td", { text: r.who || "" }), el("td", { text: fmtSize(r.size) })))));
-    list.replaceChildren(el("div", { class: "tblwrap" }, tb), cursor ? el("p", {}, el("button", { class: "btn ghost", type: "button", onclick: () => load(false) }, t("more"))) : null);
+        el("td", { text: r.workspace_name || "" }, r.shared_from ? el("div", { class: "muted small", text: t("shared_from", { n: r.shared_from }) }) : null), el("td", { text: fmtDate(r.date || r.created_at) }), el("td", { text: r.who || "" }), el("td", { text: fmtSize(r.size) })))));
+    list.replaceChildren(el("div", { class: "muted small", text: t("total_n", { n: total }) }), el("div", { class: "tblwrap" }, tb), cursor ? el("p", {}, el("button", { class: "btn ghost", type: "button", onclick: () => load(false) }, t("more"))) : null);
   };
   const load = async (reset) => {
     if (reset) { rows = []; cursor = null; list.replaceChildren(loading()); }
     const me2 = ++seq;
     try {
-      const r = await api(O("/documents") + q({ category: cat === "all" ? "" : cat, workspace: wsSel.value, q: search.value.trim(), from: from.value, to: to.value, cursor }));
+      const r = await api(O("/documents") + q({ category: cat === "all" ? "" : cat, workspace: wsSel.value, q: search.value.trim(), cursor }));
       if (me2 !== seq || stale(my)) return;
-      rows = rows.concat(items(r)); cursor = r.next_cursor || r.cursor || null; drawList();
+      rows = rows.concat(items(r)); cursor = r.next_cursor || null; total = r.total ?? rows.length; drawList();
     } catch (e) { if (!handleAuth(e) && me2 === seq) drawList(e); }
   };
   const openDoc = async (r) => {
     const pre = el("pre", { class: "preview", text: r.preview || t("no_preview") });
-    const src = safeUrl(r.source_url || r.source_link);
+    const src = safeUrl(r.source_url);
     const close = () => { sc.remove(); dr.remove(); prev && prev.focus(); };
     const prev = document.activeElement;
     const sc = el("div", { class: "scrim", onclick: close });
     const dr = el("div", { class: "drawer", role: "dialog", "aria-modal": "true", "aria-label": r.title, tabindex: "-1" },
       el("h2", { text: r.title }), el("div", {}, el("span", { class: "chip", text: t("cat_" + r.category) }), " ", el("span", { class: "muted small", text: [r.workspace_name, fmtDate(r.date), r.who, fmtSize(r.size)].filter(Boolean).join(" · ") })),
       src ? el("a", { class: "btn ghost sm", href: src, target: "_blank", rel: "noopener noreferrer", style: "text-decoration:none;align-self:flex-start" }, t("open_source")) : null,
+      r.category === "uploads" && r.workspace === "web" ? el("button", { class: "btn ghost sm", type: "button", style: "align-self:flex-start", onclick: () => downloadDoc(r) }, t("download")) : null,
       el("h3", { text: t("preview") }), pre, el("button", { class: "btn ghost", type: "button", onclick: close }, t("close")));
     dr.addEventListener("keydown", (ev) => { if (ev.key === "Escape") close(); });
     document.body.append(sc, dr); dr.focus();
-    if (r.id && !r.preview) { try { const full = await api(O("/documents/" + encodeURIComponent(r.id))); pre.textContent = full.preview || full.text || t("no_preview"); } catch { /* keep */ } }
+    if (r.id) { try { const full = await api(O("/documents/" + encodeURIComponent(r.id))); pre.textContent = full.text || full.preview || t("no_preview"); } catch { /* keep */ } }
   };
   // upload
   const fileIn = el("input", { type: "file", class: "sr", id: "d-file", "aria-label": t("upload") });
@@ -534,10 +558,10 @@ VIEWS.docs = async (body, my) => {
   const drop = el("div", { class: "drop", tabindex: "0", role: "button", "aria-label": t("upload") }, t("drop_here"));
   const doUpload = (file) => {
     if (!file) return;
-    const fd = new FormData(); fd.append("file", file); if (wsSel.value) fd.append("workspace", wsSel.value);
+    const fd = new FormData(); fd.append("file", file);
     prog.hidden = false; prog.value = 0; note0(t("uploading", { name: file.name }));
     const fin = (ok, msg) => { prog.hidden = true; upMsg.replaceChildren(el("div", { class: "notice " + (ok ? "ok" : "error"), text: msg })); if (ok) { cat = "uploads"; draw(); load(true); } };
-    if (MOCK) { let p = 0; const iv = setInterval(() => { p += 20; prog.value = p; if (p >= 100) { clearInterval(iv); mockDocs.unshift({ id: "u" + Date.now(), title: file.name, category: "uploads", workspace_name: "Web", date: new Date().toISOString(), who: me.email, size: file.size, preview: "(mock upload)" }); fin(true, t("upload_done")); } }, 150); return; }
+    if (MOCK) { let p = 0; const iv = setInterval(() => { p += 20; prog.value = p; if (p >= 100) { clearInterval(iv); mockDocs.unshift({ id: "web:upload:" + Date.now(), title: file.name, category: "uploads", workspace: "web", workspace_name: "Salid Web", date: new Date().toISOString(), who: me.email, size: file.size, preview: "(mock upload)" }); fin(true, t("upload_done")); } }, 150); return; }
     const x = new XMLHttpRequest(); x.open("POST", O("/documents")); x.setRequestHeader("Authorization", "Bearer " + token);
     x.upload.onprogress = (ev) => { if (ev.lengthComputable) prog.value = (ev.loaded / ev.total) * 100; };
     x.onload = () => { if (x.status === 401) { toLogin("err_expired"); return; } let d = ""; try { d = JSON.parse(x.responseText).detail || ""; } catch { /* ignore */ } x.status < 300 ? fin(true, t("upload_done")) : fin(false, t("err_generic", { status: x.status }) + (typeof d === "string" && d ? " [" + d + "]" : "")); };
@@ -552,21 +576,25 @@ VIEWS.docs = async (body, my) => {
   fileIn.addEventListener("change", () => { doUpload(fileIn.files[0]); fileIn.value = ""; });
   upBox.append(el("div", { class: "card" }, el("h2", { text: t("upload") }), drop, fileIn, prog, upMsg));
   let tm; search.addEventListener("input", () => { clearTimeout(tm); tm = setTimeout(() => load(true), 300); });
-  [wsSel, from, to].forEach((n) => n.addEventListener("change", () => load(true)));
+  wsSel.addEventListener("change", () => load(true)); [from, to].forEach((n) => n.addEventListener("change", () => drawList()));
+  const reidx = isAdmin() ? el("button", { class: "btn ghost sm", type: "button", style: "align-self:flex-start", onclick: async (ev) => {
+    ev.target.disabled = true;
+    try { const r = await api(O("/documents/reindex"), { method: "POST" }); toast(t("reindexed", { n: r.indexed })); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
+    ev.target.disabled = false; } }, t("reindex")) : null;
   body.replaceChildren(el("div", { class: "card" }, tabs,
-    el("div", { class: "row" }, field(t("f_ws"), wsSel), field(t("f_from"), from), field(t("f_to"), to), field(t("f_search"), search)), list), upBox);
+    el("div", { class: "row" }, field(t("f_ws"), wsSel), field(t("f_from"), from), field(t("f_to"), to), field(t("f_search"), search)), reidx, list), upBox);
   draw(); load(true);
 };
 
 VIEWS.chat = async (body, my) => {
-  const [wsx, hist] = await Promise.all([workspaces(), api(O("/chat/history")).catch(() => ({ items: [] }))]);
+  const [wsx, hist] = await Promise.all([workspaces(), api(O("/chat/history")).catch(() => ({ turns: [] }))]);
   if (stale(my)) return; done(body);
-  const sel = el("select", { id: "c-scope" }, el("option", { value: "" }, t("scope_all")), wsx.map((w) => el("option", { value: w.id }, w.name)));
+  const sel = el("select", { id: "c-scope" }, el("option", { value: "" }, t("scope_all")), wsx.filter((w) => w.status === "connected").map((w) => el("option", { value: w.id }, w.name)));
   const msgs = el("div", { id: "msgs", role: "log", "aria-live": "polite", "aria-label": t("n_chat") });
   const add = (who, text) => { const n = el("div", { class: "msg " + (who === "user" || who === "me" ? "me" : "bot") }); n.innerHTML = md(text); msgs.append(n); msgs.scrollTop = msgs.scrollHeight; return n; };
-  const h = items(hist);
+  const h = items(hist, "turns");
   if (!h.length) msgs.append(el("div", { class: "empty", text: t("chat_empty") }));
-  else h.forEach((m) => add(m.role, m.text || m.content || ""));
+  else h.forEach((m) => add(m.role, m.text || ""));
   const ta = el("textarea", { id: "c-in", rows: "1", placeholder: t("chat_ph"), "aria-label": t("chat_ph") });
   const btn = el("button", { class: "btn", type: "submit" }, t("send"));
   const form = el("form", { class: "compose" }, ta, btn);
@@ -577,7 +605,7 @@ VIEWS.chat = async (body, my) => {
     const ty = el("div", { class: "msg typing", role: "status", "aria-label": t("typing") }, el("span"), el("span"), el("span")); msgs.append(ty); msgs.scrollTop = msgs.scrollHeight;
     try {
       const r = await api(O("/chat"), J("POST", { message: text, workspace_id: sel.value || undefined }));
-      ty.remove(); add("bot", r.reply || r.answer || r.text || "");
+      ty.remove(); add("bot", r.answer || "");
     } catch (e) { ty.remove(); if (handleAuth(e)) return; msgs.append(el("div", { class: "notice error", role: "alert", text: errText(e) })); }
     btn.disabled = false; ta.focus();
   };
@@ -595,7 +623,7 @@ VIEWS.ws = async (body, my) => {
   // cards
   const cards = wsx.length ? el("div", { class: "wsgrid" }, wsx.map((w) => el("div", { class: "card" },
     el("div", { class: "hd" }, platBadge(w.platform), el("div", {}, el("strong", { text: w.name }), el("div", { class: "muted small", text: w.platform }))),
-    el("div", {}, el("span", { class: "badge " + (w.status === "connected" ? "ok" : w.status === "pending" ? "warn" : "err"), text: t("st_" + w.status) })),
+    el("div", {}, w.settings_url ? [el("a", { class: "small", href: w.settings_url, text: t("n_settings") }), " "] : null, el("span", { class: "badge " + (w.status === "connected" ? "ok" : w.status === "pending" ? "warn" : "err"), text: t("st_" + w.status) })),
     admin && w.platform !== "web" ? el("button", { class: "btn danger sm", type: "button", onclick: async () => {
       if (!confirm(t("confirm_disc", { n: w.name }))) return;
       try { await api(O("/workspaces/" + encodeURIComponent(w.id)), { method: "DELETE" }); toast(t("saved")); route(); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
@@ -611,7 +639,7 @@ VIEWS.ws = async (body, my) => {
       catch (e) { if (!handleAuth(e)) msg.replaceChildren(el("div", { class: "notice error", role: "alert", text: errText(e) })); }
     });
     out.push(el("div", { class: "card" }, el("h2", { text: t("add_discord") }), el("p", { text: t("add_d1") }),
-      INVITE_URL.startsWith("__") ? null : el("p", {}, el("a", { class: "btn ghost sm", href: INVITE_URL, target: "_blank", rel: "noopener noreferrer", style: "text-decoration:none;display:inline-block" }, t("invite_btn"))),
+      el("p", {}, el("button", { class: "btn ghost sm", type: "button", onclick: () => startConnector("discord") }, t("invite_btn"))),
       el("p", { text: t("add_d2") }), el("p", { text: t("add_d3") }), f, msg));
   }
   // sharing matrix
@@ -647,36 +675,36 @@ VIEWS.ws = async (body, my) => {
 };
 
 VIEWS.apps = async (body, my) => {
-  const [cx, wsx] = await Promise.all([api("/api/center/connectors"), workspaces()]);
+  const cx = await api("/api/center/connectors" + q({ org: orgId }));
   if (stale(my)) return; done(body);
-  const info = {}; items(cx, "connectors").forEach((c) => { info[c.platform] = c; });
-  const nDisc = wsx.filter((w) => w.platform === "discord" && w.status === "connected").length;
-  const card = (p, name, desc, action) => el("div", { class: "card" }, el("div", { class: "hd" }, platBadge(p), el("div", {}, el("strong", { text: name }), el("div", { class: "muted small", text: desc }))), action);
-  const conn = (p) => { const c = info[p]; const on = c && (c.enabled !== false) && (c.configured !== false) && !c.disabled;
-    return on ? el("a", { class: "btn", style: "text-decoration:none;text-align:center", href: "/api/center/connectors/" + p + "/start" + q({ org: orgId }) }, t("connect")) : el("span", { class: "badge", text: t("not_enabled") }); };
-  const soon = () => el("span", { class: "badge", text: t("soon") });
-  body.replaceChildren(el("div", { class: "wsgrid" },
-    card("discord", "Discord", t("app_discord"), nDisc ? el("span", { class: "badge ok", text: t("connected_n", { n: nDisc }) }) : el("a", { class: "btn", href: "#/ws", style: "text-decoration:none;text-align:center" }, t("connect"))),
-    card("slack", "Slack", t("app_slack"), conn("slack")), card("clickup", "ClickUp", t("app_clickup"), conn("clickup")),
-    card("g1", "Google Drive", t("app_drive"), soon()), card("g2", "Gmail", t("app_gmail"), soon()), card("g3", "Google Calendar", t("app_calendar"), soon())));
+  const names = { discord: "app_discord", slack: "app_slack", clickup: "app_clickup", google_drive: "app_drive", gmail: "app_gmail", google_calendar: "app_calendar" };
+  const card = (c) => {
+    let action;
+    if (c.status === "coming_soon") action = el("span", { class: "badge", text: t("soon") });
+    else if (c.status === "not_configured" || !c.enabled) action = el("span", { class: "badge", text: t("not_enabled") });
+    else action = el("div", { class: "row" }, c.connected ? el("span", { class: "badge ok", text: t("connected_n", { n: c.connected }) }) : null,
+      isAdmin() ? el("button", { class: "btn" + (c.connected ? " ghost" : ""), type: "button", onclick: () => startConnector(c.platform) }, c.platform === "discord" ? t("add_discord") : t("connect")) : null);
+    return el("div", { class: "card" }, el("div", { class: "hd" }, platBadge(c.platform.startsWith("google") || c.platform === "gmail" ? "soon" : c.platform), el("div", {}, el("strong", { text: c.name }), el("div", { class: "muted small", text: t(names[c.platform] || "") }))), action);
+  };
+  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).map(card)));
 };
 
 VIEWS.members = async (body, my) => {
   const r = await api(O("/members")); if (stale(my)) return; done(body);
-  const admin = isAdmin(); let list = items(r, "members");
+  const admin = isAdmin(); let list = items(r);
   const holder = el("div"), out = el("div");
-  const act = async (fn) => { try { await fn(); list = items(await api(O("/members")), "members"); draw(); toast(t("saved")); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); } };
+  const act = async (fn) => { try { await fn(); list = items(await api(O("/members"))); draw(); toast(t("saved")); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); } };
   const roleSel = (cur, onchg, dis) => { const s = el("select", { "aria-label": t("mem_role"), disabled: dis }, ["owner", "admin", "member"].map((x) => el("option", { value: x, selected: x === cur }, t("role_" + x)))); s.addEventListener("change", () => onchg(s.value)); return s; };
   const draw = () => {
     holder.replaceChildren(list.length ? el("div", { class: "tblwrap" }, el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, el("th", { scope: "col", text: t("mem_email") }), el("th", { scope: "col", text: t("mem_role") }), el("th", { scope: "col" }, el("span", { class: "sr", text: t("remove") })))),
       el("tbody", {}, list.map((m) => el("tr", {}, el("td", { text: m.email }),
-        el("td", {}, admin ? roleSel(m.role, (v) => act(() => api(O("/members"), J("POST", { email: m.email, role: v })))) : el("span", { class: "chip", text: t("role_" + m.role) })),
-        el("td", {}, admin && m.role !== "owner" ? el("button", { class: "btn danger sm", type: "button", onclick: () => { if (confirm(t("confirm_rm", { e: m.email }))) act(() => api(O("/members") + q({ email: m.email }), { method: "DELETE" })); } }, t("remove")) : null)))))) : el("div", { class: "empty", text: t("mem_none") }));
+        el("td", {}, admin && (isOwner() || m.role === "member") ? roleSel(m.role, (v) => act(() => api(O("/members"), J("POST", { email: m.email, role: v })))) : el("span", { class: "chip", text: t("role_" + m.role) })),
+        el("td", {}, admin && m.role !== "owner" && (isOwner() || m.role === "member") ? el("button", { class: "btn danger sm", type: "button", onclick: () => { if (confirm(t("confirm_rm", { e: m.email }))) act(() => api(O("/members") + q({ email: m.email }), { method: "DELETE" })); } }, t("remove")) : null)))))) : el("div", { class: "empty", text: t("mem_none") }));
   };
   draw();
   const parts = [el("div", { class: "card" }, el("h2", { text: t("mem_h") }), holder)];
   if (admin) {
-    const email = el("input", { type: "email", id: "m-email", required: true, autocomplete: "off" }), rs = el("select", { id: "m-role" }, ["member", "admin"].map((x) => el("option", { value: x }, t("role_" + x))));
+    const email = el("input", { type: "email", id: "m-email", required: true, autocomplete: "off" }), rs = el("select", { id: "m-role" }, (isOwner() ? ["member", "admin", "owner"] : ["member"]).map((x) => el("option", { value: x }, t("role_" + x))));
     const f = el("form", { class: "row" }, field(t("mem_email"), email), field(t("mem_role"), rs), el("button", { class: "btn", type: "submit" }, t("mem_invite")));
     f.addEventListener("submit", (ev) => { ev.preventDefault(); act(async () => { await api(O("/members"), J("POST", { email: email.value.trim(), role: rs.value })); email.value = ""; }); });
     parts.push(el("div", { class: "card" }, el("h2", { text: t("mem_invite") }), f));
@@ -686,21 +714,23 @@ VIEWS.members = async (body, my) => {
 
 VIEWS.license = async (body, my) => {
   const l = await api(O("/license")); if (stale(my)) return; done(body);
-  const lic = l.license || l, d = daysLeft(lic);
+  const lic = l.license, d = lic.days_left;
   const parts = [el("div", { class: "card" }, el("h2", { text: t("lic_h") }),
     el("div", { class: "kv" }, el("span", { text: t("plan") }), el("b", { text: t("plan_" + lic.plan) })),
     el("div", { class: "kv" }, el("span", { text: t("status") }), licBadge(lic)),
     el("div", { class: "kv" }, el("span", { text: t("seats") }), el("b", { text: lic.seats ?? "-" })),
     el("div", { class: "kv" }, el("span", { text: t("valid_until") }), el("b", { text: fmtDate(lic.valid_until) + (d != null ? " (" + daysText(d) + ")" : "") })),
     d != null && d <= 7 ? el("div", { class: "notice error", role: "alert", text: daysText(d) }) : null)];
-  const plan = el("select", { id: "l-plan" }, ["trial", "monthly", "yearly", "enterprise"].map((p) => el("option", { value: p }, t("plan_" + p))));
-  const seats = el("input", { type: "number", id: "l-seats", min: "1", value: String(lic.seats || 5) }), notes = el("textarea", { id: "l-note", maxlength: "500" }), msg = el("div", { role: "status" });
-  const f = el("form", { class: "card" }, el("h2", { text: t("req_h" ) }), el("p", { class: "muted small", text: t("req_p") }),
-    el("div", { class: "row" }, field(t("plan"), plan), field(t("seats"), seats)), field(t("req_note"), notes), msg, el("div", {}, el("button", { class: "btn", type: "submit" }, t("req_send"))));
-  f.addEventListener("submit", async (ev) => { ev.preventDefault();
-    try { await api(O("/license/request"), J("POST", { plan: plan.value, seats: Number(seats.value) || 1, note: notes.value })); msg.replaceChildren(el("div", { class: "notice ok", text: t("req_sent") })); }
-    catch (e) { if (!handleAuth(e)) msg.replaceChildren(el("div", { class: "notice error", role: "alert", text: errText(e) })); } });
-  parts.push(f);
+  if (isAdmin()) {
+    const plan = el("select", { id: "l-plan" }, ["monthly", "yearly", "enterprise"].map((p) => el("option", { value: p }, t("plan_" + p))));
+    const seats = el("input", { type: "number", id: "l-seats", min: "1", value: String(lic.seats || 5) }), notes = el("textarea", { id: "l-note", maxlength: "500" }), msg = el("div", { role: "status" });
+    const f = el("form", { class: "card" }, el("h2", { text: t("req_h") }), el("p", { class: "muted small", text: t("req_p") }),
+      el("div", { class: "row" }, field(t("plan"), plan), field(t("seats"), seats)), field(t("req_note"), notes), msg, el("div", {}, el("button", { class: "btn", type: "submit" }, t("req_send"))));
+    f.addEventListener("submit", async (ev) => { ev.preventDefault();
+      try { await api(O("/license/request"), J("POST", { plan: plan.value, seats: Number(seats.value) || 1, note: notes.value })); msg.replaceChildren(el("div", { class: "notice ok", text: t("req_sent") })); }
+      catch (e) { if (!handleAuth(e)) msg.replaceChildren(el("div", { class: "notice error", role: "alert", text: errText(e) })); } });
+    parts.push(f);
+  }
   if (me.is_super) {
     const sp = el("select", { id: "s-plan" }, ["trial", "monthly", "yearly", "enterprise"].map((p) => el("option", { value: p, selected: p === lic.plan }, t("plan_" + p))));
     const ss = el("select", { id: "s-status" }, ["active", "past_due", "expired", "suspended"].map((p) => el("option", { value: p, selected: p === lic.status }, t("st_" + p))));
@@ -708,9 +738,22 @@ VIEWS.license = async (body, my) => {
     const sv = el("input", { type: "date", id: "s-valid", value: (lic.valid_until || "").slice(0, 10) }), sn = el("input", { type: "text", id: "s-notes", value: lic.notes || "" }), m2 = el("div", { role: "status" });
     const sf = el("form", { class: "card" }, el("h2", { text: t("super_h") }), el("div", { class: "row" }, field(t("plan"), sp), field(t("status"), ss), field(t("seats"), se), field(t("valid_until"), sv)), field(t("notes"), sn), m2, el("div", {}, el("button", { class: "btn", type: "submit" }, t("save"))));
     sf.addEventListener("submit", async (ev) => { ev.preventDefault();
-      try { await api(O("/license"), J("PUT", { plan: sp.value, status: ss.value, seats: Number(se.value) || 1, valid_until: sv.value || null, notes: sn.value })); toast(t("saved")); route(); }
+      try { await api(O("/license"), J("PUT", { plan: sp.value, status: ss.value, seats: Number(se.value) || 1, valid_until: sv.value || null, notes: sn.value, billing_provider: lic.billing_provider || "" })); toast(t("saved")); route(); }
       catch (e) { if (!handleAuth(e)) m2.replaceChildren(el("div", { class: "notice error", role: "alert", text: errText(e) })); } });
     parts.push(sf);
+    const reqBox = el("div", { class: "card" }, el("h2", { text: t("pending_req") }), loading()), orgBox = el("div", { class: "card" }, el("h2", { text: t("all_orgs") }), loading());
+    parts.push(reqBox, orgBox);
+    const loadAdmin = async () => {
+      try {
+        const [rq, og] = await Promise.all([api("/api/center/admin/license-requests?status=pending"), api("/api/center/admin/orgs")]);
+        const decide = async (r, approve) => { try { await api("/api/center/admin/license-requests/" + encodeURIComponent(r.id), J("POST", { approve })); toast(t("saved")); loadAdmin(); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); } };
+        reqBox.replaceChildren(el("h2", { text: t("pending_req") }), ...[items(rq).length ? items(rq).map((r) => el("div", { class: "kv", style: "align-items:center;flex-wrap:wrap" },
+          el("span", { text: r.org_name + " · " + t("plan_" + r.plan) + " · " + r.seats + " " + t("seats") + (r.note ? " · " + r.note : "") + " (" + r.requested_by + ")" }),
+          el("span", {}, el("button", { class: "btn sm", type: "button", onclick: () => decide(r, true) }, t("approve")), " ", el("button", { class: "btn ghost sm", type: "button", onclick: () => decide(r, false) }, t("reject"))))) : el("div", { class: "empty", text: t("no_req") })].flat());
+        orgBox.replaceChildren(el("h2", { text: t("all_orgs") }), el("div", { class: "tblwrap" }, el("table", { class: "tbl" }, el("tbody", {}, items(og).map((o) => el("tr", {}, el("td", { text: o.name }), el("td", { text: o.owner_email }), el("td", { text: t("plan_" + o.license.plan) }), el("td", {}, licBadge(o.license))))))));
+      } catch (e) { if (!handleAuth(e)) { reqBox.replaceChildren(errBox(e, loadAdmin)); orgBox.replaceChildren(); } }
+    };
+    loadAdmin();
   }
   body.replaceChildren(...parts);
 };
@@ -738,61 +781,86 @@ $("login-lang").addEventListener("click", () => setLang(lang === "th" ? "en" : "
 $("signout").addEventListener("click", () => { try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch { /* ignore */ } toLogin(""); });
 window.addEventListener("hashchange", () => { closeNav(); route(); });
 
-/* ---------- MOCK API (only when ?mock=1) ---------- */
+/* ---------- MOCK API (only when ?mock=1; shapes follow the backend contract) ---------- */
 let mockDocs = [];
 function mockApi(method, path, body) {
-  const MS = 1; const d = (n) => new Date(Date.now() - n * 86400000).toISOString();
+  const d = (n) => new Date(Date.now() - n * 86400000).toISOString();
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const mkLic = (plan, status, n) => ({ plan, status, seats: 10, valid_until: day(n), notes: "", billing_provider: "", active: status === "active", days_left: n, grace_until: day(n + 3) });
   if (!mockApi.s) {
     mockDocs = [
-      { id: "d1", title: "ใบเสร็จ ร้านกาแฟ บางรัก", category: "receipts", workspace_id: "w1", workspace_name: "ออฟฟิศกรุงเทพ", date: d(1), who: "สมชาย", size: 184000, preview: "ร้านกาแฟบางรัก\nรวม 420.00 บาท\nชำระด้วยบัตร", source_url: "https://discord.com/channels/1/2/3" },
-      { id: "d2", title: "ใบแจ้งหนี้ INV-2026-088", category: "receipts", workspace_id: "w1", workspace_name: "ออฟฟิศกรุงเทพ", date: d(3), who: "มาลี", size: 92000, preview: "บริษัท ไทยซัพพลาย จำกัด\nยอดรวม 48,150 บาท ครบกำหนด 30 วัน" },
-      { id: "d3", title: "สัญญาเช่าสำนักงาน.pdf", category: "contracts_docs", workspace_id: "w1", workspace_name: "ออฟฟิศกรุงเทพ", date: d(20), who: "สมชาย", size: 2400000, preview: "สัญญาเช่า 12 เดือน ค่าเช่า 35,000 บาท/เดือน", source_url: "https://discord.com/channels/1/2/4" },
-      { id: "d4", title: "ประชุมทีมขาย 12 ต.ค.", category: "minutes", workspace_id: "w2", workspace_name: "ทีมเชียงใหม่", date: d(4), who: "สลิด", size: 5100, preview: "- เป้าไตรมาส 4: 2.4 ล้านบาท\n- **ติดตาม** ลูกค้า 3 ราย" },
-      { id: "d5", title: "รายงานยอดขายเดือนกันยายน", category: "reports", workspace_id: "w1", workspace_name: "ออฟฟิศกรุงเทพ", date: d(9), who: "สลิด", size: 310000, preview: "ยอดขายรวม 1.92 ล้านบาท เพิ่มขึ้น 8%" },
-      { id: "d6", title: "คู่มือพนักงานใหม่", category: "wiki", workspace_id: "w2", workspace_name: "ทีมเชียงใหม่", date: d(40), who: "มาลี", size: 12000, preview: "ขั้นตอนวันแรก, ระบบ VPN, สวัสดิการ" },
-      { id: "d7", title: "แผนการตลาด Q4.xlsx", category: "uploads", workspace_id: "web", workspace_name: "Web", date: d(2), who: "owner@example.co.th", size: 88000, preview: "(สรุปโดย AI) แผนแคมเปญ 3 ช่วง" },
+      { id: "discord-1:receipt:1", title: "ใบเสร็จ ร้านกาแฟ บางรัก", category: "receipts", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(1), who: "สมชาย", size: null, tags: ["receipt"], preview: "ร้านกาแฟบางรัก รวม 420.00 บาท ชำระด้วยบัตร", source_url: "https://discord.com/channels/1/2/3" },
+      { id: "discord-1:receipt:2", title: "ใบแจ้งหนี้ INV-2026-088", category: "receipts", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(3), who: "มาลี", size: null, tags: [], preview: "บริษัท ไทยซัพพลาย จำกัด ยอดรวม 48,150 บาท" },
+      { id: "discord-1:note:3", title: "สัญญาเช่าสำนักงาน.pdf", category: "contracts_docs", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(20), who: "สมชาย", size: 2400000, tags: ["pdf"], preview: "สัญญาเช่า 12 เดือน ค่าเช่า 35,000 บาท/เดือน", source_url: "https://discord.com/channels/1/2/4" },
+      { id: "discord-2:minutes:4", title: "ประชุมทีมขาย 12 ต.ค.", category: "minutes", workspace: "discord-2", workspace_name: "ทีมเชียงใหม่", platform: "discord", date: d(4), who: "สลิด", size: null, tags: [], preview: "เป้าไตรมาส 4: 2.4 ล้านบาท", shared_from: null },
+      { id: "discord-1:report:5", title: "รายงานยอดขายเดือนกันยายน", category: "reports", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(9), who: "สลิด", size: 310000, tags: [], preview: "ยอดขายรวม 1.92 ล้านบาท เพิ่มขึ้น 8%" },
+      { id: "discord-1:wiki:6", title: "คู่มือพนักงานใหม่", category: "wiki", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(40), who: "มาลี", size: null, tags: [], preview: "ขั้นตอนวันแรก, ระบบ VPN, สวัสดิการ", shared_from: "ออฟฟิศกรุงเทพ" },
+      { id: "web:upload:7", title: "แผนการตลาด Q4.xlsx", category: "uploads", workspace: "web", workspace_name: "Salid Web", platform: "web", date: d(2), who: "owner@example.co.th", size: 88000, tags: ["plan"], preview: "(สรุปโดย AI) แผนแคมเปญ 3 ช่วง", source_url: "" },
     ];
-    mockApi.s = { orgs: [{ id: "o1", name: "บริษัท ตัวอย่าง จำกัด", role: "owner", license: { plan: "trial", status: "active", seats: 10, valid_until: new Date(Date.now() + 9 * 86400000).toISOString().slice(0, 10) } }, { id: "o2", name: "กลุ่มร้านอาหารใหม่", role: "member", license: { plan: "monthly", status: "past_due", seats: 5, valid_until: d(2).slice(0, 10) } }],
-      ws: [{ id: "w1", platform: "discord", name: "ออฟฟิศกรุงเทพ", status: "connected" }, { id: "w2", platform: "discord", name: "ทีมเชียงใหม่", status: "connected" }, { id: "web", platform: "web", name: "Web", status: "connected" }],
-      share: [{ from_workspace: "w1", to_workspace: "w2", categories: ["wiki", "minutes"] }],
-      members: [{ email: "owner@example.co.th", role: "owner" }, { email: "mali@example.co.th", role: "admin" }, { email: "somchai@example.co.th", role: "member" }] };
+    mockApi.s = { orgs: [{ id: "org_a1", name: "บริษัท ตัวอย่าง จำกัด", role: "owner", license: mkLic("trial", "active", 9) }, { id: "org_b2", name: "กลุ่มร้านอาหารใหม่", role: "member", license: mkLic("monthly", "past_due", -2) }],
+      ws: [{ id: "web", platform: "web", external_id: "web", name: "Salid Web", status: "connected", settings_url: null }, { id: "discord-1", platform: "discord", external_id: "1", name: "ออฟฟิศกรุงเทพ", status: "connected", settings_url: "/hub" }, { id: "discord-2", platform: "discord", external_id: "2", name: "ทีมเชียงใหม่", status: "connected", settings_url: "/hub" }],
+      share: [{ from_workspace: "discord-1", to_workspace: "discord-2", categories: ["wiki", "minutes"] }],
+      members: [{ email: "owner@example.co.th", role: "owner" }, { email: "mali@example.co.th", role: "admin" }, { email: "somchai@example.co.th", role: "member" }],
+      reqs: [{ id: "r1", org_id: "org_b2", org_name: "กลุ่มร้านอาหารใหม่", plan: "yearly", seats: 8, note: "อยากได้รายปี", requested_by: "boss@example.co.th", status: "pending" }] };
   }
   const s = mockApi.s; const [p, qs] = path.split("?"); const qp = new URLSearchParams(qs || "");
-  const ok = (v) => new Promise((r) => setTimeout(() => r(v), 120 * MS));
+  const ok = (v) => new Promise((r) => setTimeout(() => r(v), 120));
+  const fail = (m, c) => Promise.reject(new ApiError(m, c));
   let m;
   if (p === "/api/center/me") return ok({ email: "owner@example.co.th", is_super: true, orgs: s.orgs });
-  if (p === "/api/center/orgs" && method === "POST") { const o = { id: "o" + (s.orgs.length + 1), name: body.name, role: "owner", license: { plan: "trial", status: "active", seats: 5, valid_until: new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10) } }; s.orgs.push(o); return ok(o); }
-  if (p === "/api/center/connectors") return ok({ connectors: [{ platform: "discord", enabled: true }, { platform: "slack", enabled: true }, { platform: "clickup", enabled: false }] });
-  if (!(m = p.match(/^\/api\/center\/orgs\/([^/]+)(\/.*)?$/))) return Promise.reject(new ApiError("mock: not found", 404));
-  const sub = m[2] || "";
-  if (sub === "/overview") { const c = {}; mockDocs.forEach((x) => { c[x.category] = (c[x.category] || 0) + 1; });
-    return ok({ license: s.orgs.find((o) => o.id === decodeURIComponent(m[1])).license, workspaces: { discord: 2, web: 1 }, documents: c, members: s.members.length,
-      recent_activity: [{ text: "สลิดสรุปการประชุมทีมขาย", ts: d(0.1) }, { text: "สมชาย อัปโหลดใบเสร็จ", ts: d(1) }, { text: "เชื่อมต่อเซิร์ฟเวอร์ ทีมเชียงใหม่", ts: d(6) }] }); }
-  if (sub === "/workspaces") return ok({ items: s.ws });
-  if ((m = sub.match(/^\/workspaces\/discord\/link$/))) { if (!body.code || body.code.length < 4) return Promise.reject(new ApiError("invalid or expired code", 400)); s.ws.splice(2, 0, { id: "w" + Date.now(), platform: "discord", name: "เซิร์ฟเวอร์ใหม่", status: "connected" }); return ok({ ok: true }); }
-  if ((m = sub.match(/^\/workspaces\/([^/]+)$/)) && method === "DELETE") { s.ws = s.ws.filter((w) => w.id !== decodeURIComponent(m[1])); return ok({ ok: true }); }
+  if (p === "/api/center/orgs" && method === "POST") { const o = { id: "org_" + Date.now(), name: body.name, role: "owner", license: mkLic("trial", "active", 14) }; s.orgs.push(o); return ok(o); }
+  if (p === "/api/center/connectors") return ok([
+    { platform: "discord", name: "Discord", enabled: true, configured: true, status: "available", connected: 2 },
+    { platform: "slack", name: "Slack", enabled: true, configured: true, status: "available", connected: 0 },
+    { platform: "clickup", name: "ClickUp", enabled: false, configured: false, status: "not_configured", connected: 0 },
+    { platform: "google_drive", name: "Google Drive", enabled: false, configured: false, status: "coming_soon", connected: 0 },
+    { platform: "gmail", name: "Gmail", enabled: false, configured: false, status: "coming_soon", connected: 0 },
+    { platform: "google_calendar", name: "Google Calendar", enabled: false, configured: false, status: "coming_soon", connected: 0 }]);
+  if ((m = p.match(/^\/api\/center\/connectors\/(\w+)\/start$/))) return ok({ url: "https://example.com/" + m[1], kind: m[1] === "discord" ? "invite" : "oauth" });
+  if (p === "/api/center/admin/license-requests") return ok(s.reqs.filter((r) => r.status === "pending"));
+  if ((m = p.match(/^\/api\/center\/admin\/license-requests\/(.+)$/))) { const r = s.reqs.find((x) => x.id === m[1]); r.status = body.approve ? "approved" : "rejected"; return ok(r); }
+  if (p === "/api/center/admin/orgs") return ok(s.orgs.map((o) => ({ id: o.id, name: o.name, owner_email: "owner@example.co.th", members: 3, workspaces: 3, license: o.license })));
+  if (!(m = p.match(/^\/api\/center\/orgs\/([^/]+)(\/.*)?$/))) return fail("mock: not found", 404);
+  const sub = m[2] || "", org = s.orgs.find((o) => o.id === decodeURIComponent(m[1]));
+  if (sub === "/overview") { const c = {}; mockDocs.forEach((x) => { c[x.category] = (c[x.category] || 0) + 1; }); const bp = {}; s.ws.forEach((w) => { bp[w.platform] = (bp[w.platform] || 0) + 1; });
+    return ok({ org: { id: org.id, name: org.name }, documents: { total: mockDocs.length, by_category: c }, workspaces: { total: s.ws.length, connected: s.ws.length, by_platform: bp }, members: s.members.length, license: org.license, license_days_left: org.license.days_left,
+      recent_activity: [{ id: "a1", category: "minutes", title: "ประชุมทีมขาย 12 ต.ค.", at: d(0.1), workspace: "discord-2", workspace_name: "ทีมเชียงใหม่", who: "สลิด" }, { id: "a2", category: "receipts", title: "ใบเสร็จ ร้านกาแฟ บางรัก", at: d(1), workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", who: "สมชาย" }] }); }
+  if (sub === "/tasks") return ok({ tasks: [{ id: "t1", title: "ส่งใบเสนอราคาลูกค้า A", assignee: "มาลี", due: day(2), status: "open", url: "", workspace: "discord-1", platform: "discord" }, { id: "t2", title: "ตามบิลค่าเช่า", assignee: "สมชาย", due: day(-1), status: "overdue", url: "", workspace: "discord-1", platform: "discord" }] });
+  if (sub === "/workspaces") return ok(s.ws);
+  if (sub === "/workspaces/discord/link") { if (!body.code || body.code.length < 4) return fail("invalid or expired code", 400); const w = { id: "discord-" + Date.now(), platform: "discord", external_id: "9", name: "เซิร์ฟเวอร์ใหม่", status: "connected", settings_url: "/hub" }; s.ws.push(w); return ok(w); }
+  if ((m = sub.match(/^\/workspaces\/([^/]+)$/)) && method === "DELETE") { s.ws = s.ws.filter((w) => w.id !== decodeURIComponent(m[1])); return ok(s.ws); }
   if (sub === "/sharing") {
-    if (method === "GET") return ok({ items: s.share });
-    if (method === "POST") { s.share = s.share.filter((l) => !(l.from_workspace === body.from_workspace && l.to_workspace === body.to_workspace)); s.share.push(body); return ok({ ok: true }); }
-    s.share = s.share.filter((l) => !(l.from_workspace === qp.get("from_workspace") && l.to_workspace === qp.get("to_workspace"))); return ok({ ok: true });
+    if (method === "POST") { s.share = s.share.filter((l) => !(l.from_workspace === body.from_workspace && l.to_workspace === body.to_workspace)); s.share.push(body); }
+    if (method === "DELETE") s.share = s.share.filter((l) => !(l.from_workspace === qp.get("from_workspace") && l.to_workspace === qp.get("to_workspace")));
+    return ok(s.share);
   }
   if (sub === "/members") {
     if (method === "POST") { const x = s.members.find((y) => y.email === body.email); if (x) x.role = body.role; else s.members.push({ email: body.email, role: body.role }); }
     if (method === "DELETE") s.members = s.members.filter((y) => y.email !== qp.get("email"));
-    return ok({ members: s.members });
+    return ok(s.members);
   }
-  if (sub === "/license") { const o = s.orgs.find((x) => x.id === decodeURIComponent(m[1])); if (method === "PUT") Object.assign(o.license, body); return ok(o.license); }
-  if (sub === "/license/request") return ok({ ok: true });
+  if (sub === "/license") { if (method === "PUT") Object.assign(org.license, body); return ok({ license: org.license, requests: [] }); }
+  if (sub === "/license/request") return ok({ id: "r" + Date.now(), status: "pending", ...body });
+  if (sub === "/documents/reindex") return ok({ indexed: mockDocs.length });
   if (sub === "/documents") { const cat = qp.get("category"), qq = (qp.get("q") || "").toLowerCase(), wsf = qp.get("workspace");
-    return ok({ items: mockDocs.filter((x) => (!cat || x.category === cat) && (!wsf || x.workspace_id === wsf) && (!qq || (x.title + x.preview).toLowerCase().includes(qq))), next_cursor: null }); }
-  if ((m = sub.match(/^\/documents\/(.+)$/))) return ok(mockDocs.find((x) => x.id === m[1]) || {});
-  if (sub === "/chat/history") return ok({ items: mockApi.chat || [{ role: "assistant", text: "สวัสดีค่ะ ถามสลิดได้เลยนะคะ" }] });
-  if (sub === "/chat") { mockApi.chat = mockApi.chat || []; return new Promise((r) => setTimeout(() => r({ reply: "ยอดใบเสร็จเดือนนี้รวม **48,570 บาท** ค่ะ\n- ร้านกาแฟบางรัก 420 บาท\n- ไทยซัพพลาย 48,150 บาท\nดูรายละเอียดที่ [เอกสาร](https://example.com)" }), 1200)); }
-  return Promise.reject(new ApiError("mock: not found", 404));
+    const r = mockDocs.filter((x) => (!cat || x.category === cat) && (!wsf || x.workspace === wsf) && (!qq || (x.title + x.preview).toLowerCase().includes(qq))); return ok({ items: r, next_cursor: null, total: r.length }); }
+  if ((m = sub.match(/^\/documents\/(.+)$/))) { const x = mockDocs.find((y) => y.id === decodeURIComponent(m[1])) || {}; return ok({ ...x, text: (x.preview || "") + "\n\n(ข้อความเต็ม ตัวอย่าง)", extra: {} }); }
+  if (sub === "/chat/history") return ok({ turns: mockApi.chat || [{ role: "salid", text: "สวัสดีค่ะ ถามสลิดได้เลยนะคะ", at: d(0), workspace_id: "web" }] });
+  if (sub === "/chat") return new Promise((r) => setTimeout(() => r({ answer: "ยอดใบเสร็จเดือนนี้รวม **48,570 บาท** ค่ะ\n- ร้านกาแฟบางรัก 420 บาท\n- ไทยซัพพลาย 48,150 บาท\nดูรายละเอียดที่ [เอกสาร](https://example.com)", workspace_id: body.workspace_id || "web", at: d(0) }), 1200));
+  return fail("mock: not found", 404);
 }
 
 /* ---------- boot ---------- */
+function oauthReturn() {
+  try {
+    const u = new URLSearchParams(location.search), c = u.get("connected"), er = u.get("error");
+    if (!c && !er) return;
+    history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "") + location.hash);
+    setTimeout(() => toast(c ? t("conn_ok", { p: c }) : t("conn_err", { e: er }), c ? "ok" : "error"), 400);
+  } catch { /* ignore */ }
+}
 applyStatic();
+oauthReturn();
 if (MOCK) { $("mockbar").hidden = false; token = "mock"; start(); }
 else { show("login"); renderGoogleButton(); }
 </script>
