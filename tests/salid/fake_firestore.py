@@ -65,6 +65,9 @@ class FakeQuery:
         return FakeQuery(self.col, self.filters, n)
 
     def stream(self):
+        self.col.client.streams.append(
+            (self.col.name, tuple((f.field_path, f.op_string, f.value) for f in self.filters))
+        )
         out = []
         for doc_id, d in self.col.docs.items():
             ok = all(
@@ -90,6 +93,7 @@ class FakeCollection(FakeQuery):
 class FakeFirestore:
     def __init__(self):
         self.cols, self.queries = {}, []
+        self.streams = []  # one (collection, filters) entry per executed query
 
     def collection(self, name):
         return self.cols.setdefault(name, FakeCollection(self, name))

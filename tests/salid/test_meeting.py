@@ -319,6 +319,83 @@ async def test_wake_word_answers_with_transcript_history(env, monkeypatch):
     await env.mgr.end(1000)
 
 
+async def test_wake_word_answers_get_memory_scoped_to_the_voice_channel(env, monkeypatch):
+    s = await start(env)
+    scoped, asked = [], {}
+
+    async def tools_for(guild, member, answering, *also):
+        scoped.append((guild.id, member.id, answering, also))
+        return "MEMORY"
+
+    monkeypatch.setattr(env.bot, "_memory_tools_for", tools_for)
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด เมื่อวานตกลงงบไว้เท่าไร")
+    await env.mgr.handle_segment(s, segment(11))
+    assert scoped == [(1000, 11, env.chan.id, ())] and asked["memory"] == "MEMORY"
+    await env.mgr.end(1000)
+
+
+async def test_voice_memory_scope_also_covers_the_fallback_channel(env, monkeypatch):
+    # answers fall back to the channel the meeting was started from: its readers bound the scope too
+    fallback = SimpleNamespace(id=55, name="ทั่วไป", parent_id=None, sent=[])
+
+    async def fallback_send(text):
+        fallback.sent.append(text)
+
+    fallback.send = fallback_send
+    a = make_member(env.guild, 10, "แอน", env.chan)
+    make_member(env.guild, 11, "บอย", env.chan)
+    await env.mgr.join(a, fallback_channel=fallback)
+    s = env.mgr.sessions[1000]
+    scoped = []
+
+    async def tools_for(guild, member, answering, *also):
+        scoped.append((answering, also))
+        return None
+
+    monkeypatch.setattr(env.bot, "_memory_tools_for", tools_for)
+    import salid.qa
+
+    monkeypatch.setattr(salid.qa, "ask", lambda *a, **kw: SimpleNamespace(text="ok"))
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด เมื่อวานตกลงอะไร")
+    await env.mgr.handle_segment(s, segment(11))
+    assert scoped == [(env.chan.id, (55,))]
+    await env.mgr.end(1000)
+
+
+async def test_voice_answers_log_a_metrics_line(env, monkeypatch, caplog):
+    s = await start(env)
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: SimpleNamespace(text="ok", rounds=0, seconds=0.1)
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด ยอดเท่าไร")
+    with caplog.at_level("INFO", logger="salid.bot"):
+        await env.mgr.handle_segment(s, segment(11))
+    assert any(r.getMessage().startswith("answer guild=1000 channel=77 ") for r in caplog.records)
+    await env.mgr.end(1000)
+
+
+async def test_wake_word_without_the_memory_feature_passes_no_memory(env, monkeypatch):
+    env.bot.guilds_store.save_settings(1000, GuildSettingsUpdate(features=dict(memory=False)), "x")
+    s = await start(env)
+    asked = {}
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปเมื่อวานหน่อย")
+    await env.mgr.handle_segment(s, segment(11))
+    assert asked["memory"] is None
+    await env.mgr.end(1000)
+
+
 async def test_wake_word_exec_flag_follows_the_speaker(env, monkeypatch):
     s = await start(env)
     boss = make_member(env.guild, 5, "เจ้านาย", env.chan)

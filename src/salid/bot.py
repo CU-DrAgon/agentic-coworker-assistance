@@ -28,6 +28,7 @@ from .deep_task import (
     run_deep_task,
 )
 from .digest import build_daily_digest
+from .embed import make_embedder
 from .extract import (
     apply_correction,
     apply_void_command,
@@ -65,6 +66,7 @@ from .memory import (
 )
 from .memory_access import ChannelAccess, allowed_channel_ids
 from .memory_import import MemoryImporter, Target, import_progress
+from .memory_index import IndexedMemoryStore
 from .memory_store import MemoryStore, SQLiteMemoryStore, make_memory_store
 from .memory_summary import render_summary
 from .message_control import AnswerLog, parse_cancel_task, parse_delete_message
@@ -79,6 +81,7 @@ from .modes import (
 )
 from .naming import command_text, mentions_name
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
+from .recent import RecentMessages
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -244,7 +247,11 @@ class SecretaryBot(discord.Client):
         self._sync_pending: dict[int, asyncio.Task] = {}
         self.meetings = MeetingManager(self)
         # Organisational memory: raw log + day summaries (see salid.memory).
-        self.memory_store = memory or self._default_memory_store(settings, store)
+        self.embedder = make_embedder(settings, llm)  # NullEmbedder without a client (tests)
+        # The index serves summary reads from memory; every memory write must go through it.
+        self.memory_store = IndexedMemoryStore(
+            memory or self._default_memory_store(settings, store), self.embedder
+        )
         self.memory = MemoryService(
             self.memory_store,
             settings,
@@ -257,6 +264,7 @@ class SecretaryBot(discord.Client):
                 retention_of=self.team.memory_retention_days,
                 channel_name_of=self._channel_name,
                 enabled=lambda gid: self.team.enabled(gid, "memory"),
+                embedder=self.embedder,
             ),
         )
         self._memory_queue: asyncio.Queue | None = None
@@ -284,6 +292,9 @@ class SecretaryBot(discord.Client):
             page_sleep=IMPORT_PAGE_SLEEP_S,
         )
         self._seen_mode: dict[int, str] = {}  # channel -> last mode seen (off -> on notice)
+        # Short-term context: recent messages per channel from gateway events (see salid.recent).
+        self.recent = RecentMessages(per_channel=HISTORY_MESSAGES + 10, max_age_s=HISTORY_SECONDS)
+        self._recent_swept = float("-inf")
         self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
 
     @staticmethod
@@ -308,12 +319,14 @@ class SecretaryBot(discord.Client):
 
     async def on_ready(self):
         logger.info("logged in as %s in %d guilds", self.user, len(self.guilds))
+        self.recent.reset()
         for guild in self.guilds:
             await self._sync_guild(guild)
         self._start_import()
 
     async def on_resumed(self):
-        self._start_import()  # a gateway outage may have dropped events
+        self.recent.reset()  # a gateway outage may have dropped events
+        self._start_import()
 
     # ------------------------------------------------------------- guild lifecycle
     @staticmethod
@@ -455,6 +468,7 @@ class SecretaryBot(discord.Client):
 
     # ------------------------------------------------------------- routing
     async def on_message(self, message: discord.Message):
+        self.recent.add(message)
         own = message.author == self.user
         logged = False
         if message.guild is not None and (own or not getattr(message.author, "bot", False)):
@@ -653,20 +667,38 @@ class SecretaryBot(discord.Client):
 
     async def _gate_lines(self, channel, limit: int, before=None) -> list[GateLine]:
         """The channel's last lines, oldest first, for a gate prompt."""
+        lines: list[GateLine] = []
+        for prev in await self._history(channel, limit, before):
+            text = self._strip_mentions(prev.content, prev)
+            if text:
+                who = "สลิด" if prev.author == self.user else prev.author.display_name
+                lines.append(GateLine(str(prev.id), who, text))
+        return lines[::-1]
+
+    async def _history(self, channel, limit: int, before=None) -> list:
+        """The channel's messages before `before` (default: the newest), newest first: from the
+        recent buffer when the channel is primed, else from Discord, which then primes it (only
+        when nothing newer than `before` could be missing)."""
+        cid = getattr(channel, "id", None)
+        if cid is not None:
+            got = self.recent.history(cid, limit, getattr(before, "id", None))
+            if got is not None:
+                return got
         history = getattr(channel, "history", None)
         if history is None:
             return []
-        lines: list[GateLine] = []
+        kw = {"limit": max(limit, self.recent.per_channel)}
+        if before is not None:
+            kw["before"] = before
         try:
-            kw = {"limit": limit} if before is None else {"limit": limit, "before": before}
-            async for prev in history(**kw):
-                text = self._strip_mentions(prev.content, prev)
-                if text:
-                    who = "สลิด" if prev.author == self.user else prev.author.display_name
-                    lines.append(GateLine(str(prev.id), who, text))
+            rows = [m async for m in history(**kw)]
         except discord.HTTPException:
             logger.warning("could not read channel history", exc_info=True)
-        return lines[::-1]
+            return []
+        newest = self.recent.newest_id(cid) if cid is not None else None
+        if cid is not None and (before is None or newest == getattr(before, "id", None)):
+            self.recent.prime(cid, rows)
+        return rows[:limit]
 
     def _command_text(self, message: discord.Message) -> str:
         """Text for the typed-command parsers: tag, a leading name ("Salid ...") and trailing
@@ -875,28 +907,24 @@ class SecretaryBot(discord.Client):
         """The room's recent conversation, oldest first: every participant (not only the asker)
         with local times, plus the message being replied to and today's summary of this channel
         when memory has one. Context only; the ledger and memory scopes are decided in code."""
-        history = getattr(message.channel, "history", None)
-        if history is None:
+        if getattr(message.channel, "history", None) is None:
             return ""
         zone = self.s.zone
         lines: list[str] = []
-        try:
-            async for prev in history(limit=HISTORY_MESSAGES + 10, before=message):
-                if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
-                    break
-                if getattr(prev.author, "bot", False) and prev.author != self.user:
-                    continue
-                text = self._strip_mentions(prev.content, prev)
-                if not text and getattr(prev, "attachments", None):
-                    text = " ".join(f"[{a.filename}]" for a in prev.attachments)
-                if text:
-                    who = "สลิด" if prev.author == self.user else prev.author.display_name
-                    at = prev.created_at.astimezone(zone).strftime("%H:%M")
-                    lines.append(f"[{at}] {who}: {text[:HISTORY_LINE_CHARS]}")
-                if len(lines) >= HISTORY_MESSAGES:
-                    break
-        except discord.HTTPException:
-            logger.warning("could not read channel history", exc_info=True)
+        for prev in await self._history(message.channel, HISTORY_MESSAGES + 10, before=message):
+            if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
+                break
+            if getattr(prev.author, "bot", False) and prev.author != self.user:
+                continue
+            text = self._strip_mentions(prev.content, prev)
+            if not text and getattr(prev, "attachments", None):
+                text = " ".join(f"[{a.filename}]" for a in prev.attachments)
+            if text:
+                who = "สลิด" if prev.author == self.user else prev.author.display_name
+                at = prev.created_at.astimezone(zone).strftime("%H:%M")
+                lines.append(f"[{at}] {who}: {text[:HISTORY_LINE_CHARS]}")
+            if len(lines) >= HISTORY_MESSAGES:
+                break
         lines.reverse()
         while lines and sum(len(x) + 1 for x in lines) > HISTORY_CHARS:
             lines.pop(0)
@@ -929,21 +957,15 @@ class SecretaryBot(discord.Client):
 
     async def _previous_text(self, message: discord.Message) -> str:
         """The author's own message just before a bare @mention ("Hi" then "@Salid")."""
-        history = getattr(message.channel, "history", None)
-        if history is None:
-            return ""
-        try:
-            async for prev in history(limit=5, before=message):
-                if prev.author.id != message.author.id:
-                    continue
-                age = (message.created_at - prev.created_at).total_seconds()
-                if age > FOLLOWUP_WINDOW_SECONDS:
-                    return ""
-                text = self._strip_mentions(prev.content, prev)
-                if text:
-                    return text
-        except discord.HTTPException:
-            logger.warning("could not read channel history", exc_info=True)
+        for prev in await self._history(message.channel, 5, before=message):
+            if prev.author.id != message.author.id:
+                continue
+            age = (message.created_at - prev.created_at).total_seconds()
+            if age > FOLLOWUP_WINDOW_SECONDS:
+                return ""
+            text = self._strip_mentions(prev.content, prev)
+            if text:
+                return text
         return ""
 
     async def _file_inputs(self, message: discord.Message) -> list[FileInput]:
@@ -1019,6 +1041,7 @@ class SecretaryBot(discord.Client):
         stay silent (NO_REPLY). Attachments (images, PDFs, text files) go to the agent with the
         text, and it decides what to do with them (record a receipt, summarise, ...); not for an
         interjection, which was not addressed to Salid. Returns True when something was posted."""
+        t0 = time.monotonic()
         q = self._strip_mentions(message.content, message)
         with_files = bool(message.attachments) and not interjection
         if not q and not with_files:
@@ -1056,6 +1079,7 @@ class SecretaryBot(discord.Client):
             actions = self._file_actions(
                 message, guild, member, is_exec, setting, asyncio.get_running_loop()
             )
+        t_ctx = time.monotonic()
         async with message.channel.typing():
             ans = await asyncio.to_thread(
                 ask,
@@ -1071,7 +1095,7 @@ class SecretaryBot(discord.Client):
                 interjection=interjection,
                 **({"files": files, "actions": actions} if files else {}),
             )
-        logger.info("answered in %.1fs (%d rounds, exec=%s)", ans.seconds, ans.rounds, is_exec)
+        self._log_answer(gid, message.channel.id, is_exec, ans, t0, t_ctx, time.monotonic())
         if interjection and is_no_reply(ans.text):
             logger.info("interjection suppressed (nothing useful to add)")
             return False
@@ -1094,6 +1118,21 @@ class SecretaryBot(discord.Client):
                     await message.add_reaction(reaction)
         self._note_answer(message, sent)
         return True
+
+    @staticmethod
+    def _log_answer(gid, cid, is_exec, ans, t0: float, t_ctx: float, t_end: float) -> None:
+        """One metrics line per answer: ids, timings and token counts, never content. New Answer
+        fields are read with defaults (callers and tests may hand back a minimal object)."""
+        tool_ms = getattr(ans, "tool_ms", None) or {}
+        tools = ",".join(f"{k}:{v:.0f}" for k, v in tool_ms.items()) or "-"
+        logger.info(
+            "answer guild=%s channel=%s exec=%s rounds=%d calls=%d ms_total=%d ms_context=%d "
+            "ms_agent=%d tools=%s tok_in=%d tok_cached=%d tok_out=%d tok_thought=%d",
+            gid, cid, is_exec, getattr(ans, "rounds", 0), getattr(ans, "model_calls", 0),
+            (t_end - t0) * 1000, (t_ctx - t0) * 1000, (t_end - t_ctx) * 1000, tools,
+            getattr(ans, "tokens_in", 0), getattr(ans, "tokens_cached", 0),
+            getattr(ans, "tokens_out", 0), getattr(ans, "tokens_thought", 0),
+        )  # fmt: skip
 
     def _deep_status(self, guild_id: int, task: str, is_exec: bool) -> str:
         """Why a deep task cannot start now (not_executive / disabled / empty / busy), else ok."""
@@ -1555,6 +1594,9 @@ class SecretaryBot(discord.Client):
                 logger.exception("tick failed")
 
     async def tick(self) -> None:
+        if self._clock() - self._recent_swept >= 60:
+            self._recent_swept = self._clock()
+            self.recent.sweep(datetime.now(UTC))
         await self._signoff_due()
         await self._join_due()
         await self._memory_due()
@@ -1649,8 +1691,8 @@ class SecretaryBot(discord.Client):
                 tools = await self._memory_tools(m, guild, m.author)
                 if tools is None:
                     continue
-                result = await asyncio.to_thread(
-                    tools.chat_search, kws, limit=gate.HINT_HITS_PER_CANDIDATE + 2
+                result = await asyncio.to_thread(  # keyword-only: hints stay free
+                    tools.chat_search, kws, limit=gate.HINT_HITS_PER_CANDIDATE + 2, semantic=False
                 )
             except Exception:
                 logger.warning("memory hint lookup failed", exc_info=True)
@@ -1794,6 +1836,10 @@ class SecretaryBot(discord.Client):
 
     async def on_raw_message_edit(self, payload) -> None:
         data = getattr(payload, "data", None) or {}
+        if "content" in data:
+            self.recent.edit(
+                getattr(payload, "channel_id", None), payload.message_id, data["content"]
+            )
         if payload.guild_id is None or "content" not in data:
             return
         atts = [
@@ -1816,12 +1862,14 @@ class SecretaryBot(discord.Client):
         )
 
     async def on_raw_message_delete(self, payload) -> None:
+        self.recent.delete(getattr(payload, "channel_id", None), [payload.message_id])
         if payload.guild_id is not None:
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, [payload.message_id])
             )
 
     async def on_raw_bulk_message_delete(self, payload) -> None:
+        self.recent.delete(getattr(payload, "channel_id", None), payload.message_ids)
         if payload.guild_id is not None:
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, sorted(payload.message_ids))
@@ -2157,15 +2205,31 @@ class SecretaryBot(discord.Client):
         allowed = allowed_channel_ids(access, member.id, answering_channel_id)
         return {a.channel_id: a.name for a in access if a.channel_id in allowed}
 
+    def _answering_id(self, channel) -> int:
+        """The channel id whose readers bound a memory answer posted in `channel` (a thread
+        counts as its parent; a channel memory does not know gives -1, i.e. nothing)."""
+        where = self._memory_channel(channel)
+        return where[0] if where else -1
+
     async def _memory_tools(self, message, guild, member) -> MemoryTools | None:
+        # in a DM (answering None) the asker's own readable channels are enough
+        answering = self._answering_id(message.channel) if message.guild is not None else None
+        return await self._memory_tools_for(guild, member, answering)
+
+    async def _memory_tools_for(
+        self, guild, member, answering: int | None, *also: int
+    ) -> MemoryTools | None:
+        """Memory tools for `member`, scoped to what everyone reading `answering` (a channel id;
+        None = a DM, the asker alone) may see, and also everyone reading each channel in `also`
+        (where the answer may be posted instead). None when memory is off or the scope fails."""
         if not self.team.enabled(guild.id, "memory"):
             return None
-        answering = None
-        if message.guild is not None:  # in a DM the asker's own readable channels are enough
-            where = self._memory_channel(message.channel)
-            answering = where[0] if where else -1
         try:
             allowed = await asyncio.to_thread(self._memory_scope, guild, member, answering)
+            for other in also:
+                if other != answering:
+                    more = await asyncio.to_thread(self._memory_scope, guild, member, other)
+                    allowed = {cid: name for cid, name in allowed.items() if cid in more}
         except Exception:
             logger.warning("could not compute memory scope", exc_info=True)
             return None
@@ -2175,6 +2239,7 @@ class SecretaryBot(discord.Client):
             allowed,
             self.s,
             self.team.memory_retention_days(guild.id),
+            embedder=self.embedder,
         )
 
     # ------------------------------------------------------------- digest

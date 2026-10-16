@@ -17,13 +17,30 @@ def make_client(s: Settings) -> genai.Client:
     return genai.Client(vertexai=True, project=s.gcp_project, location=s.gemini_location)
 
 
-def generate(client, model: str, contents, config, delays=RETRY_DELAYS):
-    """generate_content with retry on transient Vertex errors (429/5xx)."""
+def with_retry(fn, delays=None):
+    """Call `fn()`, retrying transient Vertex errors (429/5xx) after each delay in `delays`
+    (None = `RETRY_DELAYS`, read at call time)."""
+    delays = RETRY_DELAYS if delays is None else delays
     for attempt, delay in enumerate((*delays, None), start=1):
         try:
-            return client.models.generate_content(model=model, contents=contents, config=config)
+            return fn()
         except errors.APIError as e:
             if e.code not in TRANSIENT or delay is None:
                 raise
             logger.warning("gemini transient %s, retry %d in %.0fs", e.code, attempt, delay)
             time.sleep(delay)
+
+
+def generate(client, model: str, contents, config, delays=RETRY_DELAYS):
+    """generate_content with retry on transient Vertex errors (429/5xx)."""
+    return with_retry(
+        lambda: client.models.generate_content(model=model, contents=contents, config=config),
+        delays,
+    )
+
+
+def embed(client, model: str, contents, config, delays=None):
+    """embed_content with the same retry policy as `generate`."""
+    return with_retry(
+        lambda: client.models.embed_content(model=model, contents=contents, config=config), delays
+    )

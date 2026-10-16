@@ -8,6 +8,7 @@ from google.adk.models import BaseLlm, LlmResponse
 from google.genai import types
 
 from salid.config import Settings
+from salid.embed import normalize
 from salid.models import Receipt
 from salid.store import SQLiteStore
 
@@ -47,7 +48,10 @@ class ScriptedLlm(BaseLlm):
         self.requests.append(llm_request)
         item = self.script.pop(0)
         item = item(llm_request) if callable(item) else item
-        yield LlmResponse(content=item.candidates[0].content)
+        yield LlmResponse(
+            content=item.candidates[0].content,
+            usage_metadata=getattr(item, "usage_metadata", None),
+        )
 
 
 def scripted(*script) -> ScriptedLlm:
@@ -67,11 +71,51 @@ def json_resp(obj):
     return text_resp(json.dumps(obj, ensure_ascii=False))
 
 
+def usage(resp, prompt=0, cached=0, out=0, thought=0):
+    """Attach token usage to a scripted response (as Vertex reports it)."""
+    resp.usage_metadata = types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=prompt,
+        cached_content_token_count=cached,
+        candidates_token_count=out,
+        thoughts_token_count=thought,
+    )
+    return resp
+
+
 def fc_resp(*calls):
     parts = [types.Part(function_call=types.FunctionCall(name=n, args=a)) for n, a in calls]
     return SimpleNamespace(
         text=None, candidates=[SimpleNamespace(content=types.Content(role="model", parts=parts))]
     )
+
+
+CONCEPTS = {
+    "ads": ("งบโฆษณา", "โฆษณา", "ads", "marketing", "advertis"),
+    "ice": ("น้ำแข็ง", "ice"),
+    "rent": ("ค่าเช่า", "rent"),
+}
+
+
+class FakeEmbedder:
+    """Deterministic embedder: one axis per concept a text mentions (Thai or English) plus a small
+    constant axis, normalised. Same concept -> cosine 1.0; unrelated -> below 0.3."""
+
+    model_id, dim = "fake@4", 4
+
+    def __init__(self, fail=False):
+        self.calls, self.fail = [], fail
+        if fail:  # its own model id: cached query vectors of the working fake never leak in
+            self.model_id = "fake-down@4"
+
+    def embed(self, texts, task):
+        self.calls.append((list(texts), task))
+        if self.fail:
+            raise RuntimeError("embedding down")
+        low = [t.casefold() for t in texts]
+        return [
+            normalize([float(any(w in t for w in ws)) for ws in CONCEPTS.values()] + [0.3])
+            for t in low
+        ]
 
 
 class FixedClockSettings(Settings):

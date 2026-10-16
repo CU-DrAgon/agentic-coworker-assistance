@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     # Cheap model for the "is this addressed to Salid?" yes/no gates (see salid.gate).
     gate_model: str = "gemini-3.5-flash-lite"
     low_confidence: float = 0.7
+    # Meaning-based memory search (salid.embed): empty model = keyword-only, no embedding calls.
+    embed_model: str = "gemini-embedding-001"
+    embed_dim: int = 256
+    embed_location: str = ""  # empty = gemini_location
     # Organisational memory (salid.memory): raw chat log + per-channel day summaries.
     memory_retention_days: int = 90
     memory_update_every: int = 30  # new messages in a channel that trigger a summary update

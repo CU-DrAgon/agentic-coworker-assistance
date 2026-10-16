@@ -19,6 +19,7 @@ range queries (`created_at <` / `local_date <` the latest cutoff), filtered per 
 from __future__ import annotations
 
 from collections.abc import Collection
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -37,6 +38,8 @@ from .memory_store import (
     message_to_doc,
     select_messages,
 )
+
+MAX_PARALLEL_DAYS = 8  # concurrent per-day queries in one messages() call
 
 
 def _sum_from(d: dict[str, Any]) -> DaySummary:
@@ -82,9 +85,13 @@ class FirestoreMemoryStore:
             f"{guild_id}_{channel_id}_{day}"
         )
 
-    def _day(self, guild_id: int, day: str) -> list[MemoryMessage]:
-        snaps = self._q(self.messages_name, ("guild_id", "==", guild_id), ("local_date", "==", day))
-        return [message_from_doc(s.to_dict()) for s in snaps.stream()]
+    def _day(self, guild_id: int, day: str, channel_id: int | None = None) -> list[MemoryMessage]:
+        """One local day of the guild's log; one channel only when `channel_id` is given (all
+        equality filters: served by Firestore's automatic single-field indexes)."""
+        conds = [("guild_id", "==", guild_id), ("local_date", "==", day)]
+        if channel_id is not None:
+            conds.append(("channel_id", "==", channel_id))
+        return [message_from_doc(s.to_dict()) for s in self._q(self.messages_name, *conds).stream()]
 
     # ------------------------------------------------------------ messages
     def add_message(self, m: MemoryMessage) -> None:
@@ -159,18 +166,19 @@ class FirestoreMemoryStore:
         allowed = set(allowed_channels)
         if not allowed or (channel_id is not None and channel_id not in allowed):
             return []
-        rows = [
-            m
-            for day in date_range(start_date, end_date)
-            for m in self._day(guild_id, day)
-            if m.channel_id in allowed
-        ]
+        days = date_range(start_date, end_date)
+        if not days:
+            return []
+        # one query per day, run in parallel (each is a network round trip)
+        with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_DAYS, len(days))) as pool:
+            per_day = list(pool.map(lambda d: self._day(guild_id, d, channel_id), days))
+        rows = [m for day_rows in per_day for m in day_rows if m.channel_id in allowed]
         return select_messages(
             rows, channel_id=channel_id, keyword=keyword, limit=limit, newest_first=newest_first
         )
 
     def messages_after(self, guild_id, channel_id, local_date, after=None, limit=500):
-        out = [m for m in self._day(guild_id, local_date) if m.channel_id == channel_id]
+        out = self._day(guild_id, local_date, channel_id)
         if after is not None:
             out = [m for m in out if m.key > after]
         out.sort(key=lambda m: m.key)
@@ -194,6 +202,19 @@ class FirestoreMemoryStore:
 
     def put_summary(self, s: DaySummary) -> None:
         self._sum_ref(s.guild_id, s.channel_id, s.local_date).set(s.model_dump())
+
+    def all_summaries(self, guild_id):
+        snaps = self._q(self.summaries_name, ("guild_id", "==", guild_id)).stream()
+        return sorted(
+            (_sum_from(s.to_dict()) for s in snaps), key=lambda s: (s.local_date, s.channel_id)
+        )
+
+    def put_summary_vectors(self, guild_id, channel_id, local_date, vec_model, vec_hashes, vecs):
+        ref = self._sum_ref(guild_id, channel_id, local_date)
+        if not ref.get().exists:
+            return False
+        ref.update({"vec_model": vec_model, "vec_hashes": list(vec_hashes), "vecs": vecs})
+        return True
 
     def summaries(self, guild_id, allowed_channels, start_date, end_date):
         allowed = set(allowed_channels)
