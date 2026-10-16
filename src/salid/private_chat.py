@@ -62,7 +62,8 @@ def category_name(base: str, n: int) -> str:
 
 
 def overwrites(guild, member) -> dict:
-    """@everyone cannot see it; the member can read / write / attach; Salid can also manage."""
+    """@everyone cannot see it; the member can read / write / attach; Salid can also manage the
+    channel. Only permissions Salid holds guild-wide may be granted here (no Manage Messages)."""
     return {
         guild.default_role: discord.PermissionOverwrite(view_channel=False),
         member: discord.PermissionOverwrite(
@@ -78,7 +79,6 @@ def overwrites(guild, member) -> dict:
             attach_files=True,
             embed_links=True,
             manage_channels=True,
-            manage_messages=True,
         ),
     }
 

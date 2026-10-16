@@ -329,3 +329,19 @@ async def test_dm_picker_links_the_private_channel(bot, g, world):
     msg = DM("ยอด")
     await bot.on_message(msg)
     assert f"https://discord.com/channels/{GUILD}/{ch.id}" in msg.replies[0][0]
+
+
+def test_salid_overwrite_only_grants_permissions_salid_is_invited_with():
+    """Discord refuses (403) a channel whose overwrites grant the bot a permission it lacks."""
+    import discord as _d
+
+    from salid import private_chat
+    from salid.permissions import SALID_PERMISSIONS
+
+    class _G:
+        default_role = object()
+        me = object()
+
+    ow = private_chat.overwrites(_G(), object())[_G.me]
+    allowed, _ = ow.pair()
+    assert allowed.value & ~_d.Permissions(SALID_PERMISSIONS).value == 0
