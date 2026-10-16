@@ -488,6 +488,7 @@ def asked(monkeypatch, lv):
 
     monkeypatch.setattr(lv.bot, "_room_secretary", room_secretary)
     monkeypatch.setattr(lv.bot, "_coo_tools", coo_tools)
+    monkeypatch.setattr(lv.bot, "_freetime_tools", lambda *a: [])  # covered in test_freetime.py
     monkeypatch.setattr(lv.bot, "_ranks", lambda g: {5: 9, 11: 1, 12: 4})
     monkeypatch.setattr(lv.bot, "_profile_of", lambda gid, uid: Profile(nickname=f"p{uid}"))
     return seen

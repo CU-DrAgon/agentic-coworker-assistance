@@ -24,6 +24,7 @@ ASKS = "salid_asks"  # messages that mention a member and ask for something
 ALERTS = "salid_doc_alerts"  # important documents and who they concern
 DELIVERIES = "salid_deliveries"  # files Salid forwarded for people (audit log)
 MINUTES = "salid_meeting_minutes"  # summary text of each finished voice meeting (minutes.py)
+AVAILABILITY = "salid_availability"  # per (guild, user) work hours and busy blocks (freetime.py)
 PROFILES = "salid_profiles"  # per (guild, user) personal preferences (salid.profiles)
 
 

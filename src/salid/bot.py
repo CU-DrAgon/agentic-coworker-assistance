@@ -46,6 +46,7 @@ from .extract import (
     ingest_attachment,
     parse_void_command,
 )
+from .freetime_bot import FreetimeMixin
 from .gate import GateLine, is_join_candidate
 from .guild_settings import (
     MAX_RETENTION_DAYS,
@@ -248,7 +249,9 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client):
+class SecretaryBot(
+    FreetimeMixin, CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client
+):
     def __init__(
         self,
         settings: Settings,
@@ -366,6 +369,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
+        self._freetime_init()  # find a time everyone is free (salid.freetime)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1783,6 +1787,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             if memory is not None and not interjection
             else []
         )
+        extra_tools = [*coo_tools, *self._freetime_tools(guild, asker, lang)]
         chat_actions = self._chat_actions(
             message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
         )
@@ -1794,7 +1799,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             **({"profile": profile_block(profile)} if profile is not None else {}),
             **self._web_kw(guild.id),
             **({"secretary": secretary} if secretary is not None else {}),
-            **({"extra_tools": coo_tools} if coo_tools else {}),
+            **({"extra_tools": extra_tools} if extra_tools else {}),
         }
 
     @staticmethod
