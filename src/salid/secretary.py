@@ -110,6 +110,7 @@ class SecretaryContext:
     app_id: Any = None  # the bot's application id (builds the re-authorize link)
     ledger: Any = None  # qa.LedgerTools (scoping of receipts); set by qa.ask_async
     service: MeetingService | None = None
+    places: Callable[[str, list[int]], dict] | None = None  # salid.places.place_for_event
     sender: EmailSender | None = None
     documents: bool = True
     scheduling: bool = True
@@ -161,6 +162,7 @@ class SecretaryTools:
         voice_channel: str | None = None,
         description: str = "",
         link: str | None = None,
+        place: str | None = None,
     ) -> dict:
         c = self.c
         if not c.scheduling or c.service is None:
@@ -183,7 +185,7 @@ class SecretaryTools:
         if link and classify_link(link) is None:
             return {"error": "link is not a valid http(s) URL"}
         guild, members, unresolved, vc, _author = c.run(
-            self._prepare(attendees or [], voice_channel, link)
+            self._prepare(attendees or [], voice_channel, link or (place or "").strip())
         )
         if unresolved:
             return {
@@ -198,6 +200,23 @@ class SecretaryTools:
             }
         if len(members) > 25:
             return {"error": "too many attendees (max 25)"}
+        found = None
+        if place and place.strip() and not link:
+            found = c.places(place.strip(), [m.id for m in members]) if c.places else None
+            status = (found or {}).get("status", "not_found")
+            if status == "restricted":
+                return {
+                    "status": "needs_info",
+                    "place_restricted_for": found["cannot_know"],
+                    "instruction": "These invitees may not know that place, so it was not used. "
+                    "Do NOT say where it is. Ask whether to schedule without the place, or to "
+                    "share the place with them first (its owner or an executive can).",
+                }
+            if status != "ok":
+                return {
+                    "status": "needs_info",
+                    "instruction": f"No remembered place matches {place!r}; ask for a link or address.",
+                }
         lang = self._lang()
         zone = c.settings.zone
         key = (
@@ -211,6 +230,7 @@ class SecretaryTools:
                 sorted(m.id for m in members),
                 getattr(vc, "id", None),
                 link,
+                (found or {}).get("name"),
             ),
         )
         proposal = {
@@ -220,7 +240,7 @@ class SecretaryTools:
             "where": (
                 f"voice channel #{vc.name}"
                 if vc is not None
-                else (link or "Discord (external event)")
+                else (link or (found or {}).get("name") or "Discord (external event)")
             ),
             "note": description,
         }
@@ -235,7 +255,9 @@ class SecretaryTools:
                 ),
             }
         try:
-            m = c.run(self._create(guild, members, vc, title, start_dt, minutes, link, description))
+            m = c.run(
+                self._create(guild, members, vc, title, start_dt, minutes, link, description, found)
+            )
         except CalendarError as e:
             if e.code == "missing_permission":
                 return self._perm_help()
@@ -246,7 +268,9 @@ class SecretaryTools:
             "dm_failed": m.get("dm_failed", []),
         }
 
-    async def _create(self, guild, members, vc, title, start_dt, minutes, link, description):
+    async def _create(
+        self, guild, members, vc, title, start_dt, minutes, link, description, place=None
+    ):
         c = self.c
         author = guild.get_member(c.author_id)
         organizer = author or members[0]
@@ -261,6 +285,7 @@ class SecretaryTools:
             description=description,
             organizer=organizer,
             text_channel_id=c.text_channel_id,
+            place=place,
         )
 
     def list_meetings(self, range: str = "upcoming") -> dict:  # noqa: A002 (tool parameter name)
@@ -610,6 +635,7 @@ def build_secretary_tools(tools: SecretaryTools, calls: list[tuple[str, dict]]) 
         voice_channel: str | None = None,
         description: str = "",
         link: str | None = None,
+        place: str | None = None,
     ) -> dict:
         """Schedule a meeting / appointment as a Discord Scheduled Event. The first call only
         returns a proposal (status needs_confirmation): show it to the user, mention the
@@ -626,6 +652,8 @@ def build_secretary_tools(tools: SecretaryTools, calls: list[tuple[str, dict]]) 
             description: agenda or note, optional.
             link: a meeting URL (Google Meet, Zoom, Teams or any https link), optional. A link
                 makes it an external event at that URL.
+            place: name of a place Salid remembers (e.g. "สาขาบางนา"), optional. Used as the
+                location only when every invitee may know it; otherwise you are told to ask.
         """
         a = dict(
             title=title,
@@ -635,6 +663,7 @@ def build_secretary_tools(tools: SecretaryTools, calls: list[tuple[str, dict]]) 
             voice_channel=voice_channel,
             description=description,
             link=link,
+            place=place,
         )
         return logged("schedule_meeting", a, lambda: tools.schedule_meeting(**a))
 

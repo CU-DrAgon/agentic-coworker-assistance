@@ -109,6 +109,7 @@ from .permissions import (
     guild_missing,
     permission_message,
 )
+from .places_bot import PlacesMixin
 from .polls_bot import PollsMixin
 from .profiles import ProfileMixin, effective_language, profile_block
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
@@ -267,6 +268,7 @@ class SecretaryBot(
     WikiMixin,
     ApprovalMixin,
     BroadcastMixin,
+    PlacesMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -396,6 +398,7 @@ class SecretaryBot(
         self._freetime_init()  # find a time everyone is free (salid.freetime)
         self._wiki_init()  # company knowledge base (salid.wiki_bot)
         self._approval_init()  # approval requests (salid.approvals_bot)
+        self._places_init()  # remembered places (salid.places_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1835,6 +1838,7 @@ class SecretaryBot(
             *([] if interjection else self._catchup_tools(guild, asker, memory)),
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
             *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
+            *([] if interjection else self._places_tools(message, guild, asker, is_exec)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
@@ -1860,12 +1864,13 @@ class SecretaryBot(
         return captions_tools(session_of, self.meetings.set_captions)
 
     @staticmethod
-    def room_message(guild, asker, channel):
+    def room_message(guild, asker, channel, room=None):
         """What a message-bound tool needs from a voice meeting: the room's text channel as the
-        current channel, the asker as author, and no attachments or reply."""
+        current channel, the asker as author, and no attachments or reply. `room`: the ids of the
+        humans present (the audience of every answer)."""
         return SimpleNamespace(
             id=0, guild=guild, channel=channel, author=asker, content="", attachments=[],
-            reference=None,
+            reference=None, room=frozenset(room) if room is not None else None,
         )  # fmt: skip
 
     def _room_secretary(self, guild, asker, is_exec: bool, lang: str, text_channel_id: int | None):
@@ -1892,6 +1897,7 @@ class SecretaryBot(
             state=self.secretary_state,
             run=lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=60),
             service=self.scheduler,
+            places=self._places_resolver(guild, asker, is_exec),
             sender=self.email_sender,
             documents=on["documents"],
             scheduling=on["scheduling"],
@@ -2739,6 +2745,8 @@ class SecretaryBot(
             record = self._memory_message(message, own, cid, thread_id)
             if record is not None:
                 self._memory_enqueue(partial(self.memory.record, record))
+                if not own:
+                    self._places_hook(message, cid)  # address-looking text -> remembered places
             if previous == "off" and not own:  # switched on elsewhere (hub): tell the channel once
                 target = message.channel if thread_id is None else message.channel.parent
                 await self._memory_notice(target or message.channel, gid)
@@ -2819,6 +2827,7 @@ class SecretaryBot(
     async def on_raw_message_delete(self, payload) -> None:
         if payload.guild_id is not None:
             self._asks_forget(payload.guild_id, {payload.message_id})
+            await self._places_source_deleted(payload.guild_id, {payload.message_id})
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, [payload.message_id])
             )
@@ -2826,6 +2835,7 @@ class SecretaryBot(
     async def on_raw_bulk_message_delete(self, payload) -> None:
         if payload.guild_id is not None:
             self._asks_forget(payload.guild_id, set(payload.message_ids))
+            await self._places_source_deleted(payload.guild_id, set(payload.message_ids))
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, sorted(payload.message_ids))
             )

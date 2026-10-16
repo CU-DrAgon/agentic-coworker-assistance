@@ -50,6 +50,10 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "set_channel_language",
         "set_channel_mode",
         "set_memory_days",
+        "remember_place",
+        "share_place",
+        "forget_place",
+        "set_place_secret",
     }
 )
 

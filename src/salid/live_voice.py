@@ -994,7 +994,7 @@ class LiveVoice:
 
             def agent_for(member, is_exec: bool, profile) -> dict:
                 return bot._agent_kwargs(
-                    bot.room_message(guild, member, here),
+                    bot.room_message(guild, member, here, room={h.id for h in humans}),
                     guild,
                     member,
                     is_exec,

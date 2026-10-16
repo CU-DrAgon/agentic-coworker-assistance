@@ -26,6 +26,7 @@ from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
+from .places import PLACES_PROMPT
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
 from .web_read import make_read_web
@@ -977,6 +978,7 @@ CAPABILITIES_PROMPT = (
     "ยกตัวอย่างในชีวิตประจำวัน 4-6 อย่างที่เกี่ยวกับเขา เช่น ส่งรูปใบเสร็จมาให้จดลงบัญชี, ถามว่าเดือนนี้จ่ายอะไรไปเท่าไร, "
     "โยน PDF/ไฟล์เสียง/ลิงก์มาให้อ่านและสรุป, ถามว่าเมื่อวานในห้องคุยอะไรกัน, นัดประชุมหรือร่างอีเมล, ฝากบอกคนอื่นในทีม "
     "โหวตด้วยโพลของ Discord (create_poll / poll_results) และสำรวจความเห็นรายคนทาง DM (start_form / form_results) ได้ โดยสลิดยืนยันกับผู้ขอก่อนส่ง DM. "
+    "จำสถานที่สำคัญของบริษัท (สำนักงานใหญ่ สาขา โกดัง) และสถานที่ส่วนตัวเมื่อเจ้าตัวขอให้จำ แล้วบอกที่อยู่/ลิงก์แผนที่ตอนมีคนถามว่าที่ไหน (find_place) โดยเห็นได้เฉพาะคนที่มีสิทธิ์. "
     "ตอบสั้นๆ ไม่เกิน 3-4 ประโยค (ไม่ใช้ bullet หัวข้อ หรือตัวหนา; ถ้าถามเป็นอังกฤษก็ตอบอังกฤษสั้นๆ แบบเดียวกัน) ไม่ต้องไล่เป็นคู่มือหรือรายการยาว และบอกด้วยว่าอยากเปลี่ยนการตั้งค่าอะไร (ห้องไหนไม่ต้องตอบ ภาษา ความจำกี่วัน) แค่บอกสลิดเป็นคำพูดก็ได้ "
     "ไม่ต้องจำคำสั่ง. อย่าอ้างว่าทำได้มากกว่านี้. รายละเอียด:\n"
     "1) ใบเสร็จและบัญชี: ส่งรูปหรือ PDF ใบเสร็จในห้องไหนก็ได้ สลิดดูจากเนื้อหาเองว่าเป็นใบเสร็จไหม (ไม่ดูชื่อห้อง) หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
@@ -1166,6 +1168,7 @@ def system_prompt(
     profile: str = "",
     freetime: bool = False,
     wiki: bool = False,
+    places: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1197,6 +1200,8 @@ def system_prompt(
         p += FREETIME_PROMPT
     if wiki:
         p += WIKI_PROMPT
+    if places:
+        p += PLACES_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1544,6 +1549,7 @@ def build_agent(
     freetime: bool = False,
     wiki: bool = False,
     thinking_level: str = "LOW",
+    places: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1563,6 +1569,7 @@ def build_agent(
         profile=profile,
         freetime=freetime,
         wiki=wiki,
+        places=places,
     )
     model_calls = 0
 
@@ -1725,6 +1732,7 @@ async def ask_async(
         wiki="wiki_search" in tool_names,
         # Spoken answers sit between a person and the sound of silence: think as little as possible.
         thinking_level=SPOKEN_THINKING if spoken else "LOW",
+        places="find_place" in tool_names,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex

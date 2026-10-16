@@ -86,6 +86,7 @@ FEATURES = (
     "catchup",
     "wiki",
     "approvals",
+    "places",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -144,6 +145,7 @@ class Features(BaseModel):
     catchup: bool = True  # "what did I miss" catch-up (tool, /ตามทัน, morning brief section)
     wiki: bool = True  # company knowledge base built from memory (needs `memory`)
     approvals: bool = True  # request_approval & co: approval requests with Approve / Decline DMs
+    places: bool = True  # remembers head office / branches / consented personal places
 
 
 class Channel(BaseModel):
