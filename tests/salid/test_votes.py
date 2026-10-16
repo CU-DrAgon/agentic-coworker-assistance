@@ -278,7 +278,7 @@ async def vote(vw, who, index):
 # ------------------------------------------------------------------ opening and delivery
 async def test_default_voters_are_the_room_and_each_gets_one_ballot(vw):
     res = await open_vote(vw)
-    assert res["status"] == "opened" and res["voters"] == 3 and "5 นาที" in res["say"]
+    assert res["status"] == "opened" and res["voters"] == 3 and "say" not in res
     v = the_vote(vw)
     assert sorted(v["voters"]) == sorted([STAFF, PEER, INTERN]) and v["room"] == "ห้องประชุม"
     assert v["opened_by"] == STAFF and v["voice_channel_id"] == 80 and v["status"] == "open"
@@ -475,7 +475,7 @@ async def test_vote_status_scope(vw):
 # ------------------------------------------------------------------ voice
 async def test_voice_result_is_announced_and_chat_has_the_line(vw):
     res = await open_vote(vw)
-    assert "กดได้เลย" in res["say"]  # returned at once, not a background job
+    assert "say" not in res  # text only: the tally message tells everyone; returned at once
     from salid.live_voice import BACKGROUND_TOOLS
 
     assert "call_vote" not in BACKGROUND_TOOLS

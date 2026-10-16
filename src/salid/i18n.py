@@ -826,6 +826,18 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ขออภัยค่ะ ตรวจสอบให้ไม่ได้ตอนนี้ เครื่องมือค้นข้อมูลขัดข้องค่ะ",
         "en": "Sorry, I can't check that right now. The lookup tool is not working.",
     },
+    "voice_working_text": {
+        "th": "⏳ กำลังหาข้อมูล: {question}",
+        "en": "⏳ Looking into it: {question}",
+    },
+    "voice_handoff_text": {
+        "th": "⏳ ส่งไปทำพื้นหลังแล้ว: {question} (จะแจ้งเมื่อเสร็จ)",
+        "en": "⏳ Sent to the background: {question} (I'll tell you when it's done)",
+    },
+    "voice_still_working_text": {
+        "th": "⏳ ยังทำอยู่ค่ะ: {question}",
+        "en": "⏳ Still working on it: {question}",
+    },
     "voice_bg_1": {
         "th": "งานนี้ใช้เวลาหน่อยค่ะ สลิดทำให้อยู่ เดี๋ยวได้แล้วจะบอกนะคะ คุยเรื่องอื่นต่อได้เลยค่ะ",
         "en": "This one takes a little while. I'm on it and I'll tell you when it's ready; keep talking meanwhile.",
@@ -839,8 +851,8 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "That will take some time. I'm working on it in the background and will say when I have it.",
     },
     "voice_still_working": {
-        "th": "ยังทำอยู่ค่ะ อีกแป๊บนะคะ",
-        "en": "Still working on it, a moment more.",
+        "th": "ยังทำอยู่ค่ะ",
+        "en": "Still working on it.",
     },
     "voice_jobs_full": {
         "th": "ขอให้งานก่อนหน้าเสร็จก่อนนะคะ",
@@ -1914,10 +1926,6 @@ CATALOG: dict[str, dict[str, str]] = {
     "vote_anon_tag": {"th": "[ไม่เปิดเผยชื่อ]", "en": "[anonymous]"},
     "vote_names": {"th": "{option}: {names}", "en": "{option}: {names}"},
     "vote_nonvoters": {"th": "ไม่ได้ลงคะแนน: {names}", "en": "Did not vote: {names}"},
-    "vote_say": {
-        "th": "ส่งปุ่มโหวตให้ทุกคนแล้วค่ะ กดได้เลย ปิดใน {minutes} นาทีนะคะ",
-        "en": "I sent everyone the vote buttons. Press one any time, it closes in {minutes} minutes.",
-    },
     "vote_cue": {
         "th": "(ปิดโหวตแล้ว — แจ้งผลสั้น ๆ โดยพูดตามนี้ ห้ามเรียบเรียงใหม่: {line})",
         "en": "(The vote has closed. Announce the result briefly, say it as given, do not rephrase: {line})",

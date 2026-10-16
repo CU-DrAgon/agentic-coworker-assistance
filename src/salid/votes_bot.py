@@ -168,7 +168,8 @@ class VotesMixin:
             """Open a vote (ลงมติ): Salid sends every voter a message with one button per option
             in their private channel, counts the presses and posts the result in the meeting chat
             and the minutes. Use for "ขอมติว่า..." / "ลงมติเรื่อง..." / "let's vote on...". It
-            returns at once; reply with the `say` line. Defaults: options agree / disagree /
+            returns at once; the tally message in the meeting chat already tells everyone, so add at most a
+            few words. Defaults: options agree / disagree /
             abstain, 5 minutes, names shown in the result, voters = the people in the voice room
             (or who can read this channel).
 
@@ -300,7 +301,6 @@ class VotesMixin:
             "voters": len(people),
             "closes_at": V.hhmm(vote["closes_at"], self._vote_tz()),
             "anonymous": anonymous,
-            "say": t("vote_say", lang, minutes=mins),
         }
 
     # ------------------------------------------------------------- delivery

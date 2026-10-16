@@ -58,36 +58,27 @@ async def test_noise_frames_do_not_count_as_talking(lv):
 
 
 @pytest.mark.asyncio
-async def test_handoff_line_is_played_when_the_model_stays_silent(lv, monkeypatch):
-    setup_async(lv, live_handoff_say_seconds=0.02)
+async def test_handoff_posts_a_text_line_returns_no_say_and_plays_no_clip(lv, monkeypatch):
+    setup_async(lv)
     brains = Brains()
     patch_brain(monkeypatch, brains)
     s, live = await lv.join(5)
     v = s.live
     played = []
 
-    async def render(text, lang, cache=False):
-        return b"\x00\x00" * 960
-
     async def play(pcm):
         played.append(pcm)
         return True
 
-    monkeypatch.setattr(v, "_render", render)
     monkeypatch.setattr(v, "_play_filler", play)
     s.engaged = True
-    res = await v._one_brain("ทำสรุปยอดไตรมาสให้หน่อย")
-    assert res["status"] == "working"
-    await asyncio.sleep(0.1)
-    assert len(played) == 1  # the model said nothing: the clip was played
-    played.clear()
-    v._real_audio_at = time.monotonic() + 10  # the model did speak: nothing is played
-    res = await v._one_brain("อีกงานหนึ่ง")
-    assert res["status"] == "working"
-    await asyncio.sleep(0.1)
-    assert played == []
-    brains.release("ทำสรุปยอดไตรมาสให้หน่อย")
-    brains.release("อีกงานหนึ่ง")
+    q = "ทำสรุปยอดไตรมาสให้หน่อย"
+    res = await v._one_brain(q)
+    assert res["status"] == "working" and "say" not in res and res["job"]
+    await asyncio.sleep(0.2)
+    assert played == []  # the model said nothing and no fallback clip is rendered either
+    assert lv.chan.sent.count(t("voice_handoff_text", "th", question=q)) == 1
+    brains.release(q)
     await lv.mgr.end((1000, 77))
 
 

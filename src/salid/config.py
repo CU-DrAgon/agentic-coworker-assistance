@@ -126,7 +126,6 @@ class Settings(BaseSettings):
     live_foreground_seconds: float = 12.0
     live_max_jobs: int = 3
     live_result_pause_seconds: float = 1.5
-    live_handoff_say_seconds: float = 4.0  # model silent this long after a hand-off: play the line
     live_result_wait_seconds: float = 90.0
     # Live: the name was heard but the model has not started to answer after this long (counted from
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
@@ -152,7 +151,8 @@ class Settings(BaseSettings):
     name_min_voiced_seconds: float = 0.35  # SALID_NAME_MIN_VOICED_SECONDS
     name_min_cv: float = 0.25  # SALID_NAME_MIN_CV
     name_min_rms: float = 250.0  # SALID_NAME_MIN_RMS
-    # A spoken "one moment" clip while a slow tool (ask_salid) runs; a second line if still waiting.
+    # A spoken "one moment" clip while a slow tool (ask_salid) runs. If it is still running after
+    # `live_filler_again_seconds` ONE typed note goes to the meeting chat (not spoken).
     live_filler: bool = True
     live_filler_again_seconds: float = 8.0
     # "One moment" lines (chat, Live voice, classic meeting) are written by the cheap model so they

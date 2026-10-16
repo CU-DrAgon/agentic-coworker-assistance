@@ -949,7 +949,7 @@ REAL = 7680  # a 1920-byte 24 kHz model chunk after upsampling to 48 kHz stereo
 
 async def test_filler_plays_on_a_slow_tool_and_is_cut_when_the_answer_audio_arrives(lv, slow_tool):
     s, live = await lv.join(5)
-    await until(lambda: len(s.live._filler_pcm) == 6)  # prerendered at startup
+    await until(lambda: len(s.live._filler_pcm) == 4)  # prerendered at startup
     live.push(tool_msg("ask_salid", {"question": "q"}))
     await until(lambda: lv.vc.played)
     src = play_source(lv)
@@ -973,9 +973,9 @@ async def test_filler_is_skipped_when_the_model_already_started_speaking(lv, slo
     await lv.mgr.end((1000, 77))
 
 
-async def test_no_filler_for_fast_tools_and_a_second_line_if_still_waiting(lv, slow_tool):
+async def test_no_filler_for_fast_tools_and_a_typed_note_if_still_waiting(lv, slow_tool):
     s, live = await lv.join(5)
-    await until(lambda: len(s.live._filler_pcm) == 6)
+    await until(lambda: len(s.live._filler_pcm) == 4)
     lv.bot.s.live_filler_again_seconds = 0.05
     live.push(tool_msg("post_note", {"text": "x"}))
     await asyncio.sleep(0.15)
@@ -983,7 +983,10 @@ async def test_no_filler_for_fast_tools_and_a_second_line_if_still_waiting(lv, s
     live.push(tool_msg("ask_salid", {"question": "q"}))
     await until(lambda: lv.vc.played)
     one = play_source(lv).buffered_bytes
-    await until(lambda: play_source(lv).buffered_bytes > one)  # "almost there"
+    await until(lambda: t("voice_working_text", "th", question="q") in lv.chan.sent)
+    await asyncio.sleep(0.15)
+    assert play_source(lv).buffered_bytes == one  # the 8 s note is typed, no second clip
+    assert lv.chan.sent.count(t("voice_working_text", "th", question="q")) == 1  # once per job
     slow_tool.set()
     await lv.mgr.end((1000, 77))
 
@@ -993,8 +996,6 @@ async def test_filler_does_not_repeat_twice_in_a_row(lv):
     picks = [s.live._pick_fallback("th") for _ in range(40)]
     for i, p in enumerate(picks):  # never one of the 3 before it
         assert p not in picks[max(0, i - 3) : i]
-    again = [s.live._pick_fallback("th", "again") for _ in range(8)]
-    assert len(set(again)) == 8  # never the same "still on it" line twice in a session
     await lv.mgr.end((1000, 77))
 
 
@@ -1322,7 +1323,7 @@ def tts_spy(lv, monkeypatch):
     return lv
 
 
-async def test_filler_is_written_for_the_question_and_again_line_is_generated_too(
+async def test_filler_is_written_for_the_question_and_the_again_line_is_typed_not_spoken(
     tts_spy, slow_tool
 ):
     lv = tts_spy
@@ -1330,9 +1331,11 @@ async def test_filler_is_written_for_the_question_and_again_line_is_generated_to
     lv.bot.s.live_filler_again_seconds = 0.05
     s, live = await lv.join(5)
     live.push(tool_msg("ask_salid", {"question": "ยอดเดือนนี้เท่าไร"}))
-    await until(lambda: "ยังหาอยู่นะคะ ข้อมูลเยอะหน่อย" in lv.said)
+    note = t("voice_working_text", "th", question="ยอดเดือนนี้เท่าไร")
+    await until(lambda: note in lv.chan.sent)
     assert "ขอเช็กยอดเดือนนี้แป๊บนะคะ" in lv.said
-    assert [c["stage"] for c in stub.calls] == ["first", "again"]  # both started at once
+    assert "ยังหาอยู่นะคะ ข้อมูลเยอะหน่อย" not in lv.said  # no second clip
+    assert [c["stage"] for c in stub.calls] == ["first"]  # no "again" line is even written
     assert all(c["question"] == "ยอดเดือนนี้เท่าไร" and c["kind"] == "voice" for c in stub.calls)
     slow_tool.set()
     await lv.mgr.end((1000, 77))
@@ -1344,7 +1347,7 @@ async def test_slow_or_failing_line_plays_a_prerendered_fallback_only(tts_spy, s
     lv.bot.fillers = stub
     lv.bot.s.voice_ack_timeout_s = 0.05
     s, live = await lv.join(5)
-    await until(lambda: len(s.live._filler_pcm) == 6)
+    await until(lambda: len(s.live._filler_pcm) == 4)
     before = list(lv.said)
     live.push(tool_msg("ask_salid", {"question": "q"}))
     await until(lambda: lv.vc.played)
@@ -1365,17 +1368,9 @@ def catalog_th(n):
 async def test_prerender_is_bounded_not_the_whole_pool(tts_spy):
     lv = tts_spy
     s, _live = await lv.join(5)
-    await until(lambda: len(s.live._filler_pcm) == 6)
+    await until(lambda: len(s.live._filler_pcm) == 4)
     await asyncio.sleep(0.1)
-    assert len(lv.said) == 6  # 4 first + 2 again of 16 lines
-    await lv.mgr.end((1000, 77))
-
-
-async def test_again_line_is_never_the_same_twice_in_a_session(lv):
-    s, _live = await lv.join(5)
-    a = s.live._pick_fallback("th", "again")
-    b = s.live._pick_fallback("th", "again")
-    assert a != b
+    assert len(lv.said) == 4  # 4 of the 8 first-line fallbacks, no "again" clips
     await lv.mgr.end((1000, 77))
 
 
@@ -1391,7 +1386,7 @@ async def test_generic_line_clip_is_cached_on_disk_and_not_synthesized_twice(tts
 
     lv.bot.fillers = Pooled()
     s, live = await lv.join(5)
-    await until(lambda: len(s.live._filler_pcm) == 6)
+    await until(lambda: len(s.live._filler_pcm) == 4)
     n = len(lv.said)
     live.push(tool_msg("ask_salid", {"question": "q"}))
     await until(lambda: lv.said.count("เดี๋ยวสลิดเปิดดูให้นะคะ") == 1)

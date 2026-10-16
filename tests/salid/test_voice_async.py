@@ -98,7 +98,7 @@ async def test_a_quick_answer_is_returned_as_before(lv, monkeypatch):
 
 
 # ------------------------------------------------------------------ background hand-off
-async def test_slow_job_returns_working_with_a_line_and_the_live_model_is_not_blocked(
+async def test_slow_job_returns_working_without_a_say_and_the_live_model_is_not_blocked(
     lv, monkeypatch
 ):
     setup_async(lv)
@@ -108,10 +108,12 @@ async def test_slow_job_returns_working_with_a_line_and_the_live_model_is_not_bl
     live.push(tool_msg("ask_salid", {"question": Q}, id="a"))
     await until(lambda: live.tool_responses)
     res = live.tool_responses[0][0].response
-    assert res["status"] == "working" and res["say"] == LINE and len(res["job"]) == 4
-    first = next(c for c in lv.bot.fillers.calls if c.get("facts"))
-    assert first["stage"] == "first" and first["kind"] == "voice"
-    assert first["facts"] == [lvm.BG_FACT["th"]]
+    assert res["status"] == "working" and "say" not in res and len(res["job"]) == 4
+    assert not [
+        c for c in lv.bot.fillers.calls if c.get("facts")
+    ]  # no spoken hand-off line written
+    note = t("voice_handoff_text", "th", question=Q)  # the status is typed in the meeting chat
+    assert lv.chan.sent.count(note) == 1 and note.startswith("⏳")
     # the room goes on: another tool call is answered while the job still runs
     live.push(tool_msg("post_note", {"text": "x"}, id="n"))
     await until(lambda: len(live.tool_responses) == 2)
@@ -120,19 +122,27 @@ async def test_slow_job_returns_working_with_a_line_and_the_live_model_is_not_bl
     await lv.mgr.end((1000, 77))
 
 
-async def test_handoff_line_falls_back_to_the_pool_in_both_languages(lv, monkeypatch):
+def test_status_lines_are_bilingual_and_the_question_is_cut_at_80_chars():
+    for key in ("voice_working_text", "voice_handoff_text", "voice_still_working_text"):
+        th, en = t(key, "th", question="x"), t(key, "en", question="x")
+        assert th.startswith("⏳") and en.startswith("⏳") and th != en
+        assert "ค่ะ" in t("voice_still_working_text", "th", question="x")
+    assert lvm.status_question("  สรุป\n  ยอด ") == "สรุป ยอด"
+    long = lvm.status_question("ก" * 200)
+    assert len(long) == lvm.STATUS_Q_CHARS and long.endswith("…")
+    assert not hasattr(lvm, "FILLER_AGAIN") and not hasattr(lvm.LiveVoice, "_ensure_said")
+
+
+async def test_english_room_gets_the_handoff_note_in_english(lv, monkeypatch):
     setup_async(lv)
-    lv.bot.fillers = FillerStub(boom=True)
     brains = Brains()
     patch_brain(monkeypatch, brains)
     s, live = await lv.join(5)
-    live.push(tool_msg("ask_salid", {"question": Q}))
+    s.language = "en"
+    live.push(tool_msg("ask_salid", {"question": "build the Q3 summary"}))
     await until(lambda: live.tool_responses)
-    say = live.tool_responses[0][0].response["say"]
-    assert any(say.startswith(x[:12]) for x in lvm.FILLER_BG["th"])
-    assert "คุยเรื่องอื่น" in say or "ทำอยู่" in say or "เบื้องหลัง" in say
-    assert all(x for x in lvm.FILLER_BG["en"])
-    brains.release(Q)
+    assert t("voice_handoff_text", "en", question="build the Q3 summary") in lv.chan.sent
+    brains.release("build the Q3 summary")
     await lv.mgr.end((1000, 77))
 
 
@@ -306,7 +316,8 @@ async def test_the_same_question_again_says_still_working(lv, monkeypatch):
     live.push(tool_msg("ask_salid", {"question": Q + "?"}, id="b"))
     await until(lambda: len(live.tool_responses) == 2)
     again = live.tool_responses[1][0].response
-    assert again["status"] == "working" and again["say"] == "ยังทำอยู่ค่ะ อีกแป๊บนะคะ"
+    assert again["status"] == "working" and again["say"] == "ยังทำอยู่ค่ะ"  # one short sentence
+    assert t("voice_still_working_text", "th", question=Q + "?") in lv.chan.sent  # and a typed note
     assert brains.started == [Q]
     brains.release(Q)
     await lv.mgr.end((1000, 77))
@@ -467,9 +478,11 @@ def test_prompts_explain_working_status_and_the_result_message_in_both_languages
     s = FixedClockSettings()
     th, en = build_instruction(s, "th"), build_instruction(s, "en")
     assert "status=working" in th and "ไม่ต้องรอ" in th and "(ผลงานที่ขอไว้เสร็จแล้ว" in th
-    assert "ยังทำอยู่" in th and "ห้ามเรียบเรียงใหม่" in th and "ห้ามพูดคำเติมเอง" in th
+    assert "ไม่ต้องพูดถึงมัน" in th and "ห้ามเรียบเรียงใหม่" in th and "ห้ามพูดคำเติมเอง" in th
+    assert "ให้พูดบรรทัด say ตามที่เป็น" not in th
     assert "status=working" in en and "do not wait" in en and "(The requested job is done" in en
-    assert "still being done" in en and "do not rephrase" not in en.split("status=working")[0]
+    assert "say nothing about it" in en and "do not rephrase" not in en.split("status=working")[0]
+    assert "say the “say” line as it is, do not wait" not in en
     assert "superseded" not in th and "superseded" not in en
 
 
