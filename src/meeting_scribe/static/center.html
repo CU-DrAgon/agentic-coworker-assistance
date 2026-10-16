@@ -255,7 +255,7 @@ th: {
   st_active:"ใช้งานอยู่", st_past_due:"ค้างชำระ", st_expired:"หมดอายุ", st_suspended:"ถูกระงับ",
   tasks:"งาน", no_tasks:"ยังไม่มีงาน", assignee:"ผู้รับผิดชอบ", due:"กำหนด", status:"สถานะ", download:"ดาวน์โหลดไฟล์", reindex:"จัดทำดัชนีค้นหาใหม่", reindexed:"จัดทำดัชนีแล้ว {n} รายการ", shared_from:"แชร์จาก {n}", total_n:"ทั้งหมด {n} รายการ", conn_ok:"เชื่อมต่อ {p} สำเร็จ", conn_err:"เชื่อมต่อไม่สำเร็จ ({e})", approve:"อนุมัติ", reject:"ปฏิเสธ", pending_req:"คำขอแพ็กเกจที่รออยู่", all_orgs:"ทุกองค์กร", no_req:"ไม่มีคำขอ", days_left:"เหลือ {n} วัน", days_over:"หมดอายุแล้ว {n} วัน", license:"แพ็กเกจ", workspaces:"พื้นที่ทำงาน", docs:"เอกสาร", members:"สมาชิก", recent:"กิจกรรมล่าสุด", no_activity:"ยังไม่มีกิจกรรม",
   onboard:"เริ่มต้นใช้งาน", ob1:"สร้างองค์กร", ob2:"เพิ่มสลิดเข้าเซิร์ฟเวอร์ Discord ของคุณ", ob3:"พิมพ์ /ตั้งค่า ใน Discord แล้ววางรหัสที่ได้ในหน้า พื้นที่ทำงาน", ob4:"เลือกว่าจะแชร์ข้อมูลระหว่างเซิร์ฟเวอร์หรือไม่", ob_go:"ไปที่ พื้นที่ทำงาน", invite:"ลิงก์เชิญสลิด",
-  cat_all:"ทั้งหมด", cat_receipts:"ใบเสร็จ/ใบแจ้งหนี้", cat_contracts_docs:"สัญญาและเอกสาร", cat_minutes:"บันทึกประชุม", cat_reports:"รายงาน", cat_wiki:"ฐานความรู้", cat_ideas:"ไอเดียและโปรเจกต์", cat_uploads:"อัปโหลด",
+  cat_all:"ทั้งหมด", cat_receipts:"ใบเสร็จ/ใบแจ้งหนี้", cat_contracts_docs:"สัญญาและเอกสาร", cat_minutes:"บันทึกประชุม", cat_reports:"รายงาน", cat_wiki:"ฐานความรู้", cat_ideas:"ไอเดียและโปรเจกต์", cat_contests:"การแข่งขัน/แฮกกาธอน", cat_uploads:"อัปโหลด",
   cat_places:"สถานที่", cat_ledger:"บัญชีรายรับรายจ่าย", cat_tasks:"งาน", cat_documents:"เอกสาร",
   f_ws:"พื้นที่ทำงาน", f_all_ws:"ทั้งหมด", f_from:"ตั้งแต่", f_to:"ถึง", f_search:"ค้นหา", f_search_ph:"ค้นหาชื่อหรือเนื้อหา",
   c_title:"ชื่อ", c_ws:"พื้นที่", c_date:"วันที่", c_who:"โดย", c_size:"ขนาด", no_docs:"ยังไม่มีเอกสารในหมวดนี้", no_docs_hint:"เอกสารที่สลิดอ่านใน Discord หรือที่คุณอัปโหลดจะแสดงที่นี่",
@@ -284,7 +284,7 @@ en: {
   st_active:"Active", st_past_due:"Past due", st_expired:"Expired", st_suspended:"Suspended",
   tasks:"Tasks", no_tasks:"No tasks yet", assignee:"Assignee", due:"Due", status:"Status", download:"Download file", reindex:"Rebuild search index", reindexed:"Indexed {n} items", shared_from:"Shared from {n}", total_n:"{n} items", conn_ok:"Connected {p}", conn_err:"Connection failed ({e})", approve:"Approve", reject:"Reject", pending_req:"Pending plan requests", all_orgs:"All organizations", no_req:"No requests", days_left:"{n} days left", days_over:"Expired {n} days ago", license:"License", workspaces:"Workspaces", docs:"Documents", members:"Members", recent:"Recent activity", no_activity:"No activity yet",
   onboard:"Get started", ob1:"Create an organization", ob2:"Add Salid to your Discord server", ob3:"Type /ตั้งค่า in Discord and paste the code on the Workspaces page", ob4:"Choose whether to share data between servers", ob_go:"Go to Workspaces", invite:"Salid invite link",
-  cat_all:"All", cat_receipts:"Receipts/Invoices", cat_contracts_docs:"Contracts & docs", cat_minutes:"Meeting minutes", cat_reports:"Reports", cat_wiki:"Knowledge base", cat_ideas:"Ideas & projects", cat_uploads:"Uploads",
+  cat_all:"All", cat_receipts:"Receipts/Invoices", cat_contracts_docs:"Contracts & docs", cat_minutes:"Meeting minutes", cat_reports:"Reports", cat_wiki:"Knowledge base", cat_ideas:"Ideas & projects", cat_contests:"Contests & hackathons", cat_uploads:"Uploads",
   cat_places:"Places", cat_ledger:"Ledger", cat_tasks:"Tasks", cat_documents:"Documents",
   f_ws:"Workspace", f_all_ws:"All", f_from:"From", f_to:"To", f_search:"Search", f_search_ph:"Search title or content",
   c_title:"Title", c_ws:"Workspace", c_date:"Date", c_who:"By", c_size:"Size", no_docs:"No documents in this category", no_docs_hint:"Documents Salid reads in Discord, or that you upload, appear here.",
@@ -419,7 +419,7 @@ async function start() {
 /* ---------- helpers ---------- */
 const PLAT = { discord: "D", slack: "S", clickup: "C", web: "W" };
 const platBadge = (p) => el("div", { class: "plat " + (p in PLAT ? p : "soon"), "aria-hidden": "true" }, PLAT[p] || "?");
-const CATS = ["receipts", "contracts_docs", "minutes", "reports", "wiki", "ideas", "uploads"];
+const CATS = ["receipts", "contracts_docs", "minutes", "reports", "wiki", "ideas", "contests", "uploads"];
 function licBadge(l) {
   if (!l) return el("span", { class: "badge", text: "-" });
   const cls = l.status === "active" ? "ok" : l.status === "past_due" ? "warn" : "err";

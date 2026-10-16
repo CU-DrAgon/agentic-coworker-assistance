@@ -23,6 +23,7 @@ from google.genai import types
 
 from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
+from .contests import CONTESTS_PROMPT
 from .currency import CURRENCY_PROMPT
 from .embed import NullEmbedder, cosine
 from .flights import FLIGHT_PROMPT
@@ -1373,6 +1374,7 @@ def stable_prompt(
     travel: bool = False,
     markets: bool = False,
     ideas: bool = False,
+    contests: bool = False,
     web: bool = False,
     secretary: bool = False,
     chat: bool = False,
@@ -1416,6 +1418,8 @@ def stable_prompt(
         p += MARKETS_PROMPT
     if ideas:
         p += IDEAS_PROMPT
+    if contests:
+        p += CONTESTS_PROMPT
     if web:
         p += WEB_PROMPT
     if secretary:
@@ -1484,6 +1488,7 @@ def system_prompt(
     travel: bool = False,
     markets: bool = False,
     ideas: bool = False,
+    contests: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1501,6 +1506,7 @@ def system_prompt(
         travel=travel,
         markets=markets,
         ideas=ideas,
+        contests=contests,
         web=web,
         secretary=secretary,
         chat=chat,
@@ -1878,6 +1884,7 @@ def build_agent(
     travel: bool = False,
     markets: bool = False,
     ideas: bool = False,
+    contests: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1903,6 +1910,7 @@ def build_agent(
         travel=travel,
         markets=markets,
         ideas=ideas,
+        contests=contests,
     )
     model_calls = 0
 
@@ -2087,6 +2095,7 @@ async def ask_async(
         travel="convert_currency" in tool_names,
         markets="stock_quote" in tool_names,
         ideas="idea_save" in tool_names,
+        contests="contest_add" in tool_names,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex

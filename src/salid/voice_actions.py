@@ -62,6 +62,9 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "idea_export",
         "idea_share",
         "business_framework",
+        "contest_add",
+        "contest_update",
+        "contest_share",
     }
 )
 

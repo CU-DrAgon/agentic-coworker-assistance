@@ -469,6 +469,9 @@ class BriefInput:
         default_factory=list
     )  # morning: {id, requester, title, amount, days}
     markets: str = ""  # morning: opt-in market line (salid.markets.market_line), appended as is
+    contests: list[str] = field(
+        default_factory=list
+    )  # morning: "⏳ contest ..." lines (salid.contests)
 
     def is_empty(self) -> bool:
         if self.kind == "morning":
@@ -480,6 +483,7 @@ class BriefInput:
                 or self.catchup
                 or self.approvals
                 or self.markets
+                or self.contests
             )
         # open tasks alone do not make an evening brief (they are listed when something else is)
         return not (self.attended or self.new_tasks or self.done or self.tomorrow or self.asks)

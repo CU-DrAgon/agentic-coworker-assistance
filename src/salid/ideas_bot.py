@@ -20,28 +20,31 @@ class IdeasMixin:
     def _ideas_init(self) -> None:
         self.ideas = IdeaRepo(self.docs, clock=lambda: self.s.now())
 
+    def _ideas_ctx(self, message, guild, asker, is_exec: bool, lang: str) -> IdeasCtx:
+        """The idea context of one request: who asks, who outranks whom, whether it is private."""
+        return IdeasCtx(
+            guild_id=guild.id,
+            guild_name=getattr(guild, "name", "") or "",
+            asker_id=asker.id,
+            asker_name=getattr(asker, "display_name", str(asker.id)),
+            is_exec=is_exec,
+            repo=self.ideas,
+            client=self.llm,
+            model=self.s.gemini_model,
+            lang=lang,
+            now=self.s.now,
+            outranked=lambda: hierarchy_authors(asker.id, self._ranks(guild), None),
+            private=lambda: self._ideas_private_here(message, guild, asker),
+            resolve_person=lambda name: self._ideas_people(guild, name),
+            fonts=lambda: find_fonts(self.s.pdf_font),
+        )
+
     def _ideas_tools(self, message, guild, asker, is_exec: bool, lang: str) -> list:
         """The idea tools for one request (chat or voice). [] when the flag is off; never raises."""
         try:
             if not self.team.enabled(guild.id, "ideas"):
                 return []
-            ctx = IdeasCtx(
-                guild_id=guild.id,
-                guild_name=getattr(guild, "name", "") or "",
-                asker_id=asker.id,
-                asker_name=getattr(asker, "display_name", str(asker.id)),
-                is_exec=is_exec,
-                repo=self.ideas,
-                client=self.llm,
-                model=self.s.gemini_model,
-                lang=lang,
-                now=self.s.now,
-                outranked=lambda: hierarchy_authors(asker.id, self._ranks(guild), None),
-                private=lambda: self._ideas_private_here(message, guild, asker),
-                resolve_person=lambda name: self._ideas_people(guild, name),
-                fonts=lambda: find_fonts(self.s.pdf_font),
-            )
-            return ideas_tools(ctx)
+            return ideas_tools(self._ideas_ctx(message, guild, asker, is_exec, lang))
         except Exception:
             logger.warning("idea tools unavailable", exc_info=True)
             return []

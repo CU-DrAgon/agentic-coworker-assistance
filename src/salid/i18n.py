@@ -1479,6 +1479,31 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ผลแบบสอบถามส่งทาง DM แล้วค่ะ",
         "en": "I sent the results to you by DM.",
     },
+    # ---------------------------------------------------------------- contests (salid.contests_bot)
+    "contest_remind": {
+        "th": "⏳ {name}: “{label}” เหลืออีก {left} ({when}) ยังเหลืออีก {open} ข้อที่ต้องส่งค่ะ",
+        "en": "⏳ {name}: “{label}” is due in {left} ({when}). {open} item(s) still open.",
+    },
+    "contest_remind_nolist": {
+        "th": "⏳ {name}: “{label}” เหลืออีก {left} ({when}) ค่ะ",
+        "en": "⏳ {name}: “{label}” is due in {left} ({when}).",
+    },
+    "contest_brief": {
+        "th": "⏳ {name} ส่งงานอีก {days} วัน (เหลือ {open} ข้อ)",
+        "en": "⏳ {name}: {days} day(s) to submit ({open} item(s) left)",
+    },
+    "contest_brief_today": {
+        "th": "⏳ {name} ส่งงานวันนี้ (เหลือ {open} ข้อ)",
+        "en": "⏳ {name}: due today ({open} item(s) left)",
+    },
+    "contest_brief_nolist": {
+        "th": "⏳ {name} ส่งงานอีก {days} วัน",
+        "en": "⏳ {name}: {days} day(s) to submit",
+    },
+    "contest_brief_today_nolist": {
+        "th": "⏳ {name} ส่งงานวันนี้",
+        "en": "⏳ {name}: due today",
+    },
     # ---------------------------------------------------------------- wiki (salid.wiki_bot)
     "wiki_post_footer": {
         "th": "อัปเดตล่าสุด {date} · เขียนโดย {who} · สลิด",
