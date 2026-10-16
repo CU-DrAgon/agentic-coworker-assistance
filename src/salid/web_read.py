@@ -167,3 +167,31 @@ def make_read_web(
         return read_web_call(client, model, user_text, request)
 
     return read_web
+
+
+def grounded_search(client, model: str, prompt: str, instruction: str, timeout_s: float = 15.0):
+    """One Google Search grounded call (search only, no url_context) for a strict, self-built
+    prompt (flights). Returns {text, sources} or {error}. Never logs the prompt."""
+    config = types.GenerateContentConfig(
+        system_instruction=instruction,
+        tools=[types.Tool(google_search=types.GoogleSearch())],
+        temperature=0.1,
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        http_options=types.HttpOptions(timeout=int(timeout_s * 1000)),
+    )
+    try:
+        resp = llm.generate(
+            client,
+            model,
+            [types.Content(role="user", parts=[types.Part(text=prompt)])],
+            config,
+            delays=(),  # one attempt: the caller has a hard time budget
+        )
+    except Exception as e:
+        logger.warning("grounded search failed (%s)", type(e).__name__)
+        return {"error": f"web search failed ({type(e).__name__})"}
+    text = (getattr(resp, "text", None) or "").strip()
+    sources, _ = _sources(resp)
+    if not text:
+        return {"error": "the web search returned no text", "sources": sources}
+    return {"text": text, "sources": sources}

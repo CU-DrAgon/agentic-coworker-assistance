@@ -125,6 +125,7 @@ from .summary import (
     summary_question,
 )
 from .translate_bot import TranslateMixin
+from .travel_bot import TravelMixin
 from .voice_pool import VoicePool
 from .wiki_bot import WikiMixin
 
@@ -269,6 +270,7 @@ class SecretaryBot(
     ApprovalMixin,
     BroadcastMixin,
     PlacesMixin,
+    TravelMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -399,6 +401,7 @@ class SecretaryBot(
         self._wiki_init()  # company knowledge base (salid.wiki_bot)
         self._approval_init()  # approval requests (salid.approvals_bot)
         self._places_init()  # remembered places (salid.places_bot)
+        self._travel_init()  # currency + flights (salid.travel_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1839,6 +1842,7 @@ class SecretaryBot(
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
             *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._places_tools(message, guild, asker, is_exec)),
+            *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
@@ -2557,6 +2561,7 @@ class SecretaryBot(
         await self._scheduler_due()
         await self._coo_due()
         await self._polls_forms_due()
+        await self._travel_due()
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""
