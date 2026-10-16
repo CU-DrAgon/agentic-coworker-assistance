@@ -6,9 +6,12 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -21,15 +24,18 @@ from google.genai import types
 from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
 from .currency import CURRENCY_PROMPT
+from .embed import NullEmbedder, cosine
 from .flights import FLIGHT_PROMPT
 from .freetime import FREETIME_PROMPT
+from .gate import extract_keywords
 from .gmaps import MAPS_PROMPT
 from .i18n import resolve_lang, t
 from .markets import MARKETS_PROMPT
 from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
-from .memory_store import MemoryMessage, MemoryStore
-from .memory_summary import render_summary
+from .memory_index import entries_for
+from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
+from .memory_summary import render_summary, summary_items
 from .places import PLACES_PROMPT
 from .search import SEARCH_PROMPT
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
@@ -45,6 +51,13 @@ APP_NAME = "salid"
 RETRY_OPTIONS = types.HttpRetryOptions(
     attempts=5, initial_delay=2.0, max_delay=30.0, http_status_codes=[429, 500, 502, 503, 504]
 )
+# Answer field -> usage_metadata attribute (Vertex token accounting per model call).
+USAGE_FIELDS = {
+    "tokens_in": "prompt_token_count",
+    "tokens_cached": "cached_content_token_count",
+    "tokens_out": "candidates_token_count",
+    "tokens_thought": "thoughts_token_count",
+}
 THAI_DAYS = ["จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"]
 
 
@@ -369,6 +382,36 @@ SUMMARY_WEIGHT = 3  # a keyword hit in a summary counts this many raw-message hi
 SEARCH_MSGS_PER_GROUP = 3
 MAX_SEARCH_DAYS = 400
 MAX_ROWS_SEARCH = 5000
+# Hybrid search (keyword + meaning) over day summaries; raw messages only where it pays off.
+RAW_RECENT_DAYS = 3  # raw messages of the last days are always scanned (not summarised yet)
+RAW_GROUPS = 5  # older top hits whose raw messages are read for quotes and links
+RAW_GROUP_FETCH = 600  # messages read per such channel-day
+MIN_SIMILARITY = 0.55  # cosine a summary item needs to count as a meaning match (provisional)
+RRF_K = 60  # reciprocal rank fusion constant
+QUERY_CACHE_SIZE = 512  # recent query vectors kept (the model often repeats a search)
+QUERY_EMBED_TIMEOUT_S = 2.0  # longest wait for the query vector before keyword-only search
+RAW_NOTE = (
+    f"raw messages older than {RAW_RECENT_DAYS} days are searched through summaries only; for an "
+    "exact code, number or phrase use chat_messages with a keyword and dates"
+)
+_query_cache: OrderedDict[tuple[str, str], object] = OrderedDict()
+_query_lock = threading.Lock()
+_embed_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="salid-embed")
+
+
+def _query_vector(embedder, text: str):
+    """The query's vector, cached per (model, text). Raises when embedding fails."""
+    key = (embedder.model_id, text)
+    with _query_lock:
+        if key in _query_cache:
+            _query_cache.move_to_end(key)
+            return _query_cache[key]
+    vec = embedder.embed([text], "query")[0]
+    with _query_lock:
+        _query_cache[key] = vec
+        while len(_query_cache) > QUERY_CACHE_SIZE:
+            _query_cache.popitem(last=False)
+    return vec
 
 
 class MemoryTools:
@@ -386,6 +429,7 @@ class MemoryTools:
         retention_days: int | None = None,
         opener: Callable[[int | None, int, int], dict] | None = None,
         visibility: Visibility | None = None,
+        embedder=None,
     ):
         self.opener = opener  # (channel id | None, message id, file index) -> {"text": ...}
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
@@ -396,6 +440,7 @@ class MemoryTools:
         self.vis = visibility
         self.hidden: list[MemoryMessage] = []
         self.hidden_in_dm = 0  # of those: would be visible if asked in a DM
+        self.embedder = embedder or NullEmbedder()
 
     def open_file(self, message_link_or_id: str, file_index: int = 0) -> dict:
         """Re-read an attachment (document, audio, video, image) of a remembered message. The
@@ -508,6 +553,8 @@ class MemoryTools:
             out.append(it)
         return out, False
 
+    _summary_lines = staticmethod(summary_items)  # searchable lines of a summary (also: wiki)
+
     def chat_days(self, start_date: str, end_date: str, channel_name: str | None = None) -> dict:
         start, end = self._range(start_date, end_date)
         shown = self._shown()
@@ -519,7 +566,8 @@ class MemoryTools:
         sums = [
             x for x in self.store.summaries(self.guild_id, shown, start, end) if x.message_count > 0
         ]
-        # Messages newer than the (living) summary, so nothing between updates is missed.
+        # Messages newer than the (living) summary, so nothing between updates is missed. One
+        # read per day, split by channel here.
         today = self.s.now().date()
         tail: list[dict] = []
         covered = {(x.channel_id, x.local_date): x for x in sums}
@@ -527,16 +575,21 @@ class MemoryTools:
             d = day.isoformat()
             if not start <= d <= end:
                 continue
-            for cid in self.store.day_channels(self.guild_id, d):
-                if cid not in shown:
-                    continue
+            by_channel: dict[int, list[MemoryMessage]] = {}
+            for m in self.store.messages(
+                self.guild_id, set(shown), d, d, limit=MAX_ROWS, newest_first=False
+            ):
+                by_channel.setdefault(m.channel_id, []).append(m)
+            for cid in sorted(by_channel):
                 x = covered.get((cid, d))
                 if x is not None and x.final:
                     continue
-                rows = self.store.messages_after(
-                    self.guild_id, cid, d, x.cursor if x else None, TAIL_PER_CHANNEL
-                )
-                tail += [self._msg(m) for m in rows if self._visible(m)]
+                rows = [
+                    m
+                    for m in by_channel[cid]
+                    if (x is None or x.cursor is None or m.key > x.cursor) and self._visible(m)
+                ]
+                tail += [self._msg(m) for m in rows[:TAIL_PER_CHANNEL]]
         tail = tail[-TAIL_TOTAL:]
         # Newest days first; the output is capped, so old days drop out first.
         all_days = [
@@ -563,32 +616,29 @@ class MemoryTools:
             out["note"] = "nothing recorded in the channels you can see for this period"
         return out
 
-    @staticmethod
-    def _summary_lines(summary: dict) -> list[str]:
-        """Searchable lines of a summary: topics, decisions, action items, numbers, the rest."""
-        lines = [summary.get("overview") or ""]
-        for tp in summary.get("topics") or []:
-            people = ", ".join(tp.get("people") or [])
-            lines.append(f"Topic: {tp.get('title', '')} {tp.get('details', '')} {people}".strip())
-        lines += [f"Decision: {x}" for x in summary.get("decisions") or []]
-        for a in summary.get("action_items") or []:
-            lines.append(f"Action: {a.get('who', '')} {a.get('what', '')} {a.get('due', '')}")
-        lines += [f"Number: {x}" for x in summary.get("numbers") or []]
-        lines += [f"Open: {x}" for x in summary.get("open_questions") or []]
-        return [x.strip() for x in lines if x and x.strip()]
-
     def chat_search(
         self,
-        keywords: list[str],
+        keywords: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
         person: str | None = None,
+        query: str | None = None,
+        semantic: bool = True,
     ) -> dict:
+        """Hybrid search: keyword hits and meaning (embedding similarity) over the day summaries,
+        fused by reciprocal rank; raw messages of the last RAW_RECENT_DAYS days are scanned for
+        keywords, and the top older hits get their matching raw messages (quotes and links).
+        `semantic=False` (join-mode hints) makes no embedding call."""
+        started = time.monotonic()
         kws = [k.strip().casefold() for k in (keywords or []) if isinstance(k, str) and k.strip()]
         kws = list(dict.fromkeys(kws))[:12]
-        if not kws:
-            return {"error": "give at least one keyword"}
+        query = (query or "").strip()
+        if not kws and query:  # words of the question, so keyword search works without meaning
+            kws = [k.casefold() for k in extract_keywords(query)]
+        use_meaning = semantic and bool(self.embedder.model_id)
+        if not kws and not (query and use_meaning):
+            return {"error": "give at least one keyword or a query"}
         today = self.s.now().date()
         end = date.fromisoformat(end_date) if end_date else today
         start = (
@@ -601,6 +651,21 @@ class MemoryTools:
         start = max(start, end - timedelta(days=MAX_SEARCH_DAYS - 1))
         a, b = start.isoformat(), end.isoformat()
         pids, ptext = self._person_ids(person)
+        raw_from = (today - timedelta(days=RAW_RECENT_DAYS - 1)).isoformat()
+
+        pending = None
+        if use_meaning:  # embed the query while the summaries load
+            pending = _embed_pool.submit(_query_vector, self.embedder, query or " ".join(kws))
+        t_index = time.monotonic()
+        entries = entries_for(self.store, self.guild_id, self._shown(), a, b, self.embedder)
+        ms_index = (time.monotonic() - t_index) * 1000
+        qv, ms_embed = None, 0.0
+        if pending is not None:
+            try:
+                qv = pending.result(timeout=QUERY_EMBED_TIMEOUT_S)
+            except Exception:
+                logger.warning("query embedding failed; keyword search only", exc_info=True)
+            ms_embed = (time.monotonic() - t_index) * 1000
 
         def hits(text: str) -> int:
             low = text.casefold()
@@ -610,50 +675,123 @@ class MemoryTools:
 
         def group(day: str, cid: int) -> dict:
             return groups.setdefault(
-                (day, cid), {"score": 0, "summary": [], "messages": [], "n_msgs": 0}
+                (day, cid),
+                {"score": 0, "summary": [], "messages": [], "n_msgs": 0, "sim": 0.0, "near": []},
             )
 
-        for x in self.store.summaries(self.guild_id, self._shown(), a, b):
-            for line in self._summary_lines(x.summary):
+        for e in entries:
+            for line in e.items:
                 h = hits(line)
                 if h and (not ptext or ptext in line.casefold()):
-                    g = group(x.local_date, x.channel_id)
+                    g = group(e.local_date, e.channel_id)
                     g["score"] += h * SUMMARY_WEIGHT
                     g["summary"].append(line[:300])
-        rows = self.store.messages(
-            self.guild_id, self._read_ids(), a, b, limit=MAX_ROWS_SEARCH, newest_first=True
-        )
-        for m in rows:  # newest first
+            if qv is not None and e.vectors:
+                sims = [
+                    (cosine(qv, v), line)
+                    for v, line in zip(e.vectors, e.items, strict=False)
+                    if len(v) == len(qv)  # vectors of another model/dim are ignored
+                    and (not ptext or ptext in line.casefold())
+                ]
+                best = max(sims, default=(0.0, ""))
+                if best[0] >= MIN_SIMILARITY:
+                    g = group(e.local_date, e.channel_id)
+                    g["sim"] = best[0]
+                    g["near"] = [line[:300] for _, line in sorted(sims, reverse=True)[:2]]
+
+        def scan(m: MemoryMessage) -> None:
+            """Count a keyword-matching raw message (role hierarchy and person filter apply)."""
             h = hits(f"{m.text} {m.author_name}")
-            if h and self._by_person(m, pids, ptext):
-                if not self._visible(m):
-                    self._hide(m)
-                    continue
-                g = group(m.local_date, m.channel_id)
-                g["score"] += h
-                g["n_msgs"] += 1
-                if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
-                    g["messages"].append(self._msg(m))
-        ranked = sorted(groups.items(), key=lambda kv: (kv[1]["score"], kv[0][0]), reverse=True)
+            if not h or not self._by_person(m, pids, ptext):
+                return
+            if not self._visible(m):
+                self._hide(m)
+                return
+            g = group(m.local_date, m.channel_id)
+            g["score"] += h
+            g["n_msgs"] += 1
+            if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
+                g["messages"].append(self._msg(m))
+
+        raw_queries = 0
+        raw_to = min(b, today.isoformat())  # no reads for days that have not happened yet
+        if kws and max(a, raw_from) <= raw_to:  # recent raw messages (not summarised yet)
+            raw_queries += 1
+            rows = self.store.messages(
+                self.guild_id, self._read_ids(), max(a, raw_from), raw_to,
+                limit=MAX_ROWS_SEARCH, newest_first=True,
+            )  # fmt: skip
+            for m in rows:  # newest first
+                scan(m)
+
+        rankings = (
+            sorted((k for k, g in groups.items() if g["score"] > 0),
+                   key=lambda k: (groups[k]["score"], k[0]), reverse=True),
+            sorted((k for k, g in groups.items() if g["sim"] >= MIN_SIMILARITY),
+                   key=lambda k: (groups[k]["sim"], k[0]), reverse=True),
+        )  # fmt: skip
+        fused: dict[tuple[str, int], float] = {}
+        for ranking in rankings:
+            for rank, key in enumerate(ranking, start=1):
+                fused[key] = fused.get(key, 0.0) + 1 / (RRF_K + rank)
+        order = sorted(fused, key=lambda k: (fused[k], k[0]), reverse=True)
+        order = order[: max(1, min(int(limit), 50))]
+
+        if kws:  # quotes and links for the top older hits
+            readable = self._read_ids()
+            for day, cid in [k for k in order if k[0] < raw_from and k[1] in readable][:RAW_GROUPS]:
+                raw_queries += 1
+                g = groups[(day, cid)]
+                for m in reversed(
+                    self.store.messages_after(self.guild_id, cid, day, None, RAW_GROUP_FETCH)
+                ):
+                    h = hits(f"{m.text} {m.author_name}")
+                    if not h or not self._by_person(m, pids, ptext):
+                        continue
+                    if not self._visible(m):
+                        self._hide(m)
+                        continue
+                    g["n_msgs"] += 1
+                    if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
+                        g["messages"].append(self._msg(m))
+
+        def match(g: dict) -> str:
+            kw, mean = g["score"] > 0, g["sim"] >= MIN_SIMILARITY
+            return "both" if kw and mean else "keyword" if kw else "meaning"
+
         items = [
             {
                 "date": day,
                 "channel": self._name(cid),
                 "score": g["score"],
-                "summary_hits": g["summary"][:6],
+                "match": match(g),
+                "summary_hits": (g["summary"] or g["near"])[:6],
                 "matching_messages": g["n_msgs"],
                 "messages": g["messages"],
             }
-            for (day, cid), g in ranked[: max(1, min(int(limit), 50))]
+            for day, cid in order
+            for g in (groups[(day, cid)],)
         ]
         fit, cut = self._fit(items, SEARCH_CHARS)
         out: dict = {"keywords": kws, "range": [a, b], "count": len(fit), "hits": fit}
+        notes = []
         if cut:
-            out["note"] = "output truncated: more hits exist, use narrower keywords or dates"
+            notes.append("output truncated: more hits exist, use narrower keywords or dates")
         if not fit:
-            out["note"] = "no matches in the channels you can see"
+            notes.append("no matches in the channels you can see")
+        if a < raw_from:
+            notes.append(RAW_NOTE)
+        if notes:
+            out["note"] = " | ".join(notes)
         if self._hidden_note():
             out["withheld"] = self._hidden_note()
+        kinds = [h["match"] for h in fit]
+        logger.info(
+            "memory search guild=%s ms=%d ms_embed=%d ms_index=%d raw_queries=%d hits=%d "
+            "keyword=%d meaning=%d both=%d",
+            self.guild_id, (time.monotonic() - started) * 1000, ms_embed, ms_index, raw_queries,
+            len(fit), kinds.count("keyword"), kinds.count("meaning"), kinds.count("both"),
+        )  # fmt: skip
         return out
 
     def chat_messages(
@@ -729,6 +867,7 @@ class MemoryTools:
         fn = getattr(self, name)
         params = fn.__code__.co_varnames[1 : fn.__code__.co_argcount]
         clean = {k: v for k, v in (args or {}).items() if k in params and v is not None}
+        clean.pop("semantic", None)  # internal switch, never the model's choice
         try:
             return fn(**clean)
         except (TypeError, ValueError) as e:
@@ -964,8 +1103,11 @@ LATENCY_PROMPT = (
 MEMORY_PROMPT = (
     "\nความจำของทีม (ค้นรอบเดียวแล้วตอบ ไม่เจอก็บอกว่าไม่พบ ไม่ต้องวนค้นซ้ำ; ไม่ต้องค้นถ้าข้อความหรือไฟล์ที่แนบมีคำตอบอยู่แล้ว): "
     "เมื่อถูกถามว่าเกิดอะไรขึ้น ใครพูดอะไร หรืองาน/เรื่องใดถึงไหนแล้ว "
-    "ถ้าคำถามไม่มีวันที่ชัดเจน ให้เรียก chat_search ก่อนด้วยคำค้น 3-8 คำ ทั้งไทย อังกฤษ คำพ้อง ชื่อคน และตัวย่อ "
-    "(เช่น งบโฆษณา, ค่าโฆษณา, ads, marketing budget) แล้วค่อยเปิดวันที่เจอด้วย chat_days หรือ chat_messages. "
+    "ถ้าคำถามไม่มีวันที่ชัดเจน ให้เรียก chat_search ก่อน โดยใส่ query เป็นคำถามของผู้ใช้ และ keywords 3-8 คำ "
+    "(ชื่อคน ตัวเลข รหัส คำสำคัญ ทั้งไทย อังกฤษ คำพ้อง และตัวย่อ เช่น งบโฆษณา, ค่าโฆษณา, ads, marketing budget) "
+    "เพราะ chat_search ค้นตามความหมายได้ทั้งไทยและอังกฤษ "
+    "แล้วค่อยเปิดวันที่เจอด้วย chat_days หรือ chat_messages. "
+    "ถ้าหารหัส ตัวเลข หรือคำพูดเป๊ะๆ ที่เก่ากว่า 3 วัน ให้ใช้ chat_messages พร้อม keyword และช่วงวันที่. "
     "ถ้าคำถามมีวันที่ ให้เรียก chat_days (สรุปรายวันต่อห้อง) ได้เลย "
     "แล้วใช้ chat_messages (ข้อความจริง ค้นด้วย keyword) เมื่อต้องการรายละเอียดหรือคำพูดจริง. "
     "เมื่อผู้ใช้ถามถึงเอกสารหรือเสียงที่เคยแชร์ในห้อง (ข้อความขึ้นต้นด้วย [PDF: ...], [DOCX: ...], [เสียง: ...] ฯลฯ) ให้หาด้วย chat_search แล้วเรียก open_file ด้วยลิงก์ของข้อความนั้นเพื่ออ่านเนื้อหาจริง อย่าตอบจากโน้ตสั้นๆ อย่างเดียว. "
@@ -1187,6 +1329,109 @@ def apply_particle(text: str, particle: str) -> str:
     return _Q_PARTICLE.sub(particle, text.replace("ค่ะ", particle))
 
 
+def particle_of(settings: Settings) -> str:
+    return str(getattr(settings, "persona_particle", "") or "ค่ะ")
+
+
+def stable_prompt(
+    language: str,
+    memory: bool,
+    *,
+    coo: bool = False,
+    freetime: bool = False,
+    wiki: bool = False,
+    places: bool = False,
+    maps: bool = False,
+    search: bool = False,
+    travel: bool = False,
+    markets: bool = False,
+    web: bool = False,
+    secretary: bool = False,
+    chat: bool = False,
+    particle: str = "ค่ะ",
+) -> str:
+    """The part of the system prompt that is identical for every request in one language and
+    tool set (persona, rules, capabilities, duplicate rules, memory guidance, and the guidance of
+    each tool family that is registered). It comes first so Gemini's implicit prefix cache can
+    reuse it across requests and tool rounds. `particle`: the persona's politeness particle."""
+    p = (
+        PERSONA[language if language in PERSONA else "th"]
+        + HUMAN_STYLE_PROMPT
+        + "คุยได้ทุกเรื่อง: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
+        "ช่วยคิดไอเดีย ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
+        "ถ้าเป็นข่าวหรือข้อมูลล่าสุดที่อาจไม่รู้ ให้บอกตรงๆ ว่าอาจไม่อัปเดต\n"
+        "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
+        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วยสัญลักษณ์สกุลเงินของใบเสร็จนั้น (฿ = บาท, $ = USD). "
+        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยนเอง (ห้ามประมาณหรือเดาอัตราแลกเปลี่ยนเองเด็ดขาด: ถ้าผู้ใช้ขอให้แปลง ให้เรียก convert_currency เท่านั้น แล้วบอกอัตรา วันที่ และแหล่งที่มา; ถ้าไม่มีเครื่องมือนี้ให้บอกว่าแปลงให้ไม่ได้): ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
+        "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
+    )
+    p += CAPABILITIES_PROMPT
+    p += LATENCY_PROMPT
+    p += DUPLICATES_PROMPT
+    if memory:
+        p += MEMORY_PROMPT
+    if coo:
+        p += COO_PROMPT
+    if freetime:
+        p += FREETIME_PROMPT
+    if wiki:
+        p += WIKI_PROMPT
+    if places:
+        p += PLACES_PROMPT
+    if maps:
+        p += MAPS_PROMPT
+    if search:
+        p += SEARCH_PROMPT
+    if travel:
+        p += CURRENCY_PROMPT + FLIGHT_PROMPT
+    if markets:
+        p += MARKETS_PROMPT
+    if web:
+        p += WEB_PROMPT
+    if secretary:
+        p += SECRETARY_PROMPT
+    if chat:
+        p += CHAT_TOOLS_PROMPT
+    return apply_particle(p, particle)
+
+
+def volatile_prompt(
+    settings: Settings,
+    now,
+    *,
+    scoped: bool,
+    interjection: bool,
+    language: str,
+    files: bool = False,
+    profile: str = "",
+    people: list[str] | None = None,
+) -> str:
+    """The per-request tail of the system prompt: date and time, the asker's scope, the
+    interjection rule, the file-input rules, the asker's own preferences, the taggable people
+    and the language line."""
+    p = (
+        f"\nวันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
+        f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD"
+    )
+    if scoped:
+        p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
+    if interjection:
+        p += INTERJECTION_PROMPT
+    if files:
+        p += FILES_PROMPT + MEDIA_PROMPT
+    p += profile  # the asker's own preferences (salid.profiles.profile_block), "" when none
+    if people is not None:
+        p += MENTION_PROMPT
+        p += "\nคนที่แท็กได้ (ชื่อที่แสดง): " + (", ".join(people) if people else "(ยังไม่มีรายชื่อ)")
+    if language == "en":
+        p += "\nLanguage: write your whole reply in English."
+    elif language == "auto":
+        p += (
+            "\nLanguage: reply in the same language as the user's latest message (Thai or English)."
+        )
+    return apply_particle(p, particle_of(settings))
+
+
 def system_prompt(
     settings: Settings,
     scoped: bool,
@@ -1211,65 +1456,33 @@ def system_prompt(
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
-    tagging, e.g. a DM)."""
+    tagging, e.g. a DM). Stable part first, per-request part last (see `stable_prompt`)."""
     now = now or settings.now()
-    p = (
-        PERSONA[language if language in PERSONA else "th"]
-        + HUMAN_STYLE_PROMPT
-        + "คุยได้ทุกเรื่อง: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
-        "ช่วยคิดไอเดีย ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
-        "ถ้าเป็นข่าวหรือข้อมูลล่าสุดที่อาจไม่รู้ ให้บอกตรงๆ ว่าอาจไม่อัปเดต\n"
-        f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
-        f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD\n"
-        "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
-        "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วยสัญลักษณ์สกุลเงินของใบเสร็จนั้น (฿ = บาท, $ = USD). "
-        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยนเอง (ห้ามประมาณหรือเดาอัตราแลกเปลี่ยนเองเด็ดขาด: ถ้าผู้ใช้ขอให้แปลง ให้เรียก convert_currency เท่านั้น แล้วบอกอัตรา วันที่ และแหล่งที่มา; ถ้าไม่มีเครื่องมือนี้ให้บอกว่าแปลงให้ไม่ได้): ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
-        "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
+    return stable_prompt(
+        language,
+        memory,
+        coo=coo,
+        freetime=freetime,
+        wiki=wiki,
+        places=places,
+        maps=maps,
+        search=search,
+        travel=travel,
+        markets=markets,
+        web=web,
+        secretary=secretary,
+        chat=chat,
+        particle=particle_of(settings),
+    ) + volatile_prompt(
+        settings,
+        now,
+        scoped=scoped,
+        interjection=interjection,
+        language=language,
+        files=files,
+        profile=profile,
+        people=people,
     )
-    p += CAPABILITIES_PROMPT
-    p += LATENCY_PROMPT
-    p += DUPLICATES_PROMPT
-    if scoped:
-        p += "\nผู้ถามไม่ใช่ผู้บริหาร: ข้อมูลที่เห็นคือเฉพาะใบเสร็จที่ผู้ถามส่งเองเท่านั้น ให้ระบุในคำตอบว่าเป็นของผู้ถามเอง และห้ามอ้างถึงข้อมูลของคนอื่น"
-    if memory:
-        p += MEMORY_PROMPT
-    if coo:
-        p += COO_PROMPT
-    if freetime:
-        p += FREETIME_PROMPT
-    if wiki:
-        p += WIKI_PROMPT
-    if places:
-        p += PLACES_PROMPT
-    if maps:
-        p += MAPS_PROMPT
-    if search:
-        p += SEARCH_PROMPT
-    if travel:
-        p += CURRENCY_PROMPT + FLIGHT_PROMPT
-    if markets:
-        p += MARKETS_PROMPT
-    if interjection:
-        p += INTERJECTION_PROMPT
-    if files:
-        p += FILES_PROMPT + MEDIA_PROMPT
-    if web:
-        p += WEB_PROMPT
-    if secretary:
-        p += SECRETARY_PROMPT
-    if chat:
-        p += CHAT_TOOLS_PROMPT
-    p += profile  # the asker's own preferences (salid.profiles.profile_block), "" when none
-    if people is not None:
-        p += MENTION_PROMPT
-        p += "\nคนที่แท็กได้ (ชื่อที่แสดง): " + (", ".join(people) if people else "(ยังไม่มีรายชื่อ)")
-    if language == "en":
-        p += "\nLanguage: write your whole reply in English."
-    elif language == "auto":
-        p += (
-            "\nLanguage: reply in the same language as the user's latest message (Thai or English)."
-        )
-    return apply_particle(p, str(getattr(settings, "persona_particle", "") or "ค่ะ"))
 
 
 @dataclass
@@ -1282,12 +1495,20 @@ class Answer:
     attachments: list[tuple[str, bytes]] = field(
         default_factory=list
     )  # PDFs to upload (name, data)
+    # Cost and latency (summed over every model call of the turn; 0 when not reported).
+    model_calls: int = 0
+    tokens_in: int = 0
+    tokens_cached: int = 0
+    tokens_out: int = 0
+    tokens_thought: int = 0
+    tool_ms: dict[str, float] = field(default_factory=dict)  # tool name -> total milliseconds
 
 
 def build_tools(
     ledger: LedgerTools,
     calls: list[tuple[str, dict]] | None = None,
     memory: MemoryTools | None = None,
+    timings: dict[str, float] | None = None,
 ) -> list:
     """The four ledger tools (plus the two memory tools when `memory` is given) as plain functions
     bound to `ledger` / `memory` (ADK wraps them as FunctionTools).
@@ -1295,15 +1516,20 @@ def build_tools(
     Permission scoping lives in `ledger.forced`: none of these signatures has a submitter
     parameter, so the model cannot pass one (ADK also drops undeclared arguments). Errors are
     returned to the model as data instead of raised, so a bad date never kills the turn.
+    `timings` (tool name -> milliseconds, summed) receives how long each tool took.
     """
     log = calls if calls is not None else []
+    spent = timings if timings is not None else {}
 
     def safe(name: str, args: dict, fn):
         log.append((name, {k: v for k, v in args.items() if v is not None}))
+        started = time.monotonic()
         try:
             return fn()
         except (TypeError, ValueError) as e:
             return {"error": str(e)}
+        finally:
+            spent[name] = spent.get(name, 0.0) + (time.monotonic() - started) * 1000
 
     def spending_summary(start_date: str, end_date: str, group_by: str = "none") -> dict:
         """Total spending and receipt count for a date range, optionally grouped.
@@ -1465,26 +1691,35 @@ def build_tools(
         return safe("chat_messages", a, lambda: memory.chat_messages(**a))
 
     def chat_search(
-        keywords: list[str],
+        keywords: list[str] | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
         person: str | None = None,
+        query: str | None = None,
     ) -> dict:
-        """Search day summaries AND raw messages for ANY of the keywords (case-insensitive
-        substring), in the channels the asker may see. Hits are grouped by date and channel,
-        ranked by keyword hits (summary hits count more), with matching summary lines and up to
+        """Search the team's memory by keywords AND by meaning (Thai and English), in the
+        channels the asker may see. Day summaries are searched over the whole range; raw
+        messages of the last 3 days too. Hits are grouped by date and channel and ranked by
+        both signals (match = keyword, meaning or both), with matching summary lines and up to
         3 matching messages with links.
 
         Args:
-            keywords: 3-8 search words: Thai and English forms, synonyms, names, abbreviations.
+            keywords: 2-5 search words: names, numbers, codes and key terms (Thai or English).
             start_date: ISO date YYYY-MM-DD, optional (default: the whole retention window).
             end_date: ISO date YYYY-MM-DD, optional (default: today).
             limit: max date/channel groups, default 20.
             person: only what this person (name or @mention) wrote or is named in, optional.
+            query: the user's question in plain words, any language; improves meaning-based
+                matching.
         """
         a = dict(
-            keywords=keywords, start_date=start_date, end_date=end_date, limit=limit, person=person
+            keywords=keywords,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            person=person,
+            query=query,
         )
         return safe("chat_search", a, lambda: memory.chat_search(**a))
 
@@ -1753,6 +1988,13 @@ async def ask_async(
     their prompt section."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
+    tool_ms: dict[str, float] = {}
+    model_calls = 0
+
+    def count_call(n: int) -> None:
+        nonlocal model_calls
+        model_calls = n
+
     created: list[tuple[int, str | None]] = []
     ledger = LedgerTools(
         store,
@@ -1766,7 +2008,7 @@ async def ask_async(
     skipped += unreadable
     if memory is not None and usable and is_file_only_question(question):
         memory = None  # the question is about the attached file only: no chat-memory tools
-    tools = build_tools(ledger, calls, memory)
+    tools = build_tools(ledger, calls, memory, tool_ms)
     if usable and actions is not None:
         tools += build_file_tools(usable, actions, calls, created)
     if web_client is not None:
@@ -1790,6 +2032,7 @@ async def ask_async(
         scoped=not is_exec,
         now=now,
         model=model,
+        on_model_call=count_call,
         language=language,
         memory=memory is not None,
         interjection=interjection,
@@ -1830,12 +2073,16 @@ async def ask_async(
     message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
     first_call_s = last_call_s = 0.0
+    tokens = dict.fromkeys(USAGE_FIELDS, 0)
     async for event in runner.run_async(
         user_id=adk_user,
         session_id=session_id,
         new_message=message,
         run_config=RunConfig(max_llm_calls=MAX_ROUNDS + 2),
     ):
+        if event.usage_metadata is not None:
+            for name, attr in USAGE_FIELDS.items():
+                tokens[name] += getattr(event.usage_metadata, attr, None) or 0
         if event.get_function_calls():
             rounds += 1
             last_call_s = time.monotonic() - started
@@ -1861,6 +2108,9 @@ async def ask_async(
         calls,
         created,
         list(secretary.attachments) if secretary is not None else [],
+        model_calls=model_calls,
+        tool_ms=tool_ms,
+        **tokens,
     )
 
 

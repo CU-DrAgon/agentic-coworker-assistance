@@ -1694,14 +1694,23 @@ class MeetingManager:
         if member is None or not bot.team.enabled(s.guild_id, "qa"):
             return
         async with s.answer_lock:
+            t0 = time.monotonic()
             history = s.transcript.history(bot.s.now())
+            # the spoken answer is heard by everyone in the room; typed to the voice channel's chat,
+            # or to the fallback channel when that fails (see _post), it is read there too: the
+            # readers of all of them bound the memory scope
+            fallback = s.fallback_channel
+            also = (bot._answering_id(fallback),) if fallback is not None else ()
             memory = None
             guild = getattr(member, "guild", None)
-            if guild is not None:  # channels everyone in the room can read: the answer is spoken
+            if guild is not None:
                 humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
                 if all(m.id != member.id for m in humans):
                     humans.append(member)
-                memory = await bot._room_memory_tools(guild, s.voice_channel, humans)
+                memory = await bot._room_memory_tools(
+                    guild, s.voice_channel, humans, *also, asker=member
+                )
+            t_ctx = time.monotonic()
             ans = await asyncio.to_thread(
                 ask,
                 bot.s,
@@ -1715,6 +1724,10 @@ class MeetingManager:
                 memory=memory,
                 spoken=True,
                 **bot._web_kw(s.guild_id),
+            )
+            is_exec = bot.is_exec_member(member)
+            bot._log_answer(
+                s.guild_id, s.voice_channel.id, is_exec, ans, t0, t_ctx, time.monotonic()
             )
             if getattr(bot.s, "meeting_text_echo", False):  # meetings stay voice by default
                 for i, part in enumerate(chunks(ans.text, 1800)):

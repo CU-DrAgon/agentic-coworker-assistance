@@ -65,6 +65,11 @@ class DaySummary(BaseModel):
     updated_at: str = ""
     final: bool = False
     dirty: bool = False  # a covered message was deleted: regenerate once from the raw log
+    # Embeddings of the summary's items (salid.memory.vectorize), all optional: "<model>@<dim>",
+    # one short hash per item (same order as memory_summary.summary_items), packed float32.
+    vec_model: str = ""
+    vec_hashes: list[str] = Field(default_factory=list)
+    vecs: bytes = b""
 
     @property
     def cursor(self) -> tuple[str, int] | None:
@@ -212,6 +217,23 @@ class MemoryStore(Protocol):
 
     def get_summary(self, guild_id: int, channel_id: int, local_date: str) -> DaySummary | None: ...
     def put_summary(self, s: DaySummary) -> None: ...
+    def all_summaries(self, guild_id: int) -> list[DaySummary]:
+        """Every day summary of the guild (one query; the memory index and the vector backfill
+        filter in Python)."""
+        ...
+
+    def put_summary_vectors(
+        self,
+        guild_id: int,
+        channel_id: int,
+        local_date: str,
+        vec_model: str,
+        vec_hashes: list[str],
+        vecs: bytes,
+    ) -> bool:
+        """Set only the vector fields of an existing summary; False when it does not exist."""
+        ...
+
     def summaries(
         self, guild_id: int, allowed_channels: Collection[int], start_date: str, end_date: str
     ) -> list[DaySummary]: ...
@@ -246,10 +268,16 @@ CREATE TABLE IF NOT EXISTS salid_day_summaries (
   guild_id INTEGER NOT NULL, channel_id INTEGER NOT NULL, local_date TEXT NOT NULL,
   summary TEXT, last_message_at TEXT, last_message_id INTEGER DEFAULT 0,
   message_count INTEGER DEFAULT 0, updated_at TEXT, final INTEGER DEFAULT 0,
-  dirty INTEGER DEFAULT 0,
+  dirty INTEGER DEFAULT 0, vec_model TEXT DEFAULT '', vec_hashes TEXT DEFAULT '[]', vecs BLOB,
   PRIMARY KEY (guild_id, channel_id, local_date)
 );
 """
+# Columns added after the first release: added to older databases on open.
+SUMMARY_ADDED_COLUMNS = {
+    "vec_model": "TEXT DEFAULT ''",
+    "vec_hashes": "TEXT DEFAULT '[]'",
+    "vecs": "BLOB",
+}
 MESSAGE_COLS = (
     "guild_id,message_id,channel_id,thread_id,author_id,author_name,created_at,local_date,"
     "text,jump_url,edited_at,kind,visibility"
@@ -279,6 +307,10 @@ class SQLiteMemoryStore:
             cols = {r["name"] for r in c.execute("PRAGMA table_info(salid_messages)")}
             if "visibility" not in cols:  # database from before DM notes
                 c.execute("ALTER TABLE salid_messages ADD COLUMN visibility TEXT DEFAULT 'normal'")
+            have = {r["name"] for r in c.execute("PRAGMA table_info(salid_day_summaries)")}
+            for col, decl in SUMMARY_ADDED_COLUMNS.items():
+                if col not in have:
+                    c.execute(f"ALTER TABLE salid_day_summaries ADD COLUMN {col} {decl}")
 
     @contextmanager
     def _conn(self):
@@ -306,6 +338,9 @@ class SQLiteMemoryStore:
         d = dict(row)
         d["summary"] = json.loads(d["summary"] or "{}")
         d["final"], d["dirty"] = bool(d["final"]), bool(d["dirty"])
+        d["vec_model"] = d.get("vec_model") or ""
+        d["vec_hashes"] = json.loads(d.get("vec_hashes") or "[]")
+        d["vecs"] = bytes(d.get("vecs") or b"")
         return DaySummary(**d)
 
     # ------------------------------------------------------------ messages
@@ -463,8 +498,8 @@ class SQLiteMemoryStore:
         with self._conn() as c:
             c.execute(
                 "INSERT OR REPLACE INTO salid_day_summaries (guild_id,channel_id,local_date,"
-                "summary,last_message_at,last_message_id,message_count,updated_at,final,dirty) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                "summary,last_message_at,last_message_id,message_count,updated_at,final,dirty,"
+                "vec_model,vec_hashes,vecs) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     s.guild_id,
                     s.channel_id,
@@ -476,8 +511,28 @@ class SQLiteMemoryStore:
                     s.updated_at,
                     int(s.final),
                     int(s.dirty),
+                    s.vec_model,
+                    json.dumps(s.vec_hashes),
+                    s.vecs,
                 ),
             )
+
+    def all_summaries(self, guild_id):
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM salid_day_summaries WHERE guild_id=? ORDER BY local_date, channel_id",
+                (guild_id,),
+            ).fetchall()
+        return [self._sum(r) for r in rows]
+
+    def put_summary_vectors(self, guild_id, channel_id, local_date, vec_model, vec_hashes, vecs):
+        with self._conn() as c:
+            cur = c.execute(
+                "UPDATE salid_day_summaries SET vec_model=?, vec_hashes=?, vecs=? "
+                "WHERE guild_id=? AND channel_id=? AND local_date=?",
+                (vec_model, json.dumps(vec_hashes), vecs, guild_id, channel_id, local_date),
+            )
+            return cur.rowcount > 0
 
     def summaries(self, guild_id, allowed_channels, start_date, end_date):
         allowed = list(allowed_channels)

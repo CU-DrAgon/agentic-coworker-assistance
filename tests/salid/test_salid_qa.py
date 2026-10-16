@@ -1,9 +1,21 @@
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-from conftest import ALICE, BOB, EXEC_ID, GUILD, fc_resp, scripted, text_resp
+import pytest
+from conftest import ALICE, BOB, EXEC_ID, GUILD, fc_resp, scripted, text_resp, usage
 
 from salid.digest import build_daily_digest
-from salid.qa import MAX_ROUNDS, LedgerTools, ask
+from salid.qa import (
+    CAPABILITIES_PROMPT,
+    MAX_ROUNDS,
+    MEMORY_PROMPT,
+    NO_REPLY,
+    LedgerTools,
+    ask,
+    stable_prompt,
+    system_prompt,
+)
 
 
 def test_aggregation_math(seeded):
@@ -289,3 +301,40 @@ def test_a_model_that_keeps_calling_tools_after_the_cap_gets_an_answer_not_a_cra
     assert not llm.requests[MAX_ROUNDS].config.tools  # tools withdrawn on the call after the cap
     assert "ใช้เครื่องมือครบ" in _tool_results(llm)  # the stray call was answered, not run
     assert len([c for c in a.tool_calls if c[0] == "flagged_receipts"]) == MAX_ROUNDS
+
+
+# ------------------------------------------------------------------ metrics
+def test_answer_reports_tokens_and_tool_time(settings, seeded):
+    llm = scripted(
+        usage(
+            fc_resp(("spending_summary", {"start_date": "2026-10-01", "end_date": "2026-10-14"})),
+            prompt=100, cached=40, out=10, thought=5,
+        ),
+        usage(text_resp("ยอด ฿10,370.50"), prompt=120, cached=60, out=20),
+    )  # fmt: skip
+    a = ask(settings, seeded, "เดือนนี้เท่าไร", guild_id=GUILD, is_exec=True, user_id=EXEC_ID,
+            model=llm)  # fmt: skip
+    assert (a.model_calls, a.tokens_in, a.tokens_cached, a.tokens_out, a.tokens_thought) == (
+        2, 220, 100, 30, 5,
+    )  # fmt: skip
+    assert set(a.tool_ms) == {"spending_summary"} and a.tool_ms["spending_summary"] >= 0
+
+
+def test_answer_without_usage_metadata_reports_zero_tokens(settings, seeded):
+    a = ask(settings, seeded, "hi", guild_id=GUILD, is_exec=True, user_id=EXEC_ID,
+            model=scripted(text_resp("hi")))  # fmt: skip
+    assert (a.model_calls, a.tokens_in, a.tool_ms) == (1, 0, {})
+
+
+# ------------------------------------------------------------------ prompt caching
+@pytest.mark.parametrize("lang", ["th", "en", "auto"])
+def test_prompt_prefix_is_identical_across_times_and_askers(settings, lang):
+    t1 = datetime(2026, 10, 14, 9, 1, tzinfo=ZoneInfo("Asia/Bangkok"))
+    t2 = datetime(2026, 10, 16, 18, 47, tzinfo=ZoneInfo("Asia/Bangkok"))
+    a = system_prompt(settings, scoped=False, now=t1, language=lang, memory=True)
+    b = system_prompt(settings, scoped=True, now=t2, language=lang, memory=True, interjection=True)
+    stable = stable_prompt(lang, memory=True)
+    assert a.startswith(stable) and b.startswith(stable)
+    assert stable.endswith(MEMORY_PROMPT) and CAPABILITIES_PROMPT in stable
+    assert "2026-10-14" not in stable and a.index("2026-10-14") > len(stable)
+    assert "ผู้ถามไม่ใช่ผู้บริหาร" in b[len(stable) :] and NO_REPLY in b[len(stable) :]

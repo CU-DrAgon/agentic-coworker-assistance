@@ -348,7 +348,19 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
    and an allowed-channel set computed from Discord permissions (`salid/memory_access.py`): the asker must be able
    to read the channel, and when the answer is posted in channel X everyone who can read X must be able to read
    the source (DMs: the asker's channels). The model cannot widen it. `chat_days` also returns today's raw messages
-   newer than the summary; outputs are capped (6,000 / 4,000 characters).
+   newer than the summary; outputs are capped (6,000 / 4,000 characters). Voice wake-word answers use the same
+   tools, scoped to the voice channel's chat.
+4. **Hybrid search (keyword + meaning).** Every summary item (overview, topic, decision, action item, number, open
+   question) is embedded once by `SALID_EMBED_MODEL` (default `gemini-embedding-001`, 256 dimensions) when the
+   summary is written; unchanged items keep their vector, and a backfill (10 summaries per tick) covers older
+   summaries. Vectors live on the summary record, so retention, deletion and regeneration apply to them too.
+   `chat_search` takes the user's question as `query` plus a few keywords, ranks day/channel groups by keyword hits
+   and by cosine similarity (Thai and English match each other), and fuses both with reciprocal rank fusion. Raw
+   messages are scanned for the last 3 days and read for the top 5 older hits only (quotes and links); for an exact
+   code in older messages the model uses `chat_messages`. Summaries and vectors are served from an in-process
+   per-guild index (64 MB cap, LRU, one load query per guild); it is correct only with one bot process, which is
+   how the bot is deployed. Join-mode hints stay keyword-only (no embedding calls). Kill switch:
+   `SALID_EMBED_MODEL=` (empty) gives keyword-only search.
 
 - **Retention** is per guild: hub field "เก็บความจำไว้กี่วัน" or `/ความจำ days:<1-3650>` (`/memory`), default
   `SALID_MEMORY_RETENTION_DAYS` (90). The daily purge deletes by the guild's *current* setting (no stored expiry,
@@ -391,6 +403,12 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
 - **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
   retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
   same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.
+- **Short-term context**: the room's last messages (30 lines, 3 hours) come from an in-memory buffer fed by gateway
+  events (edits and deletes included); a channel is read from Discord once to prime it, and again after a reconnect.
+- **Observability**: one log line per answer (`answer guild=... ms_total=... ms_context=... ms_agent=... tools=...
+  tok_in=... tok_cached=... tok_out=... tok_thought=...`) and per memory search (`memory search ... ms_embed=...
+  raw_queries=... keyword=... meaning=... both=...`); ids, timings and counts only, never content. The system
+  prompt puts its stable part first so Gemini's implicit cache can reuse it (`tok_cached` shows it).
 - `MemoryService.delete_guild(guild_id)` wipes a guild's memory; the bot does not call it on removal because it
   keeps every other guild record too (retention expires the data).
 

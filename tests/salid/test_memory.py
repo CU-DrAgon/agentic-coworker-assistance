@@ -3,12 +3,22 @@
 Offline: SQLite and the Firestore fake, scripted LLMs, small Discord fakes."""
 
 import json
-from datetime import UTC, datetime, timedelta
+import time
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from conftest import GUILD, FakeClient, FixedClockSettings, fc_resp, json_resp, scripted, text_resp
+from conftest import (
+    GUILD,
+    FakeClient,
+    FakeEmbedder,
+    FixedClockSettings,
+    fc_resp,
+    json_resp,
+    scripted,
+    text_resp,
+)
 from fake_firestore import offline_memory_store
 from test_bot_multitenant import ME, member
 from test_modes import (  # noqa: F401  (fixtures)
@@ -25,6 +35,8 @@ from test_modes import (  # noqa: F401  (fixtures)
 )
 
 from salid import memory_summary
+from salid import qa as qa_mod
+from salid.embed import unpack
 from salid.guild_settings import (
     GuildSettings,
     GuildSettingsUpdate,
@@ -32,9 +44,18 @@ from salid.guild_settings import (
     default_retention_days,
 )
 from salid.i18n import t
-from salid.memory import MemoryScheduler, MemoryService, build_message, message_text
+from salid.memory import (
+    MemoryScheduler,
+    MemoryService,
+    build_message,
+    message_text,
+    vectorize,
+    vectors_usable,
+)
 from salid.memory_access import ChannelAccess, allowed_channel_ids
+from salid.memory_index import IndexedMemoryStore
 from salid.memory_store import DaySummary, SQLiteMemoryStore
+from salid.memory_summary import summary_items
 from salid.qa import MemoryTools, ask
 
 BKK = ZoneInfo("Asia/Bangkok")
@@ -400,6 +421,14 @@ def test_adapter_applies_permissions_audience_and_modes(bot, rworld):
     assert set(scope(bot, w, w.staff, None)) == {10}  # off channels are never remembered
 
 
+async def test_memory_tools_for_several_answering_channels_intersect(bot, rworld):
+    w = rworld
+    bot._viewers.clear()
+    wide = await bot._memory_tools_for(w.g, w.boss, 11)
+    both = await bot._memory_tools_for(w.g, w.boss, 11, 12)
+    assert set(wide.allowed) == {11, 12} and set(both.allowed) == {12}
+
+
 # ------------------------------------------------------------------ tools
 def seeded_tools(mstore, settings, allowed, now=None):
     now = now or bkk(14, 9).astimezone(UTC)
@@ -470,6 +499,27 @@ def test_chat_days_returns_summaries_and_todays_raw_tail(mstore, settings):
     )
 
 
+def test_firestore_messages_after_filters_the_channel_server_side(settings):
+    st = offline_memory_store()
+    st.add_message(mk(settings, 1, bkk(14, 9).astimezone(UTC), cid=10))
+    st.add_message(mk(settings, 2, bkk(14, 9).astimezone(UTC), cid=11))
+    st.client.streams.clear()
+    assert [m.message_id for m in st.messages_after(GUILD, 10, "2026-10-14")] == [1]
+    assert ("channel_id", "==", 10) in st.client.streams[-1][1]
+
+
+def test_chat_days_reads_each_tail_day_once(settings):
+    st = offline_memory_store()
+    for i, cid in enumerate((10, 11, 12) * 2):
+        day = 13 + i // 3
+        st.add_message(mk(settings, i + 1, bkk(day, 9, i).astimezone(UTC), "x", cid=cid))
+    tools = MemoryTools(st, GUILD, {10: "a", 11: "b", 12: "c"}, settings)
+    st.client.streams.clear()
+    r = tools.chat_days("2026-10-13", "2026-10-14")
+    msg_reads = [f for name, f in st.client.streams if name == "salid_messages"]
+    assert len(msg_reads) == 2 and len(r["newer_than_summary"]) == 6
+
+
 def test_chat_days_output_is_capped_newest_days_first(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "general"}, settings)
     for d in range(1, 15):
@@ -508,26 +558,136 @@ def test_chat_search_ranks_summary_hits_higher_and_matches_any_keyword(mstore, s
 
 def test_chat_search_ties_go_newest_first_and_limits_groups(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
-    for d in (5, 6, 7):
+    for d in (12, 13, 14):  # inside the raw window (last 3 days)
         mstore.add_message(mk(settings, d, bkk(d, 10).astimezone(UTC), "ads", cid=10))
     assert [h["date"] for h in tools.chat_search(["ads"])["hits"]] == [
-        "2026-10-07",
-        "2026-10-06",
-        "2026-10-05",
+        "2026-10-14",
+        "2026-10-13",
+        "2026-10-12",
     ]
     assert len(tools.chat_search(["ads"], limit=2)["hits"]) == 2
 
 
 def test_chat_search_output_is_capped(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
+    long = "ads " + "ก" * 450
     for d in range(1, 15):
-        for i in range(4):
-            mstore.add_message(
-                mk(settings, d * 10 + i, bkk(d, 10, i).astimezone(UTC), "ads " + "ก" * 450, cid=10)
-            )
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      message_count=4, final=True,
+                                      summary={"overview": long, "decisions": [long] * 6}))  # fmt: skip
     r = tools.chat_search(["ads"], limit=50)
     assert len(json.dumps(r, ensure_ascii=False)) <= 4500 and "truncated" in r["note"]
     assert all(len(h["messages"]) <= 3 for h in r["hits"])
+
+
+def test_old_raw_only_days_point_to_chat_messages(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {10: "g"}, settings, retention_days=30)
+    mstore.add_message(mk(settings, 1, bkk(5, 10).astimezone(UTC), "ads", cid=10))
+    r = tools.chat_search(["ads"])
+    assert r["hits"] == [] and "chat_messages" in r["note"]
+
+
+# ------------------------------------------------------------------ hybrid search
+def topic_day(st, day, cid, title, details=""):
+    """A final day summary with one topic, vectorised with the fake embedder."""
+    summary = {"overview": "", "topics": [{"title": title, "details": details, "people": []}]}
+    v = vectorize(summary, None, FakeEmbedder())
+    st.put_summary(DaySummary(guild_id=GUILD, channel_id=cid, local_date=day, message_count=3,
+                              final=True, summary=summary, vec_model=v.model_id,
+                              vec_hashes=v.hashes, vecs=v.data))  # fmt: skip
+
+
+def hybrid_tools(mstore, settings, allowed=None, emb=None):
+    st = IndexedMemoryStore(mstore, emb or FakeEmbedder())
+    return st, MemoryTools(st, GUILD, allowed or {10: "general", 12: "ads"}, settings,
+                           retention_days=30, embedder=emb or FakeEmbedder())  # fmt: skip
+
+
+def test_english_query_finds_a_thai_only_day(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา", "ค่าโฆษณาเฟซบุ๊ก 20,000")
+    topic_day(st, "2026-10-06", 10, "ซื้อน้ำแข็ง")
+    r = tools.chat_search(["marketing budget"], query="what is our marketing budget?")
+    assert [(h["date"], h["channel"], h["match"]) for h in r["hits"]] == [
+        ("2026-10-05", "ads", "meaning")
+    ]
+    assert "งบโฆษณา" in r["hits"][0]["summary_hits"][0]
+
+
+def test_thai_query_finds_an_english_only_day(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 10, "Facebook ads plan")
+    assert tools.chat_search(["งบโฆษณา"], query="งบโฆษณาเท่าไร")["hits"][0]["date"] == "2026-10-05"
+
+
+def test_keyword_and_meaning_together_rank_first(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-03", 10, "Q4 ads plan")  # keyword "ads" and meaning
+    topic_day(st, "2026-10-04", 10, "โฆษณา")  # meaning only (newer, so it wins the meaning tie)
+    r = tools.chat_search(["ads"], query="ads")
+    # RRF: 10-03 = 1/61 + 1/62 beats 10-04 = 1/61
+    assert [(h["date"], h["match"]) for h in r["hits"]] == [
+        ("2026-10-03", "both"),
+        ("2026-10-04", "meaning"),
+    ]
+
+
+def test_embedding_failure_falls_back_to_keywords(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings, emb=FakeEmbedder(fail=True))
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    r = tools.chat_search(["งบโฆษณา"], query="marketing budget")
+    assert [h["match"] for h in r["hits"]] == ["keyword"] and "error" not in r
+
+
+def test_semantic_false_makes_no_embedding_call(mstore, settings):
+    emb = FakeEmbedder()
+    st, tools = hybrid_tools(mstore, settings, emb=emb)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    tools.chat_search(["งบโฆษณา"], semantic=False)
+    assert not [c for c in emb.calls if c[1] == "query"]
+
+
+def test_meaning_hits_never_leave_the_allowed_channels(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings, allowed={10: "general"})
+    topic_day(st, "2026-10-05", 11, "งบโฆษณาลับ")
+    assert tools.chat_search(["marketing"], query="marketing budget")["hits"] == []
+
+
+def test_stale_vectors_are_ignored_not_crashed_on(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    st.put_summary_vectors(GUILD, 12, "2026-10-05", "other@8", ["x"], b"\0" * 32)
+    assert tools.chat_search(["marketing"], query="marketing")["hits"] == []
+
+
+def test_query_only_search_works(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings)
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    assert tools.chat_search([], query="marketing budget")["hits"][0]["date"] == "2026-10-05"
+    assert "error" in tools.chat_search([], query=" ")
+
+
+def test_chat_search_query_budget_on_firestore(settings):
+    base = offline_memory_store()
+    st, tools = hybrid_tools(base, settings, allowed={10: "general", 11: "b"})
+    start = date(2026, 10, 14)
+    for n in range(90):
+        day = (start - timedelta(days=n)).isoformat()
+        for cid in (10, 11):
+            base.put_summary(DaySummary(guild_id=GUILD, channel_id=cid, local_date=day,
+                                        message_count=2, final=n > 1,
+                                        summary={"overview": "ads" if n % 7 == 0 else "x"}))  # fmt: skip
+            at = datetime.fromisoformat(day).replace(hour=3, tzinfo=UTC)
+            for i in range(2):
+                base.add_message(
+                    mk(settings, n * 100 + cid * 2 + i, at + timedelta(minutes=i), "ads", cid=cid)
+                )
+    base.client.streams.clear()
+    assert tools.chat_search(["ads"], query="ads")["hits"]
+    assert len(base.client.streams) <= 10
+    base.client.streams.clear()
+    tools.chat_days("2026-10-08", "2026-10-14")
+    assert len(base.client.streams) <= 3
 
 
 def test_ask_wires_the_memory_tools_and_prompt(mstore, settings, tmp_path):
@@ -537,10 +697,12 @@ def test_ask_wires_the_memory_tools_and_prompt(mstore, settings, tmp_path):
     llm = scripted(fc_resp(("chat_search", {"keywords": ["ads", "งบโฆษณา"]})), text_resp("พบครับ"))
     a = ask(settings, SQLiteStore(str(tmp_path / "l.db")), "งบโฆษณาเหลือเท่าไหร่", guild_id=GUILD,
             is_exec=False, user_id=7, model=llm, memory=tools)  # fmt: skip
-    names = {d.name for t_ in llm.requests[0].config.tools for d in t_.function_declarations}
-    assert {"chat_days", "chat_messages", "chat_search", "spending_summary"} <= names
+    decls = {d.name: d for t_ in llm.requests[0].config.tools for d in t_.function_declarations}
+    assert {"chat_days", "chat_messages", "chat_search", "spending_summary"} <= set(decls)
+    search_params = decls["chat_search"].parameters_json_schema["properties"]
+    assert "query" in search_params and "semantic" not in search_params
     prompt = llm.requests[0].config.system_instruction
-    assert "chat_search" in prompt and "ความจำของทีม" in prompt
+    assert "chat_search" in prompt and "ความจำของทีม" in prompt and "query" in prompt
     blob = json.dumps(
         [
             str(p.function_response)
@@ -904,3 +1066,192 @@ def test_import_state_parity(mstore):
         and mstore.get_guild_state(GUILD).images_done == 0
     )
     assert mstore.get_channel_state(GUILD + 1, 10) is not None
+
+
+# ------------------------------------------------------------------ vectors
+def test_summary_items_lists_every_part():
+    s = {"overview": "o", "topics": [{"title": "t", "details": "d", "people": ["แอน"]}],
+         "decisions": ["x"], "action_items": [{"who": "บอย", "what": "w", "due": ""}],
+         "numbers": ["5"], "open_questions": ["q"]}  # fmt: skip
+    assert summary_items(s) == [
+        "o", "Topic: t d แอน", "Decision: x", "Action: บอย w", "Number: 5", "Open: q",
+    ]  # fmt: skip
+
+
+def test_update_writes_vectors_and_reuses_unchanged_items(mstore, settings):
+    first = json_resp({"overview": "งบโฆษณา", "decisions": ["d1"]})
+    second = json_resp({"overview": "งบโฆษณา", "decisions": ["d1", "ซื้อน้ำแข็ง"]})
+    clock, llm, emb = Clock(bkk(14, 10)), FakeClient([first, second]), FakeEmbedder()
+    s = sched(mstore, settings, clock, llm, embedder=emb)
+    svc = MemoryService(mstore, settings, s)
+    for i in range(30):
+        log(svc, settings, i + 1, bkk(14, 9, i))
+    s.tick([GUILD])
+    for i in range(30, 60):
+        log(svc, settings, i + 1, bkk(14, 10, i - 30))  # after the first update's cursor
+    s.tick([GUILD])
+    assert emb.calls[1] == (["Decision: ซื้อน้ำแข็ง"], "document")
+    got = mstore.get_summary(GUILD, 10, "2026-10-14")
+    assert vectors_usable(got, "fake@4") and len(unpack(got.vecs, 4)) == 3
+
+
+def test_summary_is_saved_when_embedding_fails(mstore, settings):
+    clock, llm = Clock(bkk(14, 10)), FakeClient([summary_json("a")])
+    s = sched(mstore, settings, clock, llm, embedder=FakeEmbedder(fail=True))
+    svc = MemoryService(mstore, settings, s)
+    for i in range(30):
+        log(svc, settings, i + 1, bkk(14, 9, i))
+    s.tick([GUILD])
+    got = mstore.get_summary(GUILD, 10, "2026-10-14")
+    assert got.summary["overview"] == "overview a" and got.vec_model == ""
+
+
+def test_backfill_vectorises_old_summaries_newest_first_with_a_cap(mstore, settings):
+    for d in range(1, 13):
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      final=True, message_count=3, summary={"overview": f"day {d}"}))  # fmt: skip
+    emb = FakeEmbedder()
+    s = sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb)
+    s.tick([GUILD])
+    assert [c[0] for c in emb.calls][0] == ["day 12"] and len(emb.calls) == 10
+    s.tick([GUILD])
+    assert len(emb.calls) == 12
+    s.tick([GUILD])
+    assert len(emb.calls) == 12  # nothing left: the guild is skipped
+    assert all(vectors_usable(x, "fake@4") for x in mstore.all_summaries(GUILD))
+
+
+def test_backfill_redoes_vectors_of_another_model(mstore, settings):
+    old = vectorize({"overview": "งบโฆษณา"}, None, FakeEmbedder())
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01", final=True,
+                                  summary={"overview": "งบโฆษณา"}, vec_model="other@8",
+                                  vec_hashes=old.hashes, vecs=old.data))  # fmt: skip
+    emb = FakeEmbedder()
+    sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb).tick([GUILD])
+    assert mstore.get_summary(GUILD, 10, "2026-10-01").vec_model == "fake@4"
+
+
+def test_empty_summary_counts_as_vectorised():
+    s = DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01", summary={})
+    assert vectors_usable(s, "fake@4") and vectorize({}, None, FakeEmbedder()).embedded == 0
+
+
+def test_put_summary_vectors_and_all_summaries_parity(mstore):
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01",
+                                  summary={"overview": "a"}, message_count=4))  # fmt: skip
+    mstore.put_summary(DaySummary(guild_id=GUILD + 1, channel_id=10, local_date="2026-10-01",
+                                  summary={}))  # fmt: skip
+    assert mstore.put_summary_vectors(GUILD, 10, "2026-10-01", "fake@4", ["h"], b"\0" * 16)
+    assert not mstore.put_summary_vectors(GUILD, 99, "2026-10-01", "fake@4", ["h"], b"")
+    got = mstore.all_summaries(GUILD)
+    assert [(x.channel_id, x.vec_model, x.vecs, x.message_count) for x in got] == [
+        (10, "fake@4", b"\0" * 16, 4)
+    ]
+
+
+def test_old_sqlite_summary_table_gets_vector_columns(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / "old.db")
+    with sqlite3.connect(path) as c:
+        c.execute(
+            "CREATE TABLE salid_day_summaries (guild_id INTEGER, channel_id INTEGER, "
+            "local_date TEXT, summary TEXT, last_message_at TEXT, last_message_id INTEGER DEFAULT 0, "
+            "message_count INTEGER DEFAULT 0, updated_at TEXT, final INTEGER DEFAULT 0, "
+            "dirty INTEGER DEFAULT 0, PRIMARY KEY (guild_id, channel_id, local_date))"
+        )
+        c.execute(
+            "INSERT INTO salid_day_summaries (guild_id, channel_id, local_date, summary, updated_at) "
+            "VALUES (1000, 10, '2026-10-01', '{}', '')"
+        )
+    st = SQLiteMemoryStore(path)
+    assert st.get_summary(GUILD, 10, "2026-10-01").vec_model == ""
+    assert st.put_summary_vectors(GUILD, 10, "2026-10-01", "fake@4", ["h"], b"\1" * 16)
+    assert st.get_summary(GUILD, 10, "2026-10-01").vecs == b"\1" * 16
+
+
+# ------------------------------------------------------------------ review fixes
+def test_backfill_stops_at_its_time_budget(mstore, settings):
+    for d in range(1, 13):
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      final=True, message_count=3, summary={"overview": f"day {d}"}))  # fmt: skip
+    seconds = iter(range(0, 1000, 2))  # every timer read: 2 s later
+    emb = FakeEmbedder()
+    s = sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=emb,
+              timer=lambda: next(seconds))  # fmt: skip
+    s.tick([GUILD])
+    assert len(emb.calls) == 2  # the tick loop is not held for the whole batch
+
+
+def test_backfill_rechecks_a_done_guild_for_summaries_written_elsewhere(mstore, settings):
+    clock, emb = Clock(bkk(14, 10)), FakeEmbedder()
+    s = sched(mstore, settings, clock, FakeClient([]), embedder=emb)
+    s.tick([GUILD])  # nothing to do yet: the guild is marked done
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-01",
+                                  final=True, summary={"overview": "imported"}))  # fmt: skip
+    s.tick([GUILD])  # e.g. written by the history importer, not by the scheduler
+    assert emb.calls == []
+    clock.at = bkk(14, 10, 11)
+    s.tick([GUILD])
+    assert vectors_usable(mstore.get_summary(GUILD, 10, "2026-10-01"), "fake@4")
+
+
+def test_one_unembeddable_summary_does_not_stall_the_backfill(mstore, settings):
+    for d, text in ((1, "day 1"), (2, "day 2"), (3, "poison")):
+        mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date=f"2026-10-{d:02d}",
+                                      final=True, message_count=3, summary={"overview": text}))  # fmt: skip
+
+    class Picky(FakeEmbedder):
+        def embed(self, texts, task):
+            if any("poison" in t for t in texts):
+                raise RuntimeError("rejected")
+            return super().embed(texts, task)
+
+    s = sched(mstore, settings, Clock(bkk(14, 10)), FakeClient([]), embedder=Picky())
+    s.tick([GUILD])
+    s.tick([GUILD])
+    for day in ("2026-10-01", "2026-10-02"):
+        assert vectors_usable(mstore.get_summary(GUILD, 10, day), "fake@4")
+
+
+def test_slow_query_embedding_times_out_to_keywords(mstore, settings, monkeypatch):
+    monkeypatch.setattr(qa_mod, "QUERY_EMBED_TIMEOUT_S", 0.05)
+
+    class Slow(FakeEmbedder):
+        model_id = "slow@4"
+
+        def embed(self, texts, task):
+            if task == "query":
+                time.sleep(0.5)
+            return super().embed(texts, task)
+
+    st, tools = hybrid_tools(mstore, settings, emb=Slow())
+    topic_day(st, "2026-10-05", 12, "งบโฆษณา")
+    started = time.monotonic()
+    r = tools.chat_search(["งบโฆษณา"], query="a slow marketing question")
+    assert time.monotonic() - started < 0.4 and [h["match"] for h in r["hits"]] == ["keyword"]
+
+
+def test_month_range_ending_in_the_future_stays_within_budget(settings):
+    base = offline_memory_store()
+    st, tools = hybrid_tools(base, settings, allowed={10: "general"})
+    base.add_message(mk(settings, 1, bkk(14, 9).astimezone(UTC), "ads", cid=10))
+    base.client.streams.clear()
+    r = tools.chat_search(["ads"], "2026-10-01", "2026-10-31", query="ads this month")
+    assert r["hits"] and len(base.client.streams) <= 10
+
+
+def test_query_only_search_uses_its_words_when_meaning_search_is_off(mstore, settings):
+    tools = MemoryTools(mstore, GUILD, {12: "ads"}, settings, retention_days=30)  # no embedder
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=12, local_date="2026-10-05",
+                                  message_count=3, final=True,
+                                  summary={"overview": "marketing plan for Q4"}))  # fmt: skip
+    r = tools.chat_search([], query="what is the marketing plan?")
+    assert [h["date"] for h in r["hits"]] == ["2026-10-05"]
+
+
+def test_query_only_search_uses_its_words_when_embedding_fails(mstore, settings):
+    st, tools = hybrid_tools(mstore, settings, emb=FakeEmbedder(fail=True))
+    topic_day(st, "2026-10-05", 12, "marketing plan")
+    r = tools.chat_search([], query="the marketing plan please")
+    assert [(h["date"], h["match"]) for h in r["hits"]] == [("2026-10-05", "keyword")]

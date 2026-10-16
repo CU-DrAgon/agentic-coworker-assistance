@@ -111,3 +111,71 @@ def test_live_firestore_store_and_gcs_archive():
                 snap.reference.delete()
         if uri:
             arch.delete(uri)
+
+
+def test_embedding_probe():
+    """One-off probe for memory search: model availability in the configured location, the batch
+    limit, the dimension, and Thai/English similarity (prints the numbers used to calibrate
+    salid.embed.EMBED_BATCH and qa.MIN_SIMILARITY)."""
+    from salid.embed import VertexEmbedder, cosine
+
+    s = Settings()
+    texts = ["งบโฆษณาเดือนนี้ 50,000 บาท", "marketing budget for this month", "ซื้อน้ำแข็ง 3 ถุง"]
+    client = make_client(s)
+    try:
+        vecs = VertexEmbedder(client, s.embed_model, 256, batch=3).embed(texts, "document")
+        batch_ok = True
+    except Exception as e:  # noqa: BLE001  (the probe reports which batch size works)
+        print(f"batch of 3 failed: {type(e).__name__}: {e}")
+        vecs = VertexEmbedder(client, s.embed_model, 256, batch=1).embed(texts, "document")
+        batch_ok = False
+    th, en, ice = vecs
+    q = VertexEmbedder(client, s.embed_model, 256).embed(["how big is the ads budget?"], "query")[0]
+    print(
+        f"model={s.embed_model} location={s.embed_location or s.gemini_location} "
+        f"batch3_ok={batch_ok} dims={[len(v) for v in vecs]}\n"
+        f"cos(th,en)={cosine(th, en):.3f} cos(th,ice)={cosine(th, ice):.3f} "
+        f"cos(en,ice)={cosine(en, ice):.3f} cos(q,th)={cosine(q, th):.3f} "
+        f"cos(q,ice)={cosine(q, ice):.3f}"
+    )
+    assert all(len(v) == 256 for v in vecs)
+    assert cosine(th, en) > cosine(th, ice) and cosine(q, th) > cosine(q, ice)
+
+
+def test_live_memory_store_queries():
+    """Real Firestore for the memory store's queries (three equality filters in messages_after,
+    the guild-wide all_summaries, bytes vectors), in throwaway `salid_*_test_<random>` collections
+    that are deleted in `finally`."""
+    import uuid
+    from datetime import UTC, datetime
+
+    from google.cloud import firestore
+
+    from salid.firestore_memory import FirestoreMemoryStore
+    from salid.memory import build_message
+    from salid.memory_store import DaySummary
+
+    s = Settings.from_env()
+    token = uuid.uuid4().hex[:10]
+    names = {k: f"salid_{k}_test_{token}" for k in ("messages", "summaries", "channels", "guilds")}
+    client = firestore.Client(project=s.gcp_project)
+    store = FirestoreMemoryStore(client=client, project=s.gcp_project, **names)
+    try:
+        at = datetime(2026, 10, 14, 3, 0, tzinfo=UTC)
+        for mid, cid in ((1, 10), (2, 11), (3, 10)):
+            store.add_message(build_message(
+                s, guild_id=GUILD, channel_id=cid, message_id=mid, author_id=1, author_name="a",
+                created_at=at.replace(minute=mid), text=f"m{mid}",
+            ))  # fmt: skip
+        assert [m.message_id for m in store.messages_after(GUILD, 10, "2026-10-14")] == [1, 3]
+        got = store.messages(GUILD, {10, 11}, "2026-10-13", "2026-10-14", newest_first=False)
+        assert [m.message_id for m in got] == [1, 2, 3]
+        store.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-14",
+                                     summary={"overview": "x"}, updated_at=""))  # fmt: skip
+        assert store.put_summary_vectors(GUILD, 10, "2026-10-14", "m@2", ["h"], b"\x00" * 8)
+        [summary] = store.all_summaries(GUILD)
+        assert summary.vec_model == "m@2" and summary.vecs == b"\x00" * 8
+    finally:
+        for name in names.values():
+            for snap in client.collection(name).stream():
+                snap.reference.delete()

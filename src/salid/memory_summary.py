@@ -129,6 +129,21 @@ def update_summary(
     return current or SummaryDoc().model_dump()
 
 
+def summary_items(summary: dict) -> list[str]:
+    """The searchable items of a summary, one line each: overview, topics, decisions, action
+    items, numbers, open questions. Keyword search and embeddings use the same items."""
+    lines = [summary.get("overview") or ""]
+    for tp in summary.get("topics") or []:
+        people = ", ".join(tp.get("people") or [])
+        lines.append(f"Topic: {tp.get('title', '')} {tp.get('details', '')} {people}".strip())
+    lines += [f"Decision: {x}" for x in summary.get("decisions") or []]
+    for a in summary.get("action_items") or []:
+        lines.append(f"Action: {a.get('who', '')} {a.get('what', '')} {a.get('due', '')}")
+    lines += [f"Number: {x}" for x in summary.get("numbers") or []]
+    lines += [f"Open: {x}" for x in summary.get("open_questions") or []]
+    return [x.strip() for x in lines if x and x.strip()]
+
+
 def render_summary(summary: dict, max_chars: int = RENDER_CHARS) -> str:
     """The summary as compact text for the answering model."""
     lines: list[str] = []

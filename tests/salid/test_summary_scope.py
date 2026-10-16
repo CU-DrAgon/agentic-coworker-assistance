@@ -69,6 +69,9 @@ async def as_c(bot, world):
     person(g, PASSIN, "passin", 9)
     c = person(g, C, "C", 2)
     bot.team._cache.clear()
+    # the seeded records are from the 15th/16th: the clock must not be before them (hybrid
+    # search only scans raw messages of days that already happened)
+    object.__setattr__(bot.s, "now", lambda: at(12, day=16))
     seed(bot)
     where = SimpleNamespace(guild=g, channel=g.text_channels[0])
     return await bot._memory_tools(where, g, c)

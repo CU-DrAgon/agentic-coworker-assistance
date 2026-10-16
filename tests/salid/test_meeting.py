@@ -345,6 +345,85 @@ async def test_wake_word_answers_with_transcript_history(env, monkeypatch):
     await env.mgr.end((1000, 77))
 
 
+async def test_wake_word_answers_get_memory_scoped_to_the_voice_channel(env, monkeypatch):
+    s = await start(env)
+    env.chan.members = [env.guild.members[10], env.guild.members[11]]  # the room
+    scoped, asked = [], {}
+
+    async def tools_for(guild, voice_channel, humans, *also, asker=None):
+        scoped.append((guild.id, asker.id, voice_channel.id, also, sorted(h.id for h in humans)))
+        return "MEMORY"
+
+    monkeypatch.setattr(env.bot, "_room_memory_tools", tools_for)
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด เมื่อวานตกลงงบไว้เท่าไร")
+    await env.mgr.handle_segment(s, segment(11))
+    # the speaker is scoped with the whole room, against the voice channel's chat readers
+    assert scoped == [(1000, 11, env.chan.id, (), [10, 11])] and asked["memory"] == "MEMORY"
+    await env.mgr.end((1000, 77))
+
+
+async def test_voice_memory_scope_also_covers_the_fallback_channel(env, monkeypatch):
+    # answers fall back to the channel the meeting was started from: its readers bound the scope too
+    fallback = SimpleNamespace(id=55, name="ทั่วไป", parent_id=None, sent=[])
+
+    async def fallback_send(text):
+        fallback.sent.append(text)
+
+    fallback.send = fallback_send
+    a = make_member(env.guild, 10, "แอน", env.chan)
+    make_member(env.guild, 11, "บอย", env.chan)
+    await env.mgr.join(a, fallback_channel=fallback)
+    s = env.mgr.sessions[(1000, 77)]
+    scoped = []
+
+    async def tools_for(guild, voice_channel, humans, *also, asker=None):
+        scoped.append((voice_channel.id, also))
+        return None
+
+    monkeypatch.setattr(env.bot, "_room_memory_tools", tools_for)
+    import salid.qa
+
+    monkeypatch.setattr(salid.qa, "ask", lambda *a, **kw: SimpleNamespace(text="ok"))
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด เมื่อวานตกลงอะไร")
+    await env.mgr.handle_segment(s, segment(11))
+    assert scoped == [(env.chan.id, (55,))]
+    await env.mgr.end((1000, 77))
+
+
+async def test_voice_answers_log_a_metrics_line(env, monkeypatch, caplog):
+    s = await start(env)
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: SimpleNamespace(text="ok", rounds=0, seconds=0.1)
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด ยอดเท่าไร")
+    with caplog.at_level("INFO", logger="salid.bot"):
+        await env.mgr.handle_segment(s, segment(11))
+    assert any(r.getMessage().startswith("answer guild=1000 channel=77 ") for r in caplog.records)
+    await env.mgr.end((1000, 77))
+
+
+async def test_wake_word_without_the_memory_feature_passes_no_memory(env, monkeypatch):
+    env.bot.guilds_store.save_settings(1000, GuildSettingsUpdate(features=dict(memory=False)), "x")
+    s = await start(env)
+    asked = {}
+    import salid.qa
+
+    monkeypatch.setattr(
+        salid.qa, "ask", lambda *a, **kw: asked.update(kw) or SimpleNamespace(text="ok")
+    )
+    monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด สรุปเมื่อวานหน่อย")
+    await env.mgr.handle_segment(s, segment(11))
+    assert asked["memory"] is None
+    await env.mgr.end((1000, 77))
+
+
 async def test_wake_word_exec_flag_follows_the_speaker(env, monkeypatch):
     s = await start(env)
     boss = make_member(env.guild, 5, "เจ้านาย", env.chan)
@@ -842,7 +921,8 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
     posted, spoken = [], []
 
     async def go():
-        async def memory_tools(guild, voice_channel, humans):
+        async def memory_tools(guild, voice_channel, humans, *also, asker=None):
+            seen["asker"] = asker.id
             seen["humans"] = [h.id for h in humans]
             return "MEM"
 
@@ -852,6 +932,7 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
             store=None,
             is_exec_member=lambda mem: True,
             _room_memory_tools=memory_tools,
+            _log_answer=lambda *a: None,
             _web_kw=lambda gid: {"web_client": "W"},
         )
         mgr = m.MeetingManager(bot)
@@ -860,7 +941,8 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
             transcript=SimpleNamespace(history=lambda now: ""),
             answer_lock=asyncio.Lock(),
             text_channel=None,
-            voice_channel=SimpleNamespace(members=[SimpleNamespace(id=6, bot=False)]),
+            fallback_channel=None,
+            voice_channel=SimpleNamespace(id=77, members=[SimpleNamespace(id=6, bot=False)]),
             language="th",
             ending=False,
             vc=SimpleNamespace(is_connected=lambda: True),

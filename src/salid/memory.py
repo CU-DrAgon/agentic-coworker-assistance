@@ -12,15 +12,20 @@ contents.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import threading
+import time
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 from . import memory_summary
 from .config import Settings
+from .embed import NullEmbedder, pack, unpack
 from .memory_store import DaySummary, MemoryMessage, MemoryStore, iso
+from .memory_summary import summary_items
 
 logger = logging.getLogger(__name__)
 UTC = UTC
@@ -29,6 +34,9 @@ MAX_TEXT_CHARS = 4000
 MAX_UPDATES_PER_TICK = 3
 MAX_FETCH = 600  # messages read per channel-day update
 RETRY_AFTER = timedelta(minutes=5)  # after a failed summary call
+MAX_VECTORIZE_PER_TICK = 10  # old summaries given vectors per tick (backfill)
+BACKFILL_BUDGET_S = 3.0  # the backfill stops after this long (it runs inside the bot's tick)
+VECTORS_RECHECK = timedelta(minutes=10)  # a done guild / failed summary is looked at again
 DISCORD_EPOCH_MS = 1420070400000
 
 
@@ -91,6 +99,54 @@ def build_message(
     )
 
 
+def item_hash(text: str) -> str:
+    """Short stable id of a summary item's text (vectors are reused while it is unchanged)."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+
+
+class Vectors(NamedTuple):
+    model_id: str
+    hashes: list[str]
+    data: bytes  # packed float32, one vector per item
+    embedded: int  # items sent to the embedding model
+    reused: int  # items whose vector came from the previous version
+
+
+def vectorize(summary: dict, previous: DaySummary | None, embedder) -> Vectors:
+    """Vectors for a summary's items. Items whose text is unchanged since `previous` (same model)
+    keep their vector; the rest go to the embedder in one call. Raises when embedding fails."""
+    model_id = embedder.model_id
+    if not model_id:
+        return Vectors("", [], b"", 0, 0)
+    items = summary_items(summary)
+    hashes = [item_hash(x) for x in items]
+    known = {}
+    if previous is not None and previous.vec_model == model_id and previous.vecs:
+        old = unpack(previous.vecs, embedder.dim)
+        if len(old) == len(previous.vec_hashes):
+            known = dict(zip(previous.vec_hashes, old, strict=True))
+    missing = list(dict.fromkeys(x for x, h in zip(items, hashes, strict=True) if h not in known))
+    if missing:
+        fresh = embedder.embed(missing, "document")
+        if len(fresh) != len(missing):
+            raise ValueError(f"expected {len(missing)} vectors, got {len(fresh)}")
+        known.update(zip((item_hash(x) for x in missing), fresh, strict=True))
+    reused = sum(1 for x in items if x not in missing)
+    return Vectors(model_id, hashes, pack([known[h] for h in hashes]), len(missing), reused)
+
+
+def _summary_key(s: DaySummary) -> tuple[int, int, str]:
+    return (s.guild_id, s.channel_id, s.local_date)
+
+
+def vectors_usable(s: DaySummary, model_id: str) -> bool:
+    """The summary has vectors for every item from `model_id` (an empty summary needs none)."""
+    items = summary_items(s.summary)
+    return bool(model_id) and (
+        not items or (s.vec_model == model_id and len(s.vec_hashes) == len(items))
+    )
+
+
 @dataclass
 class _Entry:
     count: int = 0  # new messages since the last update
@@ -121,6 +177,8 @@ class MemoryScheduler:
         enabled: Callable[[int], bool] = lambda gid: True,
         max_updates: int = MAX_UPDATES_PER_TICK,
         on_summary: Callable[[int, int, str, dict, list[MemoryMessage]], None] | None = None,
+        embedder=None,
+        timer: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store, self.s, self.llm = store, settings, llm
         # called after a summary was stored: (guild, channel, day, summary dict, new messages)
@@ -134,6 +192,13 @@ class MemoryScheduler:
         self._known_guilds: set[int] = set()  # guilds seen by tick(): their own retention applies
         self._lock = threading.Lock()
         self._purged_on: str | None = None
+        self.embedder = embedder or NullEmbedder()
+        self.timer = timer  # wall-clock budget of one backfill run
+        # guild -> when all its summaries had vectors; summaries may also be written outside the
+        # scheduler (history import), so a done guild is looked at again after VECTORS_RECHECK
+        self._vectors_done: dict[int, datetime] = {}
+        self._vector_failed: dict[tuple[int, int, str], datetime] = {}  # summary -> failed at
+        self._backfill_turn = 0
 
     # ------------------------------------------------------------ events from the log
     def note(self, guild_id: int, channel_id: int, local_date: str) -> None:
@@ -161,7 +226,57 @@ class MemoryScheduler:
                 break
             if self._update(key):
                 done += 1
+        self._backfill(guild_ids)
         self.maybe_purge(now)
+        return done
+
+    def _backfill(self, guild_ids: list[int]) -> int:
+        """Give old summaries vectors: one guild per tick (round-robin), newest days first, at most
+        MAX_VECTORIZE_PER_TICK and BACKFILL_BUDGET_S. A guild with nothing missing, and a summary
+        whose embedding failed, are skipped for VECTORS_RECHECK. Returns the summaries done."""
+        model_id = self.embedder.model_id
+        now = self.now()
+        todo = [
+            g
+            for g in guild_ids
+            if self.enabled(g)
+            and now - self._vectors_done.get(g, now - VECTORS_RECHECK) >= VECTORS_RECHECK
+        ]
+        if not model_id or not todo:
+            return 0
+        gid = todo[self._backfill_turn % len(todo)]
+        self._backfill_turn += 1
+        missing = sorted(
+            (
+                x
+                for x in self.store.all_summaries(gid)
+                if not vectors_usable(x, model_id)
+                and now - self._vector_failed.get(_summary_key(x), now - VECTORS_RECHECK)
+                >= VECTORS_RECHECK
+            ),
+            key=lambda x: x.local_date,
+            reverse=True,
+        )
+        if not missing:
+            self._vectors_done[gid] = now
+            return 0
+        done, started = 0, self.timer()
+        for x in missing[:MAX_VECTORIZE_PER_TICK]:
+            try:
+                v = vectorize(x.summary, x, self.embedder)
+            except Exception:
+                logger.warning("memory vector backfill failed for guild %s", gid, exc_info=True)
+                self._vector_failed[_summary_key(x)] = now  # skipped for a while: others go first
+                break
+            self.store.put_summary_vectors(
+                gid, x.channel_id, x.local_date, v.model_id, v.hashes, v.data
+            )
+            done += 1
+            if self.timer() - started >= BACKFILL_BUDGET_S:
+                break
+        logger.info(
+            "memory vector backfill guild=%s summaries=%d left=%d", gid, done, len(missing) - done
+        )
         return done
 
     def _seed(self, guild_id: int, now: datetime) -> None:
@@ -266,6 +381,11 @@ class MemoryScheduler:
             return False
         base = 0 if dirty or summary is None else summary.message_count
         last = msgs[-1] if msgs else None
+        try:  # embeddings never block a summary: on failure it is saved without vectors
+            vec = vectorize(new, summary, self.embedder)
+        except Exception:
+            logger.warning("memory vectors failed for %s/%s %s", gid, cid, day, exc_info=True)
+            vec = Vectors("", [], b"", 0, 0)
         fresh = self.store.get_summary(gid, cid, day)
         out = DaySummary(
             guild_id=gid,
@@ -282,16 +402,20 @@ class MemoryScheduler:
             updated_at=iso(now.astimezone(UTC)),
             final=past and not more,
             dirty=bool(fresh and fresh.dirty and not dirty),
+            vec_model=vec.model_id,
+            vec_hashes=vec.hashes,
+            vecs=vec.data,
         )
         self.store.put_summary(out)
+        self._vectors_done.pop(gid, None)
         if self.on_summary is not None and msgs:
             try:
                 self.on_summary(gid, cid, day, new, [m for m in msgs if m.visibility != "private"])
             except Exception:
                 logger.warning("summary hook failed for %s/%s %s", gid, cid, day, exc_info=True)
         logger.info(
-            "memory update guild=%s channel=%s day=%s new=%d llm=%s final=%s",
-            gid, cid, day, len(msgs), calls, out.final,
+            "memory update guild=%s channel=%s day=%s new=%d llm=%s final=%s embedded=%d reused=%d",
+            gid, cid, day, len(msgs), calls, out.final, vec.embedded, vec.reused,
         )  # fmt: skip
         with self._lock:
             if out.final:

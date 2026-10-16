@@ -118,6 +118,10 @@ class Settings(BaseSettings):
     # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
     # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
     transcribe_location: str = "asia-southeast1"
+    # Meaning-based memory search (salid.embed): empty model = keyword-only, no embedding calls.
+    embed_model: str = "gemini-embedding-001"
+    embed_dim: int = 256
+    embed_location: str = ""  # empty = gemini_location
     # Organisational memory (salid.memory): raw chat log + per-channel day summaries.
     memory_retention_days: int = 90
     memory_update_every: int = 30  # new messages in a channel that trigger a summary update
