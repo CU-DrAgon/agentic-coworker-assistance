@@ -979,10 +979,19 @@ def select_files(files: list[FileInput]) -> tuple[list[FileInput], list[FileInpu
     return ok, skipped
 
 
+MAX_DECODE_PIXELS = 50_000_000  # images decoded in-process (GIF first frame); bot memory is 2 GiB
+
+
+class ImageTooLarge(ValueError):
+    """The image header declares more than MAX_DECODE_PIXELS; refused before decoding."""
+
+
 def _gif_first_frame(data: bytes) -> bytes:
     from PIL import Image
 
     with Image.open(io.BytesIO(data)) as im:
+        if im.width * im.height > MAX_DECODE_PIXELS:  # a tiny file can declare a huge canvas
+            raise ImageTooLarge(f"image larger than {MAX_DECODE_PIXELS // 1_000_000} megapixels")
         im.seek(0)
         out = io.BytesIO()
         im.convert("RGBA").save(out, format="PNG")
@@ -1006,8 +1015,8 @@ def file_parts(files: list[FileInput]) -> tuple[list[types.Part], list[FileInput
                 data, mime = _gif_first_frame(data), "image/png"
             parts.append(types.Part(text=label))
             parts.append(types.Part.from_bytes(data=data, mime_type=mime))
-        except Exception:
-            f.skip = "could not be read"
+        except Exception as e:
+            f.skip = str(e) if isinstance(e, ImageTooLarge) else "could not be read"
             bad.append(f)
     return parts, bad
 
