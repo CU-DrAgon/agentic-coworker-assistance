@@ -147,6 +147,7 @@ from .private_chat_bot import PrivateChatMixin
 from .profiles import ProfileMixin, effective_language, profile_block
 from .promo_bot import PromoMixin
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
+from .quotation_bot import QuotationMixin
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .recent import RecentMessages
 from .scheduling import DiscordCalendar, MeetingService
@@ -337,6 +338,7 @@ class SecretaryBot(
     TravelMixin,
     MarketsMixin,
     IdeasMixin,
+    QuotationMixin,
     MeetingDocMixin,
     CompanyMixin,
     ContestsMixin,
@@ -500,6 +502,7 @@ class SecretaryBot(
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
+        self._quotation_init()  # quotations (salid.quotation_bot)
         self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
         self._contests_init()  # hackathons / grants / tenders (salid.contests_bot)
         self._bizfin_init()  # finance calculators, benchmark, security (salid.bizfin_bot)
@@ -2181,6 +2184,7 @@ class SecretaryBot(
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),

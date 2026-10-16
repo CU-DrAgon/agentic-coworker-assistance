@@ -296,6 +296,8 @@ BACKGROUND_TOOLS = frozenset(
         "market_benchmark",  # 20-60 s web benchmark + PDF
         "business_framework",  # long framework + PDF
         "idea_export",  # PDF / docx / md of an idea
+        "make_quotation",  # quotation PDF + docx
+        "revise_quotation",  # new revision of a quotation, PDF + docx
         "financial_projection",  # spreadsheet / PDF
         "meeting_document",  # minutes document file
         "contest_plan",  # plan, optionally PDF

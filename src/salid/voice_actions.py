@@ -64,6 +64,9 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "idea_export",
         "idea_share",
         "business_framework",
+        # quotations are issued in the company's name by the person who asked (their role decides)
+        "make_quotation",
+        "revise_quotation",
         "teach_company",
         "propose_lesson",
         "forget_company_item",

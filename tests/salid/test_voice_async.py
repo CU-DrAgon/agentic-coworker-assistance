@@ -275,7 +275,7 @@ async def test_a_known_long_tool_goes_to_the_background_at_once(lv, asked, monke
 def test_background_tools_are_the_documented_list():
     assert {
         "deep_research", "make_promo_kit", "create_deck", "market_benchmark", "business_framework",
-        "idea_export", "financial_projection", "meeting_document", "contest_plan", "contest_pitch",
+        "idea_export", "make_quotation", "revise_quotation", "financial_projection", "meeting_document", "contest_plan", "contest_pitch",
         "wiki_write", "wiki_publish",
     } == lvm.BACKGROUND_TOOLS  # fmt: skip
 
