@@ -593,4 +593,4 @@ named by voice/text ("ส่งมติการประชุมไปห้�
 สะหลิด, สลิต, ซาลิด, ซะลิด, salid, saleed; สนิท / สิริ / Siri only as an address: greeting, particle, "น้อง", start/end of the utterance).
 Then it is *engaged* and answers every utterance without the name; "ขอบคุณครับ", "พอแล้ว", "ยุติได้", "thanks, that's all" or
 `SALID_ENGAGED_TIMEOUT_SECONDS` (90) of nobody addressing it return to listening. "ออกประชุม / ออกจากห้อง / ไปได้แล้ว / leave" leave the room.
-In Live mode the model is told the state; if it has not started answering `SALID_LIVE_FORCE_REPLY_SECONDS` (1.2) after the name, a cue forces a turn.
+In Live mode the model is told the state; if it has not started answering after the name, a cue forces a turn: `SALID_LIVE_NAME_REPLY_SECONDS` (1.5) after the speaker went quiet when the name was seen in the Live input transcript, `SALID_LIVE_FORCE_REPLY_SECONDS` for the classic transcription. A spoken "one moment" clip plays while ask_salid runs (`SALID_LIVE_FILLER`).

@@ -1507,6 +1507,7 @@ def build_agent(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    thinking_level: str = "LOW",
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1552,10 +1553,13 @@ def build_agent(
         instruction=lambda _ctx: prompt,
         tools=tools,
         generate_content_config=types.GenerateContentConfig(
-            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level="LOW")
+            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
         ),
         before_model_callback=before_model,
     )
+
+
+SPOKEN_THINKING = "MINIMAL"  # ThinkingLevel for answers that are read aloud in a voice room
 
 
 def spoken_hint(particle: str = "") -> str:
@@ -1674,6 +1678,8 @@ async def ask_async(
         people=people,
         coo=bool(extra_tools),
         profile=profile,
+        # Spoken answers sit between a person and the sound of silence: think as little as possible.
+        thinking_level=SPOKEN_THINKING if spoken else "LOW",
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -1694,6 +1700,7 @@ async def ask_async(
         text_in += "\n" + spoken_hint(str(getattr(settings, "voice_particle", "") or ""))
     message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
+    first_call_s = last_call_s = 0.0
     async for event in runner.run_async(
         user_id=adk_user,
         session_id=session_id,
@@ -1702,8 +1709,20 @@ async def ask_async(
     ):
         if event.get_function_calls():
             rounds += 1
+            last_call_s = time.monotonic() - started
+            first_call_s = first_call_s or last_call_s
         elif event.is_final_response() and event.content and event.content.parts:
             text = "".join(p.text or "" for p in event.content.parts if not p.thought).strip()
+    total_s = time.monotonic() - started
+    if spoken:  # timing only, no content
+        logger.info(
+            "qa spoken timing: first tool call %.1fs, last tool call %.1fs, total %.1fs, "
+            "%d tool rounds",
+            first_call_s,
+            last_call_s,
+            total_s,
+            rounds,
+        )
     if not text and interjection:
         text = NO_REPLY  # an unprompted answer that failed is never worth posting
     return Answer(

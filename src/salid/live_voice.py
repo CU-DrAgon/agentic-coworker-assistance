@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import threading
 import time
 from array import array
@@ -31,9 +32,16 @@ import discord
 from google.genai import types
 
 from .i18n import resolve_lang
-from .meeting import SPEAK_COOLDOWN_S, _connected, _stop_playback
+from .meeting import (
+    SPEAK_COOLDOWN_S,
+    _connected,
+    _stop_playback,
+    parse_meeting_command,
+    parse_wake,
+)
 from .mentions import tag_candidates
 from .qa import THAI_DAYS
+from .speech import pcm_duration_s, say, with_particle
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -146,6 +154,24 @@ def ask_salid(question: str) -> dict:
     return {}
 
 
+HEARD_GAP_S = 3.0  # input-transcript text after this much quiet starts a new utterance
+NAME_DEDUPE_S = 10.0  # a classic name hit this soon after a Live-transcript hit is the same call
+FILLERS = {
+    "th": ["แป๊บนึงนะคะ", "ขอดูให้แป๊บนึงนะคะ", "เดี๋ยวสลิดเช็กให้ค่ะ", "รอสักครู่นะคะ"],
+    "en": ["One moment.", "One moment, let me check.", "Let me look that up.", "Give me a second."],
+}
+FILLER_AGAIN = {"th": "ใกล้เสร็จแล้วค่ะ", "en": "Almost there."}
+FILLER_TOOLS = {"ask_salid"}  # tools that take seconds: worth a spoken "one moment"
+SPEAKER_NOTE_MIN_S = 1.0  # speaker-change notes are at least this far apart
+BURST_GAP_S = 1.0  # a speaker's frames this close together are one stretch of speech
+SPEAKER_KEEP_S = 120.0  # how long speech stretches are remembered
+ASKER_MAX_AGE_S = 30.0  # the last utterance counts as "who asked" if it ended this recently
+ROOM_NOTE = (
+    "(ผู้ถามคือ {asker}. คำตอบนี้จะถูกพูดให้ทุกคนในห้องเสียงฟัง: การกระทำ (นัด อีเมล DM โพสต์ อนุมัติ งาน) "
+    "ทำในนามผู้ถามด้วยสิทธิ์ของเขา แต่ข้อมูลที่พูดต้องเป็นสิ่งที่ทุกคนในห้องดูได้เท่านั้น. "
+    "ถ้าสิ่งที่ถามถูกจำกัดเพราะมีคนในห้องที่ไม่มีสิทธิ์ ให้ตอบสั้น ๆ ว่าพูดตรงนี้ไม่ได้เพราะไม่ใช่ทุกคนในห้องฟังได้ "
+    "และเสนอส่งให้ทาง DM; ถ้าผู้ถามตกลงให้ใช้ send_dm ถึง “me”)"
+)
 ASK_TIMEOUT_S = 60.0
 ANSWER_MAX_CHARS = 600
 LEDGER_NOTE = (
@@ -360,7 +386,11 @@ def build_instruction(
             "- เรียก ask_salid เฉพาะเมื่อคำถามต้องใช้ข้อมูลของทีม (ใครพูดอะไร/มติ งานและเจ้าของ ไฟล์ ใบเสร็จ/ค่าใช้จ่าย "
             "ตารางนัด) หรือข้อมูลล่าสุดจากเว็บ แล้วเรียบเรียงคำตอบเป็นคำพูดของคุณเอง ห้ามเดาหรือคำนวณตัวเลขเอง\n"
             "- ห้ามพูดถึงเงิน ใบเสร็จ หรือค่าใช้จ่ายเองเด็ดขาด เว้นแต่มีคนถามเรื่องนั้นโดยตรง\n"
-            "- ระหว่างรอ ask_salid จะพูดคำเติมสั้นมาก ๆ ได้ เช่น “แป๊บนึงนะคะ” (พูดเป็นธรรมชาติ ไม่ต้องทุกครั้ง)\n"
+            "- ระบบจะส่งข้อความในวงเล็บบอกว่าตอนนี้ใครกำลังพูด (เช่น “(ตอนนี้ คุณมิว กำลังพูด)”) ใช้เรียกชื่อคนที่คุยด้วยให้เป็นธรรมชาติ "
+            "(เช่น “ได้ค่ะคุณมิว”) ห้ามอ่านข้อความเหล่านี้ออกเสียงและห้ามตอบมัน\n"
+            "- ถ้า ask_salid บอกว่าพูดตรงนี้ไม่ได้เพราะไม่ใช่ทุกคนในห้องฟังได้ ให้บอกผู้ถามสั้น ๆ ตามนั้นและเสนอส่งให้ทาง DM\n"
+            "- ห้ามพูดคำเติมเองก่อนหรือระหว่างเรียก ask_salid (เช่น “แป๊บนึงนะคะ”) ระบบพูดให้แล้ว ให้เรียกเครื่องมือทันทีโดยไม่พูดอะไร "
+            "แล้วค่อยตอบเมื่อได้ผลลัพธ์\n"
             "- ถ้า ask_salid บอกว่าดูไม่ได้ ให้บอกเหตุผลสั้น ๆ ตามนั้น\n"
         )
     else:
@@ -413,6 +443,22 @@ class LiveVoice:
         self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
         self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
+        # name heard in the Live input transcript (fast path)
+        self._heard_buf = ""
+        self._heard_at = 0.0
+        self._heard_hit = False
+        self._live_hit_at = -1e9
+        self._fallback: tuple[int, str] | None = None  # who/what to answer if the model stays mute
+        # filler clips ("one moment") for slow tools
+        self._filler_pcm: dict[str, bytes] = {}
+        self._filler_last: dict[str, str] = {}
+        self._filler_until = 0.0  # monotonic: filler audio may still sit in the playback buffer
+        self._filler_task: asyncio.Task | None = None
+        # who is talking (Discord gives one stream per user)
+        self._bursts: dict[int, list] = {}  # user id -> its open [uid, start, end]
+        self._spans: list[list] = []  # [uid, start, end] stretches of speech, oldest first
+        self._noted_uid: int | None = None  # the speaker the Live model was last told about
+        self._note_at = -1e9
 
     # ---- lifecycle
     def start(self) -> asyncio.Task:
@@ -452,6 +498,55 @@ class LiveVoice:
         session is still connecting, so a greeting right after joining is not lost."""
         if not self._closing:
             self.mixer.feed(user_id, pcm)
+            self._track_speaker(user_id, time.monotonic())
+
+    # ---- who is talking / who asked
+    def _track_speaker(self, uid: int, now: float) -> None:
+        cur = self._bursts.get(uid)
+        if cur is not None and now - cur[2] < BURST_GAP_S:
+            cur[2] = now
+        else:
+            cur = self._bursts[uid] = [uid, now, now]
+            self._spans.append(cur)
+            while self._spans and self._spans[0][2] < now - SPEAKER_KEEP_S:
+                self._spans.pop(0)
+        if (
+            uid != self._noted_uid
+            and now - self._note_at >= SPEAKER_NOTE_MIN_S
+            and self._live is not None
+        ):
+            self._noted_uid, self._note_at = uid, now
+            self._spawn(self._send_speaker(uid))
+
+    def speaker_name(self, uid: int) -> str:
+        s = self.session
+        guild = s.voice_channel.guild
+        try:
+            nick = self.bot._profile_of(s.guild_id, uid).nickname
+        except Exception:
+            nick = ""
+        member = guild.get_member(uid)
+        return nick or (member.display_name if member else "")
+
+    async def _send_speaker(self, uid: int) -> None:
+        live, name = self._live, self.speaker_name(uid)
+        if live is None or self._closing or not name:
+            return
+        en = getattr(self.session, "lang", "th") == "en"
+        note = f"(Now speaking: {name})" if en else f"(ตอนนี้ {name} กำลังพูด)"
+        await live.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=note)]), turn_complete=False
+        )
+
+    def recent_speakers(self, now: float | None = None) -> list[int]:
+        """Users whose voice was active in the last utterance (the one that ended most recently,
+        and everyone who overlapped it). [] when nobody spoke lately."""
+        now = time.monotonic() if now is None else now
+        spans = [b for b in self._spans if b[2] >= now - ASKER_MAX_AGE_S]
+        if not spans:
+            return []
+        last = max(spans, key=lambda b: b[2])
+        return sorted({b[0] for b in spans if b[1] <= last[2] and b[2] >= last[1]})
 
     # ---- connecting
     def _open_default(self, config: types.LiveConnectConfig):  # pragma: no cover - network
@@ -550,8 +645,11 @@ class LiveVoice:
 
     async def _serve(self, live: Any) -> None:
         self._streaming = False  # audio heard while connecting stays queued: it is sent first
+        self._noted_uid = None  # a new session knows nobody yet: tell it who is talking
         if self._engaged:
             self._spawn(self._send_state())
+        if getattr(self.bot.s, "live_filler", True) and not self._filler_pcm:
+            self._spawn(self._prerender_fillers())
         tasks = [
             asyncio.create_task(self._sender(live)),
             asyncio.create_task(self._receiver(live)),
@@ -591,8 +689,60 @@ class LiveVoice:
         """Someone said the name (the utterance ended at `since`, monotonic). If the model has not
         started answering `live_force_reply_seconds` after that, force a turn with a cue; no audio
         `live_cue_retry_seconds` after the cue: cue once more; still nothing after another
-        `live_fallback_seconds`: the classic path (agent + TTS) answers `question` instead."""
+        `live_fallback_seconds`: the classic path (agent + TTS) answers `question` instead.
+
+        The Live input transcript usually sees the name first (`_on_heard`); the classic hit that
+        follows for the same utterance must not force a second turn, but it does tell the running
+        one who to answer through the classic path if the model stays mute."""
+        now = time.monotonic()
+        if now - self._live_hit_at < NAME_DEDUPE_S and since - self._live_hit_at < 3.0:
+            if user_id is not None and (question or heard).strip():
+                self._fallback = (user_id, question or heard)
+            return
         self._spawn(self._force_reply(since, heard, user_id, question or heard))
+
+    # ---- the name in the Live session's own input transcript (arrives while the person talks)
+    def _on_heard(self, text: str) -> None:
+        now = time.monotonic()
+        if now - self._heard_at > HEARD_GAP_S:
+            self._flush_heard()
+        self._heard_at = now
+        self._heard_buf += text
+        if self._heard_hit:
+            return
+        said = parse_wake(self._heard_buf)  # the same detector as the classic path
+        if said is None:
+            return
+        self._heard_hit = True
+        if parse_meeting_command(said) == "leave":
+            return  # "สลิด ออกประชุม": the meeting manager leaves; no reply to force
+        s = self.session
+        if s.ending or s.leaving:
+            return
+        self._live_hit_at = now
+        self._fallback = None
+        logger.info("live: name heard in the live transcript")
+        self.bot.meetings._set_engaged(s, True)
+        self._spawn(
+            self._force_reply(
+                now,
+                self._heard_buf,
+                None,
+                said or self._heard_buf,
+                wait=float(getattr(self.bot.s, "live_name_reply_seconds", 1.5)),
+                track_voice=True,
+            )
+        )
+
+    def _flush_heard(self) -> None:
+        """The utterance is over: a thank-you / "that's enough" said to Salid while it is engaged
+        puts it back to listening (like the classic path), then start a fresh buffer."""
+        text, hit = self._heard_buf.strip(), self._heard_hit
+        self._heard_buf, self._heard_hit = "", False
+        if text and not hit and self._engaged:
+            mgr = self.bot.meetings
+            if mgr.is_dismissal(text):
+                mgr._set_engaged(self.session, False)
 
     def _answering(self, since: float) -> bool:
         return (
@@ -612,12 +762,22 @@ class LiveVoice:
         )
 
     async def _force_reply(
-        self, since: float, heard: str = "", user_id: int | None = None, question: str = ""
+        self,
+        since: float,
+        heard: str = "",
+        user_id: int | None = None,
+        question: str = "",
+        *,
+        wait: float | None = None,
+        track_voice: bool = False,
     ) -> None:
         sets = self.bot.s
-        wait = float(getattr(sets, "live_force_reply_seconds", 1.2))
-        delay = since + wait - time.monotonic()
-        if delay > 0:
+        if wait is None:
+            wait = float(getattr(sets, "live_force_reply_seconds", 1.2))
+        while True:  # `track_voice`: the person may still be talking when the name is seen
+            delay = max(since, self._last_voice if track_voice else 0.0) + wait - time.monotonic()
+            if delay <= 0:
+                break
             await asyncio.sleep(delay)
         live = self._live
         if live is None or self._closing or self.session.ending:
@@ -642,6 +802,8 @@ class LiveVoice:
             return
         if self._real_audio_at >= cue_at or self._turn_audio or self._awaiting_answer:
             return
+        if user_id is None and self._fallback is not None:
+            user_id, question = self._fallback
         if user_id is None or not question.strip():
             return
         logger.warning("live: no audio from the model: answering through the classic path")
@@ -709,10 +871,14 @@ class LiveVoice:
                 data = part.inline_data.data if part.inline_data is not None else None
                 if data:
                     self._on_audio(data)
+        it = sc.input_transcription
+        if it is not None and it.text:
+            self._on_heard(it.text)
         ot = sc.output_transcription
         if ot is not None and ot.text:
             self._said.append(ot.text)
         if sc.turn_complete:
+            self._flush_heard()
             self._turn_complete()
         return None
 
@@ -767,13 +933,22 @@ class LiveVoice:
             user_id = humans[0].id
         else:  # unknown speaker: no account data at all
             user_id, question = 0, f"{question}\n{LEDGER_NOTE}"
-        # Same agent as in chat (bot._agent_kwargs). Its tools act for one person; with several in
-        # the room the speaker is unknown, so use the lowest-ranked one: nobody gets more than
-        # they could. Personal profile only when a single person is there.
+        # Same agent as in chat (bot._agent_kwargs). ACTIONS run as the person who asked (their
+        # rights, their profile): the speaker heard just before this call; with several overlapping
+        # the lowest-ranked of them; unknown: the lowest-ranked in the room. DATA is limited by the
+        # whole room (memory scope, ledger) however powerful the asker is.
         asker = humans[0]
+        ranks: dict = {}
         if len(humans) > 1 and guild is not None:
             ranks = await asyncio.to_thread(bot._ranks, guild)
             asker = min(humans, key=lambda h: ranks.get(h.id, -1))
+        recent = set(self.recent_speakers())
+        speakers = [h for h in humans if h.id in recent]
+        if speakers:
+            asker = min(speakers, key=lambda h: ranks.get(h.id, -1))
+        known_asker = len(humans) == 1 or len(speakers) == 1
+        if len(humans) > 1:
+            question = f"{question}\n{ROOM_NOTE.format(asker=asker.display_name)}"
         kw: dict = {"language": s.language, "memory": memory, **bot._web_kw(s.guild_id)}
         if guild is not None:
             here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
@@ -781,12 +956,12 @@ class LiveVoice:
                 bot.room_message(guild, asker, here),
                 guild,
                 asker,
-                everyone_exec,
+                bot.is_exec_member(asker),
                 setting=s.language,
                 lang=resolve_lang(s.language, question),
                 question=question,
                 memory=memory,
-                profile=bot._profile_of(s.guild_id, asker.id) if len(humans) == 1 else None,
+                profile=bot._profile_of(s.guild_id, asker.id) if known_asker else None,
                 people=tag_candidates(here),
             )
         ans = await asyncio.to_thread(
@@ -815,7 +990,12 @@ class LiveVoice:
         responses = []
         for fc in tool_call.function_calls or []:
             logger.info("live: tool call %s", fc.name)  # name only: arguments may hold PII
-            result = await self._run_tool(fc.name, dict(fc.args or {}))
+            filler = self._start_filler(fc.name)
+            try:
+                result = await self._run_tool(fc.name, dict(fc.args or {}))
+            finally:
+                if filler is not None:
+                    filler.cancel()
             responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
         if responses:
             await live.send_tool_response(function_responses=responses)
@@ -837,10 +1017,86 @@ class LiveVoice:
         s.introduced = True  # Salid has spoken: the room knows it is there
         self._last_audio_at = self._real_audio_at = time.monotonic()
         src = self._source
+        if src is not None and self._filler_until > self._real_audio_at:
+            src.clear()  # the real answer is here: cut the rest of the "one moment" clip
+        self._filler_until = 0.0
         if src is None or not src.feed(data):  # no source yet, or the last one is spent
             src = self._source = LiveAudioSource()
             src.feed(data)
         self._ensure_playing(src)
+
+    # ---- filler ("one moment") while a slow tool runs
+    def _filler_lang(self) -> str:
+        return "en" if getattr(self.session, "lang", "th") == "en" else "th"
+
+    async def _prerender_fillers(self) -> None:
+        """Synthesize the clips once (Cloud TTS, the classic voice) so they are ready when needed."""
+        lang = self._filler_lang()
+        for text in [*FILLERS[lang], FILLER_AGAIN[lang]]:
+            try:
+                await self._filler_clip(text, lang)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning("live: filler clip failed", exc_info=True)
+
+    async def _filler_clip(self, text: str, lang: str) -> bytes:
+        key = f"{lang}:{text}"
+        pcm = self._filler_pcm.get(key)
+        if pcm is None:
+            line = with_particle(text, str(getattr(self.bot.s, "voice_particle", "") or ""))
+            pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, line, lang)
+            self._filler_pcm[key] = pcm
+        return pcm
+
+    def _pick_filler(self, lang: str) -> str:
+        options = [t for t in FILLERS[lang] if t != self._filler_last.get(lang)]
+        text = random.choice(options)
+        self._filler_last[lang] = text
+        return text
+
+    def _start_filler(self, tool: str) -> asyncio.Task | None:
+        """A slow tool starts and Salid has not spoken in this turn: say "one moment" at once."""
+        s = self.session
+        if (
+            tool not in FILLER_TOOLS
+            or not getattr(self.bot.s, "live_filler", True)
+            or self._turn_audio  # the model is already talking: no second voice on top
+            or s.ending
+            or s.leaving
+        ):
+            return None
+        task = self._filler_task = asyncio.create_task(self._filler_run())
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+        return task
+
+    async def _filler_run(self) -> None:
+        lang = self._filler_lang()
+        try:
+            started = time.monotonic()
+            if not await self._play_filler(await self._filler_clip(self._pick_filler(lang), lang)):
+                return
+            again = float(getattr(self.bot.s, "live_filler_again_seconds", 8.0))
+            await asyncio.sleep(max(0.0, again - (time.monotonic() - started)))
+            await self._play_filler(await self._filler_clip(FILLER_AGAIN[lang], lang))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("live: filler failed", exc_info=True)
+
+    async def _play_filler(self, pcm: bytes) -> bool:
+        """Queue a filler clip on the Live playback path. False when the model started to speak."""
+        s = self.session
+        if self._turn_audio or s.ending or s.leaving or not _connected(s.vc):
+            return False
+        src = self._source
+        if src is None or not src.feed(pcm):
+            src = self._source = LiveAudioSource()
+            src.feed(pcm)
+        self._filler_until = time.monotonic() + pcm_duration_s(pcm)
+        self._ensure_playing(src)
+        return True
 
     def _ensure_playing(self, src: LiveAudioSource, retries: int = PLAY_RETRIES) -> None:
         s = self.session
@@ -900,6 +1156,8 @@ class LiveVoice:
     def _interrupt(self) -> None:
         """Barge-in: somebody talked over Salid. Drop queued audio and stop playing now."""
         logger.info("live: interrupted")
+        if self._filler_task is not None:
+            self._filler_task.cancel()
         self.stop_playback()
         self._said.clear()
         self._turn_audio = False
