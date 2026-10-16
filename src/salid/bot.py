@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import discord
 from discord import app_commands
 
+from . import dm as dm_module
 from . import gate
 from .ack import Ack, ack_flavor, ack_text
 from .approvals_bot import ApprovalButton, ApprovalMixin
@@ -41,6 +42,7 @@ from .deep_task import (
 from .deliver import DeliverMixin
 from .digest import build_daily_digest
 from .dm import closed_dm_message, dm_refusal, send_dm
+from .dm_guild import SWITCH_COMMANDS, CompanyButton, DMGuildMixin, SwitchButton
 from .docs import doc_kind
 from .email_out import make_sender
 from .extract import (
@@ -110,6 +112,8 @@ from .permissions import (
     permission_message,
 )
 from .polls_bot import PollsMixin
+from .private_chat import PRIVATE_COMMANDS
+from .private_chat_bot import PrivateChatMixin
 from .profiles import ProfileMixin, effective_language, profile_block
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
@@ -266,6 +270,8 @@ class SecretaryBot(
     CatchupMixin,
     WikiMixin,
     ApprovalMixin,
+    DMGuildMixin,
+    PrivateChatMixin,
     BroadcastMixin,
     CooMixin,
     BriefingMixin,
@@ -396,6 +402,10 @@ class SecretaryBot(
         self._freetime_init()  # find a time everyone is free (salid.freetime)
         self._wiki_init()  # company knowledge base (salid.wiki_bot)
         self._approval_init()  # approval requests (salid.approvals_bot)
+        self._dm_guild_init()  # which company a DM is about (salid.dm_guild)
+        self._pc_init()  # a private Salid channel per person (salid.private_chat)
+        dm_module.ROUTER = self._private_route
+        dm_module.SENT_HOOK = self._dm_sent_hook  # every Salid DM is tagged with its company
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -415,6 +425,8 @@ class SecretaryBot(
         self._register_commands()
         self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
         self.add_dynamic_items(ApprovalButton)  # same for approval requests
+        self.add_dynamic_items(SwitchButton)
+        self.add_dynamic_items(CompanyButton)  # the "which company?" DM buttons
         await self.tree.set_translator(SalidTranslator())
         try:
             await self.tree.sync()  # global commands; Discord may take a while to show them
@@ -427,6 +439,7 @@ class SecretaryBot(
         logger.info("logged in as %s in %d guilds", self.user, len(self.guilds))
         for guild in self.guilds:
             await self._sync_guild(guild)
+            self._pc_backfill_start(guild)  # a private channel for every member, paced
         self._start_import()
         await self.meetings.resume_all()  # rejoin meetings a restart cut off
         self.meetings.scan_all()  # people already in voice channels: join by importance
@@ -486,6 +499,7 @@ class SecretaryBot(
     async def on_guild_join(self, guild: discord.Guild):
         logger.info("joined guild %s", guild.id)
         await asyncio.to_thread(self.team.current, guild.id)
+        self._pc_backfill_start(guild)
         lang = resolve_lang(self.team.current(guild.id).default_language)
         chat = await self._ensure_chat_channel(guild, lang)
         if chat is not None:  # a reused channel must answer everything, whatever its name
@@ -592,6 +606,11 @@ class SecretaryBot(
                 await self._direct_message(message)
                 return
             gid = message.guild.id
+            owner = await self._pc_owner(gid, message.channel.id)
+            if owner is not None:  # somebody's private Salid channel: theirs alone, like a DM
+                if message.author.id == owner:
+                    await self._personal_message(message, message.guild, message.author)
+                return
             await asyncio.to_thread(self.team.current, gid)  # refresh the cache off the loop
             mode = self._mode(message.channel, gid)
             receipts_on = self.team.enabled(gid, "receipts")
@@ -675,6 +694,8 @@ class SecretaryBot(
         if called and await self._cancel_task_command(message):
             return
         if called and await self._language_command(message):
+            return
+        if called and await self._private_command(message, message.guild, message.author):
             return
         # Q&A off and no image describer: images are receipt candidates when Salid is addressed
         if (
@@ -946,16 +967,29 @@ class SecretaryBot(
         """DMs have no guild: answer only when the asker shares exactly one guild with Salid."""
         if message.author == self.user or getattr(message.author, "bot", False):
             return  # Salid's own (and other bots') DMs are never answered or recorded
-        shared = [(g, g.get_member(message.author.id)) for g in self.guilds]
-        shared = [(g, m) for g, m in shared if m is not None]
-        if len(shared) != 1:
+        shared = self._shared_guilds(message.author.id)
+        if not shared:
             await message.reply(
                 t("dm", self._lang(message), mention=self.user.mention), mention_author=False
             )
             return
-        guild, member = shared[0]
+        resolved = await self._dm_resolve(message, shared)  # which company (salid.dm_guild)
+        if resolved is None:  # Salid asked "which company?" (or switched); nothing recorded yet
+            return
+        guild, member = resolved
+        self._dm_note_footer(message, len(shared), guild)
+        await self._personal_message(message, guild, member)
+
+    async def _personal_message(self, message, guild, member) -> None:
+        """A message to Salid that is the member's own business (a DM, resolved to `guild`, or their
+        private channel in it): private-channel commands, replies to reminders and forms, the
+        private note, then the answer. Nothing here leaves `guild`."""
+        if await self._private_command(message, guild, member):
+            return
         await asyncio.to_thread(self.team.current, guild.id)
-        ack = await self.scheduler.handle_dm_reply(message.author.id, message.content)
+        ack = await self.scheduler.handle_dm_reply(
+            message.author.id, message.content, guild_id=guild.id
+        )
         if ack:  # (b) the reason an attendee gave after a meeting reminder / no-show nudge
             await message.reply(ack, mention_author=False)
             return
@@ -1515,6 +1549,7 @@ class SecretaryBot(
         if ack is not None:
             await ack.finish()
         text = resolve_mentions(defang_raw_mentions(text, guild), guild, allow_everyone=everyone)
+        text += self._dm_footers.pop(message.id, "")  # DM with 2+ companies: "— Company: X"
         allowed = allowed_mentions_for(text, allow_everyone=everyone)
         acked = ack.sent if ack is not None else None
         sent = first = None
@@ -2185,6 +2220,24 @@ class SecretaryBot(
                 app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
             )
 
+        async def private_cb(interaction: discord.Interaction):
+            await self.handle_private_chat(interaction)
+
+        private_cb = app_commands.guild_only()(private_cb)
+        for name in PRIVATE_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_private"), callback=private_cb)
+            )
+
+        async def company_cb(interaction: discord.Interaction, name: str | None = None):
+            await self.handle_company(interaction, name)
+
+        company_cb = app_commands.describe(name=t("cmd_company_arg"))(company_cb)
+        for name in SWITCH_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_company"), callback=company_cb)
+            )
+
         async def summary_cb(
             interaction: discord.Interaction,
             period: str = "today",
@@ -2551,6 +2604,7 @@ class SecretaryBot(
         await self._scheduler_due()
         await self._coo_due()
         await self._polls_forms_due()
+        await self._pc_sweep()
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""
@@ -2727,6 +2781,8 @@ class SecretaryBot(
         try:
             guild = message.guild
             gid = guild.id
+            if await self._pc_owner(gid, message.channel.id) is not None:
+                return False  # a private channel is kept as the member's private notes instead
             await asyncio.to_thread(self.team.current, gid)
             where = self._memory_channel(message.channel)
             if where is None:

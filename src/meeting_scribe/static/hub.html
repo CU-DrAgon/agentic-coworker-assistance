@@ -1050,6 +1050,18 @@
   "th": "ส่วนตัว เห็นเฉพาะห้องที่อ่านได้",
   "en": "Private, only channels they can read"
  },
+ "f_private_channels_n": {
+  "th": "ห้องส่วนตัวกับสลิดของทุกคน",
+  "en": "A private Salid channel for every member"
+ },
+ "f_private_channels_d": {
+  "th": "สลิดสร้างห้องส่วนตัวให้สมาชิกทุกคนในหมวด “คุยกับสลิด (ส่วนตัว)” (สมาชิกใหม่ได้ห้องทันที คนเดิมค่อยๆ สร้างให้) แล้วส่งสรุปเช้า-เย็น เตือนงาน และคำขออนุมัติไปที่ห้องนั้นพร้อมแท็กเจ้าของ ห้องเห็นแค่เจ้าของ สลิด และแอดมินที่มีสิทธิ์ Administrator คนที่ออกจากเซิร์ฟเวอร์จะถูกลบห้องหลัง 24 ชั่วโมง ปิดสวิตช์นี้จะหยุดสร้างห้องใหม่ แต่ไม่ลบห้องที่มีอยู่",
+  "en": "Salid creates a private channel for every member under “Salid private chats” (new members at once, existing ones gradually) and sends briefings, reminders and approval requests there, tagging the owner. Only the owner, Salid and admins with the Administrator permission can see it. A channel is deleted 24 hours after its member leaves. Turning this off stops new channels but does NOT delete existing ones."
+ },
+ "f_private_channels_w": {
+  "th": "สมาชิกเลือกรับทาง DM แทนได้",
+  "en": "Members can opt back into DMs"
+ },
  "f_approvals_n": {
   "th": "คำขออนุมัติ (เบิก ซื้อ ลา)",
   "en": "Approval requests (expense, purchase, leave)"
@@ -1253,12 +1265,13 @@ const FEATURES = [
   { id: "reports" },
   { id: "briefings" },
   { id: "catchup" },
+  { id: "private_channels" },
   { id: "approvals" },
   { id: "freetime" },
   { id: "polls" },
   { id: "wiki" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, private_channels: true, freetime: true, polls: true, wiki: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1491,7 +1504,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, private_channels: true, freetime: true, polls: true, wiki: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1575,7 +1588,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup , approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup , approvals: features.approvals, private_channels: features.private_channels, freetime: features.freetime, polls: features.polls, wiki: features.wiki },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

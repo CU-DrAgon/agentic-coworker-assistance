@@ -816,7 +816,9 @@ class MeetingService:
                 await self.post(guild, m.get("text_channel_id"), text)
         self.store.put_meeting(m)
 
-    async def handle_dm_reply(self, user_id: int, text: str) -> str | None:
+    async def handle_dm_reply(
+        self, user_id: int, text: str, guild_id: int | None = None
+    ) -> str | None:
         """A DM from an attendee soon after our reminder/nudge is the reason they cannot join:
         record it on the meeting and tell the organiser in the meeting's text channel. Returns the
         acknowledgement for the attendee, or None when the DM is not such a reply."""
@@ -826,6 +828,8 @@ class MeetingService:
         now = self.clock()
         best = None
         for m in self.store.list_meetings(statuses=("scheduled", "started")):
+            if guild_id is not None and m.get("guild_id") != guild_id:
+                continue  # the DM is about another company
             sent = m.get("dm_sent", {}).get(str(user_id))
             if not sent or user_id not in m.get("attendee_ids", []):
                 continue

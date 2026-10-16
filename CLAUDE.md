@@ -159,3 +159,5 @@ anything.
 Small surgical changes. Write a failing offline test first, keep the suite green, match the existing
 style. State what you verified and what you could not. Work on a feature branch and open a PR;
 redeploy with `scripts/deploy.sh` only after a human approves, then smoke `/health`.
+
+- `dm_guild.py`: which company a DM is about (sticky pick, confirm-to-switch, reply tags, /บริษัท). `private_chat.py` + `private_chat_bot.py`: a private Salid channel per member; `deliver_to_person` / `dm.send_dm` route proactive messages there (DM fallback, profile `delivery=dm` opt-out).

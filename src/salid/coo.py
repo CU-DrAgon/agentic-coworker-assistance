@@ -314,11 +314,8 @@ class CooMixin:
             question=doc.question or doc.topic,
             description=doc.description,
         )
-        try:
-            await owner.send(text, view=view)
-        except discord.HTTPException:
-            return False
-        return True
+        res = await self.deliver_to_person(guild, owner, text, view=view)
+        return res.ok
 
     async def handle_disclosure(self, interaction, act: str, request_id: str) -> None:
         """Approve / Decline click. Only the owner counts; a decided request is not decided twice."""
@@ -350,8 +347,10 @@ class CooMixin:
             if act == "ok":
                 await self._deliver_disclosure(guild, asker, decided)
             else:
-                await asker.send(
-                    t("disc_asker_declined", resolve_lang("auto", doc.question), topic=doc.topic)
+                await self.deliver_to_person(
+                    guild,
+                    asker,
+                    t("disc_asker_declined", resolve_lang("auto", doc.question), topic=doc.topic),
                 )
         except Exception:
             logger.warning("could not deliver disclosure answer", exc_info=True)
@@ -385,7 +384,7 @@ class CooMixin:
             logger.warning("disclosure answer failed", exc_info=True)
             text = t("disc_asker_failed", lang)
         for i in range(0, len(text), 1900):
-            await asker.send(text[i : i + 1900])
+            await self.deliver_to_person(guild, asker, text[i : i + 1900])
 
     # ------------------------------------------------------------- personal DMs
     async def _coo_dm_record(self, message, guild, member) -> tuple[bool, str]:
@@ -503,8 +502,7 @@ class CooMixin:
             lines = [t("fu_header", lang, name=getattr(member, "display_name", ""))]
             lines += [t("fu_line", lang, id=x.id, title=x.title, due=x.due) for x in items[:10]]
             lines.append(t("fu_footer", lang, id=items[0].id))
-            with contextlib.suppress(discord.HTTPException):
-                await member.send("\n".join(lines))
+            if (await self.deliver_to_person(guild, member, "\n".join(lines))).ok:
                 n += 1
         logger.info("follow-ups: guild=%s dms=%d", guild.id, n)
         return n

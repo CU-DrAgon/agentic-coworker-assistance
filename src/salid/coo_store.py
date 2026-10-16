@@ -26,6 +26,7 @@ DELIVERIES = "salid_deliveries"  # files Salid forwarded for people (audit log)
 MINUTES = "salid_meeting_minutes"  # summary text of each finished voice meeting (minutes.py)
 AVAILABILITY = "salid_availability"  # per (guild, user) work hours and busy blocks (freetime.py)
 APPROVALS = "salid_approvals"  # approval requests (salid.approvals)
+PRIVATE_CHATS = "salid_private_chats"  # per (guild, user) private Salid channel (private_chat)
 PROFILES = "salid_profiles"  # per (guild, user) personal preferences (salid.profiles)
 
 
