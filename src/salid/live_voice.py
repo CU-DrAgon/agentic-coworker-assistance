@@ -26,6 +26,7 @@ import threading
 import time
 from array import array
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import discord
@@ -41,7 +42,8 @@ from .meeting import (
 )
 from .mentions import tag_candidates
 from .qa import THAI_DAYS
-from .speech import pcm_duration_s, say, with_particle
+from .speech import pcm_duration_s, pitch_pcm, say, with_particle
+from .voice_actions import rebind_actions
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -142,6 +144,18 @@ def set_recording(recording: bool) -> dict:
     return {}
 
 
+def answer_privately(question: str) -> dict:
+    """Answer the person who just asked in a PRIVATE DM, with everything they personally may see.
+    Use it when ask_salid says the answer cannot be said in the room (not everyone present may
+    hear it) and the asker says yes to a DM, or when they ask for a private answer / "ส่ง DM ให้".
+    The answer never comes back to you: just say you sent it, in one short sentence.
+
+    Args:
+        question: what the person wants answered privately, in their words.
+    """
+    return {}
+
+
 def ask_salid(question: str) -> dict:
     """Ask the full Salid text assistant when the question needs TEAM information or current web
     info: what was said or decided in meetings/chats, tasks and owners, files, receipts and
@@ -161,7 +175,10 @@ FILLERS = {
     "en": ["One moment.", "One moment, let me check.", "Let me look that up.", "Give me a second."],
 }
 FILLER_AGAIN = {"th": "ใกล้เสร็จแล้วค่ะ", "en": "Almost there."}
-FILLER_TOOLS = {"ask_salid"}  # tools that take seconds: worth a spoken "one moment"
+FILLER_TOOLS = {
+    "ask_salid",
+    "answer_privately",
+}  # tools that take seconds: worth a spoken "one moment"
 SPEAKER_NOTE_MIN_S = 1.0  # speaker-change notes are at least this far apart
 BURST_GAP_S = 1.0  # a speaker's frames this close together are one stretch of speech
 SPEAKER_KEEP_S = 120.0  # how long speech stretches are remembered
@@ -388,7 +405,8 @@ def build_instruction(
             "- ห้ามพูดถึงเงิน ใบเสร็จ หรือค่าใช้จ่ายเองเด็ดขาด เว้นแต่มีคนถามเรื่องนั้นโดยตรง\n"
             "- ระบบจะส่งข้อความในวงเล็บบอกว่าตอนนี้ใครกำลังพูด (เช่น “(ตอนนี้ คุณมิว กำลังพูด)”) ใช้เรียกชื่อคนที่คุยด้วยให้เป็นธรรมชาติ "
             "(เช่น “ได้ค่ะคุณมิว”) ห้ามอ่านข้อความเหล่านี้ออกเสียงและห้ามตอบมัน\n"
-            "- ถ้า ask_salid บอกว่าพูดตรงนี้ไม่ได้เพราะไม่ใช่ทุกคนในห้องฟังได้ ให้บอกผู้ถามสั้น ๆ ตามนั้นและเสนอส่งให้ทาง DM\n"
+            "- ถ้า ask_salid บอกว่าพูดตรงนี้ไม่ได้เพราะไม่ใช่ทุกคนในห้องฟังได้ ให้บอกผู้ถามสั้น ๆ ตามนั้นและเสนอส่งให้ทาง DM "
+            "ถ้าเขาตกลง (หรือขอคำตอบแบบส่วนตัว) เรียก answer_privately(question) แล้วบอกสั้น ๆ ว่าส่ง DM ให้แล้ว ห้ามเดาหรือพูดเนื้อหาเอง\n"
             "- ห้ามพูดคำเติมเองก่อนหรือระหว่างเรียก ask_salid (เช่น “แป๊บนึงนะคะ”) ระบบพูดให้แล้ว ให้เรียกเครื่องมือทันทีโดยไม่พูดอะไร "
             "แล้วค่อยตอบเมื่อได้ผลลัพธ์\n"
             "- ถ้า ask_salid บอกว่าดูไม่ได้ ให้บอกเหตุผลสั้น ๆ ตามนั้น\n"
@@ -567,7 +585,7 @@ class LiveVoice:
         qa = await self._qa_enabled()
         fns = [set_minutes_destination, post_note, ask_consent, set_recording]
         if qa:
-            fns = [ask_salid, *fns]
+            fns = [ask_salid, answer_privately, *fns]
         decls = [
             types.FunctionDeclaration.from_callable_with_api_option(
                 callable=fn, api_option="ENTERPRISE"
@@ -896,12 +914,11 @@ class LiveVoice:
                 )
             return mgr.set_recording(self.session, bool(a.get("recording", True)))
 
-        if name != "ask_salid":
+        if name not in ("ask_salid", "answer_privately"):
             return {"error": f"unknown tool {name}"}
         try:
-            return await asyncio.wait_for(
-                self._ask_salid(str((args or {}).get("question", ""))), ASK_TIMEOUT_S
-            )
+            fn = self._ask_salid if name == "ask_salid" else self._answer_privately
+            return await asyncio.wait_for(fn(str((args or {}).get("question", ""))), ASK_TIMEOUT_S)
         except TimeoutError:
             return {"error": "timeout"}
         except Exception as e:
@@ -933,10 +950,11 @@ class LiveVoice:
             user_id = humans[0].id
         else:  # unknown speaker: no account data at all
             user_id, question = 0, f"{question}\n{LEDGER_NOTE}"
-        # Same agent as in chat (bot._agent_kwargs). ACTIONS run as the person who asked (their
-        # rights, their profile): the speaker heard just before this call; with several overlapping
-        # the lowest-ranked of them; unknown: the lowest-ranked in the room. DATA is limited by the
-        # whole room (memory scope, ledger) however powerful the asker is.
+        # Same agent as in chat (bot._agent_kwargs). With several people in the room the WHOLE agent
+        # is built for the lowest-ranked one, so every read (tasks, approvals, meetings, memory,
+        # ledger) is safe to say out loud. Only the outward ACTIONS are re-bound to the person who
+        # asked (the speaker heard just before this call; several overlapping: the lowest-ranked of
+        # them) with their own identity and rights.
         asker = humans[0]
         ranks: dict = {}
         if len(humans) > 1 and guild is not None:
@@ -944,26 +962,38 @@ class LiveVoice:
             asker = min(humans, key=lambda h: ranks.get(h.id, -1))
         recent = set(self.recent_speakers())
         speakers = [h for h in humans if h.id in recent]
-        if speakers:
-            asker = min(speakers, key=lambda h: ranks.get(h.id, -1))
+        speaker = min(speakers, key=lambda h: ranks.get(h.id, -1)) if speakers else asker
         known_asker = len(humans) == 1 or len(speakers) == 1
         if len(humans) > 1:
-            question = f"{question}\n{ROOM_NOTE.format(asker=asker.display_name)}"
+            question = f"{question}\n{ROOM_NOTE.format(asker=speaker.display_name)}"
         kw: dict = {"language": s.language, "memory": memory, **bot._web_kw(s.guild_id)}
         if guild is not None:
             here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
-            kw = bot._agent_kwargs(
-                bot.room_message(guild, asker, here),
-                guild,
+
+            def agent_for(member, is_exec: bool, profile) -> dict:
+                return bot._agent_kwargs(
+                    bot.room_message(guild, member, here),
+                    guild,
+                    member,
+                    is_exec,
+                    setting=s.language,
+                    lang=resolve_lang(s.language, question),
+                    question=question,
+                    memory=memory,
+                    profile=profile,
+                    people=tag_candidates(here),
+                )
+
+            kw = agent_for(
                 asker,
-                bot.is_exec_member(asker),
-                setting=s.language,
-                lang=resolve_lang(s.language, question),
-                question=question,
-                memory=memory,
-                profile=bot._profile_of(s.guild_id, asker.id) if known_asker else None,
-                people=tag_candidates(here),
+                everyone_exec,
+                bot._profile_of(s.guild_id, speaker.id) if known_asker else None,
             )
+            if speaker.id != asker.id:
+                kw = rebind_actions(
+                    kw,
+                    agent_for(speaker, bot.is_exec_member(speaker), None),
+                )
         ans = await asyncio.to_thread(
             ask,
             bot.s,
@@ -984,6 +1014,57 @@ class LiveVoice:
             len(ans.text or ""),
         )
         return {"answer": (ans.text or "")[:ANSWER_MAX_CHARS]}
+
+    async def _answer_privately(self, question: str) -> dict:
+        """A full `ask` as the speaker with their own rights (as if they had DMed Salid), sent to
+        them by DM. Only a status goes back to the voice model: the content never enters it."""
+        from .dm import send_dm
+        from .qa import ask
+
+        bot, s = self.bot, self.session
+        if not question.strip():
+            return {"error": "empty question"}
+        if not bot.team.enabled(s.guild_id, "qa"):
+            return {"error": QA_OFF}
+        humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
+        recent = set(self.recent_speakers())
+        speakers = [h for h in humans if h.id in recent]
+        who = humans[0] if len(humans) == 1 else (speakers[0] if len(speakers) == 1 else None)
+        guild = getattr(who, "guild", None)
+        if who is None or guild is None:
+            return {"error": "do not know who is asking: ask who wants the private answer"}
+        here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
+        is_exec = bot.is_exec_member(who)
+        # as in a DM: the asker's own readable channels, not the room's
+        memory = await bot._memory_tools(SimpleNamespace(guild=None, channel=here), guild, who)
+        kw = bot._agent_kwargs(
+            bot.room_message(guild, who, here),
+            guild,
+            who,
+            is_exec,
+            setting=s.language,
+            lang=resolve_lang(s.language, question),
+            question=question,
+            memory=memory,
+            profile=bot._profile_of(s.guild_id, who.id),
+            people=tag_candidates(here),
+        )
+        ans = await asyncio.to_thread(
+            ask,
+            bot.s,
+            bot.store,
+            question,
+            guild_id=s.guild_id,
+            **kw,
+            is_exec=is_exec,
+            user_id=who.id,
+            history=s.transcript.history(bot.s.now(), window_s=180, max_chars=3000),
+        )
+        res = await send_dm(who, ans.text or "")
+        logger.info(
+            "live: answer_privately %s in %.1fs", "sent" if res.ok else "failed", ans.seconds
+        )
+        return {"status": "sent"} if res.ok else {"status": "failed", "reason": res.reason}
 
     async def _on_tool_call(self, live: Any, tool_call: Any) -> None:
         self._awaiting_answer = True  # the turn_complete that follows is not the end of the answer
@@ -1046,6 +1127,7 @@ class LiveVoice:
         if pcm is None:
             line = with_particle(text, str(getattr(self.bot.s, "voice_particle", "") or ""))
             pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, line, lang)
+            pcm = await asyncio.to_thread(pitch_pcm, pcm, getattr(self.bot.s, "tts_pitch", 1.0))
             self._filler_pcm[key] = pcm
         return pcm
 

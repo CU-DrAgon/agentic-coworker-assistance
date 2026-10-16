@@ -287,6 +287,7 @@ def lv(monkeypatch, tmp_path):
     monkeypatch.setattr(lvm, "STREAM_IDLE_S", 0.06)
     monkeypatch.setattr(lvm, "BACKOFF_S", (0.0, 0.0, 0.0, 0.0))
     monkeypatch.setattr(lvm, "say", lambda *a, **k: bytes(4800))  # no Cloud TTS offline
+    monkeypatch.setattr(lvm, "pitch_pcm", lambda pcm, pitch=1.0: pcm)
     vc = FakeVC()
     connect = FakeConnect()
 
@@ -335,7 +336,7 @@ async def test_join_connects_live_at_once_and_builds_the_session_config(lv):
     assert cfg.context_window_compression.sliding_window is not None
     names = [d.name for d in cfg.tools[0].function_declarations]
     assert names == [
-        "ask_salid", "set_minutes_destination", "post_note", "ask_consent", "set_recording",
+        "ask_salid", "answer_privately", "set_minutes_destination", "post_note", "ask_consent", "set_recording",
     ]  # fmt: skip
     assert "spending_summary" not in names  # no raw ledger tools in Live mode
     assert "2026-10-14" in cfg.system_instruction
@@ -1011,18 +1012,132 @@ async def test_recent_speakers_single_then_overlapping(lv):
     await lv.mgr.end((1000, 77))
 
 
-async def test_identified_exec_speaker_acts_with_own_rights_but_data_stays_room_scoped(lv, asked):
+async def test_exec_speaker_with_a_junior_present_reads_as_junior_and_acts_as_exec(
+    lv, asked, monkeypatch
+):
     s, live = await lv.join(5, 11)  # 5 is an executive, 11 is not
+    chat_calls = []
+    orig = lv.bot._chat_actions
+
+    def rec(message, guild, member, is_exec, *a, **k):
+        chat_calls.append((member.id, is_exec))
+        return orig(message, guild, member, is_exec, *a, **k)
+
+    monkeypatch.setattr(lv.bot, "_chat_actions", rec)
+
+    def coo(guild, asker, is_exec, memory, question, lang):
+        def list_tasks():
+            return asker.id
+
+        def update_task():
+            return asker.id
+
+        return [list_tasks, update_task]
+
+    monkeypatch.setattr(lv.bot, "_coo_tools", coo)
+    monkeypatch.setattr(lv.bot, "_room_secretary", lambda *a: None)
     s.live.feed(5, pcm48(1000))
     live.push(tool_msg("ask_salid", {"question": "ส่งนัดให้หน่อย"}))
     await until(lambda: live.tool_responses)
-    assert asked["sec_args"] == (5, True, asked["sec_args"][2])  # actions: the speaker, exec rights
-    assert asked["coo_args"][0] == 5
-    assert asked["memory"] == "MEM"  # memory scope computed for the whole room
+    assert chat_calls == [(11, False), (5, True)]  # the room agent, then the speaker's actions
+    reads = {f.__name__: f() for f in asked["extra_tools"]}
+    assert reads == {"list_tasks": 11, "update_task": 11}  # every read is built for the junior
+    over = {f.__name__: f for f in asked["tool_overrides"]}
+    assert over["update_task"]() == 5 and "send_dm" in over  # actions: the exec speaker
+    assert "list_tasks" not in over
+    assert asked["memory"] == "MEM"
     assert asked["is_exec"] is False and asked["user_id"] == 0  # no ledger: 11 is not an exec
     assert "ไม่ใช่ผู้บริหาร" in asked["question"] and "DM" in asked["question"]
-    assert "profile" not in asked or asked["profile"]  # the speaker's own profile is allowed
     await lv.mgr.end((1000, 77))
+
+
+async def test_single_human_room_is_unchanged_no_rebinding(lv, asked):
+    s, live = await lv.join(5)
+    s.live.feed(5, pcm48(1000))
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert "tool_overrides" not in asked and asked["sec_args"][:2] == (5, True)
+    await lv.mgr.end((1000, 77))
+
+
+async def test_answer_privately_dms_the_speaker_and_returns_no_content(lv, asked, monkeypatch):
+    from salid.dm import DMResult
+
+    sent = []
+
+    async def fake_dm(member, text, files=()):
+        sent.append((member.id, text))
+        return DMResult(True)
+
+    async def mem(message, guild, member):
+        asked["private_for"] = (message.guild, member.id)
+        return "PMEM"
+
+    monkeypatch.setattr("salid.dm.send_dm", fake_dm)
+    monkeypatch.setattr(lv.bot, "_memory_tools", mem)
+    s, live = await lv.join(5, 11)
+    s.live.feed(5, pcm48(1000))
+    live.push(tool_msg("answer_privately", {"question": "ยอดใช้จ่ายเดือนนี้"}))
+    await until(lambda: live.tool_responses)
+    resp = live.tool_responses[0][0].response
+    assert resp == {"status": "sent"}  # nothing of the answer reaches the voice model
+    assert sent and sent[0][0] == 5 and sent[0][1].startswith("xxx")
+    assert asked["is_exec"] is True and asked["user_id"] == 5  # the speaker's own full rights
+    assert asked["memory"] == "PMEM" and asked["private_for"] == (None, 5)
+    assert "spoken" not in asked
+    await lv.mgr.end((1000, 77))
+
+
+async def test_answer_privately_needs_a_known_speaker(lv, asked):
+    s, live = await lv.join(5, 11)
+    live.push(tool_msg("answer_privately", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert "error" in live.tool_responses[0][0].response
+    await lv.mgr.end((1000, 77))
+
+
+def test_rebind_actions_swaps_only_whitelisted_names_and_never_adds():
+    from salid.voice_actions import rebind_actions
+
+    def mk(tag, *names):
+        out = []
+        for n in names:
+            f = lambda tag=tag: tag  # noqa: E731
+            f.__name__ = n
+            out.append(f)
+        return out
+
+    room = {"extra_tools": mk("room", "list_tasks", "request_approval"), "x": 1}
+    speaker = {"extra_tools": mk("spk", "list_tasks", "request_approval", "set_availability")}
+    out = rebind_actions(room, speaker, {"request_approval", "set_availability"})
+    assert out["x"] == 1 and [f() for f in out["tool_overrides"]] == ["spk", "spk"]
+
+    from salid import qa
+
+    seen = {}
+
+    def grab(settings, tools, **kw):
+        seen["tools"] = tools
+        raise _Stop
+
+    import pytest as _p
+
+    mp = _p.MonkeyPatch()
+    mp.setattr("salid.qa.build_agent", grab)
+    try:
+        from conftest import FixedClockSettings as S
+
+        from salid.store import SQLiteStore
+
+        store = SQLiteStore(":memory:")
+        _swallow(qa.ask, S(), store, "q", guild_id=1, is_exec=False, user_id=1,
+                 extra_tools=room["extra_tools"], tool_overrides=out["tool_overrides"])  # fmt: skip
+    finally:
+        mp.undo()
+    got = {
+        f.__name__: f() for f in seen["tools"] if f.__name__ in ("list_tasks", "request_approval")
+    }
+    assert got == {"list_tasks": "room", "request_approval": "spk"}
 
 
 async def test_overlapping_speakers_act_as_the_lowest_ranked_of_them(lv, asked):

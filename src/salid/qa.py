@@ -1624,6 +1624,7 @@ async def ask_async(
     extra_tools: list | None = None,
     profile: str = "",
     spoken: bool = False,
+    tool_overrides: list | None = None,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -1662,6 +1663,9 @@ async def ask_async(
     chat_tools = build_chat_tools(chat_actions, calls) if chat_actions is not None else []
     tools += chat_tools
     tools += extra_tools or []
+    if tool_overrides:  # same-named tools bound to someone else (voice: the speaker's actions)
+        swap = {getattr(f, "__name__", ""): f for f in tool_overrides}
+        tools = [swap.get(getattr(f, "__name__", ""), f) for f in tools]
     agent = build_agent(
         settings,
         tools,
@@ -1758,6 +1762,7 @@ def ask(
     extra_tools: list | None = None,
     profile: str = "",
     spoken: bool = False,
+    tool_overrides: list | None = None,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1783,5 +1788,6 @@ def ask(
             extra_tools=extra_tools,
             profile=profile,
             spoken=spoken,
+            tool_overrides=tool_overrides,
         )
     )

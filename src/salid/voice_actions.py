@@ -1,0 +1,66 @@
+"""Who a voice agent acts for. In a room with several people the whole agent is built for the
+LOWEST-ranked human present, so every READ (tasks, approvals, meetings, reports, memory) is safe to
+say out loud to everyone. Only the outward ACTIONS (scheduling, DMs, posting, approvals, polls...)
+are then re-bound to the person who actually asked, with their own identity and rights.
+
+`rebind_actions(room_kwargs, speaker_kwargs, names)` swaps tools by function name, so a new
+feature's action tool only needs its name added to ACTION_TOOL_NAMES."""
+
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+# Function names (as the model sees them) of tools that DO something for the asker. Reads are not
+# listed on purpose: they stay bound to the room.
+ACTION_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        # secretary
+        "schedule_meeting",
+        "cancel_meeting",
+        "reschedule_meeting",
+        # chat actions
+        "send_dm",
+        "deliver_minutes",
+        "set_my_notifications",
+        # coordinator
+        "update_task",
+        "request_disclosure",
+        # feature branches (approvals, broadcast, freetime, polls/forms, captions)
+        "request_approval",
+        "cancel_approval",
+        "attach_receipt_to_approval",
+        "send_dm_many",
+        "post_message",
+        "set_availability",
+        "create_poll",
+        "start_form",
+        "set_captions",
+        "set_captions_tool",
+    }
+)
+
+
+def speaker_tools(speaker_kwargs: dict) -> list:
+    """Every tool the agent built from `speaker_kwargs` (an `_agent_kwargs` result) would get from
+    the secretary, chat-actions and extra-tools parts."""
+    from .chat_tools import build_chat_tools
+    from .secretary import SecretaryTools, build_secretary_tools
+
+    tools: list = []
+    if speaker_kwargs.get("secretary") is not None:
+        tools += build_secretary_tools(SecretaryTools(speaker_kwargs["secretary"]), [])
+    if speaker_kwargs.get("chat_actions") is not None:
+        tools += build_chat_tools(speaker_kwargs["chat_actions"], [])
+    tools += list(speaker_kwargs.get("extra_tools") or [])
+    return tools
+
+
+def rebind_actions(
+    room_kwargs: dict, speaker_kwargs: dict, names: Iterable[str] = ACTION_TOOL_NAMES
+) -> dict:
+    """`room_kwargs` plus `tool_overrides`: the speaker's version of each action tool in `names`.
+    `ask` replaces the same-named tools of the room agent with them (it never adds one the room
+    agent does not have, so feature switches keep working)."""
+    wanted = set(names)
+    overrides = [f for f in speaker_tools(speaker_kwargs) if getattr(f, "__name__", "") in wanted]
+    return {**room_kwargs, "tool_overrides": overrides}

@@ -241,3 +241,23 @@ def pcm_source(pcm24k_mono: bytes, pitch: float = 1.0) -> discord.AudioSource:
         before_options=f"-f s16le -ar {TTS_RATE} -ac 1",
         options=options,
     )
+
+
+def pitch_pcm(pcm24k_mono: bytes, pitch: float = 1.0) -> bytes:
+    """Blocking. The same pitch-up as `pcm_source` applied to raw PCM (for clips that are queued as
+    PCM rather than played through ffmpeg). Any ffmpeg problem returns the clip unchanged."""
+    if not pitch or abs(pitch - 1.0) <= 0.01 or not pcm24k_mono:
+        return pcm24k_mono
+    import subprocess
+
+    af = f"asetrate={int(TTS_RATE * pitch)},aresample={TTS_RATE},atempo={1 / pitch:.4f}"
+    try:
+        r = subprocess.run(
+            ["ffmpeg", "-v", "error", "-f", "s16le", "-ar", str(TTS_RATE), "-ac", "1", "-i", "pipe:0",
+             "-af", af, "-f", "s16le", "-ar", str(TTS_RATE), "-ac", "1", "pipe:1"],
+            input=pcm24k_mono, capture_output=True, timeout=20, check=True,
+        )  # fmt: skip
+        return r.stdout or pcm24k_mono
+    except Exception:
+        logger.warning("could not pitch the clip, using it as is", exc_info=True)
+        return pcm24k_mono
