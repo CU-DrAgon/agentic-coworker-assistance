@@ -179,33 +179,3 @@ def test_live_memory_store_queries():
         for name in names.values():
             for snap in client.collection(name).stream():
                 snap.reference.delete()
-
-
-def test_live_promo_kit(tmp_path):
-    """One real Nano Banana scene (about $0.05): the model id, location and request config are
-    accepted, and a kit comes out. Open the printed folder to check the product is unchanged."""
-    from salid import cards, promo
-
-    img = Image.new("RGB", (900, 900), (150, 150, 150))
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle(
-        (330, 260, 570, 680), radius=30, fill="white", outline=(60, 60, 60), width=6
-    )
-    d.ellipse((560, 380, 680, 540), outline=(60, 60, 60), width=14)
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    s = Settings.from_env()
-    photo = promo.prepare_photo(buf.getvalue())
-    t = time.monotonic()
-    scene, reason = promo.generate_scene(
-        make_client(s), s.promo_image_model, photo, "wooden cafe table, soft morning light"
-    )
-    print(f"\n{time.monotonic() - t:.1f}s scene={'AI' if scene is not None else reason}")
-    spec = promo.merge_spec(None, headline="ลาเต้เย็น ลด 20%", scene="cafe", price="59.-")
-    files = promo.render_kit(scene or promo.fallback_scene(photo), spec, cards.card_fonts())
-    for name, data in files:
-        (tmp_path / name).write_bytes(data)
-    print(f"kit: {tmp_path}")
-    assert scene is not None, f"no AI scene: {reason}"
-    sizes = [Image.open(io.BytesIO(data)).size for _, data in files]
-    assert sizes == [f.size for f in promo.FORMATS]

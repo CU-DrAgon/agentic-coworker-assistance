@@ -145,7 +145,6 @@ from .polls_bot import PollsMixin
 from .private_chat import PRIVATE_COMMANDS
 from .private_chat_bot import PrivateChatMixin
 from .profiles import ProfileMixin, effective_language, profile_block
-from .promo_bot import PromoMixin
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .recent import RecentMessages
@@ -345,7 +344,6 @@ class SecretaryBot(
     BriefingMixin,
     ProfileMixin,
     DeliverMixin,
-    PromoMixin,
     MediaMixin,
     discord.Client,
 ):
@@ -465,7 +463,6 @@ class SecretaryBot(
         self._image_notes: dict[int, dict[int, str]] = {}  # message id -> attachment idx -> note
         self.image_stats = {"described": 0, "failed": 0, "skipped": 0}  # cost visibility
         self._init_media()
-        self._init_promo()
         self.importer = MemoryImporter(
             self.memory_store,
             settings,
@@ -1666,7 +1663,6 @@ class SecretaryBot(
             profile=profile,
             interjection=interjection,
             people=tag_candidates(message.channel, self._recent_authors.pop(message.id, ())),
-            files=files,
         )
         t_ctx = time.monotonic()
         ack = None if interjection else await self._start_ack(message, q, lang)
@@ -2122,7 +2118,6 @@ class SecretaryBot(
         profile,
         interjection: bool = False,
         people=(),
-        files: list | None = None,
     ) -> dict:
         """Everything `ask` gets besides the question, history and files: memory, the secretary,
         COO and settings tools, tag candidates, profile, web, language. The ONE place chat and
@@ -2171,8 +2166,6 @@ class SecretaryBot(
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
-            # make_promo_kit: chat only (voice passes no files), with a photo or a remembered kit
-            *([] if interjection else self._promo_tools(message, guild, asker, files)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
