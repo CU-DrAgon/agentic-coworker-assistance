@@ -22,8 +22,9 @@ Run it: `uv run python -m salid.platforms` (it starts every platform that has it
 - **Team memory**: every message in channels Salid is in (and its own replies) is remembered, with
   day summaries and meaning search. Salid reads a channel's memory for you only if you are in that
   channel **and** everyone who can read the channel the answer is posted in can read it too.
-  If Slack will not tell it who is in a channel (error, or over 5000 members) it uses that channel
-  alone. Optionally it imports the history of channels it joins, within the retention window.
+  If Slack cannot enumerate every reader of the answering room (a public channel, an API error, or
+  over 5000 members), Salid uses that room alone. Optionally it imports the history of channels it
+  joins, within the retention window.
 - **Per-workspace settings**: the same settings document as a Discord server (feature switches,
   per-channel modes `off / listen / call / join / chat`, reply language, memory retention), keyed
   by the workspace. Until someone saves settings, Salid answers in the language it is spoken to.

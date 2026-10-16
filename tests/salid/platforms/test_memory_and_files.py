@@ -292,3 +292,15 @@ async def test_download_failure_and_oversize_download_are_skipped(s, tmp_path, c
     skips = [f.skip for f in a.ask_fn.calls[0][1]["files"]]
     assert skips == ["could not be downloaded", "over the size limit"]
     assert "xoxb-LEAK" not in caplog.text
+
+
+async def test_actual_downloaded_bytes_enforce_the_total_limit(s, tmp_path):
+    a, port = make_assistant(s, tmp_path), FakePort()
+    files = [
+        FileRef("a.png", "image/png", 0, lambda: b"a" * (11 * 1024 * 1024)),
+        FileRef("b.png", "image/png", 0, lambda: b"b" * (10 * 1024 * 1024)),
+    ]
+    await run(a, port, mentions_bot=True, files=files)
+    inputs = a.ask_fn.calls[0][1]["files"]
+    assert inputs[0].data and not inputs[0].skip
+    assert not inputs[1].data and inputs[1].skip == "total size over 20 MB"

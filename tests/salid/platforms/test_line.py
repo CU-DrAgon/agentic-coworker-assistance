@@ -134,6 +134,7 @@ def test_unsigned_and_badly_signed_webhooks_are_rejected():
     pending = []
     client = TestClient(line.create_app(SECRET, rec, spawn=pending.append))
     assert post(client, {"events": [{}]}, signature=None).status_code == 401
+    assert post(client, None, raw=b" " * (line.MAX_BODY + 1), signature=None).status_code == 401
     assert post(client, {"events": [{}]}, signature="AAAA").status_code == 401
     assert post(client, {"events": [{}]}, signature=sign(b"{}", "wrong")).status_code == 401
     assert pending == [] and rec.events == []  # nothing was scheduled

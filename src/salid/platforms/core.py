@@ -45,6 +45,7 @@ from ..memory_summary import render_summary
 from ..message_control import is_thanks
 from ..naming import mentions_name
 from ..qa import MAX_FILE_BYTES as MAX_FILE_BYTES
+from ..qa import MAX_TOTAL_BYTES as MAX_TOTAL_BYTES
 from ..qa import FileActions, FileInput, MemoryTools, ask, file_mime, select_files
 from ..web_read import extract_urls
 from . import ids
@@ -618,6 +619,7 @@ class Assistant:
             for i, f in enumerate(msg.files)
         ]
         usable, _skipped = select_files(inputs)
+        actual_total = 0
         for fi in usable:
             try:
                 data = await asyncio.to_thread(msg.files[fi.index].fetch)
@@ -628,7 +630,11 @@ class Assistant:
             if len(data) > MAX_FILE_BYTES:
                 fi.skip = "over the size limit"
                 continue
+            if actual_total + len(data) > MAX_TOTAL_BYTES:
+                fi.skip = f"total size over {MAX_TOTAL_BYTES // 1024 // 1024} MB"
+                continue
             fi.data, fi.size = data, len(data)
+            actual_total += len(data)
         return inputs
 
     def _file_actions(self, msg: Incoming, gid: int, rid: int, lang: str) -> FileActions:

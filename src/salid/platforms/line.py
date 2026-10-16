@@ -336,13 +336,19 @@ def create_app(channel_secret: str, adapter: LineAdapter, spawn: Callable | None
 
     @app.post(WEBHOOK_PATH)
     async def webhook(request: Request):
-        body = await request.body()
-        if len(body) > MAX_BODY:
-            raise HTTPException(status_code=413)
-        if not verify_signature(channel_secret, body, request.headers.get("x-line-signature")):
+        signature = request.headers.get("x-line-signature")
+        if not signature:
+            raise HTTPException(status_code=401)
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > MAX_BODY:
+                raise HTTPException(status_code=413)
+        raw = bytes(body)
+        if not verify_signature(channel_secret, raw, signature):
             raise HTTPException(status_code=401)
         try:
-            data = json.loads(body)
+            data = json.loads(raw)
         except ValueError:
             raise HTTPException(status_code=400) from None
         for ev in data.get("events") or []:

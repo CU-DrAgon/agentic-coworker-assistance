@@ -51,6 +51,7 @@ class SlackPort:
         self._bot_rooms: tuple[float, dict[str, tuple[str, str]]] | None = None
         self._users: dict[str, tuple[float, dict]] = {}
         self._room_names: dict[str, str] = {}
+        self._room_private: dict[str, bool] = {}
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
@@ -78,15 +79,24 @@ class SlackPort:
     async def room_name(self, channel: str) -> str:
         if channel in self._room_names:
             return self._room_names[channel]
-        try:
-            info = (await self.client.conversations_info(channel=channel)).get("channel") or {}
-        except Exception as e:
-            logger.warning("conversations.info failed (%s)", safe_exc(e))
+        info = await self._conversation_info(channel)
+        if info is None:
             return ""
         name = info.get("name") or ""
         if name:
             self._room_names[channel] = name
         return name
+
+    async def _conversation_info(self, channel: str) -> dict | None:
+        try:
+            info = (await self.client.conversations_info(channel=channel)).get("channel") or {}
+        except Exception as e:
+            logger.warning("conversations.info failed (%s)", safe_exc(e))
+            return None
+        private = info.get("is_private")
+        if isinstance(private, bool):
+            self._room_private[channel] = private
+        return info
 
     async def _pages(self, call, key: str, **kw) -> list[Any]:
         out: list[Any] = []
@@ -141,6 +151,12 @@ class SlackPort:
         if msg.is_direct:
             audience: frozenset[str] | None = frozenset({msg.user})
         else:
+            if msg.room not in self._room_private:
+                await self._conversation_info(msg.room)
+            # conversations.members is the full audience only for private conversations. Public
+            # channels are readable by people who have not joined, so their audience is unknown.
+            if not self._room_private.get(msg.room, False):
+                return RoomView(None, [])
             audience = await self.members(msg.room, fresh=True)
         if audience is None:
             return RoomView(None, [])

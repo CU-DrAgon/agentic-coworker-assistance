@@ -20,9 +20,9 @@ class FakeSlack:
             "U3": {"id": "U3", "name": "eve", "profile": {}},
         }
         self.channels = {
-            "C1": {"id": "C1", "name": "general", "members": ["U1", "U2", BOT]},
-            "C2": {"id": "C2", "name": "leads", "members": ["U1", "U2", "U3", BOT]},
-            "C3": {"id": "C3", "name": "secret", "members": ["U1", "U9", BOT]},
+            "C1": {"id": "C1", "name": "general", "is_private": True, "members": ["U1", "U2", BOT]},
+            "C2": {"id": "C2", "name": "leads", "is_private": True, "members": ["U1", "U2", "U3", BOT]},
+            "C3": {"id": "C3", "name": "secret", "is_private": True, "members": ["U1", "U9", BOT]},
         }
         self.posts: list[dict] = []
         self.updates: list[dict] = []
@@ -290,6 +290,16 @@ async def test_ack_text_is_posted_in_the_thread(fx):
     client, a, port, adapter = fx
     ack = await port.ack(inc(message="5.0"), "one moment")
     assert ack == ("C1", "91.000") and client.posts[0]["thread_ts"] == "5.0"
+
+
+async def test_public_answering_room_never_receives_other_room_memory(fx):
+    client, a, port, adapter = fx
+    client.channels["C1"]["is_private"] = False
+    await adapter.on_message(ev(text=f"<@{BOT}> what did leads say?"), TEAM)
+    mem = a.ask_fn.calls[0][1]["memory"]
+    # conversations.members lists only joined users, but every workspace member can read a public
+    # channel. Its true audience is therefore unknown, so no other room may enter the answer.
+    assert list(mem.allowed.values()) == ["general"]
 
 
 # ------------------------------------------------------------------ audience for memory scope
