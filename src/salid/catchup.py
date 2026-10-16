@@ -134,6 +134,7 @@ class Sources:
     tasks: Callable[[], list] = lambda: []  # the person's open tasks (Task objects)
     meetings: Callable[[str, str], list[dict]] = lambda a, b: []  # [a, b) ISO UTC
     alerts: Callable[[datetime], list[dict]] = lambda since: []
+    retention_days: Callable[[], int] | None = None  # the guild's current memory retention
     meeting_link: Callable[[dict], str] = lambda m: m.get("link", "")
 
 
@@ -193,6 +194,11 @@ def gather(src: Sources, since: datetime, now: datetime, *, guessed: bool = Fals
     """Collect the catch-up since `since` (clamped to MAX_LOOKBACK_DAYS). Blocking."""
     zone = src.zone
     floor = start_of_day(now.astimezone(zone).date() - timedelta(days=MAX_LOOKBACK_DAYS), zone)
+    if src.retention_days is not None:  # never read what the purge would already have removed
+        floor = max(
+            floor,
+            start_of_day(now.astimezone(zone).date() - timedelta(days=src.retention_days()), zone),
+        )
     since = max(since, floor)
     out = CatchUp(since=since, until=now, guessed=guessed)
     out.away_days = working_days_away(since, now, zone)

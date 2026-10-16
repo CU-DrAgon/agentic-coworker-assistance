@@ -235,7 +235,7 @@ class FirestoreMemoryStore:
             out += [
                 _sum_from(s.to_dict())
                 for s in snaps.stream()
-                if s.to_dict()["channel_id"] in allowed
+                if s.to_dict()["channel_id"] in allowed and not s.to_dict().get("dirty")
             ]
         return sorted(out, key=lambda s: (s.local_date, s.channel_id))
 

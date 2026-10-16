@@ -6,6 +6,7 @@ import io
 import logging
 import random
 import re
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -447,7 +448,7 @@ class SecretaryBot(
         # Short-term context: recent messages per channel from gateway events (see salid.recent).
         self.recent = RecentMessages(per_channel=HISTORY_MESSAGES + 10, max_age_s=HISTORY_SECONDS)
         self._recent_swept = float("-inf")
-        self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
+        self._viewers: dict[tuple[int, int], tuple[float, frozenset[int]]] = {}  # (guild, channel)
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._polls_init()  # polls and DM forms (salid.polls_bot)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
@@ -627,22 +628,45 @@ class SecretaryBot(
     async def on_guild_channel_update(self, before, after):
         if before.name != after.name:
             self._request_sync(after.guild)
-        if before.overwrites != after.overwrites:  # permissions changed: maybe newly readable
-            self._request_sync(after.guild)
-            self._request_import()
+        category_moved = getattr(before, "category", None) is not getattr(after, "category", None)
+        if before.overwrites != after.overwrites or category_moved:
+            # permissions changed: maybe newly readable, and the cached readers are stale
+            gid = after.guild.id
+            self._invalidate_viewers(gid, getattr(after, "id", None))  # None: the whole guild
+            for child in getattr(after, "channels", None) or ():  # a category's overwrites
+                self._invalidate_viewers(gid, child.id)  # reach its synced children
+            if before.overwrites != after.overwrites:
+                self._request_sync(after.guild)
+                self._request_import()
 
     async def on_member_update(self, before, after):
+        if before.roles != after.roles:  # anyone's roles: who can read what may have changed
+            self._invalidate_viewers(after.guild.id)
         if self.user is not None and after.id == self.user.id and before.roles != after.roles:
             self._request_sync(after.guild)  # the owner changed Salid's roles
             self._request_import()
 
     async def on_guild_role_update(self, before, after):
+        if before.permissions != after.permissions:
+            self._invalidate_viewers(after.guild.id)
         me = getattr(after.guild, "me", None)
         if me is not None and after in me.roles and before.permissions != after.permissions:
             self._request_sync(after.guild)
             self._request_import()
 
+    async def on_guild_role_delete(self, role):
+        self._invalidate_viewers(role.guild.id)
+
+    async def on_member_join(self, member):
+        self._invalidate_viewers(member.guild.id)
+        await super().on_member_join(member)
+
+    async def on_member_remove(self, member):
+        self._invalidate_viewers(member.guild.id)
+        await super().on_member_remove(member)
+
     async def on_guild_channel_delete(self, channel):
+        self._invalidate_viewers(channel.guild.id, channel.id)
         self._request_sync(channel.guild)
 
     # ------------------------------------------------------------- permissions
@@ -1384,7 +1408,9 @@ class SecretaryBot(
             day = datetime.now(self.s.zone).date().isoformat()
             channel = getattr(message.channel, "parent", None) or message.channel
             got = await asyncio.to_thread(self.memory_store.get_summary, guild.id, channel.id, day)
-            return render_summary(got.summary, max_chars=1500) if got and got.summary else ""
+            if got is None or got.dirty or not got.summary:  # dirty: a deleted text may remain
+                return ""
+            return render_summary(got.summary, max_chars=1500)
         except Exception:
             logger.warning("could not read today's summary", exc_info=True)
             return ""
@@ -1738,7 +1764,10 @@ class SecretaryBot(
                     "min": MIN_RETENTION_DAYS,
                     "max": MAX_RETENTION_DAYS,
                 }
+            previous = self.team.memory_retention_days(gid)
             self.team.set_memory_retention_days(gid, days)
+            if days < previous:
+                self._purge_soon(gid)
             return {"status": "ok", "days": days}
 
         def show() -> dict:
@@ -2628,6 +2657,8 @@ class SecretaryBot(
             logger.exception("could not save memory retention")
             await send(t("memory_failed", lang), ephemeral=True)
             return
+        if days < current:
+            self._purge_soon(guild.id)  # shortened: delete what is now past it, without waiting
         await send(t("memory_set", lang, days=days))
 
     async def handle_language(self, interaction: discord.Interaction, language: str | None) -> None:
@@ -3112,6 +3143,24 @@ class SecretaryBot(
             return None
         return self._memory_message(message, own, target.cid, target.thread_id)
 
+    def _purge_soon(self, guild_id: int) -> None:
+        """Retention was shortened: purge that guild's memory and drop its index now, in the
+        background (the daily purge would leave expired data readable for up to a day)."""
+
+        def purge() -> None:
+            try:
+                m, s = self.memory.scheduler.purge_guild(guild_id)
+                logger.info("retention shortened: purged %d messages, %d summaries", m, s)
+            except Exception:
+                logger.warning("could not purge after shortening retention", exc_info=True)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # called from a tool thread
+            threading.Thread(target=purge, daemon=True).start()
+            return
+        self._spawn(asyncio.to_thread(purge))
+
     def _memory_triggers(self) -> None:
         """Start an import when memory was switched on or retention lengthened (hub or
         command), and resume a run the guild cap stopped."""
@@ -3119,6 +3168,8 @@ class SecretaryBot(
             now = (self.team.enabled(guild.id, "memory"), self.team.memory_retention_days(guild.id))
             before = self._memory_cfg_seen.get(guild.id)
             self._memory_cfg_seen[guild.id] = now
+            if before is not None and now[1] < before[1]:  # shortened (e.g. in the hub)
+                self._purge_soon(guild.id)
             if before is not None and now[0] and (not before[0] or now[1] > before[1]):
                 self._start_import()
         if self._import_resume_at is not None and self._clock() >= self._import_resume_at:
@@ -3358,17 +3409,28 @@ class SecretaryBot(
             getattr(perms, "read_messages", False) and getattr(perms, "read_message_history", False)
         )
 
-    def _channel_viewers(self, guild, channel) -> frozenset[int]:
-        """Humans who can read `channel`, cached for a minute."""
-        hit = self._viewers.get(channel.id)
-        if hit is not None and self._clock() - hit[0] < VIEWERS_TTL_S:
+    def _channel_viewers(self, guild, channel, *, fresh: bool = False) -> frozenset[int]:
+        """Humans who can read `channel`, cached for a minute (and dropped by the permission
+        events). `fresh=True` ignores the cache: the audience an answer is posted to must always
+        be computed live, so a channel that just opened up never looks private."""
+        key = (guild.id, channel.id)
+        hit = self._viewers.get(key)
+        if not fresh and hit is not None and self._clock() - hit[0] < VIEWERS_TTL_S:
             return hit[1]
         members = guild.members.values() if isinstance(guild.members, dict) else guild.members
         viewers = frozenset(
             m.id for m in members if not getattr(m, "bot", False) and self._can_read(channel, m)
         )
-        self._viewers[channel.id] = (self._clock(), viewers)
+        self._viewers[key] = (self._clock(), viewers)
         return viewers
+
+    def _invalidate_viewers(self, guild_id: int, channel_id: int | None = None) -> None:
+        """Forget cached readers: one channel, or (None) every channel of the guild."""
+        if channel_id is not None:
+            self._viewers.pop((guild_id, channel_id), None)
+            return
+        for key in [k for k in self._viewers if k[0] == guild_id]:
+            del self._viewers[key]
 
     def _memory_scope(self, guild, member, answering_channel_id: int | None) -> dict[int, str]:
         """Channel id -> name the asker may get memory from (see salid.memory_access). Blocking:
@@ -3382,8 +3444,10 @@ class SecretaryBot(
         for c in channels:
             if self.team.channel_mode(guild.id, c.id, c.name, self.s.ask_channel_ids) == "off":
                 continue
-            viewers = self._channel_viewers(guild, c) - {member.id}
-            if self._can_read(c, member):  # the asker is checked live, not from the cache
+            # the channel the answer goes to and the asker are read live, never from the cache
+            live = c.id == answering_channel_id
+            viewers = self._channel_viewers(guild, c, fresh=live) - {member.id}
+            if self._can_read(c, member):
                 viewers |= {member.id}
             access.append(ChannelAccess(c.id, c.name, viewers))
         allowed = allowed_channel_ids(access, member.id, answering_channel_id)
@@ -3434,6 +3498,7 @@ class SecretaryBot(
             opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
             visibility=vis,
             embedder=self.embedder,
+            retention_of=lambda gid=guild.id: self.team.memory_retention_days(gid),
         )
 
     def _room_scope(self, guild, voice_channel, humans) -> dict[int, str]:
@@ -3494,6 +3559,7 @@ class SecretaryBot(
             opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
             visibility=vis,
             embedder=self.embedder,
+            retention_of=lambda gid=guild.id: self.team.memory_retention_days(gid),
         )
 
     # ------------------------------------------------------------- digest

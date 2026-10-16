@@ -206,7 +206,7 @@ class CooMixin:
         elif answering is not None:
             where = guild.get_channel(answering)
             unknown = where is None
-            audience = frozenset() if unknown else self._channel_viewers(guild, where)
+            audience = frozenset() if unknown else self._channel_viewers(guild, where, fresh=True)
         authors = frozenset() if unknown else hierarchy_authors(member.id, ranks, audience)
         scope = Scope(
             asker_id=member.id,
@@ -551,7 +551,7 @@ class CooMixin:
                     topic=t("report_channel_topic", lang),
                     reason="Salid daily reports",
                 )
-                self._viewers.pop(channel.id, None)
+                self._invalidate_viewers(guild.id, channel.id)
                 return channel
             except discord.HTTPException:
                 logger.warning("could not create the reports channel", exc_info=True)

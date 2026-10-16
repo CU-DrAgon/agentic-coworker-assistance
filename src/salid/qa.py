@@ -430,10 +430,12 @@ class MemoryTools:
         opener: Callable[[int | None, int, int], dict] | None = None,
         visibility: Visibility | None = None,
         embedder=None,
+        retention_of: Callable[[], int] | None = None,
     ):
         self.opener = opener  # (channel id | None, message id, file index) -> {"text": ...}
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
-        self.retention_days = retention_days or settings.memory_retention_days
+        self._retention_days = retention_days or settings.memory_retention_days
+        self._retention_of = retention_of  # read at call time: a shortened setting applies at once
         # With `visibility` the role hierarchy and disclosure grants apply (salid.memory_access);
         # `hidden` collects matching records the asker may not see (never shown, only counted, so
         # Salid can offer a disclosure request).
@@ -453,13 +455,27 @@ class MemoryTools:
         cid, mid = ref
         return self.opener(cid, mid, int(file_index))
 
+    @property
+    def retention_days(self) -> int:
+        """The guild's CURRENT retention (not the value at construction)."""
+        if self._retention_of is not None:
+            try:
+                return max(int(self._retention_of()), 1)
+            except Exception:  # fail closed on the construction value
+                pass
+        return max(self._retention_days, 1)
+
+    def floor(self) -> date:
+        """Oldest day any tool may read: what the daily purge keeps (see `cutoff_date`)."""
+        return self.s.now().date() - timedelta(days=self.retention_days)
+
     def _range(self, start_date: str, end_date: str) -> tuple[str, str]:
         a, b = date.fromisoformat(start_date), date.fromisoformat(end_date)
         if b < a:
             raise ValueError("end_date is before start_date")
         if (b - a).days + 1 > MAX_CHAT_DAYS:
             raise ValueError(f"range too long: at most {MAX_CHAT_DAYS} days per call")
-        return a.isoformat(), b.isoformat()
+        return max(a, self.floor()).isoformat(), b.isoformat()  # past retention: never read
 
     def _shown(self) -> dict[int, str]:
         """Channels whose day summaries may be read: the allowed ones plus, with a hierarchy,
@@ -648,7 +664,7 @@ class MemoryTools:
         )
         if end < start:
             raise ValueError("end_date is before start_date")
-        start = max(start, end - timedelta(days=MAX_SEARCH_DAYS - 1))
+        start = max(start, end - timedelta(days=MAX_SEARCH_DAYS - 1), self.floor())
         a, b = start.isoformat(), end.isoformat()
         pids, ptext = self._person_ids(person)
         raw_from = (today - timedelta(days=RAW_RECENT_DAYS - 1)).isoformat()

@@ -236,7 +236,12 @@ class MemoryStore(Protocol):
 
     def summaries(
         self, guild_id: int, allowed_channels: Collection[int], start_date: str, end_date: str
-    ) -> list[DaySummary]: ...
+    ) -> list[DaySummary]:
+        """Day summaries to SHOW: never a dirty one (a covered message was deleted, so its text
+        may still be in the summary until it is regenerated). The scheduler reads the dirty
+        ones through `get_summary` / `all_summaries` / `open_summaries`."""
+        ...
+
     def open_summaries(self, guild_id: int) -> list[DaySummary]:
         """Summaries that are not final or are dirty (work for the scheduler)."""
         ...
@@ -542,7 +547,7 @@ class SQLiteMemoryStore:
             rows = c.execute(
                 "SELECT * FROM salid_day_summaries WHERE guild_id=? "
                 f"AND local_date BETWEEN ? AND ? AND channel_id IN ({_marks(len(allowed))}) "
-                "ORDER BY local_date, channel_id",
+                "AND dirty=0 ORDER BY local_date, channel_id",
                 [guild_id, start_date, end_date, *allowed],
             ).fetchall()
         return [self._sum(r) for r in rows]

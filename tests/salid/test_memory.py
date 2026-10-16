@@ -2,6 +2,7 @@
 """Organisational memory: raw log, summaries, retention, access control, tools, bot wiring.
 Offline: SQLite and the Firestore fake, scripted LLMs, small Discord fakes."""
 
+import asyncio
 import json
 import time
 from datetime import UTC, date, datetime, timedelta
@@ -427,6 +428,105 @@ async def test_memory_tools_for_several_answering_channels_intersect(bot, rworld
     wide = await bot._memory_tools_for(w.g, w.boss, 11)
     both = await bot._memory_tools_for(w.g, w.boss, 11, 12)
     assert set(wide.allowed) == {11, 12} and set(both.allowed) == {12}
+
+
+# ------------------------------------------------------------------ stale reader cache
+def stale_world(rworld):
+    """#hr {STAFF, MANAGER} is a private source; #ทั่วไป {STAFF, MANAGER} is where the answer goes."""
+    w = rworld
+    hr = RChan(13, "hr", {STAFF, MANAGER})
+    hr.guild = w.g
+    w.g.text_channels.append(hr)
+    w.hr, w.gen = hr, w.g.text_channels[0]
+    return w
+
+
+def test_answer_channel_widening_inside_the_ttl_excludes_the_private_source(bot, rworld):
+    w = stale_world(rworld)
+    bot._viewers.clear()
+    assert set(bot._memory_scope(w.g, w.staff, 10)) == {10, 12, 13}  # primes the cache
+    w.gen.readers.add(EXEC)  # the answer channel just opened up to the boss; no event seen yet
+    assert 13 not in bot._memory_scope(w.g, w.staff, 10)  # live audience: hr is private
+    assert set(bot._memory_scope(w.g, w.staff, 10)) == {10, 12}
+
+
+async def test_source_narrowing_is_picked_up_by_a_member_update(bot, rworld):
+    w = stale_world(rworld)
+    bot._viewers.clear()
+    assert 12 in bot._memory_scope(w.g, w.staff, 10)  # #ads readers {STAFF, MANAGER, EXEC}
+    w.g.text_channels[2].readers.discard(MANAGER)  # the manager lost access to #ads
+    old = SimpleNamespace(id=MANAGER, guild=w.g, roles=["a"])
+    new = SimpleNamespace(id=MANAGER, guild=w.g, roles=[])
+    await bot.on_member_update(old, new)
+    assert 12 not in bot._memory_scope(w.g, w.staff, 10)  # audience {S,M} no longer inside
+
+
+async def test_room_scope_uses_the_live_voice_chat_audience(bot, rworld):
+    w = stale_world(rworld)
+    bot._viewers.clear()
+    first = await bot._room_memory_tools(w.g, w.gen, [w.staff], asker=w.staff)
+    assert 13 in first.allowed
+    w.gen.readers.add(EXEC)  # the voice chat opens up inside the TTL
+    again = await bot._room_memory_tools(w.g, w.gen, [w.staff], asker=w.staff)
+    assert 13 not in again.allowed and 10 in again.allowed
+
+
+def _ev(guild, **kw):
+    return SimpleNamespace(guild=guild, **kw)
+
+
+@pytest.mark.parametrize(
+    "event",
+    ["channel_update", "category_update", "member_update", "role_update", "role_delete",
+     "member_join", "member_remove", "channel_delete"],
+)  # fmt: skip
+async def test_permission_events_drop_the_cached_viewers(bot, rworld, event):
+    w = rworld
+    g = w.g
+    g.me = SimpleNamespace(roles=[])
+    bot._viewers.clear()
+    bot._memory_scope(g, w.staff, 10)
+    assert bot._viewers
+    chan = g.text_channels[0]
+    cat = _ev(g, id=900, name="c", overwrites={"a": 1}, channels=[chan])
+    chan.category = cat
+    if event == "channel_update":
+        await bot.on_guild_channel_update(
+            _ev(g, id=10, name="x", overwrites={}), _ev(g, id=10, name="x", overwrites={"a": 1})
+        )
+    elif event == "category_update":
+        await bot.on_guild_channel_update(
+            _ev(g, id=900, name="c", overwrites={}, channels=[chan]), cat
+        )
+    elif event == "member_update":
+        await bot.on_member_update(
+            SimpleNamespace(id=STAFF, guild=g, roles=[]),
+            SimpleNamespace(id=STAFF, guild=g, roles=["r"]),
+        )
+    elif event == "role_update":
+        await bot.on_guild_role_update(_ev(g, permissions=1), _ev(g, permissions=2))
+    elif event == "role_delete":
+        await bot.on_guild_role_delete(_ev(g, id=5))
+    elif event == "member_join":
+        await bot.on_member_join(SimpleNamespace(id=STAFF, guild=g, bot=True))
+    elif event == "member_remove":
+        await bot.on_member_remove(SimpleNamespace(id=STAFF, guild=g, bot=True))
+    elif event == "channel_delete":
+        await bot.on_guild_channel_delete(_ev(g, id=10))
+    if event in ("channel_update", "category_update", "channel_delete"):
+        assert (GUILD, 10) not in bot._viewers and (GUILD, 11) in bot._viewers  # just that one
+    else:
+        assert not bot._viewers  # the whole guild
+
+
+async def test_unrelated_events_keep_the_cache(bot, rworld):
+    w = rworld
+    bot._viewers.clear()
+    bot._memory_scope(w.g, w.staff, 10)
+    await bot.on_guild_channel_update(  # a rename only
+        _ev(w.g, id=10, name="a", overwrites={}), _ev(w.g, id=10, name="b", overwrites={})
+    )
+    assert bot._viewers
 
 
 # ------------------------------------------------------------------ tools
@@ -990,6 +1090,93 @@ async def test_purge_follows_the_setting_changed_after_the_data_was_stored(bot, 
     sch = bot.memory.scheduler
     sch._known_guilds.add(GUILD)
     sch.maybe_purge(bkk(14, 10))
+    assert bot.memory_store.messages(GUILD, {10}, "2026-01-01", "2026-12-31") == []
+
+
+# ------------------------------------------------------------------ deleted / expired content
+@pytest.mark.parametrize("indexed", [True, False])
+def test_a_deleted_message_is_gone_from_every_summary_read(mstore, settings, indexed):
+    st = IndexedMemoryStore(mstore, FakeEmbedder()) if indexed else mstore
+    tools = MemoryTools(st, GUILD, {10: "general"}, settings, retention_days=30,
+                        embedder=FakeEmbedder())  # fmt: skip
+    summary = {"overview": "", "topics": [{"title": "รหัสลับ", "details": "เรื่องลับสุดยอด",
+                                           "people": []}]}  # fmt: skip
+    v = vectorize(summary, None, FakeEmbedder())
+    st.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-10",
+                              message_count=1, final=True, summary=summary, vec_model=v.model_id,
+                              vec_hashes=v.hashes, vecs=v.data))  # fmt: skip
+    st.add_message(mk(settings, 1, bkk(10, 9).astimezone(UTC), "เรื่องลับสุดยอด"))
+    assert tools.chat_search(["รหัสลับ"], query="รหัสลับ")["hits"]  # visible before the delete
+    assert tools.chat_days("2026-10-10", "2026-10-10")["count"] == 1
+    st.delete_messages(GUILD, [1])
+    kw = tools.chat_search(["รหัสลับ"], semantic=False)
+    meaning = tools.chat_search([], query="รหัสลับ")
+    assert kw["hits"] == [] and meaning["hits"] == []
+    assert "รหัสลับ" not in json.dumps(
+        tools.chat_days("2026-10-10", "2026-10-10"), ensure_ascii=False
+    )
+    assert tools.chat_days("2026-10-10", "2026-10-10")["count"] == 0
+    # once the day is regenerated it is served again
+    st.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-10-10",
+                              message_count=2, final=True, summary={"overview": "สรุปใหม่"}))  # fmt: skip
+    assert tools.chat_days("2026-10-10", "2026-10-10")["count"] == 1
+
+
+def test_a_dirty_index_entry_keeps_no_items_or_vectors(mstore, settings):
+    st = IndexedMemoryStore(mstore, FakeEmbedder())
+    topic_day(st, "2026-10-10", 10, "ลับ")
+    assert st.summary_entries(GUILD, {10}, "2026-10-01", "2026-10-31")  # loads the guild
+    st.add_message(mk(settings, 1, bkk(10, 9).astimezone(UTC)))
+    st.delete_messages(GUILD, [1])
+    [e] = [e for e in st._guilds[GUILD].values()]
+    assert e.summary.dirty and e.items == [] and e.vectors == []
+    assert st.summary_entries(GUILD, {10}, "2026-10-01", "2026-10-31") == []
+
+
+@pytest.mark.parametrize("indexed", [True, False])
+def test_tools_clamp_every_date_range_to_the_current_retention(mstore, settings, indexed):
+    st = IndexedMemoryStore(mstore, FakeEmbedder()) if indexed else mstore
+    days = [30]
+    tools = MemoryTools(st, GUILD, {10: "general"}, settings, retention_days=30,
+                        retention_of=lambda: days[0], embedder=FakeEmbedder())  # fmt: skip
+    topic_day(st, "2026-10-08", 10, "ประชุมเก่า")  # 6 days before "today" (2026-10-14)
+    topic_day(st, "2026-10-14", 10, "ประชุมวันนี้")
+    st.add_message(mk(settings, 1, bkk(8, 9).astimezone(UTC), "ประชุมเก่า"))
+    assert tools.chat_days("2026-10-01", "2026-10-14")["count"] == 2
+    days[0] = 1  # retention shortened: read at call time, not when the tools were built
+    r = tools.chat_days("2026-10-01", "2026-10-14")
+    assert [d["date"] for d in r["days"]] == ["2026-10-14"]
+    hits = tools.chat_search(["ประชุมเก่า"], start_date="2026-10-01", end_date="2026-10-14")
+    assert "2026-10-08" not in [h["date"] for h in hits["hits"]]
+    found = tools.chat_search([], query="ประชุมเก่า", start_date="2026-10-01")["hits"]
+    assert "2026-10-08" not in [h["date"] for h in found]
+    assert tools.chat_messages("2026-10-01", "2026-10-14")["count"] == 0
+    assert tools.chat_days("2026-10-01", "2026-10-07")["count"] == 0  # wholly expired range
+
+
+async def test_shortening_retention_purges_the_guild_and_drops_its_index(bot, world):
+    old = bkk(14, 9).astimezone(UTC) - timedelta(days=60)
+    bot.memory_store.add_message(mk(bot.s, 1, old))
+    topic_day(bot.memory_store, "2026-08-15", 10, "เก่ามาก")
+    other = GUILD + 1
+    bot.memory_store.add_message(mk(bot.s, 2, old, gid=other))
+    assert bot.memory_store.summaries(GUILD, {10}, "2026-08-01", "2026-08-31")  # index loaded
+    boss = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
+    await bot.handle_memory(boss, 30)
+    await asyncio.gather(*bot._bg_tasks)
+    assert bot.memory_store.messages(GUILD, {10}, "2026-01-01", "2026-12-31") == []
+    assert bot.memory_store.summaries(GUILD, {10}, "2026-08-01", "2026-08-31") == []
+    # another guild's data is untouched by this guild's purge
+    assert bot.memory_store.messages(other, {10}, "2026-01-01", "2026-12-31")
+
+
+async def test_a_retention_change_seen_by_the_tick_also_purges(bot, world):
+    old = bkk(14, 9).astimezone(UTC) - timedelta(days=60)
+    bot.memory_store.add_message(mk(bot.s, 1, old))
+    bot._memory_triggers()  # remembers 90 days
+    bot.team.set_memory_retention_days(GUILD, 30)  # e.g. from the hub
+    bot._memory_triggers()
+    await asyncio.gather(*bot._bg_tasks)
     assert bot.memory_store.messages(GUILD, {10}, "2026-01-01", "2026-12-31") == []
 
 

@@ -250,7 +250,8 @@ class MemoryScheduler:
             (
                 x
                 for x in self.store.all_summaries(gid)
-                if not vectors_usable(x, model_id)
+                if not x.dirty
+                and not vectors_usable(x, model_id)
                 and now - self._vector_failed.get(_summary_key(x), now - VECTORS_RECHECK)
                 >= VECTORS_RECHECK
             ),
@@ -428,6 +429,17 @@ class MemoryScheduler:
     def _drop(self, key) -> None:
         with self._lock:
             self._entries.pop(key, None)
+
+    def purge_guild(self, guild_id: int, now: datetime | None = None) -> tuple[int, int]:
+        """Delete now what is past ONE guild's current retention (it was just shortened) and
+        drop its cached index. Other guilds are untouched (the default cutoff is the epoch)."""
+        utc = (now or self.now()).astimezone(UTC)
+        cutoffs = {guild_id: utc - timedelta(days=self.retention_of(guild_id))}
+        result = self.store.purge(cutoffs, datetime(1970, 1, 1, tzinfo=UTC))
+        invalidate = getattr(self.store, "invalidate_guild", None)
+        if invalidate is not None:
+            invalidate(guild_id)
+        return result
 
     def maybe_purge(self, now: datetime) -> tuple[int, int] | None:
         """Once per local day: delete what is past each guild's CURRENT retention (so a changed
