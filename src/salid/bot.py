@@ -36,6 +36,7 @@ from .channel_access import (
 from .chat_tools import ChatActions
 from .company_brain_bot import CompanyMixin, PlaybookButton
 from .config import Settings
+from .contests_bot import ContestsMixin
 from .coo import CooMixin, DisclosureButton
 from .deep_task import (
     REPORT_NAME,
@@ -320,6 +321,7 @@ class SecretaryBot(
     MarketsMixin,
     IdeasMixin,
     CompanyMixin,
+    ContestsMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -474,6 +476,7 @@ class SecretaryBot(
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
         self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
+        self._contests_init()  # hackathons / grants / tenders (salid.contests_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -2041,6 +2044,7 @@ class SecretaryBot(
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
@@ -2807,6 +2811,7 @@ class SecretaryBot(
         await self._pc_sweep()
         await self._travel_due()
         await self._markets_due()
+        await self._contests_due()
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""

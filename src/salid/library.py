@@ -3,7 +3,7 @@ organization, by category, plus web uploads.
 
 Categories: `receipts` (ledger), `contracts_docs` (files Salid read in chat: PDF / Office / image
 notes in the memory log), `minutes` (voice meeting minutes), `reports` (PDF reports Salid made),
-`wiki` (knowledge base pages), `ideas` (idea / project documents, salid.ideas) and `uploads`
+`wiki` (knowledge base pages), `ideas` (idea / project documents, salid.ideas), `contests` (salid.contests) and `uploads`
 (files uploaded on the web).
 
 Who sees what (decided here in code):
@@ -35,6 +35,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from . import contests as contests_mod
 from . import docs as docs_mod
 from .coo_store import MINUTES
 from .ideas import IdeaRepo, library_visible, render_markdown
@@ -52,7 +53,16 @@ logger = logging.getLogger(__name__)
 
 ORG_DOCS = "salid_org_docs"  # guild = web workspace memory id, key = doc id
 REPORTS = "salid_reports"  # guild = workspace, key = id; {title, at, uri, by, channel_id}
-CATEGORIES = ("receipts", "contracts_docs", "minutes", "reports", "wiki", "ideas", "uploads")
+CATEGORIES = (
+    "receipts",
+    "contracts_docs",
+    "minutes",
+    "reports",
+    "wiki",
+    "ideas",
+    "contests",
+    "uploads",
+)
 # ShareLink category -> library categories it releases
 SHARE_MAP = {
     "documents": ("contracts_docs", "reports", "uploads"),
@@ -225,6 +235,7 @@ class Library:
         self.s, self.blobs, self.analyzer = settings, blobs, analyzer
         self.wiki = WikiRepo(docs)
         self.ideas = IdeaRepo(docs)
+        self.contests = contests_mod.ContestRepo(docs)
         self._now = now or (lambda: datetime.now(UTC))
 
     # ---- channels
@@ -254,6 +265,7 @@ class Library:
         self._gather_wiki(gid, base, viewer, public, out)
         self._gather_reports(gid, base, viewer, public, out)
         self._gather_ideas(gid, base, viewer, out)
+        self._gather_contests(gid, base, viewer, out)
 
     def _gather_uploads(self, ws: Workspace, base: dict, out: Gathered) -> None:
         for d in self.docs.find(ORG_DOCS, ws.memory_id):
@@ -383,6 +395,25 @@ class Library:
                 size=len(md),
                 preview=" ".join(next(iter(s.body for _k, s in d.ordered()), "").split())[:PREVIEW],
                 tags=[s.title for _k, s in d.ordered()][:6],
+                **base,
+            )
+            out.items[item.id] = item
+            out.text[item.id] = md
+
+    def _gather_contests(self, gid, base, viewer, out: Gathered) -> None:
+        for c in self.contests.all(gid):
+            if not contests_mod.library_visible(c, viewer.exec):
+                continue
+            md = contests_mod.render_markdown(c, "th")
+            item = DocItem(
+                id=f"discord-{gid}:contest:{c.id}",
+                title=c.name,
+                category="contests",
+                date=c.updated_at,
+                who=c.created_by_name,
+                size=len(md),
+                preview=" ".join(" · ".join([c.organizer, c.track, c.kind]).split())[:PREVIEW],
+                tags=[d.label for d in c.deadlines][:6],
                 **base,
             )
             out.items[item.id] = item

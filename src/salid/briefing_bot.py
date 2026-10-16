@@ -110,6 +110,8 @@ class BriefingMixin:
             text = text + "\n\n" + "\n".join(inp.notes)
         if inp.markets:  # opt-in market line: live numbers, appended verbatim
             text = f"{text}\n\n{inp.markets}"
+        if inp.contests:  # deadline lines of the contests the member works on
+            text = text + "\n\n" + "\n".join(inp.contests)
         for chunk in split_message(text):
             res = await send_dm(member, chunk)
             if not res.ok:
@@ -181,6 +183,7 @@ class BriefingMixin:
                 ]  # fmt: skip
                 inp.notes = self._maps_brief_notes(guild, member, mine, now, self._guild_lang(gid))
             inp.markets = self._market_brief_line(guild, member, prefs, now)
+            inp.contests = self._contest_brief_lines(guild, member, now)
             return inp
         iso = today.isoformat()
         stores = self.secretary_store.list_meetings(

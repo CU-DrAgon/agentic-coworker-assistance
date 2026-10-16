@@ -29,6 +29,7 @@ APPROVALS = "salid_approvals"  # approval requests (salid.approvals)
 PRIVATE_CHATS = "salid_private_chats"  # per (guild, user) private Salid channel (private_chat)
 PROFILES = "salid_profiles"  # per (guild, user) personal preferences (salid.profiles)
 COMPANY = "salid_company"  # per guild playbook, key "playbook" (salid.company_brain)
+CONTESTS = "salid_contests"  # competitions / hackathons / grants, key = contest id (salid.contests)
 IDEAS = "salid_ideas"  # idea / project documents, key `{owner_id}_{slug}` (salid.ideas)
 
 
