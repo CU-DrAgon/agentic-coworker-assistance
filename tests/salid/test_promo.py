@@ -1,8 +1,10 @@
+import importlib.util
 import inspect
 import io
 import itertools
 import logging
 import re
+from pathlib import Path
 
 import httpx
 import pytest
@@ -375,6 +377,21 @@ def test_tool_never_raises_and_logs_no_user_text(monkeypatch, caplog):
         "status": "error",
         "error": "the promo kit failed; try again",
     }
+
+
+def test_sample_script_renders_offline(tmp_path):
+    src = tmp_path / "p.png"
+    src.write_bytes(png_bytes((900, 900)))
+    script = Path(__file__).parents[2] / "scripts" / "salid_sample_promo.py"
+    spec = importlib.util.spec_from_file_location("sample", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.main([str(src), "--out", str(tmp_path / "out")]) == 0
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == [
+        "promo-1x1.jpg",
+        "promo-4x5.jpg",
+        "promo-9x16.jpg",
+    ]
 
 
 def test_tool_schema_and_description():

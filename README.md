@@ -400,6 +400,19 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   Limit `SALID_DOC_PAGES_PER_DAY` (500) pages per guild per day, backlog newest first. The agent's `open_file`
   tool re-reads a remembered attachment (document text, OCR, transcript) from its message link, only for channels
   the asker may read.
+- **Promo post kit** (`src/salid/promo.py`, `cards.py`, `promo_bot.py`, feature flag `promo`): send Salid a product
+  photo with the offer ("ทำโพสต์โปร ลาเต้เย็น 59 บาท ลด 20%") and the `make_promo_kit` tool returns three JPEGs,
+  `promo-1x1.jpg` (feed, LINE), `promo-4x5.jpg` (Facebook / Instagram feed) and `promo-9x16.jpg` (Stories, Reels,
+  TikTok; text kept out of the platforms' button zones), plus a caption with hashtags in the reply. One image-model
+  call per kit (`SALID_PROMO_IMAGE_MODEL`, default `gemini-nano-banana-2.1`, location `global`) restyles only the
+  scene around the unchanged product; the model never draws text. Headline, price, call to action and shop name are
+  typeset by Salid with the bundled Kanit font (Pillow RAQM shaping, which needs the system `libfribidi`:
+  `libfribidi0` in `Dockerfile.salid`, `brew install fribidi` locally). `SALID_PROMO_KITS_PER_DAY` (20 per guild,
+  counted before each call; 0 = AI scenes off). Blocked, failed or over-the-cap requests still get a kit built from
+  the original photo, and the reply says why. Changes within 30 minutes ("ขอโทนอุ่นกว่านี้", "เปลี่ยนราคาเป็น 49")
+  reuse the remembered photo (process memory only, never stored). Check the look with
+  `uv run python scripts/salid_sample_promo.py <photo>` (offline; `--live` makes one billed call) and the live test
+  `pytest tests/salid/test_salid_live.py -m live -k promo -s`.
 - **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
   retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
   same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.
