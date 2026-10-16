@@ -30,12 +30,15 @@ from typing import TYPE_CHECKING, Any
 import discord
 from google.genai import types
 
+from .i18n import resolve_lang
 from .meeting import SPEAK_COOLDOWN_S, _connected, _stop_playback
+from .mentions import tag_candidates
 from .qa import THAI_DAYS
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
-    from .meeting import MeetingSession
+    from .mentions import tag_candidates
+from .meeting import MeetingSession
 
 logger = logging.getLogger(__name__)
 
@@ -765,19 +768,46 @@ class LiveVoice:
             user_id = humans[0].id
         else:  # unknown speaker: no account data at all
             user_id, question = 0, f"{question}\n{LEDGER_NOTE}"
+        # Same agent as in chat (bot._agent_kwargs). Its tools act for one person; with several in
+        # the room the speaker is unknown, so use the lowest-ranked one: nobody gets more than
+        # they could. Personal profile only when a single person is there.
+        asker = humans[0]
+        if len(humans) > 1 and guild is not None:
+            ranks = await asyncio.to_thread(bot._ranks, guild)
+            asker = min(humans, key=lambda h: ranks.get(h.id, -1))
+        kw: dict = {"language": s.language, "memory": memory, **bot._web_kw(s.guild_id)}
+        if guild is not None:
+            here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
+            kw = bot._agent_kwargs(
+                bot.room_message(guild, asker, here),
+                guild,
+                asker,
+                everyone_exec,
+                setting=s.language,
+                lang=resolve_lang(s.language, question),
+                question=question,
+                memory=memory,
+                profile=bot._profile_of(s.guild_id, asker.id) if len(humans) == 1 else None,
+                people=tag_candidates(here),
+            )
         ans = await asyncio.to_thread(
             ask,
             bot.s,
             bot.store,
             question,
             guild_id=s.guild_id,
+            **kw,
             is_exec=everyone_exec,
             user_id=user_id,
             history=s.transcript.history(bot.s.now(), window_s=180, max_chars=3000),
-            language=s.language,
-            memory=memory,
             spoken=True,
-            **bot._web_kw(s.guild_id),
+        )
+        # counts only: the question and answer may hold personal data
+        logger.info(
+            "live: ask_salid answered in %.1fs (%d rounds, %d chars)",
+            ans.seconds,
+            ans.rounds,
+            len(ans.text or ""),
         )
         return {"answer": (ans.text or "")[:ANSWER_MAX_CHARS]}
 

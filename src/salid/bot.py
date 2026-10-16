@@ -1375,17 +1375,19 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             )
             q, files = self._voice_question(message, q, files)
             lang = resolve_lang(setting, q)
-        secretary = (
-            None if interjection else self._secretary(message, guild, member, is_exec, setting)
+        agent = self._agent_kwargs(
+            message,
+            guild,
+            member,
+            is_exec,
+            setting=setting,
+            lang=lang,
+            question=q,
+            memory=memory,
+            profile=profile,
+            interjection=interjection,
+            people=tag_candidates(message.channel, self._recent_authors.pop(message.id, ())),
         )
-        coo_tools = (
-            self._coo_tools(guild, member, is_exec, memory, q, lang)
-            if memory is not None and not interjection
-            else []
-        )
-        loop = asyncio.get_running_loop()
-        chat_actions = self._chat_actions(message, guild, member, is_exec, setting, loop, secretary)
-        people = tag_candidates(message.channel, self._recent_authors.pop(message.id, ()))
         ack = None if interjection else await self._start_ack(message, q, lang)
         try:
             async with message.channel.typing():
@@ -1398,16 +1400,9 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
                     is_exec=is_exec,
                     user_id=message.author.id,
                     history=history,
-                    language=setting,
-                    memory=memory,
                     interjection=interjection,
-                    chat_actions=chat_actions,
-                    people=people,
-                    profile=profile_block(profile),
+                    **agent,
                     **({"files": files, "actions": actions} if files else {}),
-                    **self._web_kw(gid),
-                    **({"secretary": secretary} if secretary is not None else {}),
-                    **({"extra_tools": coo_tools} if coo_tools else {}),
                 )
         except BaseException:
             await self._ack_failed(ack, lang)
@@ -1753,28 +1748,84 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             secretary.attachments[:] = [a for a in secretary.attachments if a[0] != attach]
         return {"status": "sent", "to": "requester" if mine else target.display_name}
 
-    def _secretary(self, message, guild, member, is_exec: bool, setting: str):
-        """The secretary tools' bindings for this message (guild, author and channel are fixed
-        here, never model input). Discord work is marshalled onto this loop."""
+    def _agent_kwargs(
+        self,
+        message,
+        guild,
+        asker,
+        is_exec: bool,
+        *,
+        setting: str,
+        lang: str,
+        question: str,
+        memory,
+        profile,
+        interjection: bool = False,
+        people=(),
+    ) -> dict:
+        """Everything `ask` gets besides the question, history and files: memory, the secretary,
+        COO and settings tools, tag candidates, profile, web, language. The ONE place chat and
+        voice build their agent, so they cannot drift apart. `message` is a Discord message, or
+        a room stand-in (`room_message`) for a voice meeting; `asker` acts for the requester."""
+        secretary = (
+            None
+            if interjection
+            else self._room_secretary(
+                guild,
+                asker,
+                is_exec,
+                self._lang(message),
+                message.channel.id if message.guild is not None else None,
+            )
+        )
+        coo_tools = (
+            self._coo_tools(guild, asker, is_exec, memory, question, lang)
+            if memory is not None and not interjection
+            else []
+        )
+        chat_actions = self._chat_actions(
+            message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
+        )
+        return {
+            "language": setting,
+            "memory": memory,
+            "chat_actions": chat_actions,
+            "people": list(people),
+            **({"profile": profile_block(profile)} if profile is not None else {}),
+            **self._web_kw(guild.id),
+            **({"secretary": secretary} if secretary is not None else {}),
+            **({"extra_tools": coo_tools} if coo_tools else {}),
+        }
+
+    @staticmethod
+    def room_message(guild, asker, channel):
+        """What a message-bound tool needs from a voice meeting: the room's text channel as the
+        current channel, the asker as author, and no attachments or reply."""
+        return SimpleNamespace(
+            id=0, guild=guild, channel=channel, author=asker, content="", attachments=[],
+            reference=None,
+        )  # fmt: skip
+
+    def _room_secretary(self, guild, asker, is_exec: bool, lang: str, text_channel_id: int | None):
+        """The same bindings without a message (a voice meeting): `asker` stands for the room."""
         gid = guild.id
         on = {f: self.team.enabled(gid, f) for f in ("scheduling", "documents", "email")}
         if not any(on.values()):
             return None
         loop = asyncio.get_running_loop()
         senders = set(self.team.current(gid).email_senders)
-        can_email = is_exec or bool(senders & {r.name for r in member.roles})
-        lang = self._lang(message)
+        can_email = is_exec or bool(senders & {r.name for r in asker.roles})
         return SecretaryContext(
             settings=self.s,
             guild_id=gid,
             guild_name=getattr(guild, "name", ""),
-            author_id=member.id,
-            author_name=member.display_name,
+            author_id=asker.id,
+            author_name=asker.display_name,
             is_exec=is_exec,
             can_email=can_email,
             lang=lang,
             app_id=self.application_id,
-            text_channel_id=message.channel.id if message.guild is not None else None,
+            text_channel_id=text_channel_id,
             store=self.secretary_store,
             state=self.secretary_state,
             run=lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=60),

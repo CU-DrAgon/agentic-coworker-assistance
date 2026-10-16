@@ -215,6 +215,9 @@ class FakeGuild:
     def get_member(self, uid):
         return self.members.get(uid)
 
+    def get_channel(self, cid):
+        return None
+
 
 def make_member(guild, uid, name, channel=None, **perms):
     m = SimpleNamespace(

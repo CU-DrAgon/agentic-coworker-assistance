@@ -27,6 +27,7 @@ from salid.live_voice import (
     to_live_input,
     upsample_output,
 )
+from salid.profiles import Profile
 from salid.store import SQLiteStore
 
 ME = SimpleNamespace(id=999, mention="<@999>")
@@ -467,7 +468,7 @@ def asked(monkeypatch, lv):
 
     def fake_ask(*a, **kw):
         seen.update(kw, question=a[2])
-        return SimpleNamespace(text="x" * 900)
+        return SimpleNamespace(text="x" * 900, seconds=1.5, rounds=2)
 
     async def room_memory(guild, voice_channel, humans):
         seen["room"] = sorted(h.id for h in humans)
@@ -476,6 +477,19 @@ def asked(monkeypatch, lv):
     monkeypatch.setattr("salid.qa.ask", fake_ask)
     monkeypatch.setattr(lv.bot, "_room_memory_tools", room_memory)
     monkeypatch.setattr(lv.bot, "_web_kw", lambda gid: {"web_client": "W"})
+
+    def room_secretary(guild, asker, is_exec, lang, text_channel_id):
+        seen["sec_args"] = (asker.id, is_exec, text_channel_id)
+        return "SEC"
+
+    def coo_tools(guild, asker, is_exec, memory, question, lang):
+        seen["coo_args"] = (asker.id, is_exec, memory)
+        return ["COO"]
+
+    monkeypatch.setattr(lv.bot, "_room_secretary", room_secretary)
+    monkeypatch.setattr(lv.bot, "_coo_tools", coo_tools)
+    monkeypatch.setattr(lv.bot, "_ranks", lambda g: {5: 9, 11: 1, 12: 4})
+    monkeypatch.setattr(lv.bot, "_profile_of", lambda gid, uid: Profile(nickname=f"p{uid}"))
     return seen
 
 
@@ -490,6 +504,94 @@ async def test_ask_salid_runs_the_text_agent_scoped_to_the_room(lv, asked):
     assert asked["is_exec"] is True and asked["spoken"] is True
     assert "คุยเรื่องแผนไตรมาสสี่" in asked["history"]  # this meeting's transcript is visible
     assert asked["language"] == s.language
+    await lv.mgr.end((1000, 77))
+
+
+async def test_ask_salid_gets_the_secretary_and_coo_tools_for_the_lone_human(lv, asked):
+    s, live = await lv.join(5)
+    live.push(tool_msg("ask_salid", {"question": "ประชุมพรุ่งนี้มีอะไรบ้าง"}))
+    await until(lambda: live.tool_responses)
+    assert asked["secretary"] == "SEC" and asked["extra_tools"] == ["COO"]
+    assert asked["sec_args"] == (5, True, s.text_channel.id)
+    assert asked["coo_args"] == (5, True, "MEM")
+    assert "p5" in asked["profile"]  # one person: their own profile
+    await lv.mgr.end((1000, 77))
+
+
+async def test_ask_salid_in_a_room_acts_as_the_lowest_ranked_human_without_profile(lv, asked):
+    s, live = await lv.join(5, 12, 11)  # ranks 9, 4, 1
+    live.push(tool_msg("ask_salid", {"question": "เตือนงานให้หน่อย"}))
+    await until(lambda: live.tool_responses)
+    assert asked["sec_args"][0] == 11 and asked["coo_args"][0] == 11
+    assert asked["sec_args"][1] is False  # not everyone is an executive
+    assert "profile" not in asked  # several people: no one's personal profile
+    await lv.mgr.end((1000, 77))
+
+
+class _Stop(Exception):
+    pass
+
+
+@pytest.fixture
+def tool_names(monkeypatch):
+    """Runs the real qa.ask up to building the agent and returns the names of its tools."""
+    seen = {}
+
+    def grab(settings, tools, **kw):
+        seen["names"] = {getattr(f, "__name__", str(f)) for f in tools}
+        raise _Stop
+
+    monkeypatch.setattr("salid.qa.build_agent", grab)
+    return seen
+
+
+async def test_chat_and_voice_build_the_same_agent_tools(lv, tool_names, monkeypatch):
+    from salid import qa
+    from salid.qa import MemoryTools
+
+    bot = lv.bot
+    s, live = await lv.join(5)
+    mem = MemoryTools(bot.memory_store, 1000, {}, bot.s, 30)
+
+    async def room_memory(guild, voice_channel, humans):
+        return mem
+
+    monkeypatch.setattr(bot, "_room_memory_tools", room_memory)
+    monkeypatch.setattr(bot, "_web_kw", lambda gid: {"web_client": object()})
+    member = lv.chan.members[0]
+    msg = SimpleNamespace(
+        id=1, guild=lv.guild, channel=lv.chan, author=member, content="", attachments=[],
+        reference=None,
+    )  # fmt: skip
+    kw = bot._agent_kwargs(
+        msg, lv.guild, member, True, setting="th", lang="th", question="q", memory=mem,
+        profile=Profile(),
+    )  # fmt: skip
+    await asyncio.to_thread(_swallow, qa.ask, bot.s, bot.store, "q", guild_id=1000,
+                            is_exec=True, user_id=5, **kw)  # fmt: skip
+    chat = set(tool_names.pop("names"))
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert tool_names["names"] == chat  # one assistant: same tools in chat and in a voice room
+    assert {"send_dm", "deliver_file", "read_web"} <= chat  # the chat-only tools are there too
+    await lv.mgr.end((1000, 77))
+
+
+def _swallow(fn, *a, **kw):
+    with contextlib.suppress(_Stop):
+        fn(*a, **kw)
+
+
+async def test_voice_confirmation_works_across_consecutive_ask_salid_calls(lv):
+    s, live = await lv.join(5)
+    bot, asker = lv.bot, lv.chan.members[0]
+    first = bot._room_secretary(lv.guild, asker, True, "th", lv.chan.id)  # call 1: propose
+    second = bot._room_secretary(lv.guild, asker, True, "th", lv.chan.id)  # call 2: confirm
+    key = ("meeting", 1000, asker.id, "same-args")
+    assert first.request_id != second.request_id
+    assert bot.secretary_state.confirm(key, first.request_id) is False
+    assert bot.secretary_state.confirm(key, first.request_id) is False  # same call: not confirmed
+    assert bot.secretary_state.confirm(key, second.request_id) is True
     await lv.mgr.end((1000, 77))
 
 
