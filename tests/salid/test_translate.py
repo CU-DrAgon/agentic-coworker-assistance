@@ -259,7 +259,8 @@ def test_tools_ride_the_one_agent_builder_and_keep_the_coo_prompt_out(bot, room)
 
     kw = asyncio.run(build())
     names = [f.__name__ for f in kw["extra_tools"]]
-    assert names == ["translate", "set_auto_translate"]
+    assert {"translate", "set_auto_translate"} <= set(names)
+    assert "list_tasks" not in names
     from salid.qa import COO_PROMPT, ask
 
     llm = scripted(text_resp("ok"))

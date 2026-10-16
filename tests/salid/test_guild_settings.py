@@ -49,6 +49,7 @@ def test_missing_document_means_defaults(gstore):
         followups=True,
         reports=True,
         briefings=True,
+        freetime=True,
     )
     assert g.receipt_channel_ids == [] and g.digest_time == "18:00" and g.active
     assert g.exec_role_names == ["ผู้บริหาร", "Executive"] and g.admin_emails == []

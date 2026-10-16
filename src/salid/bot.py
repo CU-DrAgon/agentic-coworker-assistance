@@ -47,6 +47,7 @@ from .extract import (
     ingest_attachment,
     parse_void_command,
 )
+from .freetime_bot import FreetimeMixin
 from .gate import GateLine, is_join_candidate
 from .guild_settings import (
     MAX_RETENTION_DAYS,
@@ -254,7 +255,14 @@ class _DeepJob:
 
 
 class SecretaryBot(
-    CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, TranslateMixin, discord.Client
+    TranslateMixin,
+    FreetimeMixin,
+    CooMixin,
+    BriefingMixin,
+    ProfileMixin,
+    DeliverMixin,
+    MediaMixin,
+    discord.Client,
 ):
     def __init__(
         self,
@@ -374,6 +382,7 @@ class SecretaryBot(
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
         self._translate_init()  # translation + auto-translate (salid.translate_bot)
+        self._freetime_init()  # find a time everyone is free (salid.freetime)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1801,6 +1810,7 @@ class SecretaryBot(
             *coo_tools,
             *(self._captions_tools(asker) if coo_tools else []),  # only with the COO/memory setup
             *([] if interjection else self._translate_tools(message, guild, asker, is_exec, loop)),
+            *self._freetime_tools(guild, asker, lang),
         ]
         return {
             "language": setting,

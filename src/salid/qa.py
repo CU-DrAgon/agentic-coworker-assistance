@@ -20,6 +20,7 @@ from google.genai import types
 
 from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
+from .freetime import FREETIME_PROMPT
 from .i18n import resolve_lang, t
 from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
@@ -1099,6 +1100,7 @@ SECRETARY_PROMPT = (
     "นัดประชุม: แปลงเวลาที่ผู้ใช้พูด (เช่น พรุ่งนี้บ่ายสอง) เป็น ISO 8601 ตามวันที่และเขตเวลาข้างต้น แล้วเรียก schedule_meeting; "
     "ครั้งแรกจะได้ needs_confirmation ให้แสดงชื่อนัด วัน-เวลาพร้อมวันในสัปดาห์ ผู้เข้าร่วม (แท็กด้วย mention ที่เครื่องมือให้) และห้อง/ลิงก์ แล้วถามยืนยัน "
     "ห้ามบอกว่านัดแล้วจนกว่าสถานะเป็น created; เรียกซ้ำด้วยอาร์กิวเมนต์เดียวกันทุกตัวหลังผู้ใช้ยืนยันในข้อความถัดมาเท่านั้น. "
+    "ถ้าผู้ใช้ยังไม่ระบุเวลา แต่มี find_free_time ให้เรียกหาเวลาว่างของทุกคนก่อน แล้วเสนอตัวเลือก (ไม่ต้องถามเวลา); "
     "ถ้าไม่รู้เวลาหรือผู้เข้าร่วมให้ถามสั้นๆ ก่อน ห้ามเดาชื่อคน (unresolved_attendees = ถามว่าหมายถึงใคร). "
     "ถ้าผู้ใช้ให้ลิงก์ Google Meet/Zoom/Teams ใส่ใน link. ถ้าได้ error missing_permission ให้ส่งข้อความใน how_to_grant ต่อให้ผู้ใช้ตามนั้น (สั้นๆ ไม่ต้องอธิบายขั้นตอนเพิ่ม ไม่ต้องใส่อีโมจิ). "
     "ยกเลิก/เลื่อนนัด: เรียก list_meetings หา event_id ก่อน แล้วขอยืนยันแบบเดียวกัน. "
@@ -1107,6 +1109,7 @@ SECRETARY_PROMPT = (
     "เรียก send_email ได้เฉพาะหลังผู้ใช้ยืนยันร่างนั้นในข้อความถัดมา. ถ้าได้ not_configured ให้บอกว่ายังไม่ได้ตั้งค่าการส่งอีเมล (บันทึกร่างไว้แล้ว); "
     "rate_limited = ส่งครบโควตาต่อวันแล้ว. คนที่ไม่ใช่ผู้บริหาร/ผู้จัดการส่งอีเมลไม่ได้ (not_allowed)."
 )
+
 
 NO_REPLY = "NO_REPLY"
 INTERJECTION_PROMPT = (
@@ -1136,6 +1139,7 @@ def system_prompt(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    freetime: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1163,6 +1167,8 @@ def system_prompt(
         p += MEMORY_PROMPT
     if coo:
         p += COO_PROMPT
+    if freetime:
+        p += FREETIME_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1507,6 +1513,7 @@ def build_agent(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    freetime: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1524,6 +1531,7 @@ def build_agent(
         people=people,
         coo=coo,
         profile=profile,
+        freetime=freetime,
     )
     model_calls = 0
 
@@ -1675,6 +1683,7 @@ async def ask_async(
         people=people,
         coo="list_tasks" in tool_names,
         profile=profile,
+        freetime="find_free_time" in tool_names,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
