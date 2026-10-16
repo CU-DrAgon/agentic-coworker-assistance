@@ -63,6 +63,7 @@ class ContestsMixin:
                     self.llm, self.s.gemini_model, text, request
                 ),
                 fonts=lambda: find_fonts(self.s.pdf_font),
+                room_id=getattr(getattr(message, "channel", None), "id", 0) or 0,
             )
             return ct.contest_tools(ctx)
         except Exception:

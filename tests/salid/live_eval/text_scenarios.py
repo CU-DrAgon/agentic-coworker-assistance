@@ -753,6 +753,47 @@ def build_scenarios() -> list[Scn]:
                 lambda w: one(w, "somchai", "general", "ใบเสนอราคา ABC อยู่ไหน", mention=True),
                 need_tool("search_everything"), max_chars=900))  # fmt: skip
 
+    # 49-55 contests, business finance, security, company learning ------------------------------
+    rules = (
+        "Google Cloud AI Builder Cup 2026 (Hack2skill). Prototype submission deadline 18 Oct 2026 23:59 IST. "
+        "Deliverables: working deployed link, demo video max 3 minutes, pitch deck, public GitHub repo. "
+        "Judging: innovation 30%, technical implementation with Google Cloud 30%, business impact 25%, demo 15%. "
+        "Suggested technologies: Gemini on Vertex AI, ADK, Cloud Run, Firestore, BigQuery."
+    )
+    sc.append(S("contest_add", "Save hackathon rules", "contest_add with deadline + checklist",
+                lambda w: one(w, "somchai", "general", "สลิด เก็บกติกาแฮกกาธอนนี้ไว้ให้หน่อย\n" + rules, mention=True),
+                need_tool("contest_add"), max_chars=1400))  # fmt: skip
+
+    async def judge(w):
+        await say(w, "somchai", "general", "สลิด เก็บกติกาแฮกกาธอนนี้ไว้ให้หน่อย\n" + rules, mention=True)
+        return [
+            await say(
+                w,
+                "somchai",
+                "general",
+                "ลองเป็นกรรมการให้คะแนนโปรเจกต์สลิด (ผู้ช่วย AI ใน Discord บน Gemini + ADK + Cloud Run) ตามเกณฑ์งานนี้หน่อย",
+                mention=True,
+            )
+        ]
+
+    sc.append(S("contest_judge", "Mock judge", "contest_judge called, weighted score",
+                judge, need_tool("contest_judge"), max_chars=2500))  # fmt: skip
+    sc.append(S("fin_invest", "ROI / payback / NPV / IRR", "investment_metrics",
+                lambda w: one(w, "somchai", "general", "ลงทุน 1 ล้านบาท ได้กำไรปีละ 300,000 400,000 500,000 600,000 ดอกเบี้ย 10% คืนทุนกี่ปี NPV IRR เท่าไหร่", mention=True),
+                need_tool("investment_metrics"), max_chars=1400))  # fmt: skip
+    sc.append(S("fin_price", "Price from cost", "price_from_cost",
+                lambda w: one(w, "somchai", "general", "ต้นทุนต่อชิ้น 120 บาท อยากได้มาร์จิน 40% ควรตั้งราคาเท่าไหร่", mention=True),
+                need_tool("price_from_cost"), max_chars=1200))  # fmt: skip
+    sc.append(S("sec_link", "Is this link a scam", "security_check, dangerous",
+                lambda w: one(w, "somchai", "general", "ลิงก์นี้หลอกไหม http://kasikornbamk-verify.top/login ได้ SMS ว่าบัญชีจะถูกระงับ", mention=True),
+                need_tool("security_check"), max_chars=900))  # fmt: skip
+    sc.append(S("teach_exec", "Exec teaches a company rule", "teach_company saved",
+                lambda w: one(w, "boss", "general", "สลิด จำไว้นะว่าในบริษัทนี้ ใบแจ้งหนี้เกิน 50,000 บาทต้อง CC ฝ่ายบัญชีทุกครั้ง", mention=True),
+                need_tool("teach_company"), casual=True))  # fmt: skip
+    sc.append(S("teach_member", "Member suggests a company rule", "teach_company pending approval",
+                lambda w: one(w, "mint", "general", "สลิด ต่อไปในบริษัทนี้คำว่า PO หมายถึงใบสั่งซื้อนะ", mention=True),
+                need_tool("teach_company"), casual=True))  # fmt: skip
+
     return sc
 
 

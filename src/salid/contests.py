@@ -119,6 +119,7 @@ class Contest(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     sent: list[str] = Field(default_factory=list)  # reminder keys already delivered
+    room_id: int = 0  # channel where the rules were pasted: its readers already saw them
 
     @property
     def key(self) -> str:
@@ -830,6 +831,7 @@ class ContestCtx:
     read_web: Callable[[str, str], dict] = lambda text, request: {"error": "no web access"}
     fonts: Callable[[], FontSet] = lambda: FontSet(None, None, False)
     outbox: list[tuple[str, bytes]] = field(default_factory=list)
+    room_id: int = 0  # the channel being answered in (0: unknown)
 
     # ---- access
     def readable(self) -> list[Contest]:
@@ -840,8 +842,11 @@ class ContestCtx:
         return cs
 
     def _blocked(self, c: Contest) -> bool:
-        """In a shared room only `team` contests may be shown."""
-        return c.visibility != "team" and not self.private()
+        """In a shared room only `team` contests may be shown, plus the asker's own contest in the
+        room where its rules were pasted (everyone there already saw them)."""
+        if c.visibility == "team" or self.private():
+            return False
+        return not (c.room_id and c.room_id == self.room_id and c.created_by == self.asker_id)
 
     def _private_only(self, c: Contest) -> dict:
         return {
@@ -935,6 +940,22 @@ class ContestCtx:
         if urls:
             c.url = urls[0][:300]
         c.created_by, c.created_by_name = self.asker_id, self.asker_name
+        c.room_id = 0 if self.private() else self.room_id
+        same = next(
+            (
+                o
+                for o in self.repo.mine(self.guild_id, self.asker_id)
+                if o.name.casefold() == c.name.casefold()
+            ),
+            None,
+        )
+        if same is not None:
+            return {
+                "status": "already_saved",
+                **summary_dict(same, self.lang, self.zone),
+                "instruction": "This contest is already saved; use it (contest_get / "
+                "contest_update) instead of adding it again.",
+            }
         if questions and not confirm:
             return {
                 "status": "needs_confirmation",

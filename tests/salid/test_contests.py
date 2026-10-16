@@ -263,7 +263,9 @@ def test_writes_need_owner_or_team_and_a_deliverable_owner_may_tick_their_own_it
 
 
 def test_per_user_cap(repo):
-    c = ctx_for(repo, client=FakeClient([text_resp(extract_json()) for _ in range(31)]))
+    c = ctx_for(
+        repo, client=FakeClient([text_resp(extract_json(name=f"Cup {i}")) for i in range(31)])
+    )
     for _ in range(30):
         assert c.contest_add(RULES)["status"] == "saved"
     assert c.contest_add(RULES)["status"] == "error"
@@ -790,3 +792,25 @@ def test_library_has_a_contests_category_with_owner_and_exec_rules(w):
     assert item["category"] == "contests" and item["who"] == "Ann" and item["tags"] == ["Final"]
     detail = w.client.get(f"/api/center/orgs/org_t/documents/{item['id']}", headers=H["adm"]).json()
     assert detail["text"].startswith("# Team cup") and "Final" in detail["text"]
+
+
+def test_rules_pasted_in_a_room_stay_usable_there_by_their_owner_only(repo):
+    c = ctx_for(repo, private=False, room_id=77, client=FakeClient([text_resp(extract_json())]))
+    r = c.contest_add(RULES)
+    assert r["status"] == "saved" and repo.get(GUILD, r["id"]).room_id == 77
+    assert c.contest_get("AI Builder")["status"] == "ok"
+    # another room, or another person in the same room, still sees nothing
+    assert (
+        ctx_for(repo, private=False, room_id=78).contest_get("AI Builder")["status"]
+        == "use_private_chat"
+    )
+    assert ctx_for(repo, PEER, private=False, room_id=77).contest_list()["count"] == 0
+
+
+def test_adding_the_same_contest_again_returns_the_saved_one(repo):
+    added(repo)
+    again = ctx_for(repo, client=FakeClient([text_resp(extract_json())])).contest_add(RULES)
+    assert again["status"] == "already_saved" and len(repo.mine(GUILD, STAFF)) == 1
+    # someone else may still save their own copy
+    other = ctx_for(repo, PEER, client=FakeClient([text_resp(extract_json())])).contest_add(RULES)
+    assert other["status"] == "saved"
