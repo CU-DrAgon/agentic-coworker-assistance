@@ -68,6 +68,8 @@ from .guild_settings import (
     valid_retention_days,
 )
 from .i18n import LANGS, LANGUAGE_LABELS, parse_language_command, resolve_lang, t
+from .ideas_bot import IdeasMixin
+from .ideas_pdf import markdown_pdf
 from .image_memory import (
     MAX_IMAGE_BYTES,
     MAX_IMAGES_PER_MESSAGE,
@@ -78,6 +80,7 @@ from .image_memory import (
     receipt_note,
 )
 from .licensing import Licensing, make_licensing
+from .longtext import needs_attachment, split_sections, summary_of
 from .maps_bot import MapsMixin
 from .markets_bot import MarketsMixin
 from .media import media_candidates
@@ -114,6 +117,7 @@ from .modes import (
     parse_snooze_command,
 )
 from .naming import command_text, mentions_name
+from .pdf_report import find_fonts
 from .permissions import (
     channel_missing,
     guild_missing,
@@ -197,9 +201,9 @@ MENU_TRANSLATE = "Translate with Salid"  # context menu; Thai name via SalidTran
 
 
 def chunks(text: str, n: int = 1900):
-    while text:
-        yield text[:n]
-        text = text[n:]
+    """Messages of at most `n` characters, cut between sections / paragraphs, never in the middle
+    of one that fits (see salid.longtext)."""
+    yield from split_sections(text, n)
 
 
 def own_receipt(is_receipt_post, receipts_on: bool) -> bool:
@@ -309,6 +313,7 @@ class SecretaryBot(
     SearchMixin,
     TravelMixin,
     MarketsMixin,
+    IdeasMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -453,6 +458,7 @@ class SecretaryBot(
         self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
+        self._ideas_init()  # idea / project documents (salid.ideas_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1627,11 +1633,18 @@ class SecretaryBot(
             await ack.finish()
         text = resolve_mentions(defang_raw_mentions(text, guild), guild, allow_everyone=everyone)
         text += self._dm_footers.pop(message.id, "")  # DM with 2+ companies: "— Company: X"
-        allowed = allowed_mentions_for(text, allow_everyone=everyone)
+        parts = split_sections(text)
+        if needs_attachment(
+            parts
+        ):  # more than ~3 messages: a short summary + the full text as a file
+            summary, long_file = self._long_answer_file(text, self._lang(message), guild)
+            uploads = [*uploads, long_file][:10]
+            parts = split_sections(f"{summary}\n\n{t('long_answer_note', self._lang(message))}")
+        allowed = allowed_mentions_for("\n".join(parts), allow_everyone=everyone)
         acked = ack.sent if ack is not None else None
         sent = first = None
         sent_ids: list[int] = []
-        for i, part in enumerate(chunks(text)):
+        for i, part in enumerate(parts):
             extra = {"files": list(uploads)} if i == 0 and uploads else {}
             if i == 0 and acked is not None:
                 try:
@@ -1665,6 +1678,24 @@ class SecretaryBot(
             with contextlib.suppress(discord.HTTPException):
                 await acked.delete()
         return sent, first, sent_ids
+
+    def _long_answer_file(self, text: str, lang: str, guild) -> tuple[str, discord.File]:
+        """(short summary, the full answer as a PDF; Markdown when the PDF cannot be built)."""
+        summary = summary_of(text)
+        try:
+            data = markdown_pdf(
+                org=getattr(guild, "name", "") or "Salid",
+                title="Salid",
+                markdown=text,
+                lang=lang,
+                generated_at=self.s.now(),
+                fonts=find_fonts(self.s.pdf_font),
+            )
+            name = "salid-answer.pdf"
+        except Exception:
+            logger.warning("long answer PDF failed; attaching Markdown", exc_info=True)
+            data, name = text.encode("utf-8"), "salid-answer.md"
+        return summary, discord.File(io.BytesIO(data), filename=name)
 
     def _chat_actions(
         self, message, guild, member, is_exec: bool, setting: str, loop, secretary=None
@@ -1951,6 +1982,7 @@ class SecretaryBot(
             *([] if interjection else self._maps_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
+            *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]

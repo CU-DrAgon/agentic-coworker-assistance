@@ -28,6 +28,7 @@ AVAILABILITY = "salid_availability"  # per (guild, user) work hours and busy blo
 APPROVALS = "salid_approvals"  # approval requests (salid.approvals)
 PRIVATE_CHATS = "salid_private_chats"  # per (guild, user) private Salid channel (private_chat)
 PROFILES = "salid_profiles"  # per (guild, user) personal preferences (salid.profiles)
+IDEAS = "salid_ideas"  # idea / project documents, key `{owner_id}_{slug}` (salid.ideas)
 
 
 class DocStore(Protocol):
