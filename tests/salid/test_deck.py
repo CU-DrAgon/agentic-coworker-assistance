@@ -7,6 +7,7 @@ from datetime import date
 import pytest
 from pptx import Presentation
 from pptx.enum.chart import XL_CHART_TYPE
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 from pydantic import ValidationError
@@ -195,6 +196,18 @@ def test_english_fixed_strings():
 def test_page_numbers_on_content_slides():
     prs = render({"title": "t", "slides": [bullets(), bullets()]})
     assert "2" in texts(prs.slides[1]) and "3" in texts(prs.slides[2])
+
+
+def test_notes_master_is_listed_in_the_presentation():
+    # python-pptx adds the notes master part but not p:notesMasterIdLst; Apple's importer
+    # (Quick Look, Keynote) then fails to open slides that have speaker notes.
+    prs = render({"title": "t", "slides": [{**bullets(), "notes": "n"}]})
+    pres = prs.part._element
+    listed = pres.findall(f"{qn('p:notesMasterIdLst')}/{qn('p:notesMasterId')}")
+    rel_ids = {r.rId for r in prs.part.rels.values() if r.reltype == RT.NOTES_MASTER}
+    assert len(listed) == 1 and listed[0].get(qn("r:id")) in rel_ids
+    tags = [c.tag for c in pres]
+    assert tags.index(qn("p:notesMasterIdLst")) == tags.index(qn("p:sldMasterIdLst")) + 1
 
 
 # ------------------------------------------------------------------ charts

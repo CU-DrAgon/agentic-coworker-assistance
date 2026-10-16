@@ -20,6 +20,7 @@ from pptx.dml.color import RGBColor
 from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
+from pptx.opc.constants import RELATIONSHIP_TYPE as RT
 from pptx.oxml.ns import qn
 from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Inches, Pt
@@ -351,6 +352,20 @@ def _content_slide(prs, s: Slide, n: int, chart: ChartData | None, lang: str):
     return slide
 
 
+def _list_notes_master(prs) -> None:
+    """python-pptx adds the notes master part and relationship but not `p:notesMasterIdLst`;
+    Apple's importer (Quick Look, Keynote) then fails on slides with speaker notes. The list goes
+    right after `p:sldMasterIdLst` (schema order)."""
+    pres = prs.part._element
+    rid = next((r.rId for r in prs.part.rels.values() if r.reltype == RT.NOTES_MASTER), None)
+    if rid is None or pres.find(qn("p:notesMasterIdLst")) is not None:
+        return
+    lst, item = OxmlElement("p:notesMasterIdLst"), OxmlElement("p:notesMasterId")
+    item.set(qn("r:id"), rid)
+    lst.append(item)
+    pres.find(qn("p:sldMasterIdLst")).addnext(lst)
+
+
 def render_deck(spec: DeckSpec, charts: dict[int, ChartData], *, lang: str, today: date) -> bytes:
     """The deck as `.pptx` bytes: a title slide, then one slide per outline slide. `charts` maps
     the index of a chart slide to its data (fetched from the ledger by the caller)."""
@@ -359,6 +374,7 @@ def render_deck(spec: DeckSpec, charts: dict[int, ChartData], *, lang: str, toda
     _title_slide(prs, spec, lang, today)
     for i, s in enumerate(spec.slides):
         _content_slide(prs, s, i + 2, charts.get(i), lang)
+    _list_notes_master(prs)
     out = io.BytesIO()
     prs.save(out)
     return out.getvalue()
