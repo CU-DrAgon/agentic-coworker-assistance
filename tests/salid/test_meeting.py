@@ -583,7 +583,7 @@ def voice(env, monkeypatch):
     env.bot.s.voice_reply = True
     calls = []
     monkeypatch.setattr(
-        mt, "spoken_text", lambda c, m, q, a: calls.append(("spoken", m, q, a)) or "พูดสั้น ๆ"
+        mt, "spoken_text", lambda c, m, q, a, *_: calls.append(("spoken", m, q, a)) or "พูดสั้น ๆ"
     )
     monkeypatch.setattr(
         mt, "say", lambda st, c, t, lang="th": calls.append(("tts", lang, t)) or PCM

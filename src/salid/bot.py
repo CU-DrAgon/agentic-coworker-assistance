@@ -72,7 +72,14 @@ from .guild_settings import (
     make_guild_store,
     valid_retention_days,
 )
-from .i18n import LANGS, LANGUAGE_LABELS, parse_language_command, resolve_lang, t
+from .i18n import (
+    LANGS,
+    LANGUAGE_LABELS,
+    parse_language_command,
+    parse_server_language_command,
+    resolve_lang,
+    t,
+)
 from .ideas_bot import IdeasMixin
 from .ideas_pdf import markdown_pdf
 from .image_memory import (
@@ -115,8 +122,9 @@ from .mentions import (
 )
 from .message_control import AnswerLog, is_thanks, parse_cancel_task, parse_delete_message
 from .modes import (
-    CHAT_CHANNEL_NAME,
+    CHAT_CHANNEL_NAME,  # noqa: F401  (re-exported)
     MODES,
+    chat_channel_name,
     is_chat_channel_name,
     mode_choice_name,
     mode_help,
@@ -300,8 +308,12 @@ class _LicensedTree(app_commands.CommandTree):
         if await asyncio.to_thread(licensing.is_licensed, guild.id):
             return True
         with contextlib.suppress(discord.HTTPException):
+            try:
+                lang = resolve_lang(bot.team.current(guild.id).default_language)
+            except Exception:
+                lang = "th"
             await interaction.response.send_message(
-                t("unlicensed", "th", url=licensing.url), ephemeral=True
+                t("unlicensed", lang, url=licensing.url), ephemeral=True
             )
         return False
 
@@ -594,7 +606,7 @@ class SecretaryBot(
                 (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), None
             )
         if target is not None:
-            where = chat.mention if chat else f"#{CHAT_CHANNEL_NAME}"
+            where = chat.mention if chat else f"#{chat_channel_name(lang)}"
             with contextlib.suppress(discord.HTTPException):
                 await target.send(
                     t(
@@ -622,7 +634,7 @@ class SecretaryBot(
             return None
         try:
             return await guild.create_text_channel(
-                CHAT_CHANNEL_NAME, topic=t("chat_topic", lang), reason="Salid chat channel"
+                chat_channel_name(lang), topic=t("chat_topic", lang), reason="Salid chat channel"
             )
         except discord.HTTPException:
             logger.warning("could not create chat channel in guild %s", guild.id, exc_info=True)
@@ -877,12 +889,37 @@ class SecretaryBot(
 
     # ------------------------------------------------------------- reply language
     def _lang_setting(self, target) -> str:
-        """th / en / auto for the channel of `target` (a message or a channel). DMs: auto."""
+        """th / en / auto for the channel of `target` (a message or a channel). DMs: see `_dm_setting`."""
         guild = getattr(target, "guild", None)
         if guild is None:
-            return "auto"
+            return self._dm_setting(target)
         channel = getattr(target, "channel", None) or target
         return self.team.channel_language(guild.id, getattr(channel, "id", 0))
+
+    def _dm_setting(self, target) -> str:
+        """th / en / auto for a DM: the person's own language if set, else the default language
+        of the company the DM is about (the only shared server, or the one they picked) when that is
+        English. Otherwise, or when it is unclear and the shared servers disagree: auto."""
+        user = getattr(target, "author", None) or getattr(target, "user", None)
+        uid = getattr(user, "id", None)
+        if uid is None:
+            return "auto"
+        try:
+            shared = [g for g, _ in self._shared_guilds(uid)]
+            if len(shared) > 1:
+                active = self.dm_guilds.active(uid)
+                picked = [g for g in shared if g.id == active]
+                shared = picked or shared
+            langs = set()
+            for g in shared:
+                default = self.team.current(g.id).default_language
+                # a Thai default keeps today's DM behaviour (auto: follow the words they write)
+                langs.add(
+                    self._profile_of(g.id, uid).language or (default if default == "en" else "auto")
+                )
+        except Exception:  # a store hiccup must never stop an answer
+            return "auto"
+        return langs.pop() if len(langs) == 1 else "auto"
 
     def _lang(self, target, text: str | None = None) -> str:
         """Language (th or en) for Salid's fixed replies to `target`. `auto` follows `text`, by
@@ -1021,7 +1058,8 @@ class SecretaryBot(
         """'@Salid พูดภาษาอังกฤษ' / 'speak English' etc.: sets this channel's reply language.
         Executives and server managers only; others get a short refusal."""
         text = self._command_text(message)
-        cmd = parse_language_command(text)
+        server_cmd = parse_server_language_command(text) if message.guild else None
+        cmd = server_cmd or parse_language_command(text)
         if cmd is None or message.guild is None:
             return False
         user = message.author
@@ -1031,6 +1069,16 @@ class SecretaryBot(
             await message.reply(t("lang_denied", self._lang(message)), mention_author=False)
             return True
         new = resolve_lang(cmd, text)  # the reply follows the language just chosen
+        if server_cmd:
+            try:
+                await self._apply_server_language(message.guild, server_cmd, True)
+            except Exception:
+                logger.exception("could not save server language")
+                await message.reply(t("lang_failed", new), mention_author=False)
+                return True
+            label = t(f"lang_label_{server_cmd}", new)
+            await message.reply(t("server_lang_set", new, label=label), mention_author=False)
+            return True
         try:
             await asyncio.to_thread(
                 self.team.set_channel_language, message.guild.id, message.channel.id, cmd
@@ -1042,6 +1090,12 @@ class SecretaryBot(
         label = t(f"lang_label_{cmd}", new)
         await message.reply(t("lang_set", new, label=label), mention_author=False)
         return True
+
+    async def _apply_server_language(self, guild, language: str, apply_all: bool) -> None:
+        """Save the guild default (and clear or restore per-channel overrides), then rename the
+        private channels in the background."""
+        await asyncio.to_thread(self.team.set_server_language, guild.id, language, apply_all)
+        self._spawn(self._pc_rename_for_language(guild, language))
 
     async def _join_voice_tool(self, message, member, lang: str) -> dict:
         """Agent tool: join the voice channel the requester is in (explicit: overrides cooldowns)."""
@@ -1411,12 +1465,12 @@ class SecretaryBot(
         parts = []
         summary = await self._today_summary(message)
         if summary:
-            parts.append(f"สรุปห้องนี้วันนี้ (ก่อนหน้าแชตด้านล่าง):\n{summary}")
+            parts.append(f"Summary of this room today (precedes the chat below):\n{summary}")
         ref = getattr(message, "reference", None)
         replied = getattr(ref, "resolved", None) if ref else None
         if getattr(replied, "content", None):
             who = "สลิด" if replied.author == self.user else replied.author.display_name
-            parts.append(f"ข้อความที่ผู้ถามกำลังตอบกลับ:\n{who}: {replied.content[:1000]}")
+            parts.append(f"The message the asker is replying to:\n{who}: {replied.content[:1000]}")
         if lines:
             parts.append("\n".join(lines))
         return "\n\n".join(parts)
@@ -1802,6 +1856,19 @@ class SecretaryBot(
             self.team.set_channel_language(gid, target.id, language)
             return {"status": "ok", "channel": target.name, "language": language}
 
+        def set_server_lang(language: str, apply_to_all_channels: bool = True) -> dict:
+            if language not in ("th", "en"):
+                return {"error": "unknown language", "languages": ["th", "en"]}
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            run(self._apply_server_language(guild, language, bool(apply_to_all_channels)))
+            return {
+                "status": "ok",
+                "language": language,
+                "applied_to_all_channels": bool(apply_to_all_channels),
+                "note": "answer this confirmation in the NEW language",
+            }
+
         def set_days(days: int) -> dict:
             if not allowed():
                 return {"error": "not_allowed", "needs": "server manager or executive"}
@@ -1869,6 +1936,7 @@ class SecretaryBot(
         return ChatActions(
             set_channel_mode=set_mode,
             set_channel_language=set_language,
+            set_server_language=set_server_lang,
             set_memory_days=set_days,
             show_settings=show,
             hidden_channels=hidden,
@@ -2063,7 +2131,7 @@ class SecretaryBot(
             extra_tools += self._search_tools(
                 message, guild, asker, is_exec, memory, extra_tools, lang
             )
-        company = self._company_block(message, guild, asker, is_exec, question, interjection)
+        company = self._company_block(message, guild, asker, is_exec, question, interjection, lang)
         return {
             "language": setting,
             "memory": memory,

@@ -339,7 +339,7 @@ class MeetingService:
 
     # ---- helpers
     def lang_for(self, guild_id: int, channel_id: int | None) -> str:
-        setting = self.team.channel_language(guild_id, channel_id) if channel_id else "th"
+        setting = self.team.channel_language(guild_id, channel_id or 0)  # no channel: guild default
         return resolve_lang(setting, "")  # auto has no text to follow: Thai
 
     async def dm(self, guild, user_id: int, text: str) -> bool:

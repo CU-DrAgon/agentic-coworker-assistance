@@ -151,7 +151,7 @@ class TranslateMixin:
             return
         text = self._strip_mentions(getattr(message, "content", "") or "", message).strip()
         if not text:
-            await send(t("translate_nothing", lang))
+            await send(t("translate_nothing_pure", lang))
             return
         profile = self._profile_of(guild.id, user.id)
         preferred = profile.language or self._lang_setting(interaction)  # personal wins
@@ -162,7 +162,7 @@ class TranslateMixin:
             r = await asyncio.to_thread(self._menu_translate, text, target)
         except Exception:
             logger.exception("translate menu failed")
-            await send(t("translate_failed", lang))
+            await send(t("translate_failed_pure", lang))
             return
         body = defang_raw_mentions(r.translation, guild)
         who = getattr(message.author, "display_name", "")

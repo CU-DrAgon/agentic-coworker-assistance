@@ -52,6 +52,7 @@ class TravelMixin:
                     guild.id,
                     asker.id,
                     today=lambda: self.s.now().date(),
+                    lang=lang,
                 ),
             ]
         except Exception:

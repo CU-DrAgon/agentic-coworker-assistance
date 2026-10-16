@@ -239,11 +239,25 @@ ROOM_NOTE = (
     "ถ้าสิ่งที่ถามถูกจำกัดเพราะมีคนในห้องที่ไม่มีสิทธิ์ ให้ตอบสั้น ๆ ว่าพูดตรงนี้ไม่ได้เพราะไม่ใช่ทุกคนในห้องฟังได้ "
     "และเสนอส่งให้ทาง DM; ถ้าผู้ถามตกลงให้ใช้ send_dm ถึง “me”)"
 )
+ROOM_NOTE_EN = (
+    "(The asker is {asker}. This answer will be spoken to everyone in the voice channel: actions "
+    "(schedule, email, DM, post, approve, tasks) are done on the asker's behalf with their rights, "
+    "but the information spoken must be only what everyone in the room may see. If what was asked is "
+    "restricted because someone in the room lacks access, answer briefly that it cannot be said here "
+    "because not everyone in the room may hear it, and offer to send it by DM; if the asker agrees "
+    "use send_dm to “me”.)"
+)
 ASK_TIMEOUT_S = 60.0
 ANSWER_MAX_CHARS = 600
 LEDGER_NOTE = (
     "(ในห้องเสียงมีผู้ที่ไม่ใช่ผู้บริหาร: ห้ามใช้หรือเปิดเผยข้อมูลบัญชี/ใบเสร็จ/การใช้จ่ายของร้าน "
     "ถ้าถามเรื่องนี้ให้ตอบสั้น ๆ ว่าดูได้เฉพาะเมื่อทุกคนในห้องเป็นผู้บริหาร ถามในแชทแทนได้)"
+)
+
+LEDGER_NOTE_EN = (
+    "(Someone in the voice channel is not an executive: do not use or reveal the shop's "
+    "accounting/receipt/spending data. If asked, answer briefly that it can only be viewed when "
+    "everyone in the room is an executive, and suggest asking in chat instead.)"
 )
 
 _MEETING_TOOLS = {
@@ -260,6 +274,16 @@ STATE_ENGAGED = (
     "ไม่ต้องรอให้เรียกชื่อ ถ้าเขาบอกพอแล้ว/ขอบคุณ ให้ตอบ “ได้ค่ะ” สั้น ๆ แล้วกลับไปเงียบฟัง)"
 )
 FORCE_CUE = "(มีคนเรียกชื่อคุณ: ตอบกลับทันทีตามบริบท)"
+STATE_LISTENING_EN = "(State: listening. Nobody is talking to you yet. Stay quiet until someone calls the name Salid.)"
+STATE_ENGAGED_EN = (
+    "(State: in conversation. Answer every sentence people in the room address to you like a normal "
+    "conversation, with no need to hear your name. If they say that is enough / thanks, answer "
+    "“Sure.” briefly and go back to quietly listening.)"
+)
+FORCE_CUE_EN = "(Someone called your name: reply at once, in context.)"
+HEARD_EN = " What they said: “{heard}”"
+NO_ROOM_EN = "Nobody is in the voice channel right now."
+QA_OFF_EN = "The team Q&A feature is turned off."
 
 NO_ROOM = "ไม่มีใครอยู่ในห้องเสียงตอนนี้"
 QA_OFF = "ฟีเจอร์ถามตอบข้อมูลบัญชีถูกปิดอยู่"
@@ -413,10 +437,110 @@ def thai_date_line(now) -> str:
     return f"วันนี้คือ วัน{THAI_DAYS[now.weekday()]}ที่ {now.day} {THAI_MONTHS[now.month - 1]} {now.year}"
 
 
-def build_instruction(
-    settings: Any, language: str = "th", now=None, qa: bool = True, history: str = ""
+def build_instruction_en(
+    settings: Any, language: str = "en", now=None, qa: bool = True, history: str = ""
 ) -> str:
-    """System instruction for the Live session (Thai, built per connect so the date is current)."""
+    """The English system instruction (guild language "en"): English persona, no Thai particles."""
+    now = now or settings.now()
+    p = (
+        f"Today is {now:%A, %B} {now.day}, {now.year}.\n"
+        "You are “Salid”, a teammate and assistant sitting in the team's Discord voice channel, "
+        "listening to everyone talk. Read the room, join the conversation naturally and ask "
+        "questions like a good colleague would. Do not lecture and do not recite rules or policies.\n"
+        "Speaking rules:\n"
+        "- There are 2 states; the system tells you the state in a bracketed message: (1) Listening "
+        "(default): you listen and take notes silently and do not speak, except when someone calls "
+        "the name “Salid” (it may be heard as Salit, Saleed or Sa-lid): then answer "
+        "briefly at once, and if it is a greeting, greet them back. (2) In conversation: answer every "
+        "sentence addressed to you like a normal conversation, with no need for the name. If they say "
+        "that is enough / thanks, answer “Sure.” briefly and go quiet.\n"
+        "- If people in the room are talking among themselves, stay completely silent: do not reply "
+        "or comment, even if the topic concerns the team or the past (for example “where did we eat "
+        "yesterday”), unless they call your name or turn to ask you.\n"
+        "- A word that sounds like your name but sits mid-sentence and is not addressing you "
+        "(for example “Salad”, “Siri”, “slip”) is not a call: stay quiet.\n"
+        "- Answer in 1-3 short sentences, natural like real talk. Never read long lists aloud.\n"
+        "- Persona: a friendly, cheerful, easygoing woman's voice. Speak plain natural English only. "
+        "Never use Thai words or Thai particles, and refer to yourself only as “Salid”. Never make "
+        "animal sounds.\n"
+        "- When you join the room, do not say anything yet: wait until someone greets you or talks to you.\n"
+        "- If it is unclear whether this is a meeting (no schedule, relaxed chat) and nobody has talked "
+        "to you for a while, you may ask like a colleague, e.g. “Is this a meeting today?”, by calling "
+        "ask_consent (normally text so it does not disturb; spoken when the room is quiet or someone "
+        "is talking to you). If the answer is that it is not a meeting / no notes, call "
+        "set_recording(false), say briefly that you have stopped taking notes, and stay quiet until "
+        "called. If it is a meeting, keep taking notes.\n"
+        "- If someone tells you to leave the room / end the meeting (“leave”, “you can go”, "
+        "“end the meeting”), the system handles leaving itself: do not call set_recording and do not "
+        "say you stopped taking notes. Say one short goodbye, such as “See you later!”, then stay quiet.\n"
+        "- Talk to people by voice only. Do not post text that repeats what you say. For what truly "
+        "deserves a note (decisions, action items with owner and deadline, numbers someone asks you to "
+        "remember) call post_note with one short line per topic, not every sentence.\n"
+        "- Live captions are always off until someone asks: if asked to turn on captions / translate, "
+        "call set_captions(on=true, language) (original/th/en); if asked to turn them off call "
+        "set_captions(on=false) and confirm briefly.\n"
+        "- If someone says where to send the decisions/meeting summary, call the tool "
+        "set_minutes_destination and confirm briefly.\n"
+        f"Today is {now.date().isoformat()} ({now:%A}), time {now:%H:%M}, timezone {settings.tz}. "
+        "If someone asks what day today/tomorrow/yesterday is, answer only from this date; never guess "
+        "from memory. The week starts on Monday. Use this date to turn “this month”, “last week” etc. "
+        "into YYYY-MM-DD ranges when calling tools.\n"
+        "The team's stored memory and tool results may contain Thai: translate it and always speak "
+        "English.\n"
+    )
+    if qa:
+        p += (
+            "The only information tool is ask_salid (the full assistant that knows the team's memory "
+            "and can search the web).\n"
+            "- General knowledge questions, theory, opinions, explanations, chit-chat, greetings: answer "
+            "directly yourself and do not call a tool.\n"
+            "- Call ask_salid only when the question needs the team's data (who said what / decisions, "
+            "tasks and owners, files, receipts/expenses, the schedule) or fresh information from the "
+            "web, then put the answer in your own words. Never guess or compute numbers yourself.\n"
+            "- Never bring up money, receipts or expenses yourself unless someone asks about them directly.\n"
+            "- The system sends bracketed messages saying who is speaking right now (for example "
+            "“(Now speaking: Mew)”). Use them to address people naturally (for example “Sure, Mew”). "
+            "Never read these messages aloud and never answer them.\n"
+            "- If ask_salid says it cannot be said here because not everyone in the room may hear it, "
+            "tell the asker that briefly and offer to send it by DM; if they agree (or ask for a private "
+            "answer) call answer_privately(question), then say briefly that you sent it by DM. Never "
+            "guess or say the content yourself.\n"
+            "- Do not say a filler yourself before or while calling ask_salid (such as “one moment”): "
+            "the system says it for you. Call the tool at once without speaking, then answer when you "
+            "have the result.\n"
+            "- If ask_salid says it cannot look something up, give the reason briefly.\n"
+        )
+    else:
+        p += (
+            "You cannot look up the team's data right now. If someone asks about team data, money or "
+            "receipts, say plainly that you cannot look it up at the moment; you can still answer general "
+            "knowledge yourself.\n"
+        )
+    if language == "auto":
+        p += "Language: reply in the language the speaker uses; default to English. Never use Thai particles.\n"
+    else:
+        p += "Language: always speak English (keep names and vendors as they are).\n"
+    if history:
+        p += (
+            "\nContext: what people in the room just said (reference only, do not answer it):\n"
+            + history
+            + "\n"
+        )
+    return p
+
+
+def build_instruction(
+    settings: Any,
+    language: str = "th",
+    now=None,
+    qa: bool = True,
+    history: str = "",
+    lang: str | None = None,
+) -> str:
+    """System instruction for the Live session (built per connect so the date is current). Thai by
+    default; English persona and rules when the session's resolved `lang` (or `language`) is en."""
+    if lang == "en" or language == "en":
+        return build_instruction_en(settings, language, now, qa, history)
     now = now or settings.now()
     p = (
         f"{thai_date_line(now)}\n"
@@ -627,8 +751,7 @@ class LiveVoice:
         live, name = self._live, self.speaker_name(uid)
         if live is None or self._closing or not name:
             return
-        en = getattr(self.session, "lang", "th") == "en"
-        note = f"(Now speaking: {name})" if en else f"(ตอนนี้ {name} กำลังพูด)"
+        note = f"(Now speaking: {name})" if self._en() else f"(ตอนนี้ {name} กำลังพูด)"
         await live.send_client_content(
             turns=types.Content(role="user", parts=[types.Part(text=note)]), turn_complete=False
         )
@@ -675,7 +798,9 @@ class LiveVoice:
             history = sess.transcript.history(s.now(), window_s=120, max_chars=1500)
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
-            system_instruction=build_instruction(s, sess.language, s.now(), qa=qa, history=history),
+            system_instruction=build_instruction(
+                s, sess.language, s.now(), qa=qa, history=history, lang=sess.lang
+            ),
             tools=tools,
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -768,7 +893,10 @@ class LiveVoice:
         live = self._live
         if live is None or self._closing:
             return  # the current state is sent again when the session connects
-        text = STATE_ENGAGED if self._engaged else STATE_LISTENING
+        if self._en():
+            text = STATE_ENGAGED_EN if self._engaged else STATE_LISTENING_EN
+        else:
+            text = STATE_ENGAGED if self._engaged else STATE_LISTENING
         await live.send_client_content(
             turns=types.Content(role="user", parts=[types.Part(text=text)]), turn_complete=False
         )
@@ -858,9 +986,13 @@ class LiveVoice:
         )
 
     async def _cue(self, live: Any, heard: str) -> None:
-        cue = FORCE_CUE
+        en = self._en()
+        cue = FORCE_CUE_EN if en else FORCE_CUE
         if heard.strip():  # the model may have dropped the audio: say what was heard (transcript)
-            cue += f" ข้อความที่เขาพูดคือ: “{heard.strip()[:300]}”"
+            if en:
+                cue += HEARD_EN.format(heard=heard.strip()[:300])
+            else:
+                cue += f" ข้อความที่เขาพูดคือ: “{heard.strip()[:300]}”"
         await live.send_client_content(
             turns=types.Content(role="user", parts=[types.Part(text=cue)]),
             turn_complete=True,
@@ -1029,16 +1161,16 @@ class LiveVoice:
         if not question.strip():
             return {"error": "empty question"}
         if not bot.team.enabled(s.guild_id, "qa"):
-            return {"error": QA_OFF}
+            return {"error": QA_OFF_EN if self._en() else QA_OFF}
         humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
         if not humans:
-            return {"error": NO_ROOM}
+            return {"error": NO_ROOM_EN if self._en() else NO_ROOM}
         guild = getattr(humans[0], "guild", None)
         everyone_exec = all(bot.is_exec_member(m) for m in humans)
         if everyone_exec or len(humans) == 1:  # one identified person: their own receipts only
             user_id = humans[0].id
         else:  # unknown speaker: no account data at all
-            user_id, question = 0, f"{question}\n{LEDGER_NOTE}"
+            user_id, question = 0, f"{question}\n{LEDGER_NOTE_EN if self._en() else LEDGER_NOTE}"
         # Same agent as in chat (bot._agent_kwargs). With several people in the room the WHOLE agent
         # is built for the lowest-ranked one, so every read (tasks, approvals, meetings, memory,
         # ledger) is safe to say out loud. Only the outward ACTIONS are re-bound to the person who
@@ -1063,8 +1195,9 @@ class LiveVoice:
         speaker = min(speakers, key=lambda h: ranks.get(h.id, -1)) if speakers else asker
         known_asker = len(humans) == 1 or len(speakers) == 1
         if len(humans) > 1:
-            question = f"{question}\n{ROOM_NOTE.format(asker=speaker.display_name)}"
-        kw: dict = {"language": s.language, "memory": memory, **bot._web_kw(s.guild_id)}
+            note = ROOM_NOTE_EN if self._en() else ROOM_NOTE
+            question = f"{question}\n{note.format(asker=speaker.display_name)}"
+        kw: dict = {"language": self._qa_setting(), "memory": memory, **bot._web_kw(s.guild_id)}
         if guild is not None:
             here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
 
@@ -1074,8 +1207,8 @@ class LiveVoice:
                     guild,
                     member,
                     is_exec,
-                    setting=s.language,
-                    lang=resolve_lang(s.language, question),
+                    setting=self._qa_setting(),
+                    lang=self._qa_lang(question),
                     question=question,
                     memory=memory,
                     profile=profile,
@@ -1123,7 +1256,7 @@ class LiveVoice:
         if not question.strip():
             return {"error": "empty question"}
         if not bot.team.enabled(s.guild_id, "qa"):
-            return {"error": QA_OFF}
+            return {"error": QA_OFF_EN if self._en() else QA_OFF}
         humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
         recent = set(self.recent_speakers())
         speakers = [h for h in humans if h.id in recent]
@@ -1140,8 +1273,8 @@ class LiveVoice:
             guild,
             who,
             is_exec,
-            setting=s.language,
-            lang=resolve_lang(s.language, question),
+            setting=self._qa_setting(),
+            lang=self._qa_lang(question),
             question=question,
             memory=memory,
             profile=bot._profile_of(s.guild_id, who.id),
@@ -1209,8 +1342,19 @@ class LiveVoice:
         self._ensure_playing(src)
 
     # ---- filler ("one moment") while a slow tool runs
+    def _en(self) -> bool:
+        """The session speaks English: guild/channel language en (auto falls back to the guild's)."""
+        return getattr(self.session, "lang", "th") == "en"
+
+    def _qa_setting(self) -> str:
+        s = self.session
+        return "en" if self._en() else s.language
+
+    def _qa_lang(self, question: str) -> str:
+        return "en" if self._en() else resolve_lang(self.session.language, question)
+
     def _filler_lang(self) -> str:
-        return "en" if getattr(self.session, "lang", "th") == "en" else "th"
+        return "en" if self._en() else "th"
 
     async def _prerender_fillers(self) -> None:
         """Synthesize the clips once (Cloud TTS, the classic voice) so they are ready when needed."""

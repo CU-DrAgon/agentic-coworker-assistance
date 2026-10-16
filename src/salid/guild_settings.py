@@ -294,6 +294,13 @@ class GuildSettings(GuildSettingsUpdate):
     active: bool = True
     updated_by: str = ""
     updated_at: str = ""
+    # Per-channel languages saved when the whole server was switched, so switching back restores.
+    previous_channel_languages: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("previous_channel_languages", mode="before")
+    @classmethod
+    def _previous_languages(cls, v):
+        return GuildSettingsUpdate._languages(v)
 
 
 class LinkError(Exception):
@@ -441,6 +448,36 @@ class GuildStore:
                 txn.set(ref, {"channel_languages": langs})
             else:
                 txn.update(ref, {"channel_languages": langs})
+
+        self._in_transaction(run)
+
+    def set_server_language(
+        self, guild_id: int, language: str, apply_to_all_channels: bool = True
+    ) -> None:
+        """Set the guild default language. With `apply_to_all_channels` the per-channel overrides
+        are cleared (a copy is kept in `previous_channel_languages`); switching back to Thai
+        restores that copy."""
+        if language not in ("th", "en"):
+            raise ValueError(f"unknown language {language!r}")
+        ref = self._ref(guild_id)
+
+        def run(txn) -> None:
+            snap = ref.get(transaction=txn)
+            doc = snap.to_dict() if snap.exists else None
+            data: dict = {"default_language": language}
+            if apply_to_all_channels:
+                current = dict((doc or {}).get("channel_languages") or {})
+                previous = dict((doc or {}).get("previous_channel_languages") or {})
+                if language == "th":
+                    data["channel_languages"] = previous
+                    data["previous_channel_languages"] = {}
+                else:
+                    data["channel_languages"] = {}
+                    data["previous_channel_languages"] = current or previous
+            if doc is None:
+                txn.set(ref, data)
+            else:
+                txn.update(ref, data)
 
         self._in_transaction(run)
 
@@ -668,6 +705,15 @@ class BotGuildSettings:
         """Write one channel's language and drop the cache so it applies at once."""
         try:
             self.store.set_channel_language(guild_id, channel_id, language)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def set_server_language(
+        self, guild_id: int, language: str, apply_to_all_channels: bool = True
+    ) -> None:
+        """Switch the whole server's language and drop the cache so it applies at once."""
+        try:
+            self.store.set_server_language(guild_id, language, apply_to_all_channels)
         finally:
             self._cache.pop(guild_id, None)
 

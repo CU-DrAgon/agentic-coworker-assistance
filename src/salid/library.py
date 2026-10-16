@@ -38,6 +38,7 @@ from pydantic import BaseModel
 from . import contests as contests_mod
 from . import docs as docs_mod
 from .coo_store import MINUTES
+from .i18n import resolve_lang
 from .ideas import IdeaRepo, library_visible, render_markdown
 from .memory_store import MemoryMessage
 from .orgs import Org, Workspace
@@ -249,6 +250,14 @@ class Library:
         public = {int(x) for x in g.public_channel_ids}
         return public, public | {int(c.id) for c in g.channels}
 
+    def _lang(self, gid) -> str:
+        """The guild's reply language (th/en) for the markdown rendered into the library."""
+        try:
+            g = self.guilds.find(gid)
+            return resolve_lang(getattr(g, "default_language", None))
+        except Exception:  # noqa: BLE001 - a lookup failure must not break the listing
+            return "th"
+
     # ---- gathering one workspace
     def _gather(self, ws: Workspace, viewer: Viewer, out: Gathered) -> None:
         public, known = self._channel_sets(ws)
@@ -385,7 +394,7 @@ class Library:
         for d in self.ideas.all(gid):
             if not library_visible(d, viewer.exec):
                 continue
-            md = render_markdown(d, "th", owner_line=False)
+            md = render_markdown(d, self._lang(gid), owner_line=False)
             item = DocItem(
                 id=f"discord-{gid}:idea:{d.key}",
                 title=d.title,
@@ -404,7 +413,7 @@ class Library:
         for c in self.contests.all(gid):
             if not contests_mod.library_visible(c, viewer.exec):
                 continue
-            md = contests_mod.render_markdown(c, "th")
+            md = contests_mod.render_markdown(c, self._lang(gid))
             item = DocItem(
                 id=f"discord-{gid}:contest:{c.id}",
                 title=c.name,

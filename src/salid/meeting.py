@@ -339,7 +339,8 @@ SUMMARY_PROMPT = """คุณคือ “สลิด” เลขาประ�
 
 SUMMARY_PROMPT_EN = """You are “Salid”, the team's meeting secretary. Below is a meeting transcript (format [time] name: text, \
 auto-transcribed so it may contain errors). Write a concise summary of the meeting in English. Use only \
-what is in the transcript and do not invent anything. Use these headings:
+what is in the transcript and do not invent anything. The transcript may be in Thai: translate it, \
+and write the whole summary in English only (keep people's names as written). Use these headings:
 **Meeting summary** (2-4 lines)
 **Decisions/agreements** (list; write None if there are none)
 **Action items** (list as "who: what (deadline if any)"; use the speaker names from the transcript as owners, \
@@ -725,6 +726,8 @@ class MeetingManager:
         if s.ending or s.leaving:
             return {"error": "meeting_ending"}
         if on:
+            if language == "original" and s.lang == "en":
+                language = "en"  # an English guild reads captions in English by default
             s.captions.turn_on(language, self._now())
             return {"status": "on", "language": language}
         s.captions.turn_off()
@@ -785,8 +788,13 @@ class MeetingManager:
             "and take meeting notes. Nobody has said what this is. Write ONE short, natural line "
             f"in {lang} asking, like a colleague would, whether this is a meeting and whether it "
             "is okay to take notes; they can say no. Vary the wording; no lecture, no policy. "
-            f"A woman speaks it; use the particle {p} (questions: "
-            f"{'คะ' if p == 'ค่ะ' else p}). Reply with the line only."
+            + (
+                "A woman speaks it; plain natural English, no Thai words or particles. "
+                "Reply with the line only."
+                if s.lang == "en"
+                else f"A woman speaks it; use the particle {p} (questions: "
+                f"{'คะ' if p == 'ค่ะ' else p}). Reply with the line only."
+            )
         )
         try:
             resp = await asyncio.to_thread(
@@ -1157,7 +1165,9 @@ class MeetingManager:
         )
         await self.join(
             starter,
-            lang=lang if lang in ("th", "en") else "th",
+            lang=lang
+            if lang in ("th", "en")
+            else resolve_lang(self.bot.team.current(guild.id).default_language),
             announce="meet_announce_auto",
             first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
             origin="auto",
@@ -1279,7 +1289,7 @@ class MeetingManager:
         text_ch = guild.get_channel(rec["text_channel_id"]) if rec.get("text_channel_id") else None
         humans = self._humans(channel)
         elapsed = max(0.0, (self.bot.s.now() - started_at).total_seconds())
-        lang = rec.get("fallback_lang") or "th"
+        lang = rec.get("fallback_lang") or resolve_lang(self.bot.team.current(gid).default_language)
         on_end = None
         if rec.get("meeting_id") and getattr(self.bot, "scheduler", None) is not None:
             mid = rec["meeting_id"]
@@ -1808,7 +1818,9 @@ class MeetingManager:
         s.speech_pending = True
         try:
             # The cheap model: ~1-2 s versus ~8 s for the thinking model, and it is plenty here.
-            spoken = await asyncio.to_thread(spoken_text, bot.llm, bot.s.gate_model, question, text)
+            spoken = await asyncio.to_thread(
+                spoken_text, bot.llm, bot.s.gate_model, question, text, s.lang
+            )
             if not spoken:
                 return
             spoken = with_particle(spoken, str(getattr(bot.s, "voice_particle", "ค่ะ") or "ค่ะ"))
@@ -2027,7 +2039,7 @@ class MeetingManager:
                 self.bot.llm,
                 self.bot.s.gemini_model,
                 s.transcript.full_text(),
-                s.language,
+                "en" if s.lang == "en" else s.language,
             )
         except Exception:
             logger.exception("meeting summary failed")

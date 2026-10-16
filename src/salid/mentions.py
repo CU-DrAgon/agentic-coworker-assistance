@@ -132,7 +132,7 @@ def tag_candidates(
         *recent_authors,
         *(m.display_name for m in getattr(channel, "members", []) if not m.bot),
     ]:
-        if n and n not in out and n != "สลิด":
+        if n and n not in out and n not in ("สลิด", "Salid"):
             out.append(n)
         if len(out) >= limit:
             break

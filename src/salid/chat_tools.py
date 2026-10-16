@@ -33,6 +33,7 @@ class ChatActions:
     remember_my_preference: Callable[[str, str], dict] | None = None
     show_my_preferences: Callable[[], dict] | None = None
     forget_my_preferences: Callable[[str | None], dict] | None = None
+    set_server_language: Callable[[str, bool], dict] | None = None
 
 
 def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> list:
@@ -77,6 +78,25 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
             "set_channel_language",
             {"lang": lang, "channel": channel},
             lambda: actions.set_channel_language(lang, channel),
+        )
+
+    def set_server_language(language: str, apply_to_all_channels: bool = True) -> dict:
+        """Switch Salid's language for the WHOLE server (admins / executives only), everything she
+        says and produces: replies, reminders, reports, PDFs, meeting summaries, voice. Use for
+        "ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์", "เปลี่ยนสลิดเป็นภาษาอังกฤษทั้งหมด", "switch the whole server to
+        English", "speak English everywhere" and the same for Thai. For one channel only use
+        set_channel_language.
+
+        Args:
+            language: th or en.
+            apply_to_all_channels: true (default) also clears the per-channel language settings,
+                so every channel follows the new language (switching back to Thai restores the
+                old per-channel settings); false only changes the server default.
+        """
+        return logged(
+            "set_server_language",
+            {"language": language, "apply_to_all_channels": apply_to_all_channels},
+            lambda: actions.set_server_language(language, apply_to_all_channels),
         )
 
     def set_memory_days(days: int) -> dict:
@@ -263,6 +283,7 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
     tools = {
         "set_channel_mode": set_channel_mode,
         "set_channel_language": set_channel_language,
+        "set_server_language": set_server_language,
         "set_memory_days": set_memory_days,
         "show_settings": show_settings,
         "hidden_channels": hidden_channels,

@@ -80,7 +80,12 @@ class MapsMixin:
                 return notes
             zone = self.s.zone
             tools = TravelTools(TravelCtx(routes, pc, lang, zone, lambda: now, weather))
-            origin = find_place(pc, "บ้าน") or find_place(pc, "ออฟฟิศ")
+            origin = (
+                find_place(pc, "บ้าน")
+                or find_place(pc, "home")
+                or find_place(pc, "ออฟฟิศ")
+                or find_place(pc, "office")
+            )
             for m in meetings:
                 place = (
                     pc.repo.get(guild.id, m.get("place_id") or "") if m.get("place_id") else None
@@ -94,7 +99,7 @@ class MapsMixin:
                 line = leave_line(r, origin.name, m["title"], place.name, lang)
                 if line:
                     notes.append(line)
-            office = find_place(pc, "ออฟฟิศ")
+            office = find_place(pc, "ออฟฟิศ") or find_place(pc, "office")
             if office is not None:
                 w = WeatherTools(WeatherCtx(weather, pc, lang, zone, lambda: now)).weather(
                     office.name, "today"

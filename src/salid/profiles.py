@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field
 
 from .coo_store import PROFILES, DocStore
+from .i18n import resolve_lang
 
 MAX_NICKNAME = 40
 MAX_ROLE = 120
@@ -246,6 +247,12 @@ class ProfileMixin:
             return self.profiles.get(gid, uid)
         except Exception:  # a store hiccup must never stop an answer
             return Profile()
+
+    def _person_lang(self, guild_id: int, user_id: int, text: str | None = None) -> str:
+        """th / en for a private message to one person: their own language if set, else the
+        guild default (`auto` then follows `text`)."""
+        own = self._profile_of(guild_id, user_id).language
+        return resolve_lang(own or self.team.current(guild_id).default_language, text)
 
     def _profile_actions(self, gid: int, uid: int) -> dict:
         """ChatActions fields, bound to this guild and this speaker."""

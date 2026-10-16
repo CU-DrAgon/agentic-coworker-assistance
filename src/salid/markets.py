@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 import httpx
 
 from .currency import Converter
-from .i18n import CATALOG, t
+from .i18n import CATALOG, has_thai, t
 from .web_read import grounded_generate
 
 logger = logging.getLogger(__name__)
@@ -1496,9 +1496,12 @@ def format_alert(a: Alert, lang: str = "th") -> str:
             when = datetime.fromisoformat(a.as_of).astimezone(BKK).strftime("%d/%m %H:%M")
         except ValueError:
             when = a.as_of
+    label, cur, src = w.label, a.currency, a.source
+    if lang == "en":
+        label, cur, src = localize_en(label), localize_en(cur), localize_en(src)
     return t_(
-        "mk_alert", lang, label=w.label, cond=cond, price=f"{a.price:,.2f}", cur=a.currency,
-        chg=chg, src=a.source, when=when,
+        "mk_alert", lang, label=label, cond=cond, price=f"{a.price:,.2f}", cur=cur,
+        chg=chg, src=src, when=when,
     )  # fmt: skip
 
 
@@ -1559,6 +1562,63 @@ def company_news(data: MarketData, topics: list[str], lang: str, total: int = 3)
     return t_("mk_news_head", lang) + "\n" + "\n".join(lines) if lines else ""
 
 
+# ------------------------------------------------------------------ English-mode localisation
+# The data layer builds Thai/bilingual notes. In an English guild the tool results the model reads
+# (and the alert text users see) are rewritten to English-only here: exact strings first, then
+# substrings, then a "thai / english" bilingual string keeps only its English half.
+_EN_EXACT = {
+    SOURCE_GOLD: "Gold Traders Association (Thailand)",
+    "ไม่ระบุเวลา": "time not stated",
+    "เวลา": "time",
+    "ลิงก์": "link",
+    "ขึ้น": "up",
+    "ลง": "down",
+    "เท่าเดิม": "unchanged",
+    "THB/บาททอง": "THB per baht-weight",
+    "ทองคำสากล Spot XAU/USD (USD ต่อทรอยออนซ์)": "World gold spot XAU/USD (USD per troy ounce)",
+    "ทองคำแท่ง 96.5% (สมาคม) ขายออก (บาทต่อ 1 บาททองคำ)": (
+        "Thai gold bar 96.5% (Gold Traders Association) sell price (THB per baht-weight)"
+    ),
+}
+_EN_SUBSTR = (
+    ("Spot (อ้างอิงจากสมาคมค้าทองคำ)", "Spot (as quoted by the Gold Traders Association)"),
+    (" (จากการค้นเว็บ ความแม่นยำต่ำกว่า)", " (from web search, lower accuracy)"),
+    ("สมาคมค้าทองคำ", "Gold Traders Association"),
+    (
+        "บาท ต่อน้ำหนัก 1 บาททองคำ เทียบกับประกาศครั้งก่อน",
+        "THB per baht-weight vs the previous announcement",
+    ),
+    ("ดอลลาร์สหรัฐต่อทรอยออนซ์", "USD per troy ounce"),
+    ("บาทต่อน้ำหนัก 1 บาททองคำ", "THB per baht-weight"),
+    (" (ครั้งที่ ", " (round "),
+)
+
+
+def localize_en(obj):
+    """`obj` (nested dict / list / str) with every Thai-bearing string made English-only."""
+    if isinstance(obj, dict):
+        return {k: localize_en(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [localize_en(v) for v in obj]
+    if isinstance(obj, tuple):
+        return tuple(localize_en(v) for v in obj)
+    if not isinstance(obj, str) or not has_thai(obj):
+        return obj
+    if obj in _EN_EXACT:
+        return _EN_EXACT[obj]
+    if " / " in obj:
+        tail = obj.rsplit(" / ", 1)[1]
+        if not has_thai(tail) and len(tail) >= 6:
+            return tail
+    for th, en in _EN_SUBSTR:
+        obj = obj.replace(th, en)
+    return obj
+
+
+def _loc(ctx_lang: str, obj):
+    return localize_en(obj) if ctx_lang == "en" else obj
+
+
 # ------------------------------------------------------------------ agent tools
 @dataclass
 class MarketsCtx:
@@ -1602,7 +1662,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
         names = resolve_names(symbols)
         if not names:
             return {"status": "error", "error": "no_symbol"}
-        return {"quotes": ctx.data.quotes(names, market)}
+        return _loc(ctx.lang, {"quotes": ctx.data.quotes(names, market)})
 
     def stock_history(symbol: str, range: str = "1mo", market: str = "auto") -> dict:  # noqa: A002
         """Price history summary of one symbol: start, end, % change, high and low with dates over
@@ -1615,7 +1675,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
             range: "1mo", "6mo" or "1y".
             market: "auto", "th" or "global".
         """
-        return ctx.data.history(symbol, range, market)
+        return _loc(ctx.lang, ctx.data.history(symbol, range, market))
 
     def gold_price(compare: bool = False) -> dict:
         """Today's gold prices in TWO separate parts: `thai` (Gold Traders Association, 96.5%,
@@ -1632,7 +1692,11 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
             compare: true when the user asks to compare Thai vs world or to convert the world
                 price to baht-weight; adds `conversion` (with the FX rate and its source).
         """
-        return ctx.data.gold(bool(compare))
+        res = ctx.data.gold(bool(compare))
+        if ctx.lang == "en":
+            res = localize_en(res)
+            res["summary"] = res.get("summary_en") or res.get("summary", "")
+        return res
 
     def news(query: str = "", topic: str = "", lang: str = "th", max: int = 5) -> dict:  # noqa: A002
         """Latest news headlines from Google News: title, source, time and link (no article
@@ -1674,7 +1738,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
                 "watches": [
                     {
                         "id": w.id,
-                        "label": w.label,
+                        "label": _loc(ctx.lang, w.label),
                         "condition": w.condition,
                         "value": w.threshold,
                         "target": gold_target(w.symbol),
@@ -1730,7 +1794,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
             return {"status": "refused", "reason": err}
         return {
             "status": "ok",
-            "watching": label,
+            "watching": _loc(ctx.lang, label),
             "target": gold_target(sym) if sym in ("gold", WORLD_GOLD) else None,
             "condition": cond,
             "value": v,

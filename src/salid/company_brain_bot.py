@@ -66,7 +66,14 @@ class CompanyMixin:
 
     # ------------------------------------------------------------- prompt block
     def _company_block(
-        self, message, guild, asker, is_exec: bool, question: str, interjection: bool
+        self,
+        message,
+        guild,
+        asker,
+        is_exec: bool,
+        question: str,
+        interjection: bool,
+        lang: str = "th",
     ) -> str:
         """The company playbook block for one request ("" when off, empty or on any error).
         Also decides the once-a-week onboarding nudge for an admin."""
@@ -84,7 +91,7 @@ class CompanyMixin:
             if nudge:
                 pb.nudged_at = self.s.now().isoformat(timespec="seconds")
                 self.company.save(gid, pb)
-            return company_block(pb, question, nudge=nudge)
+            return company_block(pb, question, nudge=nudge, lang=lang)
         except Exception:
             logger.warning("company block unavailable", exc_info=True)
             return ""

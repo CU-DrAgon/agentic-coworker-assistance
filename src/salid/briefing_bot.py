@@ -181,7 +181,9 @@ class BriefingMixin:
                     m for m in self.scheduler.upcoming(gid, a, b)
                     if uid in m.get("attendee_ids", []) and m.get("place_id")
                 ]  # fmt: skip
-                inp.notes = self._maps_brief_notes(guild, member, mine, now, self._guild_lang(gid))
+                inp.notes = self._maps_brief_notes(
+                    guild, member, mine, now, self._person_lang(gid, uid)
+                )
             inp.markets = self._market_brief_line(guild, member, prefs, now)
             inp.contests = self._contest_brief_lines(guild, member, now)
             return inp
@@ -291,7 +293,6 @@ class BriefingMixin:
                 if not bf.reminder_hour_ok(now):
                     continue
                 prefs = await asyncio.to_thread(self._all_prefs, gid)
-                lang = self._guild_lang(gid)
                 for d in self.asks.due_reminders(gid, now_utc, after):
                     await asyncio.to_thread(self.asks.mark_reminded, gid, d["key"])  # once
                     member = guild.get_member(d["target_id"])
@@ -302,7 +303,7 @@ class BriefingMixin:
                     if channel is not None and not self._can_read(channel, member):
                         continue
                     text = t(
-                        "ask_reminder", lang, who=d.get("author_name", ""),
+                        "ask_reminder", self._person_lang(gid, member.id), who=d.get("author_name", ""),
                         channel=f"#{d.get('channel_name', '')}", text=d.get("text", ""),
                         link=d.get("jump_url", ""),
                     )  # fmt: skip
@@ -383,11 +384,6 @@ class BriefingMixin:
                 "at": bf._iso(now),
             },
         )  # fmt: skip
-        lang = self._guild_lang(gid)
-        text = t(
-            "alert_doc", lang, kind=kind, summary=summary, channel=f"#{cname}",
-            link=getattr(message, "jump_url", ""),
-        )  # fmt: skip
         sent = 0
         for uid in eligible:
             ok = await asyncio.to_thread(
@@ -396,6 +392,10 @@ class BriefingMixin:
             )  # fmt: skip
             if not ok:
                 continue
+            text = t(
+                "alert_doc", self._person_lang(gid, uid), kind=kind, summary=summary,
+                channel=f"#{cname}", link=getattr(message, "jump_url", ""),
+            )  # fmt: skip
             res = await send_dm(guild.get_member(uid), text)
             sent += int(res.ok)
             if not res.ok:

@@ -794,6 +794,33 @@ def build_scenarios() -> list[Scn]:
                 lambda w: one(w, "mint", "general", "สลิด ต่อไปในบริษัทนี้คำว่า PO หมายถึงใบสั่งซื้อนะ", mention=True),
                 need_tool("teach_company"), casual=True))  # fmt: skip
 
+    # English server (the whole guild switched to English): nothing may come back in Thai ------
+    def english_server(body):
+        async def run(w):
+            w.bot.team.set_server_language(GUILD_ID, "en", True)
+            try:
+                return await body(w)
+            finally:
+                w.bot.team.set_server_language(GUILD_ID, "th", True)
+
+        return run
+
+    def no_thai(st):
+        return ["Thai characters in an English-server reply"] if THAI.search(replies(st)) else []
+
+    sc.append(S("en_server_greeting", "English server: greeting", "English reply, no Thai, no tools",
+                english_server(lambda w: one(w, "somchai", "general", "Hi Salid, what can you help me with?", mention=True)),
+                lambda w, st: no_thai(st) + ([] if not tools_of(st) else [f"used tools {tools_of(st)}"]),
+                english=True))  # fmt: skip
+    sc.append(S("en_server_spend", "English server: spend this month", "English reply from the ledger, no Thai",
+                english_server(lambda w: one(w, "pas", "chat", "How much did we spend this month?")),
+                lambda w, st: no_thai(st) + ([] if (calls(st, "spending_summary") or calls(st, "list_receipts")) else ["no ledger tool"]),
+                english=True, max_chars=700))  # fmt: skip
+    sc.append(S("en_server_meeting", "English server: summarize yesterday's meeting", "English summary of the Thai minutes, no Thai",
+                english_server(lambda w: one(w, "somchai", "general", "Can you summarize yesterday's meeting?", mention=True)),
+                lambda w, st: no_thai(st) + ([] if st and replies(st) else ["no reply"]),
+                english=True, max_chars=1500))  # fmt: skip
+
     return sc
 
 

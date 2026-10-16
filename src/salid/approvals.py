@@ -394,7 +394,8 @@ class ApprovalTools:
                 "proposal": proposal,
                 "instruction": (
                     "Read the request back (what, amount, who will be asked) and ask the user "
-                    "to confirm (Thai: “ยืนยันไหมคะ”; in a voice room say it aloud). Do NOT say "
+                    "to confirm (Thai: “ยืนยันไหมคะ”; English: “Shall I send it?”; in a voice room say it "
+                    "aloud). Do NOT say "
                     "it was sent. After they confirm in a later message call request_approval "
                     "again with exactly the same arguments."
                 ),
