@@ -692,3 +692,19 @@ def test_hub_page_lists_every_guild_feature_flag():
     assert set(FEATURES) <= ids, set(FEATURES) - ids
     for f in FEATURES:  # a save sends every flag, so the page must carry each one through
         assert f"{f}: features.{f}" in html, f
+
+
+def test_saved_feature_flags_win_over_the_page_defaults():
+    """fillSettings: a default listed after `...s.features` overrides the saved value, so a flag
+    an admin turned off showed as on after a reload and the next save turned it back on."""
+    import re
+    from pathlib import Path
+
+    from salid.guild_settings import FEATURES
+
+    html = (Path(__file__).parent.parent / "src/meeting_scribe/static/hub.html").read_text()
+    body = html.split("function fillSettings(s) {", 1)[1]
+    literal = re.search(r"features = \{(.*?)\};", body).group(1)
+    defaults, _, after = literal.partition("...s.features")
+    assert not re.search(r"\w+:", after), f"defaults after the saved flags: {after.strip()}"
+    assert set(FEATURES) <= set(re.findall(r"(\w+): true", defaults))  # every flag defaults on
