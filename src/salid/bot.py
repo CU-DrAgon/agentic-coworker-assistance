@@ -123,6 +123,7 @@ from .summary import (
 )
 from .translate_bot import TranslateMixin
 from .voice_pool import VoicePool
+from .wiki_bot import WikiMixin
 
 logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
@@ -261,6 +262,7 @@ class SecretaryBot(
     FreetimeMixin,
     PollsMixin,
     CatchupMixin,
+    WikiMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -388,6 +390,7 @@ class SecretaryBot(
         self._profile_init()  # personal preferences (salid.profiles)
         self._translate_init()  # translation + auto-translate (salid.translate_bot)
         self._freetime_init()  # find a time everyone is free (salid.freetime)
+        self._wiki_init()  # company knowledge base (salid.wiki_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1824,6 +1827,7 @@ class SecretaryBot(
                 else self._poll_form_tools(message, guild, asker, is_exec, lang, new_id())
             ),
             *([] if interjection else self._catchup_tools(guild, asker, memory)),
+            *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
         ]
         return {
             "language": setting,

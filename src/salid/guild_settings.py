@@ -83,6 +83,7 @@ FEATURES = (
     "freetime",
     "polls",
     "catchup",
+    "wiki",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -139,6 +140,7 @@ class Features(BaseModel):
     briefings: bool = True  # personal morning / evening briefs, doc alerts, ask reminders (DM)
     freetime: bool = True  # find_free_time / set_availability: find a time everyone is free
     catchup: bool = True  # "what did I miss" catch-up (tool, /ตามทัน, morning brief section)
+    wiki: bool = True  # company knowledge base built from memory (needs `memory`)
 
 
 class Channel(BaseModel):
