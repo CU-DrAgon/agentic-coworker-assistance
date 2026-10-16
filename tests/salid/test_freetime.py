@@ -355,3 +355,29 @@ async def test_discord_events_busy_uses_interest_and_creator_only_time(bot, worl
     out = await asyncio.to_thread(tool, ["Aom"], 60, "2026-10-20..2026-10-20")
     assert out["status"] in ("ok", "no_slot")
     assert "SECRET" not in json.dumps(out)
+
+
+def test_approved_leave_counts_as_busy_through_the_bot(bot):  # noqa: F811
+    from salid.approvals import Approval
+
+    leave = bot.approvals.create(
+        Approval(guild_id=7, requester_id=1, approver_id=2, title="ลา", kind="leave",
+                 start_date="2026-10-20", end_date="2026-10-21")
+    )  # fmt: skip
+    bot.approvals.decide(leave.id, "approved")
+    pending = bot.approvals.create(
+        Approval(guild_id=7, requester_id=1, approver_id=2, title="ลา", kind="leave",
+                 start_date="2026-10-22", end_date="2026-10-22")
+    )  # fmt: skip
+    assert pending.status == "pending"
+    leave_src = next(s for s in bot.busy_sources if isinstance(s, LeaveSource))
+    got = leave_src.busy(7, [1, 2], NOW, at(23, 0))
+    assert set(got) == {1}  # only the requester, only approved leave
+    assert [(b.start, b.end, b.kind) for b in got[1]] == [
+        (
+            datetime(2026, 10, 20, tzinfo=bot.s.zone),
+            datetime(2026, 10, 22, tzinfo=bot.s.zone),
+            "leave",
+        )
+    ]
+    assert leave_src.busy(8, [1], NOW, at(23, 0)) == {}  # other guild

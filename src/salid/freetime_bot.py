@@ -3,8 +3,8 @@
 Registers `find_free_time`, `set_availability` and `my_availability` for the `freetime` feature
 flag. Busy sources: Salid's meetings, personal availability and Discord scheduled events (who
 organises or is interested). Other sources plug in through `self.busy_sources` (an approvals module
-adds `LeaveSource(approved_leave)`, a Google Calendar free/busy source adds
-`GoogleCalendarSource(fetch)`); both are no-ops until then.
+feeds `LeaveSource` through `_leave_intervals`, a Google Calendar free/busy source adds
+`GoogleCalendarSource(fetch)`); the Google one is a no-op until then.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 import discord
 
@@ -43,9 +43,27 @@ class FreetimeMixin:
         self.busy_sources = [
             MeetingsSource(self.secretary_store),
             AvailabilitySource(self.availability, self.s.zone),
-            LeaveSource(None),
+            LeaveSource(self._leave_intervals),  # approved leave (salid.approvals)
             GoogleCalendarSource(None),
         ]
+
+    def _leave_intervals(
+        self, guild_id: int, user_id: int, start, end
+    ) -> list[tuple[datetime, datetime]]:
+        """Approved leave as whole local days: the approvals read API gives inclusive date
+        pairs, the busy sources want datetimes. Blocking."""
+        zone = self.s.zone
+        lo = start.astimezone(zone).date() if start.tzinfo else start.date()
+        hi = end.astimezone(zone).date() if end.tzinfo else end.date()
+        out = []
+        for first, last in self.approved_leave(guild_id, user_id, lo, hi):
+            out.append(
+                (
+                    datetime.combine(first, time.min, zone),
+                    datetime.combine(last + timedelta(days=1), time.min, zone),
+                )
+            )
+        return out
 
     def _freetime_tools(self, guild, asker, lang: str) -> list:
         if not self.team.enabled(guild.id, "freetime"):
