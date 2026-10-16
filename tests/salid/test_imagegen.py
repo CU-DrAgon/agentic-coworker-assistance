@@ -1,7 +1,7 @@
 import httpx
 import pytest
 from google.genai import types
-from PIL import Image
+from PIL import Image, ImageFile
 from promo_helpers import fake_client, image_response, png_bytes, text_response
 
 from salid import imagegen, promo
@@ -99,9 +99,21 @@ def test_english_only():
     )
 
 
+def test_thai_prompt_is_refused_without_a_call(caplog):
+    c = fake_client(image_response(png_bytes((64, 64))))
+    assert imagegen.generate_images(c, "m", "ลาเต้ on a table") == ([], "error")
+    assert c.models.calls == [] and "ลาเต้" not in caplog.text
+
+
 def test_open_capped_refuses_big_canvases_before_decoding(monkeypatch):
     data = png_bytes((1200, 1200))
-    monkeypatch.setattr(Image.Image, "load", lambda self: (_ for _ in ()).throw(AssertionError))
+
+    def no_decode(self):
+        raise AssertionError("pixels decoded before the size check")
+
+    # a PNG decodes through ImageFile.load; Image.Image.load alone would never be called
+    monkeypatch.setattr(ImageFile.ImageFile, "load", no_decode)
+    monkeypatch.setattr(Image.Image, "load", no_decode)
     with pytest.raises(imagegen.ImageTooLarge, match="megapixels"):
         imagegen.open_capped(data, max_pixels=1_000_000)
 

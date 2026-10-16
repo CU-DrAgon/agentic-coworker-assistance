@@ -131,8 +131,12 @@ def generate_images(
 ) -> tuple[list[Image.Image], str]:
     """`count` images of `prompt` (reference images `refs` go before it), one call each, in
     parallel. Returns (images, "") when at least one came back, else ([], reason) with reason
-    "blocked" (safety / no image), "timeout" or "error"."""
+    "blocked" (safety / no image), "timeout" or "error". A prompt with Thai in it is refused
+    ("error") without any call: the model would draw the Thai text."""
     if client is None or count < 1:
+        return [], "error"
+    if not english_only(prompt):
+        logger.warning("image prompt refused: not English")
         return [], "error"
     config = types.GenerateContentConfig(
         response_modalities=["TEXT", "IMAGE"],
