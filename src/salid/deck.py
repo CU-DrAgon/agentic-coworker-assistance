@@ -7,12 +7,23 @@ renderer. Everything here is pure: no network, no model calls, nothing written t
 
 from __future__ import annotations
 
+import io
 import re
 import unicodedata
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Annotated, Literal
 
+from pptx import Presentation
+from pptx.dml.color import RGBColor
+from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
+from pptx.oxml.ns import qn
+from pptx.oxml.xmlchemy import OxmlElement
+from pptx.util import Inches, Pt
 from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
+
+from .i18n import t
 
 MAX_TITLE_CHARS = 80
 MAX_SUBTITLE_CHARS = 120
@@ -25,7 +36,48 @@ MAX_DAY_RANGE = 62  # days one day-by-day chart may span
 MAX_DECK_BYTES = 2_000_000
 MAX_SLUG_CHARS = 40
 
+# Look: fonts (Thai goes in the complex-script slot), palette, 16:9 geometry.
+LATIN_FONT = "Arial"
+THAI_FONT = "Leelawadee UI"
+NAVY = RGBColor(0x1F, 0x2A, 0x44)
+ACCENT = RGBColor(0x2E, 0x86, 0xDE)
+INK = RGBColor(0x22, 0x22, 0x22)
+MUTED = RGBColor(0x6B, 0x72, 0x80)
+WHITE = RGBColor(0xFF, 0xFF, 0xFF)
+LIGHT = RGBColor(0xC9, 0xD3, 0xE3)
+CHART_COLORS = [
+    ACCENT,
+    RGBColor(0xF5, 0x9E, 0x0B),
+    RGBColor(0x10, 0xB9, 0x81),
+    RGBColor(0xEF, 0x44, 0x44),
+    RGBColor(0x8B, 0x5C, 0xF6),
+    RGBColor(0x64, 0x74, 0x8B),
+]
+SLIDE_W, SLIDE_H = Inches(13.333), Inches(7.5)
+MARGIN = Inches(0.8)
+BODY_TOP, BODY_H = Inches(1.8), Inches(4.9)
+THAI_MONTHS = [
+    "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+    "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม",
+]  # fmt: skip
+EN_MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]  # fmt: skip
+
 Bullet = Annotated[str, StringConstraints(max_length=MAX_BULLET_CHARS)]
+
+
+@dataclass
+class ChartData:
+    """What one chart slide plots: category labels and one value list per currency."""
+
+    categories: list[str] = field(default_factory=list)
+    series: dict[str, list[float]] = field(default_factory=dict)  # currency -> values
+
+    @property
+    def empty(self) -> bool:
+        return not self.categories
 
 
 class ChartQuery(BaseModel):
@@ -88,3 +140,147 @@ def deck_filename(title: str, today: date) -> str:
             break
         slug = f"{slug}-{word}" if slug else word
     return f"{slug or 'salid-deck'}-{today:%Y%m%d}.pptx"
+
+
+# ---------------------------------------------------------------------------- rendering
+def clean_text(s: str, keep_newlines: bool = False) -> str:
+    """Text safe for the slide XML: control characters dropped (python-pptx rejects them), line
+    breaks turned into spaces unless `keep_newlines` (speaker notes), runs of spaces collapsed."""
+    s = (s or "").replace("\r", "\n").replace("\t", " ")
+    if not keep_newlines:
+        s = s.replace("\n", " ")
+    s = "".join(ch for ch in s if ch == "\n" or unicodedata.category(ch) not in ("Cc", "Cs"))
+    return re.sub(r"[ ]{2,}", " ", s).strip()
+
+
+def format_deck_date(d: date, lang: str) -> str:
+    """ "16 October 2026" (en) or "16 ตุลาคม 2569" (th, Buddhist Era)."""
+    if lang == "th":
+        return f"{d.day} {THAI_MONTHS[d.month - 1]} {d.year + 543}"
+    return f"{d.day} {EN_MONTHS[d.month - 1]} {d.year}"
+
+
+def _thai_font(run) -> None:
+    """Put the Thai font in the complex-script slot (`a:cs`, right after `a:latin`), which
+    python-pptx does not expose."""
+    rpr = run._r.get_or_add_rPr()
+    for old in rpr.findall(qn("a:cs")):
+        rpr.remove(old)
+    cs = OxmlElement("a:cs")
+    cs.set("typeface", THAI_FONT)
+    rpr.find(qn("a:latin")).addnext(cs)
+
+
+def _run(paragraph, text: str, size, color, bold: bool = False, raw: bool = False):
+    """One styled run. `raw` keeps fixed internal text as is (e.g. the "• " marker); everything
+    else goes through clean_text."""
+    run = paragraph.add_run()
+    run.text = text if raw else clean_text(text)
+    font = run.font
+    font.size, font.bold, font.name = size, bold, LATIN_FONT
+    font.color.rgb = color
+    _thai_font(run)
+    return run
+
+
+def _textbox(slide, x, y, w, h, anchor=MSO_ANCHOR.TOP):
+    frame = slide.shapes.add_textbox(x, y, w, h).text_frame
+    frame.word_wrap = True
+    frame.auto_size = MSO_AUTO_SIZE.NONE
+    frame.vertical_anchor = anchor
+    return frame
+
+
+def _rect(slide, x, y, w, h, color) -> None:
+    shape = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, x, y, w, h)
+    shape.fill.solid()
+    shape.fill.fore_color.rgb = color
+    shape.line.fill.background()
+
+
+def _background(slide, color) -> None:
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = color
+
+
+def _title_size(text: str, big: int) -> int:
+    return big if len(text) <= 40 else big - 8
+
+
+def _bullet_size(items: list[str]) -> int:
+    chars = sum(len(x) for x in items)
+    return 24 if chars <= 200 else 20 if chars <= 400 else 16
+
+
+def _title_slide(prs, spec: DeckSpec, lang: str, today: date) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _background(slide, NAVY)
+    _rect(slide, MARGIN, Inches(2.0), Inches(1.2), Inches(0.08), ACCENT)
+    width = SLIDE_W - 2 * MARGIN
+    frame = _textbox(slide, MARGIN, Inches(2.2), width, Inches(1.7), MSO_ANCHOR.BOTTOM)
+    _run(frame.paragraphs[0], spec.title, Pt(_title_size(spec.title, 44)), WHITE, bold=True)
+    if spec.subtitle:
+        sub = _textbox(slide, MARGIN, Inches(4.0), width, Inches(1.0))
+        _run(sub.paragraphs[0], spec.subtitle, Pt(24), LIGHT)
+    foot = _textbox(slide, MARGIN, Inches(6.4), width, Inches(0.5))
+    _run(
+        foot.paragraphs[0],
+        t("deck_footer", lang, date=format_deck_date(today, lang)),
+        Pt(14),
+        LIGHT,
+    )
+
+
+def _page_number(slide, n: int) -> None:
+    frame = _textbox(slide, SLIDE_W - MARGIN - Inches(1), Inches(6.85), Inches(1), Inches(0.4))
+    frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
+    _run(frame.paragraphs[0], str(n), Pt(12), MUTED)
+
+
+def _bullet_list(slide, items: list[str], x, w, size: int) -> None:
+    frame = _textbox(slide, x, BODY_TOP, w, BODY_H)
+    for i, item in enumerate(items):
+        p = frame.paragraphs[0] if i == 0 else frame.add_paragraph()
+        p.space_after = Pt(10)
+        _run(p, "• ", Pt(size), ACCENT, bold=True, raw=True)
+        _run(p, item, Pt(size), INK)
+
+
+def _content_slide(prs, s: Slide, n: int):
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    if s.kind == "section":
+        _background(slide, ACCENT)
+        frame = _textbox(
+            slide, MARGIN, Inches(2.5), SLIDE_W - 2 * MARGIN, Inches(2.5), MSO_ANCHOR.MIDDLE
+        )
+        frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+        _run(frame.paragraphs[0], s.title, Pt(_title_size(s.title, 44)), WHITE, bold=True)
+    else:
+        _rect(slide, 0, 0, Inches(0.25), SLIDE_H, ACCENT)
+        title = _textbox(slide, MARGIN, Inches(0.5), SLIDE_W - 2 * MARGIN, Inches(1.1))
+        _run(title.paragraphs[0], s.title, Pt(_title_size(s.title, 36)), INK, bold=True)
+        width = SLIDE_W - 2 * MARGIN
+        size = _bullet_size([*s.bullets, *s.right])
+        if s.kind == "bullets":
+            _bullet_list(slide, s.bullets, MARGIN, width, size)
+        elif s.kind == "two_column":
+            col = (width - Inches(0.5)) / 2
+            _bullet_list(slide, s.bullets, MARGIN, col, size)
+            _bullet_list(slide, s.right, MARGIN + col + Inches(0.5), col, size)
+    if s.notes:
+        slide.notes_slide.notes_text_frame.text = clean_text(s.notes, keep_newlines=True)
+    _page_number(slide, n)
+    return slide
+
+
+def render_deck(spec: DeckSpec, charts: dict[int, ChartData], *, lang: str, today: date) -> bytes:
+    """The deck as `.pptx` bytes: a title slide, then one slide per outline slide. `charts` maps
+    the index of a chart slide to its data (fetched from the ledger by the caller)."""
+    prs = Presentation()
+    prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H
+    _title_slide(prs, spec, lang, today)
+    for i, s in enumerate(spec.slides):
+        _content_slide(prs, s, i + 2)
+    out = io.BytesIO()
+    prs.save(out)
+    return out.getvalue()

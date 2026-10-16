@@ -576,6 +576,11 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "(รายงานฉบับเต็มแนบเป็นไฟล์ {name})",
         "en": "(The full report is attached as {name})",
     },
+    # ---------------------------------------------------------------- slide decks (salid.deck)
+    "deck_footer": {
+        "th": "สร้างโดยสลิด · {date}",
+        "en": "Made with Salid · {date}",
+    },
     "deep_stats": {
         "th": "⏱ {seconds:.0f} วินาที · tokens {tokens:,} · โมเดล: {models}",
         "en": "⏱ {seconds:.0f} s · tokens {tokens:,} · model: {models}",
