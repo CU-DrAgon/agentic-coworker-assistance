@@ -1,4 +1,4 @@
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
 
 from salid import cards
 from salid.pdf_report import FontSet
@@ -46,3 +46,84 @@ def test_thai_is_shaped_not_drawn_glyph_by_glyph():
 def test_drawable_drops_characters_without_glyphs():
     assert cards.drawable("ลด 20% 🔥", cards.card_fonts().bold) == "ลด 20%"
     assert cards.drawable("Latte เย็น 59.-", cards.card_fonts().bold) == "Latte เย็น 59.-"
+
+
+# ------------------------------------------------------------------ primitives
+BOLD = cards.card_fonts().bold
+
+
+def test_never_breaks_inside_a_thai_syllable():
+    assert not cards.break_ok("น", "้")  # tone mark (Mn)
+    assert not cards.break_ok("้", "ำ")  # SARA AM U+0E33
+    assert not cards.break_ok("ก", "า")  # following vowel U+0E30-0E3A
+    assert not cards.break_ok("เ", "ก")  # after a leading vowel U+0E40-0E44
+    assert not cards.break_ok("ก", "ๆ")  # U+0E45-0E4E
+    assert cards.break_ok("า", "ก") and cards.break_ok("a", "b")
+
+
+def test_fit_prefers_shrinking_to_splitting():
+    f = cards.fit_text("โปรพิเศษ", BOLD, 952, 2, (96, 48))
+    assert f.lines == ["โปรพิเศษ"] and f.size == 96
+
+
+def test_fit_breaks_at_spaces_and_keeps_every_line_inside():
+    f = cards.fit_text("ลาเต้เย็น หอมกรุ่น ลดพิเศษ 20% ทั้งเดือน", BOLD, 600, 2, (96, 48))
+    assert 1 <= len(f.lines) <= 2 and f.width <= 600
+    assert all(cards.font(BOLD, f.size).getlength(line) <= 600 for line in f.lines)
+
+
+def test_fit_splits_a_long_spaceless_thai_run_only_at_syllable_boundaries():
+    text = "ลาเต้เย็นหอมกรุ่นลดราคาพิเศษทั้งเดือนนี้เท่านั้น"  # 40+ chars, no spaces
+    f = cards.fit_text(text, BOLD, 500, 2, (96, 48))
+    assert "".join(f.lines) == text and len(f.lines) == 2 and f.width <= 500
+    for a, b in zip(f.lines, f.lines[1:], strict=False):
+        assert cards.break_ok(a[-1], b[0])
+
+
+def test_line_height_leaves_room_for_marks():
+    fnt = cards.font(BOLD, 80)
+    asc, desc = fnt.getmetrics()
+    assert cards.line_height(fnt) == round((asc + desc) * 1.15)
+
+
+def test_drawn_block_stays_in_its_box():
+    img = Image.new("RGB", (1080, 600), "white")
+    f = cards.fit_text("ผู้ใหญ่ญี่ปุ่น น้ำแข็งปั้น", BOLD, 952, 2, (96, 48))
+    x0, y0, x1, y1 = cards.draw_lines(img, 64, 100, f, BOLD, fill="black")
+    assert x0 >= 64 and x1 <= 64 + 952 and y0 == 100 and y1 == 100 + f.height
+    ink = ImageOps.invert(img.convert("L")).getbbox()
+    assert ink[1] >= 100 and ink[3] <= y1
+
+
+def test_scrim_darkens_towards_alpha1():
+    img = Image.new("RGB", (100, 200), "white")
+    cards.scrim(img, 0, 200, 0, 200)
+    assert img.getpixel((50, 2))[0] > img.getpixel((50, 197))[0]
+
+
+def test_badge_and_pill_geometry():
+    b = cards.measure_badge("59.-", BOLD, (72, 40), 952)
+    assert b.w == b.fitted.width + 64 and b.h == b.fitted.height + 32
+    img = Image.new("RGB", (1080, 1080))
+    assert cards.draw_badge(img, b, 100, 200, BOLD, fill="#E53935", text_fill="#FFFFFF") == (
+        100,
+        200,
+        100 + b.w,
+        200 + b.h,
+    )
+
+
+def test_cover_gives_the_exact_size_from_any_aspect():
+    for src in ((512, 512), (2000, 800), (1536, 2752)):
+        assert cards.cover(Image.new("RGB", src), (1080, 1350)).size == (1080, 1350)
+
+
+def test_jpeg_under_the_cap():
+    noisy = Image.effect_noise((1080, 1920), 120).convert("RGB")
+    data = cards.to_jpeg(noisy)
+    assert data[:2] == b"\xff\xd8" and len(data) < 1_500_000
+
+
+def test_contrast_ratio():
+    assert round(cards.contrast("#FFFFFF", "#000000"), 1) == 21.0
+    assert round(cards.contrast("#E53935", "#FFFFFF"), 2) == 4.23
