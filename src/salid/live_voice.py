@@ -285,6 +285,10 @@ ROOM_NOTE_EN = (
     "use send_dm to “me”.)"
 )
 ASK_TIMEOUT_S = 150.0  # default of `Settings.live_ask_timeout_seconds`
+STALE_TURN_S = (
+    15.0  # a model turn / tool answer older than this no longer blocks a result announcement
+)
+HANDOFF_SAY_S = 4.0  # default of `Settings.live_handoff_say_seconds`
 # The spoken brain has exactly the chat tools (parity test). Work whose first tool call is one of
 # these takes tens of seconds (documents, decks, kits, research, PDFs), so the job goes to the
 # background at once instead of making the Live model wait for `live_foreground_seconds`.
@@ -781,6 +785,8 @@ class LiveVoice:
         self._awaiting_answer = False  # a tool call was answered: its spoken answer comes next
         self._muted_turn = False  # someone said "stop": drop the rest of this model turn
         self._turn_open = False  # the server is still sending the current model turn
+        self._turn_open_since = 0.0  # monotonic: when the current model turn began
+        self._awaiting_since = 0.0  # monotonic: when a tool call started waiting for its answer
         self._partners: set[int] = set()  # who Salid is answering (talking over her stops her)
         self._talkover: dict[int, list[float]] = {}  # partner id -> [start, last] loud speech
         self._heard_while_speaking = ""
@@ -1294,6 +1300,8 @@ class LiveVoice:
         if sc.interrupted:
             self._interrupt()
         if sc.model_turn is not None:
+            if not self._turn_open:
+                self._turn_open_since = time.monotonic()
             self._turn_open = True
         if sc.model_turn is not None and not self._muted_turn:
             for part in sc.model_turn.parts or []:
@@ -1375,7 +1383,24 @@ class LiveVoice:
             return job.result
         job.detached = True  # from here the result is announced, not returned
         logger.info("live: job %s goes to the background", job.id)
-        return {"status": "working", "job": job.id, "say": await self._handoff_line(question)}
+        say = await self._handoff_line(question)
+        self._spawn(self._ensure_said(say, time.monotonic()))
+        return {"status": "working", "job": job.id, "say": say}
+
+    async def _ensure_said(self, say: str, since: float) -> None:
+        """The Live model is told to say the hand-off line; when it stays silent for
+        `live_handoff_say_seconds` the line is played as a clip, so the room always hears that
+        the job went to the background."""
+        await asyncio.sleep(float(getattr(self.bot.s, "live_handoff_say_seconds", HANDOFF_SAY_S)))
+        if self._real_audio_at > since or self._speaking() or self._closing:
+            return
+        logger.info("live: hand-off line not spoken by the model: playing it")
+        try:
+            await self._play_filler(await self._render(say, self._filler_lang(), cache=False))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("live: hand-off clip failed", exc_info=True)
 
     async def _job_main(self, job: _Job) -> dict:
         """Runs the brain with the time limit; a finished background job is announced."""
@@ -1420,14 +1445,21 @@ class LiveVoice:
     def _quiet(self, pause: float) -> bool:
         """Nobody has spoken for `pause` seconds and Salid is neither speaking nor about to."""
         now = time.monotonic()
-        last_room = max(self._last_voice, self._frames[-1][0] if self._frames else 0.0)
+        floor = float(getattr(self.bot.s, "name_min_rms", 250.0))
+        # only voiced frames count as "someone is talking": an open mic sends silence/noise frames
+        last_room = max(
+            self._last_voice, max((t for t, r in self._frames if r >= floor), default=0.0)
+        )
+        # a turn / tool answer the model never finished must not block the announcement forever
+        turn_stuck = self._turn_open and now - self._turn_open_since > STALE_TURN_S
+        answer_stuck = self._awaiting_answer and now - self._awaiting_since > STALE_TURN_S
         return (
             now - last_room >= pause
             and self._live is not None
             and not self._speaking()
             and not self._turn_audio
-            and not self._turn_open
-            and not self._awaiting_answer
+            and (not self._turn_open or turn_stuck)
+            and (not self._awaiting_answer or answer_stuck)
             and now >= self._filler_until
         )
 
@@ -1712,6 +1744,7 @@ class LiveVoice:
             # the turn_complete that follows is not the end of the answer (a call refused below
             # produces no answer to wait for)
             self._awaiting_answer = True
+            self._awaiting_since = time.monotonic()
         task = asyncio.create_task(self._run_tool_call(live, tool_call, engaged))
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)

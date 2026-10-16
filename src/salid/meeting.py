@@ -73,6 +73,7 @@ MAX_SEGMENT_S = 20.0
 MIN_SEGMENT_S = 0.4  # shorter segments are dropped (coughs, clicks); 0.6 lost short greetings
 PAD_GAP_S = 0.15  # shorter gaps inside a segment are filled with silence to keep timing
 MIN_RMS = 120  # int16 RMS below this is treated as silence/noise and not sent to the model
+LOUD_RMS = 1500  # a segment this loud is a voice (real speech here measured 1200-7500)
 TRANSCRIPT_KEEP_S = 3 * 3600
 TRANSCRIPT_MAX_LINES = 6000
 MEETING_MAX_S = 6 * 3600
@@ -363,6 +364,13 @@ def looks_like_speech(stats: SpeechStats, settings) -> tuple[bool, str]:
     variation and overall loudness; a real bare "สลิด" (~0.5 s) passes, a click, a burst of noise
     or stationary hiss / hum does not."""
     floor = float(getattr(settings, "name_min_rms", 250.0))
+    # a short but LOUD call ("สลิด!" said sharply): clearly a voice, even with few voiced frames
+    if (
+        stats.rms >= float(getattr(settings, "name_loud_rms", LOUD_RMS))
+        and stats.voiced_s >= 0.15
+        and stats.cv >= float(getattr(settings, "name_min_cv", 0.25))
+    ):
+        return True, ""
     if stats.voiced_s < float(getattr(settings, "name_min_voiced_seconds", 0.35)):
         return False, "too little voiced audio"
     if stats.voiced_fraction < 0.3:

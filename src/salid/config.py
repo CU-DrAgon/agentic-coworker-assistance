@@ -126,6 +126,7 @@ class Settings(BaseSettings):
     live_foreground_seconds: float = 12.0
     live_max_jobs: int = 3
     live_result_pause_seconds: float = 1.5
+    live_handoff_say_seconds: float = 4.0  # model silent this long after a hand-off: play the line
     live_result_wait_seconds: float = 90.0
     # Live: the name was heard but the model has not started to answer after this long (counted from
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there

@@ -175,8 +175,8 @@ CATALOG: dict[str, dict[str, str]] = {
     "quote_f_tax_id": {"th": "เลขประจำตัวผู้เสียภาษี", "en": "tax ID"},
     "quote_f_signer_name": {"th": "ชื่อผู้ลงนาม", "en": "signer name"},
     "quote_refusal": {
-        "th": "การออกใบเสนอราคาในนามบริษัททำได้เฉพาะผู้บริหาร{roles}ค่ะ ขอให้คนเหล่านี้ช่วยออกให้นะคะ",
-        "en": "Only executives{roles} can issue quotations in the company's name. Please ask one of them.",
+        "th": "การออกใบเสนอราคาในนามบริษัททำได้เฉพาะผู้บริหาร{roles}ค่ะ สิทธิ์นี้มาจากบทบาทใน Discord ที่แอดมินของเซิร์ฟเวอร์กำหนด สลิดให้หรือเปลี่ยนสิทธิ์ให้ใครเองไม่ได้นะคะ ถ้าต้องการออกใบเสนอราคา ขอให้ผู้บริหารเป็นคนสั่ง หรือให้แอดมินเพิ่มบทบาทให้ค่ะ",
+        "en": "Only executives{roles} can issue quotations in the company's name. That right comes from Discord roles set by the server admins; Salid cannot grant or change anyone's rights. Ask an executive to issue it, or an admin to add the role.",
     },
     "quote_refusal_roles": {
         "th": " และสมาชิกที่มีบทบาท {roles}",
