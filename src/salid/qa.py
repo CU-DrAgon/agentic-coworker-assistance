@@ -48,6 +48,7 @@ from .wiki import WIKI_PROMPT
 
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 6
+SPOKEN_MAX_ROUNDS = 3  # a spoken answer: 3 tool rounds at most, then it must answer
 APP_NAME = "salid"
 # Vertex 429s (shared quota) and 5xx are retried with backoff by the genai HTTP client
 # (same policy as meeting_scribe.agents).
@@ -1904,6 +1905,7 @@ def build_agent(
     ideas: bool = False,
     contests: bool = False,
     bizfin: bool = False,
+    max_rounds: int = MAX_ROUNDS,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1936,12 +1938,12 @@ def build_agent(
     model_calls = 0
 
     def before_model(callback_context, llm_request):
-        # Hard cap: after MAX_ROUNDS tool rounds the next call has no tools, so it must answer.
+        # Hard cap: after `max_rounds` tool rounds the next call has no tools, so it must answer.
         nonlocal model_calls
         model_calls += 1
         if on_model_call:
             on_model_call(model_calls)
-        if model_calls > MAX_ROUNDS:
+        if model_calls > max_rounds:
             # No tool declarations, but tools_dict stays: a model that still emits a call (its
             # history is full of them) would otherwise crash ADK with "Tool 'x' not found.
             # Available tools: " (empty). before_tool answers such a call without running it.
@@ -1950,7 +1952,7 @@ def build_agent(
         return None
 
     def before_tool(tool, args, tool_context):
-        if model_calls > MAX_ROUNDS:
+        if model_calls > max_rounds:
             return {"error": ROUNDS_EXHAUSTED}  # skip the call; the model must now just answer
         return None
 
@@ -2054,6 +2056,7 @@ async def ask_async(
     calls: list[tuple[str, dict]] = []
     tool_ms: dict[str, float] = {}
     model_calls = 0
+    max_rounds = SPOKEN_MAX_ROUNDS if spoken else MAX_ROUNDS
 
     def count_call(n: int) -> None:
         nonlocal model_calls
@@ -2120,6 +2123,7 @@ async def ask_async(
         ideas="idea_save" in tool_names,
         contests="contest_add" in tool_names,
         bizfin="unit_economics" in tool_names,
+        max_rounds=max_rounds,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -2146,12 +2150,14 @@ async def ask_async(
         user_id=adk_user,
         session_id=session_id,
         new_message=message,
-        run_config=RunConfig(max_llm_calls=MAX_ROUNDS + 2),
+        run_config=RunConfig(max_llm_calls=max_rounds + 2),
     ):
         if event.usage_metadata is not None:
             for name, attr in USAGE_FIELDS.items():
                 tokens[name] += getattr(event.usage_metadata, attr, None) or 0
         if event.get_function_calls():
+            if model_calls > max_rounds:
+                continue  # a call after the cap is answered with an error, never run: not a round
             rounds += 1
             last_call_s = time.monotonic() - started
             first_call_s = first_call_s or last_call_s

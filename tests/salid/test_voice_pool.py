@@ -110,6 +110,7 @@ def world(monkeypatch):
             voice_mode="classic",
             db_path=":memory:",
             meeting_text_echo=True,
+            voice_state_posts=False,
         ),
         None,
         FakeClient([]),

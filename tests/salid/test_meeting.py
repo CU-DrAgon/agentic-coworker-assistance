@@ -237,7 +237,11 @@ def env(monkeypatch):
     llm = FakeClient([])
     bot = SecretaryBot(
         FixedClockSettings(
-            exec_user_ids={5}, voice_reply=False, voice_mode="classic", meeting_text_echo=True
+            exec_user_ids={5},
+            voice_reply=False,
+            voice_mode="classic",
+            meeting_text_echo=True,
+            voice_state_posts=False,
         ),
         None,
         llm,

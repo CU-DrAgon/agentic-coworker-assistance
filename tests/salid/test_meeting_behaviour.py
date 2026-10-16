@@ -58,7 +58,7 @@ async def test_live_config_has_vad_proactivity_and_meeting_tools(lv):
     assert cfg.proactivity.proactive_audio is True
     names = [d.name for d in cfg.tools[0].function_declarations]
     assert {"post_note", "ask_consent", "set_recording", "set_minutes_destination"} <= set(names)
-    assert "สลิด" in cfg.system_instruction and "เพื่อนร่วมทีม" in cfg.system_instruction
+    assert "สลิด" in cfg.system_instruction and "ผู้จดบันทึกประจำทีม" in cfg.system_instruction
     await lv.mgr.end((1000, 77))
 
 
@@ -539,7 +539,7 @@ async def test_live_is_told_the_state(lv):
     live.send_client_content = send_client_content
     lv.mgr._set_engaged(s, True)
     await until(lambda: sent)
-    assert "กำลังคุยกับคุณอยู่" in sent[0][0] and sent[0][1] is False
+    assert "กำลังคุยกับ" in sent[0][0] and sent[0][1] is False
     lv.mgr._set_engaged(s, False)
     await until(lambda: len(sent) == 2)
     assert "กำลังฟัง" in sent[1][0]

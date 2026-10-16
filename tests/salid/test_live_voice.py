@@ -17,6 +17,7 @@ from salid import live_voice as lvm
 from salid import meeting as mt
 from salid.bot import SecretaryBot
 from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
+from salid.i18n import t
 from salid.live_voice import (
     FRAME_BYTES,
     SILENCE,
@@ -276,7 +277,11 @@ def lv(monkeypatch, tmp_path):
     mk(store, 2, ALICE, "Alice", "Grab", "2026-10-05", 250.5, "ค่าเดินทาง", guild=guild.id)
     bot = SecretaryBot(
         FixedClockSettings(
-            exec_user_ids={5}, voice_reply=True, voice_mode="live", meeting_text_echo=True
+            exec_user_ids={5},
+            voice_reply=True,
+            voice_mode="live",
+            meeting_text_echo=True,
+            voice_state_posts=False,
         ),
         store,
         FakeClient([]),
@@ -599,7 +604,11 @@ async def test_chat_and_voice_build_the_same_agent_tools(lv, tool_names, monkeyp
     chat = set(tool_names.pop("names"))
     live.push(tool_msg("ask_salid", {"question": "q"}))
     await until(lambda: live.tool_responses)
-    assert tool_names["names"] == chat  # one assistant: same tools in chat and in a voice room
+    voice = tool_names["names"]
+    # one assistant: the same tools in chat and in a voice room, except the ones that make no
+    # sense out loud (files, long documents): exactly VOICE_TOOL_SKIP, nothing else
+    assert voice == chat - lvm.VOICE_TOOL_SKIP
+    assert {"idea_export", "business_framework", "wiki_write"} <= chat - voice
     assert {"send_dm", "deliver_file", "read_web"} <= chat  # the chat-only tools are there too
     await lv.mgr.end((1000, 77))
 
@@ -664,7 +673,9 @@ async def test_ask_salid_failure_is_data_for_the_model(lv, monkeypatch):
     s, live = await lv.join(5)
     live.push(tool_msg("ask_salid", {"question": "อะไรก็ได้"}))
     await until(lambda: live.tool_responses)
-    assert live.tool_responses[0][0].response == {"error": "agent down"}
+    res = live.tool_responses[0][0].response
+    assert res["error"] == "agent down" and res["say"] == t("voice_tool_failed_say", "th")
+    assert any("⚠️" in x and "ask_salid" in x and "agent down" in x for x in lv.chan.sent)
     await lv.mgr.end((1000, 77))
 
 

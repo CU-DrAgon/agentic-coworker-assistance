@@ -541,6 +541,10 @@ class MeetingSession:
     note_pass_at: float = 0.0
     engaged: bool = False  # False = listening (speaks only when its name is called)
     engaged_until: float = 0.0
+    called_at: float = -1e9  # monotonic time she was last called by name / engaged
+    unaddressed: int = 0  # consecutive utterances, while engaged, not addressed to Salid
+    state_msg: Any = None  # the last state line posted to the text chat (edited on a quick flip)
+    state_at: float = -1e9  # monotonic time of that post
     captions: CaptionState = field(default_factory=CaptionState)  # live subtitles, off by default
     captions_busy: bool = False
 
@@ -651,8 +655,12 @@ class MeetingManager:
                 continue
             try:
                 return await ch.send(text, **kw)
-            except discord.HTTPException:
-                logger.warning("could not post to channel %s", getattr(ch, "id", "?"))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # HTTP errors, rate limits, a closed session: never raise
+                logger.warning(
+                    "could not post to channel %s (%s)", getattr(ch, "id", "?"), type(e).__name__
+                )
         return None
 
     async def _notice(self, session: MeetingSession, text: str):
@@ -1068,6 +1076,7 @@ class MeetingManager:
         for m in self._humans(channel):
             session.attendee_ids.add(m.id)
         await self._notice(session, t(announce, session.lang))
+        await self._post_state(session, t("voice_state_join", session.lang))
         logger.info(
             "meeting started in guild %s channel %s on voice body %d (%s)",
             guild.id, channel.id, body.index, origin,
@@ -1414,6 +1423,7 @@ class MeetingManager:
             self.bot,
             session,
             post=lambda text: self._notice(session, text),
+            echo=lambda text: self._post(session, text),
             on_failed=lambda: self._live_failed(session),
         )
         session.live.start()
@@ -1565,13 +1575,17 @@ class MeetingManager:
         now = time.monotonic()
         if s.engaged and not called and self.is_dismissal(text):
             self._set_engaged(s, False)  # "ขอบคุณครับ พอแล้ว": back to listening, not leaving
-            if s.voice_mode != "live" and not self._is_echo(s, seg):
+            if (  # a reply only when she was thanked directly; "ok" / "next" = silence
+                s.voice_mode != "live"
+                and not self._is_echo(s, seg)
+                and re.search(r"ขอบคุณ|thank", text, re.I)
+            ):
                 self._spawn(s, self._say_text(s, self._sp(s, "meet_dismiss_ack")))
             return
         if called:
-            self._set_engaged(s, True)
+            self._set_engaged(s, True, name=name if member is not None else "")
         elif s.engaged and not self._is_echo(s, seg):
-            s.engaged_until = now + self._engage_s()  # talking with Salid keeps it engaged
+            self._engaged_utterance(s, text, now)
         if s.voice_mode == "live":
             if called and s.live is not None:
                 # Deterministic: the name was said, so Salid must answer. If the Live model has
@@ -1586,7 +1600,7 @@ class MeetingManager:
         if question is None:
             if now - s.pending_wake.pop(seg.user_id, -1e9) < PENDING_WAKE_S:
                 question = text  # "สลิด ..." then a pause, then the actual question
-            elif s.engaged:
+            elif s.engaged and s.unaddressed == 0:
                 question = text  # a conversation is going: no name needed
             else:
                 return
@@ -1617,7 +1631,12 @@ class MeetingManager:
         r"(?:\s*(?:ครับ|ค่ะ|คะ|นะ|แล้ว|ได้|เลย|ก่อน|มาก))*\W*)+$"
         r"|^\W*(?:ok(?:ay)?[,. ]*)?(?:thanks?(?:\s+you)?|thank\s+you)(?:[,. ]+(?:that'?s\s+all|that'?s\s+it|"
         r"we'?re\s+good|bye))?\W*$"
-        r"|^\W*(?:that'?s\s+(?:all|it)|we'?re\s+good|all\s+good|no\s+more\s+questions)\W*$",
+        r"|^\W*(?:that'?s\s+(?:all|it)|we'?re\s+good|all\s+good|no\s+more\s+questions)\W*$"
+        # "ok" / "next person" / "moving on": the meeting goes on without her (whole utterance only)
+        r"|^\W*(?:(?:โอเค|ok(?:ay)?|เอาล่ะ|เอาละ|งั้น)[\s,.]*)*(?:(?:ครับ|ค่ะ|คะ|นะ)\s*)?"
+        r"(?:(?:โอเค|ok(?:ay)?|เอาล่ะ|เอาละ|คนต่อไป|ต่อไป|เชิญ\s*(?:คนต่อไป|ต่อ)|ไปต่อ|next(?:\s+(?:person|one|please))?"
+        r"|moving\s+on|let'?s\s+(?:continue|move\s+on|go\s+on))"
+        r"(?:[\s,.]*(?:ครับ|ค่ะ|คะ|นะ|เลย|ครับผม|please))*[\s,.!]*)+$",
         re.I,
     )
 
@@ -1631,18 +1650,85 @@ class MeetingManager:
         return bool(cls._DISMISS_RE.search(text))
 
     def _engage_s(self) -> float:
-        return float(getattr(self.bot.s, "engaged_timeout_seconds", 90.0))
+        return float(getattr(self.bot.s, "engaged_timeout_seconds", 30.0))
 
-    def _set_engaged(self, s: MeetingSession, on: bool) -> None:
+    # Not addressed to Salid: the heuristics are deliberately simple and live here in code.
+    # While engaged, an utterance counts as addressed to her when it (a) says her name (handled
+    # by the caller), (b) comes within REPLY_WINDOW_S of her own voice (an answer to her), or
+    # (c) looks like a question or a request (`_ASK_RE`) within QUESTION_WINDOW_S of her last
+    # words. Two utterances in a row that are none of these end the conversation silently.
+    _ASK_RE = re.compile(
+        r"\?|ไหม|มั้ย|หรือเปล่า|หรือไม่|เหรอ|หรอ|อะไร|ทำไม|ยังไง|อย่างไร|เท่าไร|เท่าไหร่|เมื่อไร"
+        r"|เมื่อไหร่|ใคร|ที่ไหน|ช่วย|ขอ|หน่อย|(?<![a-z])(?:what|who|when|where|why|how|which|can\s+you"
+        r"|could\s+you|would\s+you|please|tell\s+me)(?![a-z])",
+        re.I,
+    )
+    REPLY_WINDOW_S = 6.0
+    QUESTION_WINDOW_S = 20.0
+    UNADDRESSED_LIMIT = 2
+
+    def _addressed(self, s: MeetingSession, text: str, now: float) -> bool:
+        """Is this utterance (heard while engaged, no name in it) meant for Salid?"""
+        if s.speaking:
+            return True
+        gap = now - max(s.called_at, s.speaking_until - SPEAK_COOLDOWN_S)  # since called / spoke
+        if gap <= self.REPLY_WINDOW_S:
+            return True
+        return gap <= self.QUESTION_WINDOW_S and bool(self._ASK_RE.search(text or ""))
+
+    def _engaged_utterance(self, s: MeetingSession, text: str, now: float) -> None:
+        if self._addressed(s, text, now):
+            s.unaddressed = 0
+            s.engaged_until = now + self._engage_s()  # talking with Salid keeps it engaged
+            return
+        s.unaddressed += 1
+        if s.unaddressed >= self.UNADDRESSED_LIMIT:
+            self._set_engaged(s, False)  # people talk among themselves: back to listening
+
+    def _set_engaged(self, s: MeetingSession, on: bool, name: str = "") -> None:
         """listening <-> engaged. The Live model is told the state so it stays silent when
-        listening."""
+        listening, and the change is shown in the meeting's text chat. `name`: who called her."""
         s.engaged_until = time.monotonic() + self._engage_s() if on else 0.0
+        s.unaddressed = 0
+        if on:
+            s.called_at = time.monotonic()
         if s.engaged == on:
             return
         s.engaged = on
         s.introduced = True if on else s.introduced
         if s.live is not None:
             s.live.notify_state(on)
+        if on:
+            text = (
+                t("voice_state_engaged_name", s.lang, name=name)
+                if name
+                else t("voice_state_engaged", s.lang)
+            )
+        else:
+            text = t("voice_state_listening", s.lang)
+        with contextlib.suppress(RuntimeError):  # no running loop (sync caller): best effort
+            self._spawn(s, self._post_state(s, text))
+
+    STATE_FLIP_S = 15.0
+
+    async def _post_state(self, s: MeetingSession, text: str) -> None:
+        """One short state line in the meeting's text chat (`voice_state_posts`). Within
+        STATE_FLIP_S of the previous line it edits that one instead of posting another."""
+        if not getattr(self.bot.s, "voice_state_posts", True) or s.ending:
+            return
+        now = time.monotonic()
+        prev = s.state_msg
+        if prev is not None and now - s.state_at < self.STATE_FLIP_S:
+            try:
+                await prev.edit(content=text)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("could not edit the state line", exc_info=True)
+                return  # never more than one state line per STATE_FLIP_S
+        msg = await self._post(s, text)
+        s.state_msg, s.state_at = msg, now
 
     # ---- minutes destination
     def _minutes_allowed(self, s: MeetingSession, member=None):

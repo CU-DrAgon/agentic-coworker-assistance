@@ -19,9 +19,10 @@ import json
 import logging
 import math
 import re
+import threading
 from collections import OrderedDict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -244,14 +245,47 @@ def _tool(tools: list, name: str):
     return next((f for f in tools if getattr(f, "__name__", "") == name), None)
 
 
-def chat_adapter(memory, zone, *, files: bool) -> Callable:
+class SharedChatSearch:
+    """One `MemoryTools.chat_search` per distinct request, shared by the "chat" and "files"
+    adapters. Both run in parallel with the same keywords and dates, so without this every
+    search_everything call ran the same memory search twice (two identical log lines ~50 ms
+    apart). The second caller waits for the first one's result."""
+
+    def __init__(self, memory) -> None:
+        self.memory = memory
+        self._lock = threading.Lock()
+        self._runs: dict[tuple, Future] = {}
+
+    def __call__(self, keywords: list[str], start: date, end: date) -> dict:
+        key = (tuple(keywords), start, end)
+        with self._lock:
+            fut = self._runs.get(key)
+            owner = fut is None
+            if owner:
+                fut = self._runs[key] = Future()
+        if owner:
+            try:
+                fut.set_result(
+                    self.memory.chat_search(
+                        keywords=keywords,
+                        start_date=start.isoformat(),
+                        end_date=end.isoformat(),
+                        limit=15,
+                    )
+                )
+            except BaseException as e:
+                fut.set_exception(e)
+        return fut.result()
+
+
+def chat_adapter(memory, zone, *, files: bool, shared: SharedChatSearch | None = None) -> Callable:
     """`MemoryTools.chat_search` (already limited to the asker's readable channels and the role
-    hierarchy). `files=True` keeps only messages that carry a file note, else only plain chat."""
+    hierarchy). `files=True` keeps only messages that carry a file note, else only plain chat.
+    `shared`: lets the chat and files adapters of one request share a single search."""
+    shared = shared or SharedChatSearch(memory)
 
     def run(keywords: list[str], _query: str, start: date, end: date) -> list[Hit]:
-        res = memory.chat_search(
-            keywords=keywords, start_date=start.isoformat(), end_date=end.isoformat(), limit=15
-        )
+        res = shared(keywords, start, end)
         out: list[Hit] = []
         for rank, g in enumerate(res.get("hits") or []):
             r = max(0.0, 1.0 - rank / 15)
@@ -436,8 +470,9 @@ def build_sources(
     """Adapters for whatever the asker has. `tools` = the agent tools already built for them."""
     src = SearchSources()
     if memory is not None:
-        src.adapters["chat"] = chat_adapter(memory, zone, files=False)
-        src.adapters["files"] = chat_adapter(memory, zone, files=True)
+        shared = SharedChatSearch(memory)  # chat + files: one memory search, not two
+        src.adapters["chat"] = chat_adapter(memory, zone, files=False, shared=shared)
+        src.adapters["files"] = chat_adapter(memory, zone, files=True, shared=shared)
         src.withheld = lambda: getattr(memory, "_hidden_note", lambda: None)()
     if (f := _tool(tools, "wiki_search")) is not None:
         src.adapters["wiki"] = wiki_adapter(f)

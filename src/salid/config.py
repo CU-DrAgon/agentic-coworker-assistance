@@ -109,8 +109,16 @@ class Settings(BaseSettings):
     consent_window_seconds: float = 90.0
     notes_batch_seconds: float = 60.0  # classic mode: how often the gate looks for decisions
     # Two states: listening (speaks only when its name is called) and engaged (answers every
-    # utterance). Engaged falls back to listening after this long without anyone addressing it.
-    engaged_timeout_seconds: float = 90.0
+    # utterance). Engaged falls back to listening after this long without anyone addressing it
+    # (or sooner: two utterances in a row that are not addressed to Salid).
+    engaged_timeout_seconds: float = 30.0
+    # Every listening <-> engaged change (and the join) is shown as one short line in the meeting's
+    # text chat; a flip back within 15 s edits the previous line instead of posting a new one.
+    voice_state_posts: bool = True
+    # Live ask_salid: hard limit, and when the brain is still working a spoken "it is taking
+    # longer than usual" line (once). The answer is delivered whenever it arrives before the limit.
+    live_ask_timeout_seconds: float = 150.0
+    live_slow_answer_seconds: float = 40.0
     # Live: the name was heard but the model has not started to answer after this long (counted from
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
     # (VAD silence + thinking); a cue sent earlier replaced a real answer with a generic greeting.

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import difflib
 import logging
 import random
 import re
@@ -157,7 +158,7 @@ def post_note(text: str) -> dict:
 def ask_consent(text: str, medium: str = "text") -> dict:
     """Ask, once, whether this is a meeting and whether you may take notes. Use it when people
     have been talking for a while, nobody has talked to you and it is unclear what this is (no
-    schedule). Ask like a colleague, briefly; they can say no.
+    schedule). Ask briefly; they can say no. Text by default.
 
     Args:
         text: your short, natural question.
@@ -206,7 +207,8 @@ def ask_salid(question: str) -> dict:
     """Ask the full Salid text assistant when the question needs TEAM information or current web
     info: what was said or decided in meetings/chats, tasks and owners, files, receipts and
     spending, schedules, or fresh news. Do NOT call it for general knowledge, opinions, small talk
-    or explanations you can give yourself. Returns a short answer to say aloud in your own words.
+    or explanations you can give yourself. Returns {"answer": ...} to say as it is, or an error
+    with {"say": ...} to read as it is.
 
     Args:
         question: the question, complete and self-contained (names, dates, the topic).
@@ -227,6 +229,10 @@ FILLER_AGAIN = {
     for lang in ("th", "en")
 }
 PRERENDER_FIRST, PRERENDER_AGAIN = 4, 2  # clips synthesized ahead per language (bounded TTS cost)
+FILLER_SLOW = {
+    lang: [catalog(f"ack_longer_{n}", lang) for n in (1, 2)] for lang in ("th", "en")
+}  # "it is taking longer than usual"
+SLOW_FACT = {"th": "ใช้เวลานานกว่าปกติ", "en": "it is taking longer than usual"}
 FILLER_MEMORY = 3  # the last lines said in this session are not picked again
 FILLER_TOOLS = {
     "ask_salid",
@@ -256,7 +262,36 @@ ROOM_NOTE_EN = (
     "because not everyone in the room may hear it, and offer to send it by DM; if the asker agrees "
     "use send_dm to “me”.)"
 )
-ASK_TIMEOUT_S = 60.0
+ASK_TIMEOUT_S = 150.0  # default of `Settings.live_ask_timeout_seconds`
+SLOW_ANSWER_S = 40.0  # default of `Settings.live_slow_answer_seconds`
+# Tools that make no sense out loud (they produce a file / a long document, or take minutes), so the
+# spoken brain never gets them. Everything else in the chat agent is available by voice (parity test).
+VOICE_TOOL_SKIP = frozenset(
+    {
+        "idea_export",  # PDF / docx / md of an idea
+        "business_framework",  # long framework + PDF
+        "contest_pitch",  # pitch scripts
+        "contest_plan",  # plan, optionally PDF
+        "deep_research",  # background research, PDF report
+        "meeting_document",  # minutes document file
+        "financial_projection",  # spreadsheet / PDF
+        "market_benchmark",  # 20-60 s web benchmark + PDF
+        "wiki_write",  # writes a long page
+        "wiki_publish",  # posts a page to a channel
+    }
+)
+
+
+def voice_tools(kw: dict) -> dict:
+    """`bot._agent_kwargs(...)` for the spoken brain: without the `VOICE_TOOL_SKIP` tools."""
+    tools = [
+        f for f in kw.get("extra_tools") or [] if getattr(f, "__name__", "") not in VOICE_TOOL_SKIP
+    ]
+    return {**kw, "extra_tools": tools} if "extra_tools" in kw else kw
+
+
+# TODO(web timeout): grounded web search has a fixed 20 s timeout (llm.GROUNDED_TIMEOUT_S); there is
+# no per-call knob yet, so the 15 s voice target is not enforced.
 ANSWER_MAX_CHARS = 600
 LEDGER_NOTE = (
     "(ในห้องเสียงมีผู้ที่ไม่ใช่ผู้บริหาร: ห้ามใช้หรือเปิดเผยข้อมูลบัญชี/ใบเสร็จ/การใช้จ่ายของร้าน "
@@ -277,17 +312,20 @@ _MEETING_TOOLS = {
     "set_captions": "set_captions",
 }
 
-STATE_LISTENING = "(สถานะ: กำลังฟังอยู่ ยังไม่มีใครคุยกับคุณ เงียบไว้จนกว่าจะมีคนเรียกชื่อสลิด)"
+STATE_LISTENING = "(สถานะ: กำลังฟังอยู่ ยังไม่มีใครคุยกับคุณ จดบันทึกเงียบ ๆ ห้ามพูดจนกว่าจะมีคนเรียกชื่อสลิด)"
 STATE_ENGAGED = (
-    "(สถานะ: กำลังคุยกับคุณอยู่ ตอบทุกประโยคที่คนในห้องพูดกับคุณเหมือนบทสนทนาปกติ "
-    "ไม่ต้องรอให้เรียกชื่อ ถ้าเขาบอกพอแล้ว/ขอบคุณ ให้ตอบ “ได้ค่ะ” สั้น ๆ แล้วกลับไปเงียบฟัง)"
+    "(สถานะ: กำลังคุยกับคนที่เรียกคุณอยู่ ตอบเฉพาะประโยคที่พูดกับคุณ ไม่ต้องรอให้เรียกชื่อ "
+    "ถ้าเขาบอกโอเค/ต่อไป/พอแล้ว หรือเริ่มคุยกันเอง ให้เงียบแล้วกลับไปฟังโดยไม่พูดอะไร)"
 )
 FORCE_CUE = "(มีคนเรียกชื่อคุณ: ตอบกลับทันทีตามบริบท)"
-STATE_LISTENING_EN = "(State: listening. Nobody is talking to you yet. Stay quiet until someone calls the name Salid.)"
+STATE_LISTENING_EN = (
+    "(State: listening. Nobody is talking to you yet. Take notes silently and say nothing until "
+    "someone calls the name Salid.)"
+)
 STATE_ENGAGED_EN = (
-    "(State: in conversation. Answer every sentence people in the room address to you like a normal "
-    "conversation, with no need to hear your name. If they say that is enough / thanks, answer "
-    "“Sure.” briefly and go back to quietly listening.)"
+    "(State: talking with the person who called you. Answer only what is said to you, with no need "
+    "to hear your name. If they say ok / next / enough, or start talking among themselves, go quiet "
+    "and back to listening without saying anything.)"
 )
 FORCE_CUE_EN = "(Someone called your name: reply at once, in context.)"
 HEARD_EN = " What they said: “{heard}”"
@@ -453,16 +491,20 @@ def build_instruction_en(
     now = now or settings.now()
     p = (
         f"Today is {now:%A, %B} {now.day}, {now.year}.\n"
-        "You are “Salid”, a teammate and assistant sitting in the team's Discord voice channel, "
-        "listening to everyone talk. Read the room, join the conversation naturally and ask "
-        "questions like a good colleague would. Do not lecture and do not recite rules or policies.\n"
+        "You are “Salid”, the team's note-taker sitting in the team's Discord voice channel. Your base "
+        "job is to LISTEN and take the minutes quietly; you are not a chat companion. You speak only "
+        "when someone calls your name, then you talk with that person (and whoever joins in). Do not "
+        "lecture, do not start conversations and do not recite rules or policies.\n"
         "Speaking rules:\n"
         "- There are 2 states; the system tells you the state in a bracketed message: (1) Listening "
-        "(default): you listen and take notes silently and do not speak, except when someone calls "
+        "(default): you listen and take notes silently and never speak, except when someone calls "
         "the name “Salid” (it may be heard as Salit, Saleed or Sa-lid): then answer "
-        "briefly at once, and if it is a greeting, greet them back. (2) In conversation: answer every "
-        "sentence addressed to you like a normal conversation, with no need for the name. If they say "
-        "that is enough / thanks, answer “Sure.” briefly and go quiet.\n"
+        "briefly at once, and if it is a greeting, greet them back. (2) In conversation: talk with "
+        "the person who called you and anyone who turns to you; answer what is said to you, with no "
+        "need for the name, and never ask chit-chat questions yourself.\n"
+        "- When someone says ok / thanks / next person / moving on / that is enough, or people start "
+        "talking among themselves or to someone else about something else, go back to listening "
+        "WITHOUT saying anything (say “Sure.” only if they thanked you directly).\n"
         "- If people in the room are talking among themselves, stay completely silent: do not reply "
         "or comment, even if the topic concerns the team or the past (for example “where did we eat "
         "yesterday”), unless they call your name or turn to ask you.\n"
@@ -475,14 +517,15 @@ def build_instruction_en(
         "- When you join the room, do not say anything yet: wait until someone greets you or talks to you.\n"
         "- If it is unclear whether this is a meeting (no schedule, relaxed chat) and nobody has talked "
         "to you for a while, you may ask like a colleague, e.g. “Is this a meeting today?”, by calling "
-        "ask_consent (normally text so it does not disturb; spoken when the room is quiet or someone "
-        "is talking to you). If the answer is that it is not a meeting / no notes, call "
+        "ask_consent (text by default so it does not disturb; spoken only when someone is talking "
+        "to you). If the answer is that it is not a meeting / no notes, call "
         "set_recording(false), say briefly that you have stopped taking notes, and stay quiet until "
         "called. If it is a meeting, keep taking notes.\n"
         "- If someone tells you to leave the room / end the meeting (“leave”, “you can go”, "
         "“end the meeting”), the system handles leaving itself: do not call set_recording and do not "
         "say you stopped taking notes. Say one short goodbye, such as “See you later!”, then stay quiet.\n"
-        "- Talk to people by voice only. Do not post text that repeats what you say. For what truly "
+        "- Talk to people by voice. The system also posts your answers to the text chat, so do not "
+        "post them yourself. For what truly "
         "deserves a note (decisions, action items with owner and deadline, numbers someone asks you to "
         "remember) call post_note with one short line per topic, not every sentence.\n"
         "- Live captions are always off until someone asks: if asked to turn on captions / translate, "
@@ -505,7 +548,8 @@ def build_instruction_en(
             "directly yourself and do not call a tool.\n"
             "- Call ask_salid only when the question needs the team's data (who said what / decisions, "
             "tasks and owners, files, receipts/expenses, the schedule) or fresh information from the "
-            "web, then put the answer in your own words. Never guess or compute numbers yourself.\n"
+            "web, then say the ask_salid answer as it is: shorten only by cutting sentences, never "
+            "rewrite it, keep every number, name and date. Never guess or compute numbers yourself.\n"
             "- Never bring up money, receipts or expenses yourself unless someone asks about them directly.\n"
             "- The system sends bracketed messages saying who is speaking right now (for example "
             "“(Now speaking: Mew)”). Use them to address people naturally (for example “Sure, Mew”). "
@@ -517,7 +561,9 @@ def build_instruction_en(
             "- Do not say a filler yourself before or while calling ask_salid (such as “one moment”): "
             "the system says it for you. Call the tool at once without speaking, then answer when you "
             "have the result.\n"
-            "- If ask_salid says it cannot look something up, give the reason briefly.\n"
+            "- If a tool result has an error and a “say” field, read “say” as it is (for example “Sorry, "
+            "I can't check that right now. The lookup tool is not working.”); never invent an answer. If "
+            "a result says it was superseded, say nothing: a newer question is being answered.\n"
         )
     else:
         p += (
@@ -553,13 +599,15 @@ def build_instruction(
     now = now or settings.now()
     p = (
         f"{thai_date_line(now)}\n"
-        "คุณชื่อ “สลิด” (Salid) เป็นเพื่อนร่วมทีมและผู้ช่วยที่นั่งอยู่ในห้องเสียง Discord ของทีมและฟังทุกคนคุยกันอยู่ "
-        "อ่านบรรยากาศในห้องเป็น เข้าร่วมบทสนทนาอย่างเป็นธรรมชาติ ถามชวนคุยเหมือนเพื่อนร่วมงานที่ดี "
-        "ไม่สั่งสอน ไม่อ่านกฎหรือนโยบายให้ใคร\n"
+        "คุณชื่อ “สลิด” (Salid) เป็นผู้จดบันทึกประจำทีม นั่งอยู่ในห้องเสียง Discord ของทีม งานหลักคือฟังและจดบันทึกการประชุมเงียบ ๆ "
+        "ไม่ใช่เพื่อนคุย คุณพูดเมื่อมีคนเรียกชื่อเท่านั้น แล้วคุยกับคนที่เรียกคุณ (และคนที่หันมาคุยด้วย) "
+        "ไม่สั่งสอน ไม่ชวนคุยเอง ไม่อ่านกฎหรือนโยบายให้ใคร\n"
         "กติกาการพูด:\n"
         "- มี 2 สถานะ ระบบจะบอกสถานะให้เป็นข้อความในวงเล็บ: (1) กำลังฟัง (ค่าเริ่มต้น) คุณฟังและจดเงียบ ๆ "
-        "ห้ามพูด ยกเว้นเมื่อมีคนเรียกชื่อ “สลิด” (Salid, สะลิด, สลิต, ซาลิด) ให้ตอบทันทีสั้น ๆ โดยเฉพาะถ้าเป็นการทักทาย ให้ทักกลับ "
-        "(2) กำลังคุยอยู่ ตอบทุกประโยคที่พูดกับคุณเหมือนบทสนทนาปกติ ไม่ต้องรอชื่อ ถ้าเขาบอกพอแล้ว/ขอบคุณ ให้ตอบ “ได้ค่ะ” สั้น ๆ แล้วเงียบ\n"
+        "ห้ามพูดเด็ดขาด ยกเว้นเมื่อมีคนเรียกชื่อ “สลิด” (Salid, สะลิด, สลิต, ซาลิด) ให้ตอบทันทีสั้น ๆ โดยเฉพาะถ้าเป็นการทักทาย ให้ทักกลับ "
+        "(2) กำลังคุยอยู่ คุยกับคนที่เรียกคุณและคนที่หันมาคุยกับคุณ ตอบเฉพาะประโยคที่พูดกับคุณ ไม่ต้องรอชื่อ ห้ามชวนคุยเอง\n"
+        "- เมื่อมีคนพูดว่า โอเค ขอบคุณ คนต่อไป ต่อไป พอแล้ว หรือเริ่มคุยกันเอง/คุยกับคนอื่นเรื่องอื่น "
+        "ให้กลับไปฟังเงียบ ๆ โดยไม่พูดอะไรเลย (ตอบ “ได้ค่ะ” สั้น ๆ เฉพาะเมื่อเขาขอบคุณคุณโดยตรง)\n"
         "- ถ้าคนในห้องคุยกันเอง ให้เงียบสนิท ไม่ต้องตอบหรือแสดงความเห็น แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต "
         "(เช่น “เมื่อวานกินข้าวที่ไหน”) เว้นแต่เขาเรียกชื่อคุณหรือหันมาถามคุณ\n"
         "- คำที่เสียงคล้ายชื่อคุณแต่อยู่กลางประโยคและไม่ใช่การเรียกคุณ (เช่น “สนิท” ใน “เขาสนิทกันมาก”, “สลิป”, “สิริ”) "
@@ -568,12 +616,12 @@ def build_instruction(
         "- บุคลิกน่ารัก ร่าเริง เป็นกันเอง เสียงผู้หญิง ลงท้ายด้วย “ค่ะ” “คะ” “นะคะ” ห้ามส่งเสียงสัตว์\n"
         "- ตอนเข้าห้องอย่าเพิ่งพูดอะไร รอจนมีคนทักหรือคุยกับคุณ\n"
         "- ถ้าไม่ชัดว่านี่คือการประชุมไหม (ไม่มีนัดหมาย คุยกันสบาย ๆ) และไม่มีใครคุยกับคุณมาสักพัก คุณถามได้เองแบบเพื่อนร่วมงาน "
-        "เช่น “วันนี้ประชุมกันหรือเปล่าคะ” โดยเรียก ask_consent (ปกติเป็นข้อความ จะได้ไม่รบกวน; พูดเมื่อห้องเงียบหรือมีคนคุยกับคุณ) "
+        "เช่น “วันนี้ประชุมกันหรือเปล่าคะ” โดยเรียก ask_consent (เป็นข้อความโดยปริยาย จะได้ไม่รบกวน; พูดเฉพาะเมื่อมีคนคุยกับคุณอยู่) "
         "ถ้าตอบว่าไม่ใช่การประชุม/ไม่ต้องจด ให้เรียก set_recording(false) แล้วพูดสั้น ๆ ว่าไม่จดแล้ว และเงียบรอให้เรียก "
         "ถ้าเป็นการประชุมให้จดต่อ\n"
         "- ถ้ามีคนบอกให้คุณออกจากห้อง/ออกประชุม/เลิกประชุม (“ออกประชุม”, “ออกไปก่อน”, “leave”) ระบบจัดการการออกเอง: "
         "ห้ามเรียก set_recording และห้ามพูดว่า “ไม่จดแล้ว” ให้พูดลาสั้น ๆ ประโยคเดียว เช่น “แล้วเจอกันนะคะ” แล้วเงียบ\n"
-        "- การคุยกับคนต้องเป็นเสียงเท่านั้น ห้ามส่งข้อความซ้ำสิ่งที่พูด ส่วนสิ่งที่ควรจดจริง ๆ (มติ งานที่ต้องทำพร้อมเจ้าของและกำหนดเวลา "
+        "- คุยกับคนด้วยเสียง ระบบโพสต์คำตอบของคุณลงแชทข้อความให้เองอยู่แล้ว ห้ามโพสต์ซ้ำ ส่วนสิ่งที่ควรจดจริง ๆ (มติ งานที่ต้องทำพร้อมเจ้าของและกำหนดเวลา "
         "ตัวเลขที่มีคนขอให้จำ) ให้เรียก post_note บรรทัดสั้น ๆ ต่อหนึ่งเรื่อง ไม่ใช่ทุกประโยค\n"
         "- ซับไตเติล (คำบรรยายสด) ปิดอยู่เสมอจนกว่าจะมีคนขอ: ถ้าขอเปิดซับ/แปลให้ด้วย เรียก set_captions(on=true, language) "
         "(original/th/en) ถ้าขอปิดซับเรียก set_captions(on=false) แล้วยืนยันสั้น ๆ\n"
@@ -587,7 +635,8 @@ def build_instruction(
             "เครื่องมือข้อมูลมีอันเดียวคือ ask_salid (ผู้ช่วยเต็มรูปแบบที่รู้ความจำของทีมและค้นเว็บได้)\n"
             "- คำถามความรู้ทั่วไป ทฤษฎี ความเห็น การอธิบาย คุยเล่น ทักทาย: ตอบเองตรง ๆ ห้ามเรียกเครื่องมือ\n"
             "- เรียก ask_salid เฉพาะเมื่อคำถามต้องใช้ข้อมูลของทีม (ใครพูดอะไร/มติ งานและเจ้าของ ไฟล์ ใบเสร็จ/ค่าใช้จ่าย "
-            "ตารางนัด) หรือข้อมูลล่าสุดจากเว็บ แล้วเรียบเรียงคำตอบเป็นคำพูดของคุณเอง ห้ามเดาหรือคำนวณตัวเลขเอง\n"
+            "ตารางนัด) หรือข้อมูลล่าสุดจากเว็บ แล้วพูดคำตอบของ ask_salid ตามที่ได้มา: ย่อได้เฉพาะการตัดประโยคออก "
+            "ห้ามเรียบเรียงใหม่ ต้องคงตัวเลข ชื่อ และวันที่ครบ ห้ามเดาหรือคำนวณตัวเลขเอง\n"
             "- ห้ามพูดถึงเงิน ใบเสร็จ หรือค่าใช้จ่ายเองเด็ดขาด เว้นแต่มีคนถามเรื่องนั้นโดยตรง\n"
             "- ระบบจะส่งข้อความในวงเล็บบอกว่าตอนนี้ใครกำลังพูด (เช่น “(ตอนนี้ คุณมิว กำลังพูด)”) ใช้เรียกชื่อคนที่คุยด้วยให้เป็นธรรมชาติ "
             "(เช่น “ได้ค่ะคุณมิว”) ห้ามอ่านข้อความเหล่านี้ออกเสียงและห้ามตอบมัน\n"
@@ -595,7 +644,9 @@ def build_instruction(
             "ถ้าเขาตกลง (หรือขอคำตอบแบบส่วนตัว) เรียก answer_privately(question) แล้วบอกสั้น ๆ ว่าส่ง DM ให้แล้ว ห้ามเดาหรือพูดเนื้อหาเอง\n"
             "- ห้ามพูดคำเติมเองก่อนหรือระหว่างเรียก ask_salid (เช่น “แป๊บนึงนะคะ”) ระบบพูดให้แล้ว ให้เรียกเครื่องมือทันทีโดยไม่พูดอะไร "
             "แล้วค่อยตอบเมื่อได้ผลลัพธ์\n"
-            "- ถ้า ask_salid บอกว่าดูไม่ได้ ให้บอกเหตุผลสั้น ๆ ตามนั้น\n"
+            "- ถ้าผลลัพธ์ของเครื่องมือมี error และ say ให้อ่าน say ตามที่เป็น (เช่น “ขออภัยค่ะ ตรวจสอบให้ไม่ได้ตอนนี้ "
+            "เครื่องมือค้นข้อมูลขัดข้องค่ะ”) ห้ามแต่งคำตอบเอง ถ้าผลลัพธ์บอกว่า superseded ให้เงียบ "
+            "เพราะกำลังตอบคำถามที่ใหม่กว่า\n"
         )
     else:
         p += "ตอนนี้คุณดูข้อมูลของทีมไม่ได้ ถ้ามีคนถามเรื่องข้อมูลทีม เงิน หรือใบเสร็จให้บอกตรง ๆ ว่าตอนนี้ดูไม่ได้ ส่วนความรู้ทั่วไปตอบเองได้\n"
@@ -608,6 +659,27 @@ def build_instruction(
     if history:
         p += "\nบริบท: สิ่งที่คนในห้องเพิ่งคุยกัน (ใช้อ้างอิงเท่านั้น ไม่ต้องตอบ):\n" + history + "\n"
     return p
+
+
+def _norm_question(text: str) -> str:
+    return re.sub(r"[\W_]+", "", str(text or "").lower())
+
+
+def same_question(a: str, b: str) -> bool:
+    """The same question asked again (re-asked while waiting): normalised, one contains the
+    other or they are at least 80% similar."""
+    a, b = _norm_question(a), _norm_question(b)
+    if not a or not b:
+        return False
+    return a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
+
+
+class _Brain:
+    """One running ask_salid: its normalised question and the task that answers it."""
+
+    def __init__(self, question: str):
+        self.question = question
+        self.task: asyncio.Task | None = None
 
 
 # ------------------------------------------------------------------ the live session
@@ -623,8 +695,13 @@ class LiveVoice:
         post: Callable[[str], Any],
         connect: Callable[[types.LiveConnectConfig], Any] | None = None,
         on_failed: Callable[[], None] | None = None,
+        echo: Callable[[str], Any] | None = None,
     ):
+        """`echo(text)`: posts to the meeting's text chat always (answers and failures are shown
+        there even when `post`, the optional chatter, is off); default: `post`."""
         self.bot, self.session, self.post = bot, session, post
+        self.echo = echo or post
+        self._brain: _Brain | None = None  # the ask_salid being answered (one at a time)
         self._connect = connect or self._open_default
         self.on_failed = on_failed
         self.mixer = Mixer()
@@ -664,6 +741,7 @@ class LiveVoice:
         self._again_used: set[str] = set()  # "still on it" lines already said this session
         self._filler_until = 0.0  # monotonic: filler audio may still sit in the playback buffer
         self._filler_task: asyncio.Task | None = None
+        self._filler_question = ""
         # who is talking (Discord gives one stream per user)
         self._bursts: dict[int, list] = {}  # user id -> its open [uid, start, end]
         self._spans: list[list] = []  # [uid, start, end] stretches of speech, oldest first
@@ -965,7 +1043,10 @@ class LiveVoice:
         self._live_hit_at = now
         self._fallback = None
         logger.info("live: name heard in the live transcript")
-        self.bot.meetings._set_engaged(s, True)
+        who = self.recent_speakers()
+        self.bot.meetings._set_engaged(
+            s, True, name=self.speaker_name(who[0]) if len(who) == 1 else ""
+        )
         self._spawn(
             self._force_reply(
                 now,
@@ -1152,14 +1233,76 @@ class LiveVoice:
 
         if name not in ("ask_salid", "answer_privately"):
             return {"error": f"unknown tool {name}"}
+        question = str((args or {}).get("question", ""))
+        if name == "answer_privately":
+            return await self._guarded(name, self._answer_privately, question)
+        return await self._one_brain(question)
+
+    # ---- one brain at a time
+    async def _one_brain(self, question: str) -> dict:
+        """ask_salid, one at a time per session. The same question while one is running (the person
+        re-asked while waiting) joins it and gets its result; a different question cancels the
+        running one (its worker thread cannot be killed, but its result is dropped: nothing is
+        posted or spoken) and starts the new one."""
+        cur = self._brain
+        if cur is not None and cur.task is not None and not cur.task.done():
+            if same_question(cur.question, question):
+                logger.info("live: ask_salid joined the running one")
+                return await self._wait_brain(cur)
+            logger.info("live: ask_salid superseded the running one")
+            cur.task.cancel()
+        run = self._brain = _Brain(question)
+        run.task = asyncio.create_task(self._guarded("ask_salid", self._ask_salid, question))
+        self._bg.add(run.task)
+        run.task.add_done_callback(self._bg.discard)
+        return await self._wait_brain(run)
+
+    @staticmethod
+    async def _wait_brain(run: _Brain) -> dict:
+        assert run.task is not None
         try:
-            fn = self._ask_salid if name == "ask_salid" else self._answer_privately
-            return await asyncio.wait_for(fn(str((args or {}).get("question", ""))), ASK_TIMEOUT_S)
+            return await asyncio.shield(run.task)
+        except asyncio.CancelledError:
+            me = asyncio.current_task()
+            if run.task.cancelled() and (me is None or not me.cancelling()):
+                return {"superseded": True}  # a newer question took over: say nothing
+            raise
+
+    async def _guarded(self, name: str, fn, question: str) -> dict:
+        """Run a brain tool with the time limit. A failure or timeout returns the honest line the
+        model reads as it is (`say`) and is shown in the text chat; nothing is invented."""
+        limit = float(getattr(self.bot.s, "live_ask_timeout_seconds", ASK_TIMEOUT_S))
+        try:
+            res = await asyncio.wait_for(fn(question), limit)
         except TimeoutError:
-            return {"error": "timeout"}
+            reason = "timeout"
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.warning("live: ask_salid failed: %s", e)
-            return {"error": str(e)}
+            logger.warning("live: %s failed: %s", name, type(e).__name__)
+            reason = str(e) or type(e).__name__
+        else:
+            if name == "ask_salid" and isinstance(res, dict) and res.get("answer"):
+                self._echo_text("voice_answer_echo", text=str(res["answer"]))
+            return res
+        lang = self._filler_lang()
+        self._echo_text("voice_tool_failed", tool=name, reason=reason[:80])
+        return {"error": reason, "say": catalog("voice_tool_failed_say", lang)}
+
+    def _echo_text(self, key: str, **fmt: Any) -> None:
+        """Post a fixed line to the meeting's text chat; never raises into the Live loop."""
+        text = catalog(key, self._filler_lang(), **fmt)
+
+        async def send() -> None:
+            try:
+                await self.echo(text)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("live: could not post to the text chat (%s)", type(e).__name__)
+
+        with contextlib.suppress(RuntimeError):
+            self._spawn(send())
 
     async def _ask_salid(self, question: str) -> dict:
         """The full text agent for this room: team memory limited to what every human present may
@@ -1212,17 +1355,19 @@ class LiveVoice:
             here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
 
             def agent_for(member, is_exec: bool, profile) -> dict:
-                return bot._agent_kwargs(
-                    bot.room_message(guild, member, here, room={h.id for h in humans}),
-                    guild,
-                    member,
-                    is_exec,
-                    setting=self._qa_setting(),
-                    lang=self._qa_lang(question),
-                    question=question,
-                    memory=memory,
-                    profile=profile,
-                    people=tag_candidates(here),
+                return voice_tools(
+                    bot._agent_kwargs(
+                        bot.room_message(guild, member, here, room={h.id for h in humans}),
+                        guild,
+                        member,
+                        is_exec,
+                        setting=self._qa_setting(),
+                        lang=self._qa_lang(question),
+                        question=question,
+                        memory=memory,
+                        profile=profile,
+                        people=tag_candidates(here),
+                    )
                 )
 
             kw = agent_for(
@@ -1308,19 +1453,32 @@ class LiveVoice:
         return {"status": "sent"} if res.ok else {"status": "failed", "reason": res.reason}
 
     async def _on_tool_call(self, live: Any, tool_call: Any) -> None:
+        """The tools run in the background: the receiver keeps handling audio, transcripts and
+        interruptions while the brain works (a re-asked question can then join / replace it)."""
         self._awaiting_answer = True  # the turn_complete that follows is not the end of the answer
-        responses = []
-        for fc in tool_call.function_calls or []:
-            logger.info("live: tool call %s", fc.name)  # name only: arguments may hold PII
-            filler = self._start_filler(fc.name, dict(fc.args or {}))
-            try:
-                result = await self._run_tool(fc.name, dict(fc.args or {}))
-            finally:
-                if filler is not None:
-                    filler.cancel()
-            responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
-        if responses:
-            await live.send_tool_response(function_responses=responses)
+        task = asyncio.create_task(self._run_tool_call(live, tool_call))
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+
+    async def _run_tool_call(self, live: Any, tool_call: Any) -> None:
+        try:
+            responses = []
+            for fc in tool_call.function_calls or []:
+                logger.info("live: tool call %s", fc.name)  # name only: arguments may hold PII
+                filler = self._start_filler(fc.name, dict(fc.args or {}))
+                try:
+                    result = await self._run_tool(fc.name, dict(fc.args or {}))
+                finally:
+                    if filler is not None:
+                        filler.cancel()
+                responses.append(types.FunctionResponse(id=fc.id, name=fc.name, response=result))
+            if responses and not self._closing:
+                await live.send_tool_response(function_responses=responses)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # never into the Live loop
+            logger.warning("live: tool call failed: %s", type(e).__name__)
+            self._awaiting_answer = False
 
     # ---- audio out
     def _on_audio(self, data: bytes) -> None:
@@ -1443,6 +1601,12 @@ class LiveVoice:
         ):
             return None
         question = str((args or {}).get("question") or "")
+        running = self._filler_task is not None and not self._filler_task.done()
+        if running and same_question(self._filler_question, question):
+            return None  # the question was re-asked: the "one moment" already running covers it
+        if running:
+            self._filler_task.cancel()  # a different question replaces the old one
+        self._filler_question = question
         task = self._filler_task = asyncio.create_task(self._filler_run(question))
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
@@ -1513,7 +1677,12 @@ class LiveVoice:
                 pcm = await self._render(line, lang, cache=got.generic)
             else:
                 pcm = await self._filler_clip(self._pick_fallback(lang, "again"), lang)
-            await self._play_filler(pcm)
+            if not await self._play_filler(pcm):
+                return
+            # Still no answer: one honest line, then silence until it arrives (or the time limit).
+            slow = float(getattr(self.bot.s, "live_slow_answer_seconds", SLOW_ANSWER_S))
+            await asyncio.sleep(max(0.0, slow - (time.monotonic() - started)))
+            await self._play_filler(await self._slow_clip(writer, question, lang))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -1527,6 +1696,33 @@ class LiveVoice:
                 else:
                     with contextlib.suppress(BaseException):
                         tk.exception()  # a failed line is already logged / ignored
+
+    async def _slow_clip(self, writer: FillerWriter, question: str, lang: str) -> bytes:
+        """ "It is taking longer than usual": a line written with that fact (an "again" line), else
+        one from the fallback pool."""
+        if writer.enabled():
+            timeout = float(getattr(self.bot.s, "voice_ack_timeout_s", 3.0))
+            task = asyncio.create_task(
+                write_line(
+                    writer,
+                    kind="voice",
+                    question=question,
+                    lang=lang,
+                    particle=self._particle() or "ค่ะ",
+                    stage="again",
+                    facts=[SLOW_FACT[lang]],
+                    avoid=self._filler_used,
+                )
+            )
+            got = await within(task, timeout)
+            if got is not None and got.text not in self._filler_used:
+                self._remember(got.text, "again")
+                with contextlib.suppress(Exception):
+                    return await self._render(got.text, lang, cache=False)
+        pool = [with_particle(x, self._particle()) for x in FILLER_SLOW[lang]]
+        text = random.choice([x for x in pool if x not in self._filler_used] or pool)
+        self._remember(text, "first")
+        return await self._filler_clip(text, lang)
 
     async def _play_filler(self, pcm: bytes) -> bool:
         """Queue a filler clip on the Live playback path. False when the model started to speak."""
