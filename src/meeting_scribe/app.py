@@ -73,7 +73,8 @@ def _get_or_404(meeting_id: str) -> Meeting:
 # Discord Scheduled Events for meetings).
 CREATE_EVENTS = 1 << 44
 MANAGE_EVENTS = 1 << 33
-SALID_PERMISSIONS = 1166416 | CREATE_EVENTS | MANAGE_EVENTS
+SEND_POLLS = 1 << 49
+SALID_PERMISSIONS = 1166416 | CREATE_EVENTS | MANAGE_EVENTS | SEND_POLLS
 
 
 def salid_invite_url(client_id: str) -> str:

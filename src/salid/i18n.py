@@ -1165,4 +1165,64 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "เอกสารนี้มาจาก #{source} ซึ่ง {who} มองไม่เห็น ยืนยันจะส่งไหมครับ",
         "en": "This document comes from #{source}, which {who} cannot see. Send it anyway?",
     },
+    # ---------------------------------------------------------------- polls and forms
+    "poll_result": {
+        "th": "ผลโหวต “{question}”: {winner} ชนะค่ะ ({votes} จาก {total} โหวต)",
+        "en": "Poll result for “{question}”: {winner} wins ({votes} of {total} votes).",
+    },
+    "poll_result_tie": {
+        "th": "ผลโหวต “{question}”: เสมอกันระหว่าง {winners} ({votes} โหวตเท่ากัน) ค่ะ",
+        "en": "Poll result for “{question}”: a tie between {winners} ({votes} votes each).",
+    },
+    "poll_result_none": {
+        "th": "โหวต “{question}” จบแล้ว แต่ยังไม่มีใครโหวตเลยค่ะ",
+        "en": "The poll “{question}” has ended, but nobody voted.",
+    },
+    "poll_memory": {
+        "th": "[ผลโหวต] {line}",
+        "en": "[Poll result] {line}",
+    },
+    "form_invite": {
+        "th": "สวัสดีค่ะ {creator} ({server}) ฝากให้สลิดถามเรื่อง “{title}” มี {n} ข้อ "
+        "ตอบกลับในแชตนี้ได้เลยค่ะ (พิมพ์ “ข้าม” ถ้าไม่อยากตอบข้อไหน หรือ “ไม่ขอตอบ” เพื่อหยุด) "
+        "ตอบภายใน {deadline} นะคะ",
+        "en": "Hi! {creator} ({server}) asked me to collect answers for “{title}”: {n} questions. "
+        "Just reply here (type “skip” to pass a question, or “stop” to opt out). "
+        "Please answer by {deadline}.",
+    },
+    "form_question": {
+        "th": "ข้อ {i}/{n}: {question}",
+        "en": "Question {i}/{n}: {question}",
+    },
+    "form_thanks": {
+        "th": "ขอบคุณค่ะ ตอบครบแล้ว สลิดส่งคำตอบให้ {creator} เรียบร้อยค่ะ",
+        "en": "Thank you, that's everything. I'll pass your answers to {creator}.",
+    },
+    "form_declined_ack": {
+        "th": "รับทราบค่ะ ไม่ถามเรื่องนี้อีกแล้วนะคะ",
+        "en": "Got it, I won't ask about this again.",
+    },
+    "form_reminder": {
+        "th": "เตือนความจำเบาๆ ค่ะ “{title}” ของ {creator} ใกล้ถึงกำหนด ({deadline}) แล้ว "
+        "ยังตอบไม่ครบนะคะ ตอบกลับในแชตนี้ได้เลยค่ะ",
+        "en": "Gentle reminder: “{title}” from {creator} closes soon ({deadline}) and I still "
+        "have some unanswered questions. Just reply here.",
+    },
+    "form_progress": {
+        "th": "“{title}” ตอบแล้ว {done} จาก {total} คน",
+        "en": "“{title}”: {done} of {total} people have answered.",
+    },
+    "form_closed": {
+        "th": "แบบสอบถาม “{title}” ปิดแล้วค่ะ ตอบแล้ว {done} จาก {total} คน "
+        "ขอดูผลได้เลยนะคะ (บอกว่า “ขอผลแบบสอบถาม”)",
+        "en": "The form “{title}” has closed: {done} of {total} people answered. "
+        "Ask me for the results any time.",
+    },
+    "form_col_name": {"th": "ชื่อ", "en": "Name"},
+    "form_col_state": {"th": "สถานะ", "en": "Status"},
+    "form_pdf_people": {"th": "คำตอบรายคน", "en": "Answers by person"},
+    "form_results_dm": {
+        "th": "ผลแบบสอบถามส่งทาง DM แล้วค่ะ",
+        "en": "I sent the results to you by DM.",
+    },
 }
