@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     gemini_location: str = "global"
     gemini_model: str = "gemini-3.5-flash"
     tz: str = "Asia/Bangkok"
+    # Google Maps Platform (Routes, Places, Weather). Off until routes/places/weather.googleapis.com
+    # are enabled. Auth is ADC; the API key is only a fallback if the Weather API rejects OAuth.
+    maps_enabled: bool = False
+    maps_api_key: str = Field(default="", repr=False)  # secret: never logged
+    # WeatherNext 2 ensemble in BigQuery (empty = disabled): "<project>.<dataset>"
+    weathernext_bq_dataset: str = ""
+    weathernext_bq_table: str = "weathernext_2_0_0"
     # Deep tasks (Gemini CLI, an external Node binary). Empty path = feature disabled.
     gemini_cli_path: str = ""
     deep_task_timeout: int = 600  # seconds

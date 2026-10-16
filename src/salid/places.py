@@ -704,6 +704,7 @@ def place_for_event(ctx: PlacesCtx, query: str, invitee_ids: list[int]) -> dict:
         }
     return {
         "status": "ok",
+        "id": p.id,
         "name": p.name,
         "address": p.address,
         "maps_link": maps_link(p),

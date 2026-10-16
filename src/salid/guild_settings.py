@@ -87,6 +87,7 @@ FEATURES = (
     "wiki",
     "approvals",
     "places",
+    "maps",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -146,6 +147,7 @@ class Features(BaseModel):
     wiki: bool = True  # company knowledge base built from memory (needs `memory`)
     approvals: bool = True  # request_approval & co: approval requests with Approve / Decline DMs
     places: bool = True  # remembers head office / branches / consented personal places
+    maps: bool = True  # travel time / routes / weather (also needs SALID_MAPS_ENABLED)
 
 
 class Channel(BaseModel):
