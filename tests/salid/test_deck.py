@@ -6,6 +6,7 @@ from datetime import date
 
 import pytest
 from pptx import Presentation
+from pptx.enum.chart import XL_CHART_TYPE
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 from pydantic import ValidationError
@@ -13,8 +14,10 @@ from pydantic import ValidationError
 from salid.deck import (
     LATIN_FONT,
     THAI_FONT,
+    ChartData,
     ChartQuery,
     DeckSpec,
+    chart_data,
     deck_filename,
     render_deck,
 )
@@ -192,3 +195,70 @@ def test_english_fixed_strings():
 def test_page_numbers_on_content_slides():
     prs = render({"title": "t", "slides": [bullets(), bullets()]})
     assert "2" in texts(prs.slides[1]) and "3" in texts(prs.slides[2])
+
+
+# ------------------------------------------------------------------ charts
+def summary(groups):
+    return {"groups": [{"key": k, "totals_by_currency": by} for k, by in groups]}
+
+
+Q = {"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31"}
+
+
+def test_top_groups_plus_other_per_currency():
+    s = summary(
+        [
+            ("วัตถุดิบ", {"THB": 9000}),
+            ("ค่าเดินทาง", {"THB": 250.5}),
+            ("สาธารณูปโภค", {"THB": 120}),
+            ("อุปกรณ์", {"USD": 10}),
+        ]
+    )
+    cd = chart_data(s, ChartQuery.model_validate({**Q, "top": 2}), "th")
+    assert cd.categories == ["วัตถุดิบ", "ค่าเดินทาง", "อื่นๆ"]
+    assert cd.series == {"THB": [9000, 250.5, 120], "USD": [0, 0, 10]}
+
+
+def test_day_groups_keep_date_order_and_no_other():
+    s = summary([("2026-10-01", {"THB": 5}), ("2026-10-02", {"THB": 7})])
+    cd = chart_data(s, ChartQuery.model_validate({**Q, "group_by": "day", "top": 1}), "en")
+    assert cd.categories == ["10-01", "10-02"] and cd.series == {"THB": [5, 7]}
+
+
+def test_missing_keys_and_empty_data():
+    q = ChartQuery.model_validate(Q)
+    assert chart_data(summary([(None, {"THB": 1})]), q, "th").categories == ["—"]
+    assert chart_data(summary([]), q, "th").empty
+
+
+def test_chart_slide_draws_a_native_chart_with_the_given_numbers():
+    spec = {"title": "t", "slides": [{"kind": "chart", "title": "ค่าใช้จ่ายตามหมวด", "chart": Q}]}
+    cd = ChartData(categories=["วัตถุดิบ", "อื่นๆ"], series={"THB": [9000.0, 370.5]})
+    prs = render(spec, charts={0: cd})
+    chart = next(s.chart for s in prs.slides[1].shapes if s.has_chart)
+    assert list(chart.plots[0].categories) == ["วัตถุดิบ", "อื่นๆ"]
+    assert list(chart.plots[0].series[0].values) == [9000.0, 370.5]
+
+
+@pytest.mark.parametrize(
+    "style, expected",
+    [
+        ("bar", XL_CHART_TYPE.COLUMN_CLUSTERED),
+        ("line", XL_CHART_TYPE.LINE_MARKERS),
+        ("pie", XL_CHART_TYPE.PIE),
+    ],
+)
+def test_chart_styles(style, expected):
+    spec = {
+        "title": "t",
+        "slides": [{"kind": "chart", "title": "c", "chart": {**Q, "style": style}}],
+    }
+    prs = render(spec, charts={0: ChartData(["a", "b"], {"THB": [1.0, 2.0]})})
+    assert next(s.chart for s in prs.slides[1].shapes if s.has_chart).chart_type == expected
+
+
+def test_empty_chart_shows_the_placeholder():
+    spec = {"title": "t", "slides": [{"kind": "chart", "title": "c", "chart": Q}]}
+    prs = render(spec, charts={0: ChartData([], {})})
+    assert not any(s.has_chart for s in prs.slides[1].shapes)
+    assert "ไม่มีข้อมูลในช่วงนี้" in " ".join(texts(prs.slides[1]))

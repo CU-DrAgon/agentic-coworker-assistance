@@ -581,6 +581,14 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "สร้างโดยสลิด · {date}",
         "en": "Made with Salid · {date}",
     },
+    "deck_other": {
+        "th": "อื่นๆ",
+        "en": "Other",
+    },
+    "deck_no_data": {
+        "th": "ไม่มีข้อมูลในช่วงนี้",
+        "en": "No data for this period",
+    },
     "deep_stats": {
         "th": "⏱ {seconds:.0f} วินาที · tokens {tokens:,} · โมเดล: {models}",
         "en": "⏱ {seconds:.0f} s · tokens {tokens:,} · model: {models}",

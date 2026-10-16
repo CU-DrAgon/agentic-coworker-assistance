@@ -15,7 +15,9 @@ from datetime import date
 from typing import Annotated, Literal
 
 from pptx import Presentation
+from pptx.chart.data import CategoryChartData
 from pptx.dml.color import RGBColor
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
 from pptx.oxml.ns import qn
@@ -142,6 +144,35 @@ def deck_filename(title: str, today: date) -> str:
     return f"{slug or 'salid-deck'}-{today:%Y%m%d}.pptx"
 
 
+def chart_data(summary: dict, query: ChartQuery, lang: str) -> ChartData:
+    """What a chart slide plots, from a ledger summary (`store.build_summary` shape: groups
+    biggest first, or by date for `day`). Non-day charts keep the `top` groups and sum the rest
+    per currency into "Other"; day charts keep every day, labelled MM-DD. One series per
+    currency, THB first."""
+    groups = list(summary.get("groups") or [])
+    if not groups:
+        return ChartData()
+    day = query.group_by == "day"
+    kept, rest = (groups, []) if day else (groups[: query.top], groups[query.top :])
+
+    def by(g: dict) -> dict:
+        return g.get("totals_by_currency") or {}
+
+    def label(key) -> str:
+        if key in (None, ""):
+            return "—"
+        return str(key)[5:10] if day else str(key)
+
+    currencies = sorted({c for g in groups for c in by(g)}, key=lambda c: (c != "THB", c))
+    categories = [label(g.get("key")) for g in kept]
+    series = {c: [float(by(g).get(c, 0)) for g in kept] for c in currencies}
+    if rest:
+        categories.append(t("deck_other", lang))
+        for c in currencies:
+            series[c].append(round(sum(by(g).get(c, 0) for g in rest), 2))
+    return ChartData(categories, series)
+
+
 # ---------------------------------------------------------------------------- rendering
 def clean_text(s: str, keep_newlines: bool = False) -> str:
     """Text safe for the slide XML: control characters dropped (python-pptx rejects them), line
@@ -160,10 +191,9 @@ def format_deck_date(d: date, lang: str) -> str:
     return f"{d.day} {EN_MONTHS[d.month - 1]} {d.year}"
 
 
-def _thai_font(run) -> None:
-    """Put the Thai font in the complex-script slot (`a:cs`, right after `a:latin`), which
-    python-pptx does not expose."""
-    rpr = run._r.get_or_add_rPr()
+def _thai_font(rpr) -> None:
+    """Put the Thai font in the complex-script slot (`a:cs`, right after `a:latin`) of a run's
+    or a chart's character properties; python-pptx does not expose it."""
     for old in rpr.findall(qn("a:cs")):
         rpr.remove(old)
     cs = OxmlElement("a:cs")
@@ -179,7 +209,7 @@ def _run(paragraph, text: str, size, color, bold: bool = False, raw: bool = Fals
     font = run.font
     font.size, font.bold, font.name = size, bold, LATIN_FONT
     font.color.rgb = color
-    _thai_font(run)
+    _thai_font(run._r.get_or_add_rPr())
     return run
 
 
@@ -217,11 +247,12 @@ def _title_slide(prs, spec: DeckSpec, lang: str, today: date) -> None:
     _background(slide, NAVY)
     _rect(slide, MARGIN, Inches(2.0), Inches(1.2), Inches(0.08), ACCENT)
     width = SLIDE_W - 2 * MARGIN
-    frame = _textbox(slide, MARGIN, Inches(2.2), width, Inches(1.7), MSO_ANCHOR.BOTTOM)
+    frame = _textbox(slide, MARGIN, Inches(2.2), width, Inches(3.0))
     _run(frame.paragraphs[0], spec.title, Pt(_title_size(spec.title, 44)), WHITE, bold=True)
-    if spec.subtitle:
-        sub = _textbox(slide, MARGIN, Inches(4.0), width, Inches(1.0))
-        _run(sub.paragraphs[0], spec.subtitle, Pt(24), LIGHT)
+    if spec.subtitle:  # same box, so it follows a one- or two-line title closely
+        sub = frame.add_paragraph()
+        sub.space_before = Pt(14)
+        _run(sub, spec.subtitle, Pt(24), LIGHT)
     foot = _textbox(slide, MARGIN, Inches(6.4), width, Inches(0.5))
     _run(
         foot.paragraphs[0],
@@ -231,10 +262,10 @@ def _title_slide(prs, spec: DeckSpec, lang: str, today: date) -> None:
     )
 
 
-def _page_number(slide, n: int) -> None:
+def _page_number(slide, n: int, color=MUTED) -> None:
     frame = _textbox(slide, SLIDE_W - MARGIN - Inches(1), Inches(6.85), Inches(1), Inches(0.4))
     frame.paragraphs[0].alignment = PP_ALIGN.RIGHT
-    _run(frame.paragraphs[0], str(n), Pt(12), MUTED)
+    _run(frame.paragraphs[0], str(n), Pt(12), color)
 
 
 def _bullet_list(slide, items: list[str], x, w, size: int) -> None:
@@ -246,7 +277,52 @@ def _bullet_list(slide, items: list[str], x, w, size: int) -> None:
         _run(p, item, Pt(size), INK)
 
 
-def _content_slide(prs, s: Slide, n: int):
+CHART_TYPES = {
+    "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+    "line": XL_CHART_TYPE.LINE_MARKERS,
+    "pie": XL_CHART_TYPE.PIE,
+}
+
+
+def _chart(slide, query: ChartQuery, data: ChartData | None, lang: str) -> None:
+    """A native (editable) chart in the body area, or the no-data text when there is nothing."""
+    x, w = MARGIN, SLIDE_W - 2 * MARGIN
+    if data is None or data.empty:
+        frame = _textbox(slide, x, BODY_TOP, w, BODY_H, MSO_ANCHOR.MIDDLE)
+        frame.paragraphs[0].alignment = PP_ALIGN.CENTER
+        _run(frame.paragraphs[0], t("deck_no_data", lang), Pt(24), MUTED)
+        return
+    currencies = list(data.series)[:1] if query.style == "pie" else list(data.series)
+    cd = CategoryChartData(number_format="#,##0")
+    cd.categories = data.categories
+    for cur in currencies:
+        cd.add_series(cur, data.series[cur])
+    chart = slide.shapes.add_chart(CHART_TYPES[query.style], x, BODY_TOP, w, BODY_H, cd).chart
+    chart.font.size, chart.font.name = Pt(14), LATIN_FONT
+    _thai_font(chart.font._rPr)
+    chart.has_legend = len(currencies) > 1 or query.style == "pie"
+    if chart.has_legend:
+        chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+        chart.legend.include_in_layout = False
+    plot = chart.plots[0]
+    plot.has_data_labels = True
+    plot.data_labels.number_format = "#,##0"
+    plot.data_labels.number_format_is_linked = False
+    if query.style == "pie":
+        for i, point in enumerate(plot.series[0].points):
+            point.format.fill.solid()
+            point.format.fill.fore_color.rgb = CHART_COLORS[i % len(CHART_COLORS)]
+        return
+    for i, series in enumerate(plot.series):
+        color = CHART_COLORS[i % len(CHART_COLORS)]
+        if query.style == "line":
+            series.format.line.color.rgb = color
+        else:
+            series.format.fill.solid()
+            series.format.fill.fore_color.rgb = color
+
+
+def _content_slide(prs, s: Slide, n: int, chart: ChartData | None, lang: str):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     if s.kind == "section":
         _background(slide, ACCENT)
@@ -267,9 +343,11 @@ def _content_slide(prs, s: Slide, n: int):
             col = (width - Inches(0.5)) / 2
             _bullet_list(slide, s.bullets, MARGIN, col, size)
             _bullet_list(slide, s.right, MARGIN + col + Inches(0.5), col, size)
+        elif s.kind == "chart" and s.chart is not None:
+            _chart(slide, s.chart, chart, lang)
     if s.notes:
         slide.notes_slide.notes_text_frame.text = clean_text(s.notes, keep_newlines=True)
-    _page_number(slide, n)
+    _page_number(slide, n, LIGHT if s.kind == "section" else MUTED)
     return slide
 
 
@@ -280,7 +358,7 @@ def render_deck(spec: DeckSpec, charts: dict[int, ChartData], *, lang: str, toda
     prs.slide_width, prs.slide_height = SLIDE_W, SLIDE_H
     _title_slide(prs, spec, lang, today)
     for i, s in enumerate(spec.slides):
-        _content_slide(prs, s, i + 2)
+        _content_slide(prs, s, i + 2, charts.get(i), lang)
     out = io.BytesIO()
     prs.save(out)
     return out.getvalue()
