@@ -1,0 +1,397 @@
+
+
+<!DOCTYPE html >
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head><meta http-equiv="Content-Type" content="text/html; charset=utf-8" /><meta name="facebook-domain-verification" content="tb7cnduowrp0w8oja15d5g6bln9qdu" /><link rel="icon" href="/GTAicon.png" /><title>
+	Gold Traders Association : สมาคมค้าทองคำ  - ราคาทองคำวันนี้ ราคาทองตอนนี้
+</title>
+    
+    
+    
+    <script src="Scripts/jquery-1.4.1.min.js" type="text/javascript"></script>
+    
+<style>
+#mask {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 9000;
+  background-color: #000;
+  display: none;
+}
+
+#boxes .window {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1000px;
+  height: 834px;
+  display: none;
+  z-index: 9999;
+  padding: 10px;
+  border-radius: 15px;
+  text-align: center;
+}
+
+#boxes #dialog {
+  width: 1000px;
+  height: 834px;
+  padding: 0px;
+  background-color: #ffffff;
+  font-family: 'Segoe UI Light', sans-serif;
+  font-size: 15pt;
+}
+</style>
+<script src="//ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.js"></script>
+<script>
+$(document).ready(function() {	
+
+var id = '#dialog';
+	
+//Get the screen height and width
+var maskHeight = $(document).height();
+var maskWidth = $(window).width();
+	
+//Set heigth and width to mask to fill up the whole screen
+$('#mask').css({'width':maskWidth,'height':maskHeight});
+
+//transition effect
+$('#mask').fadeIn(500);	
+$('#mask').fadeTo("slow",0.9);	
+	
+//Get the window height and width
+var winH = $(window).height();
+var winW = $(window).width();
+              
+//Set the popup window to center
+$(id).css('top',  winH/2-$(id).height()/2);
+$(id).css('left', winW/2-$(id).width()/2);
+	
+//transition effect
+$(id).fadeIn(2000); 	
+	
+//if close button is clicked
+$('.window .close').click(function (e) {
+//Cancel the link behavior
+e.preventDefault();
+
+$('#mask').hide();
+$('.window').hide();
+});
+
+//if mask is clicked
+$('#mask').click(function () {
+$(this).hide();
+$('.window').hide();
+});
+
+//if boxes is clicked
+$('#boxes').click(function () {
+$(this).hide();
+$('.window').hide();
+});
+	
+});
+</script>
+	
+	
+	
+	
+    <script type="text/javascript">
+        $(function () {
+            $('body').delay(500).queue(function () {
+                $('#NavigationMenu').removeClass('noDisplay');
+            });
+        })
+
+        
+    </script>
+
+    
+<link href="App_Themes/Front_Theme/Front_Style.bak.20251025%20(2).css" type="text/css" rel="stylesheet" /><link href="App_Themes/Front_Theme/Front_Style.css" type="text/css" rel="stylesheet" /><link href="/WebResource.axd?d=IScDSMKoVaKfm-h0_JtDo5B3rwzU6_UJcQxOSDQrXTnuOEgXbpHh7IqkwcT2-ky2d4oHLHWvSpoV0ufCb48f5QdLKs6ULuUXWymXRme8gWGVlZIQIoiuL2sreTW7ByyXdNpDpWktXQnWzXARBim7hQ2&amp;t=634714884146624249" type="text/css" rel="stylesheet" /></head>
+<body>
+<!--
+	<div id="boxes">
+  <div id="dialog" class="window close">
+    <img src="popup_image.jpg" height="100%" />
+  </div>
+  <div id="mask"></div>
+</div>
+-->
+	
+
+    <form method="post" action="./UpdatePriceList.aspx" id="form1">
+<div class="aspNetHidden">
+<input type="hidden" name="__EVENTTARGET" id="__EVENTTARGET" value="" />
+<input type="hidden" name="__EVENTARGUMENT" id="__EVENTARGUMENT" value="" />
+<input type="hidden" name="__LASTFOCUS" id="__LASTFOCUS" value="" />
+<input type="hidden" name="__VIEWSTATE" id="__VIEWSTATE" value="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" />
+</div>
+
+<script type="text/javascript">
+//<![CDATA[
+var theForm = document.forms['form1'];
+if (!theForm) {
+    theForm = document.form1;
+}
+function __doPostBack(eventTarget, eventArgument) {
+    if (!theForm.onsubmit || (theForm.onsubmit() != false)) {
+        theForm.__EVENTTARGET.value = eventTarget;
+        theForm.__EVENTARGUMENT.value = eventArgument;
+        theForm.submit();
+    }
+}
+//]]>
+</script>
+
+
+<script src="/WebResource.axd?d=_w5HQZqpvDOc9U9ZBk3O74EoJfvqokDCs0-SwOrZv6P0nktfILOPvrVOc7PjcUEgTLGexROC18_xmWw5SKhxIUusctIfmpXPPcuTLOFNNz41&amp;t=637100574060000000" type="text/javascript"></script>
+
+
+<script src="/ScriptResource.axd?d=EMKxH7PEyFHdbITqy7SMAgKTeS00QOZNOmSSz9wBLqAmXRhHN-JxMDcCb2mQnZH9ONrHkZH5CfaucDKjzUizkIvqC9sFHwV5R0T2r7oy2Lj321gfZyWYjMTA2Dm4PH-bZiuj-ursOSDXO-T6r6z4IA2&amp;t=ffffffff93f2983c" type="text/javascript"></script>
+<script type="text/javascript">
+//<![CDATA[
+var __cultureInfo = {"name":"th-TH","numberFormat":{"CurrencyDecimalDigits":2,"CurrencyDecimalSeparator":".","IsReadOnly":true,"CurrencyGroupSizes":[3],"NumberGroupSizes":[3],"PercentGroupSizes":[3],"CurrencyGroupSeparator":",","CurrencySymbol":"฿","NaNSymbol":"NaN","CurrencyNegativePattern":1,"NumberNegativePattern":1,"PercentPositivePattern":0,"PercentNegativePattern":0,"NegativeInfinitySymbol":"-Infinity","NegativeSign":"-","NumberDecimalDigits":2,"NumberDecimalSeparator":".","NumberGroupSeparator":",","CurrencyPositivePattern":0,"PositiveInfinitySymbol":"Infinity","PositiveSign":"+","PercentDecimalDigits":2,"PercentDecimalSeparator":".","PercentGroupSeparator":",","PercentSymbol":"%","PerMilleSymbol":"‰","NativeDigits":["๐","๑","๒","๓","๔","๕","๖","๗","๘","๙"],"DigitSubstitution":1},"dateTimeFormat":{"AMDesignator":"AM","Calendar":{"MinSupportedDateTime":"\/Date(-62135596800000)\/","MaxSupportedDateTime":"\/Date(253402275599999)\/","AlgorithmType":1,"Eras":[1],"TwoDigitYearMax":2572,"IsReadOnly":true},"DateSeparator":"/","FirstDayOfWeek":1,"CalendarWeekRule":0,"FullDateTimePattern":"d MMMM yyyy H:mm:ss","LongDatePattern":"d MMMM yyyy","LongTimePattern":"H:mm:ss","MonthDayPattern":"dd MMMM","PMDesignator":"PM","RFC1123Pattern":"ddd, dd MMM yyyy HH\u0027:\u0027mm\u0027:\u0027ss \u0027GMT\u0027","ShortDatePattern":"d/M/yyyy","ShortTimePattern":"H:mm","SortableDateTimePattern":"yyyy\u0027-\u0027MM\u0027-\u0027dd\u0027T\u0027HH\u0027:\u0027mm\u0027:\u0027ss","TimeSeparator":":","UniversalSortableDateTimePattern":"yyyy\u0027-\u0027MM\u0027-\u0027dd HH\u0027:\u0027mm\u0027:\u0027ss\u0027Z\u0027","YearMonthPattern":"MMMM yyyy","AbbreviatedDayNames":["อา.","จ.","อ.","พ.","พฤ.","ศ.","ส."],"ShortestDayNames":["อ","จ","อ","พ","พ","ศ","ส"],"DayNames":["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัสบดี","ศุกร์","เสาร์"],"AbbreviatedMonthNames":["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค.",""],"MonthNames":["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม",""],"IsReadOnly":true,"NativeCalendarName":"พุทธศักราช","AbbreviatedMonthGenitiveNames":["ม.ค.","ก.พ.","มี.ค.","เม.ย.","พ.ค.","มิ.ย.","ก.ค.","ส.ค.","ก.ย.","ต.ค.","พ.ย.","ธ.ค.",""],"MonthGenitiveNames":["มกราคม","กุมภาพันธ์","มีนาคม","เมษายน","พฤษภาคม","มิถุนายน","กรกฎาคม","สิงหาคม","กันยายน","ตุลาคม","พฤศจิกายน","ธันวาคม",""]},"eras":[1,"พ.ศ.",null,-543]};//]]>
+</script>
+
+<script src="/ScriptResource.axd?d=3MVE2TaIfmazmowOmjLAGPLfAsfttdcdNzcsQ4P70_CnFbjA3FnhAQ-P4uVVM-zukUDUxFek6CX27SQjkYgnht5PHCQdjoqeUhHKgcrKHIpOteM38Q8A9hNyms4SedQS0&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=y53bG7y-568zswKPwfSSpZG-bliJ5OaJLTqyLxV9IT1G0V6yek2p2F65Zdlm0EoPMqE1znytyJnX9_Ri9voUpDHnPTZCSMx-cLRbdrxEMogIcAgubiGY5YEruqwwlQKSmZw09CYv9a3HBFsewWJNnQ2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=ELV1x8iT7YyrBFLrbSv1d-FJ3pQVKzFCwAJhpoSwsQwMrBp_3EXnvBywO5gPkdKJrU3vt6NddplArUBQ5dbRXgI_j0CF_yLrRaadO8D8_D3EVxx0kDN3J7vauMaIvSO30&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=yccSGhN1y-T0VQ4nt2kgZMCgiMszcR3ho8X-lSHaXkLTlOdoK_WZdaxK3n2xflbv6qY3MwZKS3DwSvHb7Wd0K_7tUwsH5pI079drHVfYT52Ip7kobC1822Q2Wt5pkz3X0&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=NgFJJorKtrF85pmEHiZfVkw4N1pFaSS3zONohl_WS3tM-GwPmA5XxMSJEGLlGJeWAgpJOj-DIzmyhWMpj8ArjjQeyBB2KTCGQ4K6YteWG5_FMLeRwh31M_HI111BYMMXPmOB0-jPXyqTdzLSu6zU9g2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=_fg5C8HUFwdhGhmL3lkPuc1Yhrzhr7maMRT-vgzB1rnzUz-eK12JTNIssJh3yeK4F9jqfjlX4eTXhyIlBpQlUAu1cKWB_WfD43QYvy7XfaqzRqWxaDgPL146xm_EQxZBO3MMf0rIukQhRpeMOv4yyQ2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=xhOqYXzox_gM4W9GEg9E1zFxsYGzw1RfnH3xzLwK0xq3UH6P-A3NSb_4XgEFf1GLsmjTC-ar9rfjKPSLuoCdeIovTbIVgt6qHeF3LNLcwbKjTcfoWgcx6I5CMnA7_IGTtP94mOjHXi6pK_LmFsNIpg2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=d2DzKzWqHab1kgKEzwNFqX7-0huTC6bTIvU4m1vcVi1O7mFkbJWVq7ntntG-1URZGeqQQqBCdRKC9Eo5SaeQfSDopoyaVutwFm-D6Du2If3HLs9vzC4TEwf0JWS01wouiHtDE3jPthtzD9WKecIjuA2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=wuzR0GC6VjFoTaIPcVPf1YegFDpEw6d5d8tGhpRKwInIanhMtkD196nhp6eCTdCUqgDwZ_svKtaOPt3cUMF-kW6zWagNOCFkkJfC_wN6RW5kJ5lbZzvtNAmEJNULwZtHLLssYfdC1_Pio8cA789_LQ2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=gv9asiCkuYbwY_QBj_Cwn9-7PRMAf8TPONs97UicPCDp6G9_9GvQkjbbYf1AvDSMCFf3DPi-tp_C3uv8Y7y87KcYg2tVqjNut0bGOQHcjXDSQBo3Mrjehv_BRsSjWPp6i87rLWjL0-hifqxHqtdBTQ2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<script src="/ScriptResource.axd?d=Jl-OCzFJpDks5cd6ebBdaVuHKH4FMOBz1m3QVZgNKee0Rklrd6yqTiU7SfZWtzssSX6FrnIJwJedvdbTBLFGTwmqmrvfAgNnyWklcG9VDV3EKiVrOG97hWlk5ZrjNbZBOtzEZsD2MtYoqW1DUSlIAQ2&amp;t=ffffffffdd783992" type="text/javascript"></script>
+<div class="aspNetHidden">
+
+	<input type="hidden" name="__VIEWSTATEGENERATOR" id="__VIEWSTATEGENERATOR" value="792DF422" />
+	<input type="hidden" name="__VIEWSTATEENCRYPTED" id="__VIEWSTATEENCRYPTED" value="" />
+	<input type="hidden" name="__EVENTVALIDATION" id="__EVENTVALIDATION" value="Xz8skIA1rdD6CBjU84tXrn/qMOLXhvrYQXdIcmqZ5I/PH5+lU2EJ0+oIhb9oP7+eMQHFeZU5cNBQ9aP3+Fa3KhnqefsKh2op18JKECT7OtOGsV0r7xxGriS1YSHjysCAJXEaCqzMuMqErdwsIlsE0xH1sxtHNW6kWIElcGYbgZ4GJJA2eUZ6hFjjw1xtANG0xZmORyNtL7Yamya7+RUSGg==" />
+</div>	
+    <div class = "page"  style="position:relative">
+
+        <table class = "lo-header">
+			<!--<tr><td colspan="2"><img src="960x150 GRC-01.jpg" alt="work from home by covid-19" width="100%"></td></tr>-->
+			<!--<tr><td colspan="2"><a href="http://goldtraders.or.th/ArticleView.aspx?gp=1&id=1065"><img src="movehead.gif" alt="สมาคมค้าทองคำ ย้าย ที่ทำการ"></a></td></tr>-->
+            <tr>
+                <td class="lo-header-left"><img src="App_Images/HeadGTA_L.jpg" alt=""/></td>
+                <td class="lo-header-right">
+          
+        <div id="Uc_channelA_BannerListView_Uc_banner_0_pBanner_0" style="height:90px;width:600px;">
+	
+    <div id="Uc_channelA_BannerListView_Uc_banner_0_divBanner_0" style="width:600px;height:90px;"><a href='https://www.facebook.com/reel/3095264550680158' target='bank' rel='nofollow' ><img  src='/uploads/banner/HeadGTA-fake-page.jpg' height ='90px' width='600px' /> </a></div>
+    
+
+</div>
+
+    
+
+                </td>
+            </tr>
+        </table>
+        <div class="clear"/>
+        <div class="clear hideSkiplink" >
+            
+            <a href="#NavigationMenu_SkipLink"><img alt="Skip Navigation Links" src="/WebResource.axd?d=q1dk7LuPuwbfa0puKCPSArH010i138zMGlfSc_71CqmYAqXadPaHknFzdHoXFOlfTmZ9ZVWDJNbKAyBRwRuykUCn4IgLW1zPEkVcNI6nvNU1&amp;t=637100574060000000" width="0" height="0" style="border-width:0px;" /></a><div class="menu noDisplay" id="NavigationMenu">
+	<ul class="level1">
+		<li><a class="level1" href="./">หน้าแรก</a></li><li><a class="popout level1">ราคาทองคำ</a><ul class="level2">
+			<li><a class="level2" href="DailyPrices.aspx">ราคาทองประจำวัน</a></li><li><a class="level2" href="UpdatePriceList.aspx">การปรับเปลี่ยนระหว่างวัน</a></li><li><a class="level2" href="AvgPriceList.aspx">ราคาทองคำถัวเฉลี่ย</a></li><li><a class="level2" href="TaxArchiveList.aspx">คำนวณภาษีร้านทอง</a></li><li><a class="level2" href="ChartPrices.aspx">กราฟต่างประเทศ</a></li>
+		</ul></li><li><a class="popout level1">เกี่ยวกับ</a><ul class="level2">
+			<li><a class="popout level2">เกี่ยวกับสมาคม</a><ul class="level3">
+				<li><a class="level3" href="PageView.aspx?page=1">ประวัติสมาคม</a></li><li><a class="level3" href="PageView.aspx?page=2">คณะผู้บริหาร</a></li><li><a class="level3" href="MemberZones.aspx">ทำเนียบสมาชิก</a></li><li><a class="level3" href="PageView.aspx?page=3">การสมัครสมาชิก</a></li><li><a class="level3" href="PageView.aspx?page=9">ข้อบังคับ, คำสั่ง, ประกาศ</a></li><li><a class="level3" href="PageView.aspx?page=10">วันหยุดประจำปี</a></li><li><a class="level3" href="PageView.aspx?page=11">วารสารทองคำ</a></li><li><a class="level3" href="PageView.aspx?page=4">ติดต่อสมาคม</a></li>
+			</ul></li><li><a class="popout level2">เกี่ยวกับทองคำ</a><ul class="level3">
+				<li><a class="level3" href="PageView.aspx?page=6">ประวัติศาสตร์ทองคำ</a></li><li><a class="level3" href="PageView.aspx?page=5">คุณสมบัติและประโยชน์</a></li><li><a class="level3" href="PageView.aspx?page=13">ประเภทของสินค้า</a></li><li><a class="level3" href="PageView.aspx?page=12">ช่องทางตรวจสอบราคา</a></li><li><a class="level3" href="FAQs.aspx">คำถามที่พบบ่อย</a></li>
+			</ul></li>
+		</ul></li><li><a class="popout level1">บทความ</a><ul class="level2">
+			<li><a class="level2" href="ArticleList.aspx?type=1">ข่าวสารกิจกรรมสมาคม</a></li><li><a class="level2" href="ArticleList.aspx?type=2">บทความที่น่าสนใจ</a></li><li><a class="level2" href="ArticleList.aspx?type=3">ข่าวราคาทองคำ</a></li>
+		</ul></li><li><a class="level1" href="https://board.goldtraders.or.th">กระดานสนทนา</a></li><li><a class="level1" href="Downloads.aspx">ดาวน์โหลด</a></li><li><a class="level1" href="goldresearch">รายงานวิจัยทองคำ</a></li><li><a class="level1" href="Magazine">วารสารทองคำ</a></li><li><a class="level1" href="seminars.aspx">สัมมนา-ฝึกอบรม</a></li>
+	</ul>
+</div><a id="NavigationMenu_SkipLink"></a>
+            
+            
+            
+            
+        </div>
+        <div class="clear"/>
+        <div class="codeblock-marquee"><span id="cb_marquee_lblCode"><marquee>                                                                                                                                                     
+<span style="color:#0000CD;">
+
+*** หมายเหตุ : ราคารับซื้อคืนทองรูปพรรณ ตามหลักเกณฑ์ สคบ.กำหนดให้ร้านทองสามารถหักได้ไม่เกิน 5% จากราคาทองคำแท่งรับซื้อในวันนั้น ๆ ทั้งนี้หลักเกณฑ์ดังกล่าวใช้เฉพาะกรณีซื้อ-ขายร้านเดิมเท่านั้น ***    
+    
+ </marquee>
+
+</span></div>
+        
+        <div class="clear"/>
+        <div class = "main" > 
+            <table class = "lo-content">
+                <tr>
+                    <td> 
+                        <div class ="detailpage">
+                            <script type="text/javascript">
+//<![CDATA[
+Sys.WebForms.PageRequestManager._initialize('ctl00$ScriptManager1', 'form1', ['tctl00$DetailPlace$UpdatePriceListUpdatePanel','DetailPlace_UpdatePriceListUpdatePanel'], [], [], 90, 'ctl00');
+//]]>
+</script>
+
+                            
+    <div class ="pagedetail-panel" style="overflow:auto;">
+    <div class="codeblock-panel"><span id="DetailPlace_cb_top_lblCode"><script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"></script>
+<!-- GTA_2020_UpdatePriceList_ทองระหว่างวัน -->
+<ins class="adsbygoogle"
+     style="display:block"
+     data-ad-client="ca-pub-3068236045838527"
+     data-ad-slot="3897346084"
+     data-ad-format="auto"
+     data-full-width-responsive="true"></ins>
+<script>
+     (adsbygoogle = window.adsbygoogle || []).push({});
+</script>
+</span></div>
+	<div id="DetailPlace_UpdatePriceListUpdatePanel">
+	
+		<h3 class ="center">การปรับเปลี่ยนระหว่างวัน</h3>
+        <h5>ประจำวันที่ 
+           <input name="ctl00$DetailPlace$txtDate" type="text" id="DetailPlace_txtDate" disabled="disabled" class="aspNetDisabled" /><input type="image" name="ctl00$DetailPlace$btnDate" id="DetailPlace_btnDate" src="App_Images/Icons/calendar_icon.gif" />
+           
+           <input id="DetailPlace_chkToDate" type="checkbox" name="ctl00$DetailPlace$chkToDate" onclick="javascript:setTimeout(&#39;__doPostBack(\&#39;ctl00$DetailPlace$chkToDate\&#39;,\&#39;\&#39;)&#39;, 0)" /><label for="DetailPlace_chkToDate">ถึงวันที่ </label> 
+           
+           
+           <input type="submit" name="ctl00$DetailPlace$btnSearch" value="ค้นหา" id="DetailPlace_btnSearch" />
+                    
+            
+            </h5>
+            <p>
+            </p>
+            <div>
+		<table cellspacing="2" cellpadding="2" id="DetailPlace_MainGridView" style="color:Black;background-color:LightGoldenrodYellow;border-color:Tan;border-width:3px;border-style:None;font-family:Tahoma,Verdana;font-size:8pt;width:100%;">
+			<tr style="background-color:#EEDC82;font-weight:bold;">
+				<td align="center" colspan="2">ช่วงเวลา</td><td align="center" colspan="2">ทองแท่ง</td><td align="center" colspan="2">ทองรูปพรรณ</td><td align="center" colspan="3"></td>
+			</tr><tr style="background-color:#EEDC82;font-weight:bold;">
+				<th scope="col">เวลา</th><th scope="col">ครั้งที่</th><th scope="col">รับซื้อ (บาท)</th><th scope="col">ขายออก (บาท)</th><th scope="col">รับซื้อ (บาท)</th><th scope="col">ขายออก (บาท)</th><th scope="col">Gold Spot</th><th scope="col">Baht / US$</th><th scope="col">ขึ้น / ลง</th>
+			</tr><tr>
+				<td align="center">16/10/2569 09:03</td><td align="center">1</td><td align="right">65,800.00</td><td align="right">66,000.00</td><td align="right">64,490.64</td><td align="right">66,800.00</td><td align="right">4,155.50</td><td align="right">33.55</td><td align="right">50</td>
+			</tr>
+		</table>
+	</div>
+    
+</div>        
+    </div>
+    
+    
+
+    
+
+                            <br />
+                        </div>
+                        <div class="image-panel" style="width:600px; margin:auto;bottom:0;">
+          
+        <div id="Uc_channelL_BannerListView_Uc_banner_0_pBanner_0" style="height:80px;width:600px;">
+	
+    <div id="Uc_channelL_BannerListView_Uc_banner_0_divBanner_0" style="width:600px;height:80px;"><a href='https://ses7.amlo.go.th/' target='bank' rel='nofollow' ><img  src='/uploads/banner/amlo030221_02.jpg' height ='80px' width='600px' /> </a></div>
+    
+
+</div>
+
+    
+
+                                <img src="App_Images/advertisement.gif" alt=""/>
+                        </div>
+                    </td>
+                    <td class="lo-content-right"><div class="image-panel" style="margin-bottom: 1px;">
+          
+        <div id="Uc_channelM_BannerListView_Uc_banner_0_pBanner_0" style="height:200px;width:190px;">
+	
+    <div id="Uc_channelM_BannerListView_Uc_banner_0_divBanner_0" style="width:190px;height:200px;"><a href='https://shininggold.com/' target='bank' rel='nofollow' ><img  src='/uploads/banner/shininggold_banner_260825.gif' height ='200px' width='190px' /> </a></div>
+    
+
+</div>
+
+    
+        <div style='margin: 6px auto' />  
+        <div id="Uc_channelM_BannerListView_Uc_banner_1_pBanner_1" style="height:200px;width:190px;">
+	
+    <div id="Uc_channelM_BannerListView_Uc_banner_1_divBanner_1" style="width:190px;height:200px;"><a href='https://www.ylgbullion.co.th/th' target='bank' rel='nofollow' ><img  src='/uploads/banner/Banner_YLG_310124.jpg' height ='200px' width='190px' /> </a></div>
+    
+
+</div>
+
+    
+        <div style='margin: 6px auto' />  
+        <div id="Uc_channelM_BannerListView_Uc_banner_2_pBanner_2" style="height:200px;width:190px;">
+	
+    <div id="Uc_channelM_BannerListView_Uc_banner_2_divBanner_2" style="width:190px;height:200px;"><a href='https://nggtrade.com' target='bank' rel='nofollow' ><img  src='/uploads/banner/NGG_Banner011124.gif' height ='200px' width='190px' /> </a></div>
+    
+
+</div>
+
+    
+
+                        <img src="App_Images/advertisement.gif" alt=""/>
+                    </div>
+                    <div>
+                        <iframe style="BORDER-BOTTOM: medium none; BORDER-LEFT: medium none; WIDTH: 190px; HEIGHT: 230px; OVERFLOW: hidden; BORDER-TOP: medium none; BORDER-RIGHT: medium none" src="https://www.facebook.com/plugins/likebox.php?href=http%3A%2F%2Fwww.facebook.com%2Fhome.php%23%21%2Fpages%2Fthxngkha%2F155612041122772&width=190&colorscheme=light&show_faces=true&stream=false&header=false&height=340"></iframe>
+                    </div>
+                    <p style="text-align:center;">
+                        <a target="_blank" href="https://www.facebook.com/goldtraders"><img border="0" alt="" width="38" height="38" src="App_Images/Icons/facebook.gif" /></a>
+                        <a target="_blank" href="https://twitter.com/#!/Goldprice_GTA"><img border="0" alt="" width="38" height="38" src="App_Images/Icons/twitter.png" /></a>
+                        <a target="_blank" href="https://www.youtube.com/user/GoldtradersThailand"><img border="0" alt="" width="38" height="38" src="App_Images/Icons/youtube.png" /></a>
+                        <!--<a target="_blank" href="https://plus.google.com/111007572373771040060"><img border="0" alt="" width="38" height="38" src="App_Images/Icons/googleplus.png" /></a>-->
+                    </p>
+			<div class="codeblock-panel"><span id="cb_leftbottom_lblCode"></span></div>
+                    
+                    
+                        
+                    </td>                    
+                </tr>
+            </table>
+        </div>
+        
+        <div class="footer">
+            <div class="codeblock-panel" style="float:left"><span id="cb_stat1_lblCode"><!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-ZQF1J1ZBXJ"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+
+  gtag('config', 'G-ZQF1J1ZBXJ');
+</script></span></div>
+            <label style ="font-size: 14px; font-style :italic  "> สมาคมค้าทองคำ</label>, เลขที่ 33/124 อาคาร วอลล์สตรีท ทาวเวอร์ ชั้น 24 ห้อง 2404 ถนนสุรวงศ์ แขวงสุริยวงศ์ เขตบางรัก กรุงเทพฯ 10500<br />
+            โทรศัพท์ 0-2020-9000 โทรสาร 0-2020-9099
+            Email: <a href="mailto:contact@goldtraders.or.th">contact@goldtraders.or.th</a> Website: <a href="https://www.goldtraders.or.th">www.goldtraders.or.th</a>
+
+        </div>
+    </div>
+    
+<script type='text/javascript'>new Sys.WebForms.Menu({ element: 'NavigationMenu', disappearAfter: 500, orientation: 'horizontal', tabIndex: 0, disabled: false });</script>
+<script type="text/javascript">
+//<![CDATA[
+Sys.Application.add_init(function() {
+    $create(Sys.Extended.UI.CalendarBehavior, {"button":$get("DetailPlace_btnDate"),"id":"DetailPlace_Calendar1","popupPosition":4,"selectedDate":"Fri, 16 Oct 2026 09:06:59 GMT"}, null, null, $get("DetailPlace_txtDate"));
+});
+//]]>
+</script>
+</form>
+	
+	<script>
+(function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
+(i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
+m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
+})(window,document,'script','//www.google-analytics.com/analytics.js','ga');
+ga('create', 'UA-17986489-1', 'goldtraders.or.th');
+ga('send', 'pageview');
+</script>
+<script type="text/javascript">
+    (function(c,l,a,r,i,t,y){
+        c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+        t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+        y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+    })(window, document, "clarity", "script", "lvfu2hl86m");
+</script>
+</body>
+</html>

@@ -19,6 +19,7 @@ import contextlib
 import json
 import logging
 import re
+import statistics
 import threading
 import time
 import uuid
@@ -53,6 +54,15 @@ USER_AGENT = (
 )
 YAHOO_HOSTS = ("query1.finance.yahoo.com", "query2.finance.yahoo.com")
 GOLD_URL = "https://classic.goldtraders.or.th/"
+WORLD_GOLD = "GOLD:WORLD"  # watch symbol: world spot XAU/USD (the default "gold" is Thai)
+GOLD_UPDATES_URL = "https://classic.goldtraders.or.th/UpdatePriceList.aspx"
+GOLD_API_URL = "https://api.gold-api.com/price/XAU"
+FX_URL = "https://api.frankfurter.dev/v1/latest?base=USD&symbols=THB"
+BAHT_GRAMS = 15.244  # one Thai baht-weight of gold
+TROY_OZ_GRAMS = 31.1035
+THAI_UNIT = "บาทต่อน้ำหนัก 1 บาททองคำ (15.244 กรัม) / THB per 1 baht-weight of gold (15.244 g)"
+WORLD_UNIT = "USD ต่อทรอยออนซ์ (31.1035 กรัม) / USD per troy ounce (31.1035 g)"
+SPOT_DISAGREE_PCT = 1.0
 BKK = ZoneInfo("Asia/Bangkok")
 NY = ZoneInfo("America/New_York")
 
@@ -112,6 +122,13 @@ INDEXES: dict[str, tuple[str, ...]] = {
 }  # fmt: skip
 _TICKER = re.compile(r"^[A-Z0-9][A-Z0-9.\-=^&]{0,14}$")
 _US_INDEXES = {"^GSPC", "^IXIC", "^DJI", "^RUT", "^VIX"}
+WORLD_TARGETS = ("world", "spot", "international", "global", "xau", "xauusd", "สากล", "ทองโลก", "ทองคำโลก", "ทองสากล", "ต่างประเทศ")  # fmt: skip
+
+
+def gold_target(symbol: str) -> str:
+    return "world" if symbol == WORLD_GOLD else "thai"
+
+
 GOLD_WORDS = ("ทอง", "gold", "ทองคำ")
 
 
@@ -159,6 +176,8 @@ def market_kind(symbol: str) -> str:
     s = symbol.upper()
     if s == "GOLD":
         return "gold"
+    if s == WORLD_GOLD:
+        return "global"
     if s.endswith(".BK") or s.startswith("^SET") or s.startswith("^MAI"):
         return "set"
     if "=" in s or "-USD" in s:
@@ -353,7 +372,7 @@ def parse_gold_page(html: str) -> dict:
         "bar_buy": bar_buy,
         "ornament_sell": orn_sell,
         "ornament_tax_base": orn_tax,
-        "unit": "THB per baht-weight (บาทละ)",
+        "unit": THAI_UNIT,
         "purity": "96.5%",
         "announced_at": announced,
         "announced_text": label,
@@ -361,6 +380,99 @@ def parse_gold_page(html: str) -> dict:
         "source": SOURCE_GOLD,
         "url": GOLD_URL,
     }
+
+
+_UPDATE_ROW = re.compile(
+    r"(\d{1,2})/(\d{1,2})/(\d{4})\s+(\d{1,2}):(\d{2})\s+(\d+)\s+"
+    + r"\s+".join([_PRICE] * 6)
+    + r"\s+([+\-\u2212]?\s*[\d,]+(?:\.\d+)?)"
+)
+
+
+def parse_gold_updates(html: str) -> dict:
+    """The newest row of the association's intraday-changes page (UpdatePriceList.aspx): bar and
+    ornament prices, the "Gold Spot" (USD/oz) and "Baht / US$" the association used, and the
+    change versus the previous announcement. Raises MarketError when there is no row."""
+    text = " ".join(_TAGS.sub(" ", html or "").replace("&nbsp;", " ").replace("\xa0", " ").split())
+    best = None
+    for m in _UPDATE_ROW.finditer(text):
+        d, mo, y, hh, mi, rnd = (int(m.group(i)) for i in range(1, 7))
+        y = y - 543 if y > 2400 else y
+        try:
+            at = datetime(y, mo, d, hh, mi, tzinfo=BKK)
+        except ValueError:
+            continue
+        if best is None or at > best[0]:
+            best = (at, rnd, m)
+    if best is None:
+        raise MarketError("gold updates not found")
+    at, rnd, m = best
+    v = [_num(m.group(i).replace(",", "")) for i in range(7, 13)]
+    chg = _num(m.group(13).replace(",", "").replace("\u2212", "-").replace(" ", ""))
+    return {
+        "announced_at": at.isoformat(timespec="minutes"),
+        "round": rnd,
+        "bar_buy": v[0], "bar_sell": v[1], "ornament_buy": v[2], "ornament_sell": v[3],
+        "spot_usd_oz": v[4], "usd_thb": v[5],
+        "change_baht": chg,
+    }  # fmt: skip
+
+
+def parse_gold_api(payload: str | dict) -> dict:
+    """gold-api.com /price/XAU: spot USD per troy ounce and when it was updated (UTC)."""
+    try:
+        d = json.loads(payload) if isinstance(payload, str) else payload
+        price = _num(d["price"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise MarketError("unexpected payload") from e
+    if price is None or price <= 0 or str(d.get("symbol", "XAU")).upper() != "XAU":
+        raise MarketError("unexpected payload")
+    if str(d.get("currency", "USD")).upper() != "USD":
+        raise MarketError("unexpected payload")
+    at = ""
+    try:
+        at = datetime.fromisoformat(str(d["updatedAt"]).replace("Z", "+00:00")).astimezone(UTC)
+        at = at.isoformat(timespec="seconds")
+    except (KeyError, ValueError):
+        at = ""
+    return {"price": price, "updated_at": at}
+
+
+def parse_frankfurter(payload: str | dict) -> dict:
+    try:
+        d = json.loads(payload) if isinstance(payload, str) else payload
+        rate = _num(d["rates"]["THB"])
+    except (ValueError, KeyError, TypeError) as e:
+        raise MarketError("unexpected payload") from e
+    if rate is None or rate <= 0:
+        raise MarketError("unexpected payload")
+    return {"rate": rate, "date": str(d.get("date") or "")}
+
+
+def thb_per_baht_weight(spot_usd_oz: float, usd_thb: float) -> float:
+    """International spot converted to THB per baht-weight of 96.5% gold (no premiums)."""
+    return spot_usd_oz * usd_thb / TROY_OZ_GRAMS * BAHT_GRAMS * 0.965
+
+
+def combine_spots(sources: list[dict]) -> dict:
+    """Median headline and spread over the spot sources that gave a number."""
+    vals = sorted(s["value"] for s in sources)
+    if not vals:
+        return {"spot_usd_oz": None, "spread_pct": None, "disagree": False}
+    med = statistics.median(vals)
+    spread = (vals[-1] - vals[0]) / med * 100 if len(vals) > 1 else 0.0
+    return {
+        "spot_usd_oz": round(med, 2),
+        "spread_pct": round(spread, 2),
+        "disagree": len(vals) > 1 and spread > SPOT_DISAGREE_PCT,
+    }
+
+
+def _bkk(iso: str) -> str:
+    try:
+        return datetime.fromisoformat(iso).astimezone(BKK).strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return iso or "ไม่ระบุเวลา"
 
 
 _SUFFIX = re.compile(r"\s+[-–|]\s+[^-–|]{2,60}$")
@@ -449,7 +561,55 @@ def unavailable(what: str, why: str) -> dict:
     return {"status": "unavailable", "what": what, "reason": why, "hint": UNAVAILABLE_HINT}
 
 
+WEB_STATUSES = ("web_reference", "estimate")
+WEB_AGREE_PCT = 0.5  # web sources within this spread of the median count as agreeing
+
+
+def _src_line(x: dict, lang: str) -> str:
+    miss = x.get("missing") or []
+    link = f" {x['url']}" if x.get("url") else ""
+    note = ""
+    if miss:
+        note = (" [missing: " if lang == "en" else " [ขาด: ") + ", ".join(miss) + "]"
+    return f"{x['name']} {x['value']:,.2f} ({x['as_of']}){link}{note}"
+
+
+def estimate_text(q: dict, lang: str = "th") -> str:
+    """Labelled text for a web-read price. web_reference (sources agree, each with link and time):
+    "ราคาอ้างอิงจาก N แหล่ง (อ่านจากหน้าเว็บ) ..."; estimate (they differ or lack a time/link):
+    "ราคาโดยประมาณ ช่วง A–B ...". Every source is listed with its value, time and link."""
+    cur = q.get("currency") or ""
+    rg = q.get("range") or {}
+    lo, hi = rg.get("low", q["price"]), rg.get("high", q["price"])
+    n = q.get("n_sources", 1)
+    parts = "; ".join(_src_line(x, lang) for x in q.get("sources", []))
+    if q.get("status") == "web_reference":
+        if lang == "en":
+            return (
+                f"Reference price {q['price']:,.2f} {cur} (median) from {n} web source(s), read from "
+                f"web pages, not an official feed: {parts}."
+            )
+        return (
+            f"ราคาอ้างอิงจาก {n} แหล่ง (อ่านจากหน้าเว็บ) {q['price']:,.2f} {cur} (ค่ากลาง) "
+            f"ไม่ใช่ฟีดทางการ: {parts}"
+        )
+    if lang == "en":
+        return (
+            f"Estimate ~{q['price']:,.2f} {cur} (range {lo:,.2f}-{hi:,.2f}) from {n} web source(s), "
+            f"official price unconfirmed: {parts}."
+        )
+    return (
+        f"ราคาโดยประมาณ ~{q['price']:,.2f} {cur} (ช่วง {lo:,.2f}–{hi:,.2f}) จาก {n} แหล่ง "
+        f"ยังยืนยันราคาทางการไม่ได้: {parts}"
+    )
+
+
 SOURCE_GROUNDED = "Google Search (grounded)"
+WEB_NOTE = "อ่านจากหน้าเว็บ ไม่ใช่ฟีดทางการ/เรียลไทม์ / read from web pages, not an official feed"
+ESTIMATE_NOTE = (
+    "ราคาโดยประมาณจากการค้นเว็บ ความแม่นยำต่ำกว่า ยังยืนยันราคาทางการไม่ได้ / estimate from web "
+    "search, lower accuracy, not the official price; say so and give the range and the sources"
+)
 BREAKER_S = 600.0  # Yahoo is skipped this long after a 429
 GROUNDED_POLL_PER_HOUR = 30  # alert polling budget per process
 GROUNDED_ASK_PER_HOUR = 60  # interactive budget per process
@@ -459,8 +619,10 @@ GROUNDED_PROMPT = (
     '{{"symbol": str, "name": str, "price": number, "currency": str, "change": number or null, '
     '"change_pct": number or null, "as_of": "exchange local date and time of the price, e.g. '
     '2026-10-16 10:30 ICT", "source_title": str, "source_url": str}}. '
-    "Use only numbers you actually found on a page; never estimate or calculate a price. If you "
-    "cannot find an item, omit it. Prices may be delayed. Items:\n{items}"
+    "Use only numbers you actually found on a page; never estimate or calculate a price. Give "
+    "several rows per item when several different pages show it (one row per page). If the page "
+    "shows no time, use an empty as_of. If you cannot find an item, omit it. Prices may be "
+    "delayed. Items:\n{items}"
 )
 GROUNDED_HISTORY_PROMPT = (
     "You look up price history on the web with Google Search. Reply with ONLY a JSON array with one "
@@ -548,56 +710,96 @@ class Grounded:
         }
 
     def quotes(self, items: list[tuple[str, str]], kind: str = "ask") -> dict[str, dict]:
-        """items: (key, search label). One search call for all of them. Returns key -> quote
-        result (same shape as Yahoo's, minus the trend) for the items that validated."""
+        """items: (key, search label). One search call for all of them. Returns key -> a web
+        result (never "ok", which is for direct feeds): "web_reference" when every source has a
+        value, name, link and time and they agree within 0.5%, else "estimate" with the range.
+        The median is the headline; a missing time is kept ("ไม่ระบุเวลา"); only an item with no
+        usable number is absent."""
         if not items:
             return {}
         rows, chunks = self._call(
             GROUNDED_PROMPT.format(items="\n".join(f"- {label}" for _, label in items)), kind
         )
-        out: dict[str, dict] = {}
+        by_key: dict[str, list[dict]] = {}
         for row in rows:
-            price, as_of = _num(row.get("price")), str(row.get("as_of") or "").strip()
-            if price is None or price <= 0 or not _DATE.search(as_of):
+            price = _num(row.get("price"))
+            if price is None or price <= 0:
                 continue
-            key = self._match(row, items, out)
-            if key is None:
-                continue
-            chg, pct = _num(row.get("change")), _num(row.get("change_pct"))
-            if pct is None and chg is not None and price - chg:
-                pct = chg / (price - chg) * 100
+            key = self._match(row, items)
+            if key is not None:
+                by_key.setdefault(key, []).append(row)
+        out: dict[str, dict] = {}
+        for key, krows in by_key.items():
+            srcs: list[dict] = []
+            seen: set = set()
+            for row in krows:
+                price = _num(row.get("price"))
+                src = self._src(row, chunks)
+                dedupe = (src["source_url"] or src["source_title"], round(price, 4))
+                if dedupe in seen:
+                    continue
+                seen.add(dedupe)
+                as_of = str(row.get("as_of") or "").strip()
+                srcs.append(
+                    {
+                        "name": src["source_title"] or src["source_url"] or "web",
+                        "url": src["source_url"],
+                        "value": _rd(price),
+                        "as_of": as_of or "ไม่ระบุเวลา",
+                        "time_approximate": not _DATE.search(as_of),
+                        "missing": [
+                            m
+                            for m, bad in (
+                                ("เวลา", not _DATE.search(as_of)),
+                                ("ลิงก์", not src["source_url"]),
+                            )
+                            if bad
+                        ],
+                    }
+                )
+            vals = sorted(x["value"] for x in srcs)
+            med = statistics.median(vals)
+            first = krows[0]
+            chg, pct = _num(first.get("change")), _num(first.get("change_pct"))
+            price0 = _num(first.get("price"))
+            if pct is None and chg is not None and price0 and price0 - chg:
+                pct = chg / (price0 - chg) * 100
+            spread = (vals[-1] - vals[0]) / med * 100 if med else 0.0
+            agree = spread <= WEB_AGREE_PCT and not any(x["missing"] for x in srcs)
             out[key] = {
-                "status": "ok",
-                "symbol": str(row.get("symbol") or key),
-                "name": str(row.get("name") or ""),
-                "price": _rd(price),
-                "previous_close": _rd(price - chg) if chg is not None else None,
+                "status": "web_reference" if agree else "estimate",
+                "symbol": str(first.get("symbol") or key),
+                "name": str(first.get("name") or ""),
+                "price": _rd(med),
+                "range": {"low": vals[0], "high": vals[-1]},
+                "n_sources": len(srcs),
+                "spread_pct": round(spread, 2),
+                "sources": srcs,
+                "previous_close": _rd(price0 - chg) if chg is not None and price0 else None,
                 "change": _rd(chg),
                 "change_pct": _rd(pct, 2),
-                "currency": str(row.get("currency") or ""),
-                "as_of": as_of,
+                "currency": str(first.get("currency") or ""),
+                "as_of": srcs[0]["as_of"],
                 "market_time_utc": "",
                 "source": SOURCE_GROUNDED,
-                "confidence": "web",
-                "note": DELAY_NOTE + "; from a web search, verify before relying on it",
-                **self._src(row, chunks),
+                "confidence": "medium" if agree else "low",
+                "note": WEB_NOTE if agree else ESTIMATE_NOTE,
+                **self._src(first, chunks),
             }
+            out[key]["estimate_text"] = estimate_text(out[key])
         return out
 
     @staticmethod
-    def _match(row: dict, items, taken: dict) -> str | None:
+    def _match(row: dict, items) -> str | None:
         sym = re.sub(r"[^A-Z0-9]", "", str(row.get("symbol") or "").upper())
         name = str(row.get("name") or "").casefold()
         for key, label in items:
-            if key in taken:
-                continue
             k = re.sub(r"[^A-Z0-9]", "", key.upper().removesuffix(".BK"))
             if sym and (sym == k or sym == re.sub(r"[^A-Z0-9]", "", key.upper())):
                 return key
             if name and label.casefold() in name:
                 return key
-        free = [k for k, _ in items if k not in taken]
-        return free[0] if len(items) == 1 and free else None
+        return items[0][0] if len(items) == 1 else None
 
     def history(self, label: str, rng: str) -> dict | None:
         rows, chunks = self._call(
@@ -605,7 +807,7 @@ class Grounded:
         )
         for row in rows:
             vals = [_num(row.get(k)) for k in ("start", "end", "high", "low")]
-            if any(v is None or v <= 0 for v in vals) or not str(row.get("as_of") or "").strip():
+            if any(v is None or v <= 0 for v in vals):
                 continue
             start, end, high, low = vals
             pct = _num(row.get("change_pct"))
@@ -614,12 +816,108 @@ class Grounded:
                 "range": rng, "from": str(row.get("from") or ""), "to": str(row.get("to") or ""),
                 "start": start, "end": end, "high": high, "low": low,
                 "change_pct": _rd(pct if pct is not None else (end - start) / start * 100, 2),
-                "currency": str(row.get("currency") or ""), "as_of": str(row["as_of"]),
-                "source": SOURCE_GROUNDED, "confidence": "web",
-                "note": DELAY_NOTE + "; from a web search, verify before relying on it",
+                "currency": str(row.get("currency") or ""), "as_of": str(row.get("as_of") or "").strip() or "ไม่ระบุเวลา",
+                "source": SOURCE_GROUNDED, "confidence": "low", "note": ESTIMATE_NOTE,
                 **self._src(row, chunks),
             }  # fmt: skip
         return None
+
+
+GROUNDED_LABELS = {
+    "XAU_SPOT": "gold SPOT price XAU/USD in USD per troy ounce (spot, NOT futures)",
+    "TH_GOLD_BAR": "Thai gold bar 96.5% selling price (ทองคำแท่ง ขายออก) in THB per baht-weight "
+    "(15.244 g), from the Gold Traders Association or Thai gold shops",
+}
+
+
+def gold_summary(g: dict, lang: str = "th") -> str:
+    """Ready text with every unit spelled out, Thai section first, world section second."""
+    en = lang == "en"
+    th, w = g["thai"], g["world"]
+    L: list[str] = []
+    if th.get("status") == "ok":
+        when = _bkk(th["announced_at"]) if th.get("announced_at") else "-"
+        rnd = f" (ครั้งที่ {th['round']})" if th.get("round") else ""
+        c = th.get("change")
+        chg = ""
+        if c and c.get("baht") is not None:
+            chg = (
+                f"; change {c['baht']:+,.0f} THB vs previous announcement ({c['direction']})"
+                if en
+                else f"; {c['direction']} {abs(c['baht']):,.0f} บาท จากประกาศครั้งก่อน"
+            )
+        orn = f"{th['ornament_buy']:,.2f}" if th.get("ornament_buy") else "-"
+        if en:
+            L.append(
+                f"THAI GOLD (Gold Traders Association, 96.5%, THB per 1 baht-weight = 15.244 g), "
+                f"announced {when} Bangkok time{rnd}: gold bar buy {th['bar_buy']:,.0f} / sell "
+                f"{th['bar_sell']:,.0f}; ornament buy (tax base) {orn} / sell "
+                f"{th['ornament_sell'] or 0:,.0f}{chg}."
+            )
+        else:
+            L.append(
+                f"ราคาทองไทย (สมาคมค้าทองคำ ทอง 96.5% หน่วยบาทต่อน้ำหนัก 1 บาททองคำ = 15.244 กรัม) "
+                f"ประกาศ {when} น. เวลาไทย{rnd}: ทองคำแท่ง รับซื้อ {th['bar_buy']:,.0f} / ขายออก "
+                f"{th['bar_sell']:,.0f} บาท; ทองรูปพรรณ รับซื้อ (ฐานภาษี) {orn} / ขายออก "
+                f"{th['ornament_sell'] or 0:,.0f} บาท{chg}."
+            )
+    elif th.get("status") in WEB_STATUSES:
+        est = {**th, "price": th["bar_sell"], "currency": "THB per baht-weight"}
+        L.append(
+            ("Thai gold bar sell (96.5%): " if en else "ทองคำแท่ง 96.5% ขายออก: ")
+            + estimate_text(est, lang)
+        )
+    else:
+        L.append("Thai gold: unavailable." if en else "ราคาทองไทย: ดึงข้อมูลไม่ได้ตอนนี้")
+    wl: list[str] = []
+    if w.get("spot_usd_oz"):
+        srcs = "; ".join(f"{x['name']} {x['value']:,.2f} ({_bkk(x['as_of']) if x['as_of'][:2] == '20' else x['as_of']})" for x in w["spot_sources"])  # fmt: skip
+        if w.get("spot_basis") in WEB_STATUSES:
+            est = {"status": w["spot_basis"], "price": w["spot_usd_oz"], "range": w["spot_range"],
+                   "n_sources": len(w["spot_sources"]), "sources": w["spot_sources"],
+                   "currency": "USD per troy ounce (spot)"}  # fmt: skip
+            wl.append(estimate_text(est, lang))
+        else:
+            head = "Spot XAU/USD" if en else "ราคาสปอต XAU/USD"
+            wl.append(f"{head} {w['spot_usd_oz']:,.2f} USD per troy ounce"
+                      + ("" if en else " (ดอลลาร์สหรัฐต่อทรอยออนซ์)") + f": {srcs}")  # fmt: skip
+            if len(w["spot_sources"]) > 1:
+                wl.append(
+                    f"(median of {len(w['spot_sources'])} sources, spread {w['spread_pct']:.2f}%)"
+                    if en
+                    else f"(ค่ากลางจาก {len(w['spot_sources'])} แหล่ง ต่างกัน {w['spread_pct']:.2f}%)"
+                )
+            if w.get("disagree"):
+                wl.append(
+                    "Sources differ by more than 1%, treat with caution."
+                    if en
+                    else "แหล่งข้อมูลต่างกันเกิน 1% ใช้ด้วยความระมัดระวัง"
+                )
+    if w.get("futures_usd_oz"):
+        wl.append(
+            f"Futures (COMEX GC=F, not spot) {w['futures_usd_oz']:,.2f} USD per troy ounce"
+            f" as of {_bkk(w['futures_as_of'])} Bangkok" if en else
+            f"ฟิวเจอร์ส (COMEX GC=F ไม่ใช่สปอต) {w['futures_usd_oz']:,.2f} ดอลลาร์สหรัฐต่อทรอยออนซ์ "
+            f"ณ {_bkk(w['futures_as_of'])} น. เวลาไทย"
+        )  # fmt: skip
+    if wl:
+        L.append(("INTERNATIONAL GOLD: " if en else "ราคาทองสากล: ") + " ".join(wl))
+    else:
+        L.append("International gold: unavailable." if en else "ราคาทองสากล: ดึงข้อมูลไม่ได้ตอนนี้")
+    cv = g.get("conversion")
+    if cv and cv.get("status") in ("ok", "estimate"):
+        L.append(
+            f"Conversion: {cv['spot_usd_oz']:,.2f} USD/oz × {cv['usd_thb']:.2f} THB/USD "
+            f"({cv['usd_thb_source']}) ÷ 31.1035 × 15.244 × 0.965 = about "
+            f"{cv['thb_per_baht_weight_96_5']:,} THB per baht-weight (96.5%); the Thai "
+            "association price includes premiums/margins so it differs."
+            if en
+            else f"คำนวณจากสปอต: {cv['spot_usd_oz']:,.2f} ดอลลาร์/ออนซ์ × {cv['usd_thb']:.2f} บาท/ดอลลาร์ "
+            f"({cv['usd_thb_source']}) ÷ 31.1035 × 15.244 × 0.965 = ประมาณ "
+            f"{cv['thb_per_baht_weight_96_5']:,} บาทต่อน้ำหนัก 1 บาททองคำ (96.5%) "
+            "ราคาสมาคมค้าทองคำรวมพรีเมียม/ส่วนต่าง จึงต่างจากตัวเลขนี้"
+        )
+    return "\n".join(L)
 
 
 class MarketData:
@@ -777,22 +1075,202 @@ class MarketData:
                 return {**res, "input": symbol}
         return {**unavailable(symbol, str(last)), "input": symbol}
 
-    def thai_gold(self) -> dict:
+    def _updates(self) -> dict | None:
         try:
-            return self._cached(
-                "gold:th", QUOTE_TTL_S, lambda: parse_gold_page(self._get(GOLD_URL))
-            )  # type: ignore[return-value]
-        except MarketError as e:
-            return unavailable("thai gold", str(e))
+            return self._cached(  # type: ignore[return-value]
+                "gold:upd", QUOTE_TTL_S, lambda: parse_gold_updates(self._get(GOLD_UPDATES_URL))
+            )
+        except MarketError:
+            return None
 
-    def gold(self) -> dict:
-        world, fx = self.quotes(["GC=F", "THB=X"])
-        return {
-            "thai_gold": self.thai_gold(),
-            "world_gold_usd_per_oz": world,
-            "usd_thb": fx,
-            "note": "Thai prices are the association announcement; world gold is a futures quote.",
+    def thai_gold(self) -> dict:
+        """Thai gold (96.5%) from the association: the main page, joined with the newest row of its
+        intraday-changes page (Gold Spot, baht rate, change vs the previous announcement)."""
+        why = ""
+        try:
+            main: dict | None = self._cached(
+                "gold:th", QUOTE_TTL_S, lambda: parse_gold_page(self._get(GOLD_URL))
+            )  # type: ignore[assignment]
+        except MarketError as e:
+            main, why = None, str(e)
+        upd = self._updates()
+        if main is None and upd is None:
+            return unavailable("thai gold", why or "no data")
+        if main is None or (upd and upd["announced_at"] > main.get("announced_at", "")):
+            base = {
+                "status": "ok", "unit": THAI_UNIT, "purity": "96.5%", "source": SOURCE_GOLD,
+                "url": GOLD_UPDATES_URL, "ornament_tax_base": upd["ornament_buy"],  # type: ignore[index]
+                **{k: upd[k] for k in ("bar_buy", "bar_sell", "ornament_buy", "ornament_sell")},  # type: ignore[index]
+                "announced_at": upd["announced_at"], "round": upd["round"],  # type: ignore[index]
+            }  # fmt: skip
+        else:
+            base = {**main, "ornament_buy": main.get("ornament_tax_base")}
+        base["unit"] = THAI_UNIT
+        if upd and upd["announced_at"] == base.get("announced_at"):
+            c = upd["change_baht"]
+            base["change"] = {
+                "baht": c,
+                "direction": "ขึ้น" if c and c > 0 else "ลง" if c and c < 0 else "เท่าเดิม",
+                "unit": "บาท ต่อน้ำหนัก 1 บาททองคำ เทียบกับประกาศครั้งก่อน",
+            }
+            base["gta_spot_usd_oz"] = upd["spot_usd_oz"]
+            base["gta_usd_thb"] = upd["usd_thb"]
+        else:
+            base["change"] = None
+            base["gta_spot_usd_oz"] = base["gta_usd_thb"] = None
+        return base
+
+    def _gold_api(self) -> dict | None:
+        try:
+            return self._cached(  # type: ignore[return-value]
+                "gold:api", QUOTE_TTL_S, lambda: parse_gold_api(self._get(GOLD_API_URL))
+            )
+        except MarketError:
+            return None
+
+    def _frankfurter(self) -> dict | None:
+        try:
+            return self._cached(  # type: ignore[return-value]
+                "fx:ecb", 3600.0, lambda: parse_frankfurter(self._get(FX_URL))
+            )
+        except MarketError:
+            return None
+
+    def _futures(self) -> dict | None:
+        """COMEX GC=F from Yahoo only (never the grounded fallback: futures must not be mixed in)."""
+        try:
+            q = _quote_result(self._chart("GC=F", "5d", "1d"))
+        except MarketError:
+            return None
+        return {"value": q["price"], "as_of": q.get("market_time_utc") or ""}
+
+    def _grounded_one(self, key: str, label: str) -> dict | None:
+        if self.grounded is None:
+            return None
+        hit = self._peek(f"g:{key}")
+        if hit is not None:
+            return hit or None
+        try:
+            res = self.grounded.quotes([(key, label)]).get(key)
+        except MarketError as e:
+            logger.info("grounded %s failed: %s", key, e)
+            res = None
+        self._put(f"g:{key}", QUOTE_TTL_S if res else FAIL_TTL_S, res or {})
+        return res
+
+    def _spot_sources(self, thai: dict) -> list[dict]:
+        """Exact spot XAU/USD sources that answered, each with its own value and time."""
+        sources: list[dict] = []
+        if thai.get("status") == "ok" and thai.get("gta_spot_usd_oz"):
+            sources.append(
+                {"name": "Spot (อ้างอิงจากสมาคมค้าทองคำ)", "value": thai["gta_spot_usd_oz"],
+                 "as_of": thai["announced_at"], "kind": "spot", "url": GOLD_UPDATES_URL}
+            )  # fmt: skip
+        api = self._gold_api()
+        if api:
+            sources.append(
+                {"name": "Spot gold-api.com (XAU/USD)", "value": api["price"],
+                 "as_of": api["updated_at"], "kind": "spot", "url": GOLD_API_URL}
+            )  # fmt: skip
+        return sources
+
+    def world_spot(self) -> dict:
+        """World spot for alerts: median of the exact sources only (no web estimates)."""
+        sources = self._spot_sources(self.thai_gold())
+        c = combine_spots(sources)
+        if not sources:
+            return unavailable("world gold spot", "no spot source")
+        return {"status": "ok", **c, "sources": sources}
+
+    def gold(self, compare: bool = False) -> dict:
+        """Thai gold and international gold, kept apart. Exact sources first; a labelled estimate
+        from web search only when no exact source has the number."""
+        thai = self.thai_gold()
+        thai_est = None
+        if thai.get("status") != "ok":
+            thai_est = self._grounded_one("TH_GOLD_BAR", GROUNDED_LABELS["TH_GOLD_BAR"])
+            thai = (
+                {
+                    "status": thai_est["status"],
+                    "unit": THAI_UNIT,
+                    "purity": "96.5%",
+                    "bar_sell": thai_est["price"],
+                    "range": thai_est["range"],
+                    "n_sources": thai_est["n_sources"],
+                    "sources": thai_est["sources"],
+                    "confidence": thai_est["confidence"],
+                    "note": thai_est["note"],
+                    "estimate_text": estimate_text(thai_est),
+                    "bar_buy": None,
+                    "ornament_buy": None,
+                    "ornament_sell": None,
+                    "announced_at": "",
+                    "round": None,
+                    "change": None,
+                }  # fmt: skip
+                if thai_est
+                else thai
+            )
+        sources = self._spot_sources(thai)
+        fut = self._futures()
+        world: dict = {
+            "unit": WORLD_UNIT,
+            "spot_sources": sources,
+            "futures_usd_oz": fut["value"] if fut else None,
+            "futures_as_of": fut["as_of"] if fut else "",
+            "futures_label": "Futures (COMEX GC=F) — ไม่ใช่ราคา Spot / not spot",
         }
+        world.update(combine_spots(sources))
+        world["spot_basis"] = "exact" if sources else None
+        if not sources:
+            est = self._grounded_one("XAU_SPOT", GROUNDED_LABELS["XAU_SPOT"])
+            if est:
+                world.update(
+                    spot_usd_oz=est["price"], spot_basis=est["status"], spot_range=est["range"],
+                    spot_sources=[
+                        {**x, "kind": "web", "name": f"{x['name']} (จากการค้นเว็บ ความแม่นยำต่ำกว่า)"}
+                        for x in est["sources"]
+                    ],
+                    spot_estimate_text=estimate_text({**est, "currency": "USD"}),
+                    confidence=est["confidence"],
+                )  # fmt: skip
+        out: dict = {
+            "status": "ok" if thai.get("status") != "unavailable" or world["spot_usd_oz"] or fut
+            else "unavailable",
+            "thai": thai,
+            "world": world,
+            "rule": "Never mix Thai (THB per baht-weight, 96.5%) and world (USD per troy ounce) "
+            "numbers in one figure; always state unit, source and time for each.",
+        }  # fmt: skip
+        if compare:
+            out["conversion"] = self._conversion(thai, world)
+        out["summary"] = gold_summary(out, "th")
+        out["summary_en"] = gold_summary(out, "en")
+        return out
+
+    def _conversion(self, thai: dict, world: dict) -> dict:
+        spot = world.get("spot_usd_oz")
+        fx, fx_src, fx_at = (
+            thai.get("gta_usd_thb"),
+            "สมาคมค้าทองคำ (Baht / US$)",
+            thai.get("announced_at", ""),
+        )
+        if not fx:
+            f = self._frankfurter()
+            if f:
+                fx, fx_src, fx_at = f["rate"], "Frankfurter (ECB)", f["date"]
+        if not spot or not fx:
+            return {"status": "unavailable", "reason": "need spot and USD/THB"}
+        v = thb_per_baht_weight(spot, fx)
+        return {
+            "status": "ok" if world.get("spot_basis") == "exact" else "estimate",
+            "thb_per_baht_weight_96_5": round(v),
+            "formula": "spot_usd_per_oz × usd_thb ÷ 31.1035 × 15.244 × 0.965",
+            "spot_usd_oz": spot, "usd_thb": fx, "usd_thb_source": fx_src, "usd_thb_as_of": fx_at,
+            "note": "ราคาคำนวณจากสปอตสากลล้วนๆ ราคาของสมาคมค้าทองคำรวมพรีเมียม/ส่วนต่างของตลาดไทย "
+            "จึงต่างจากตัวเลขนี้ / The Thai association price also includes premiums and margins, "
+            "so it differs from this figure.",
+        }  # fmt: skip
 
     def news(self, query: str = "", topic: str = "", lang: str = "th", limit: int = 5) -> dict:
         lang = "en" if str(lang).casefold().startswith("en") else "th"
@@ -915,12 +1393,12 @@ class GoldBaseline:
     def __init__(self, docs):
         self.docs = docs
 
-    def pct(self, guild_id: int, price: float, day: str) -> float | None:
-        d = self.docs.get(STATE, guild_id, "gold") or {}
+    def pct(self, guild_id: int, price: float, day: str, key: str = "gold") -> float | None:
+        d = self.docs.get(STATE, guild_id, key) or {}
         if d.get("day") != day:
             d = {"day": day, "base": d.get("last") or price, "last": price}
         d["last"] = price
-        self.docs.put(STATE, guild_id, "gold", d)
+        self.docs.put(STATE, guild_id, key, d)
         base = d["base"]
         return (price - base) / base * 100 if base else None
 
@@ -938,7 +1416,7 @@ class Poller:
 
     @staticmethod
     def _snap(q: dict) -> tuple | None:
-        if q.get("status") != "ok":
+        if q.get("status") not in ("ok", *WEB_STATUSES):
             return None
         return (
             q["price"], q["change_pct"], q["currency"],
@@ -952,6 +1430,12 @@ class Poller:
             if g.get("status") != "ok":
                 return None
             return g["bar_sell"], None, "THB/บาททอง", g.get("announced_at", ""), SOURCE_GOLD
+        if symbol == WORLD_GOLD:
+            w = self.data.world_spot()
+            if w.get("status") != "ok":
+                return None
+            at = max((x["as_of"] for x in w["sources"]), default="")
+            return w["spot_usd_oz"], None, "USD/troy oz (spot)", at, "Spot XAU/USD (median)"
         return self._snap(self.data.quote(symbol))
 
     def due(self, guild_ids: list[int], now: datetime) -> list[Alert]:
@@ -972,7 +1456,7 @@ class Poller:
             if t0 - self._last.get(sym, -1e9) < every:
                 continue
             self._last[sym] = t0
-            if sym == "gold":
+            if sym in ("gold", WORLD_GOLD):
                 snaps[sym] = self.snapshot(sym)
             else:
                 quote_syms.append(sym)
@@ -990,8 +1474,8 @@ class Poller:
                 if snap is None:
                     continue
                 price, pct, cur, as_of, src = snap
-                if w.symbol == "gold" and price is not None:
-                    pct = self.baseline.pct(gid, price, today)
+                if w.symbol in ("gold", WORLD_GOLD) and price is not None:
+                    pct = self.baseline.pct(gid, price, today, w.symbol.lower().replace(":", "_"))
                 if triggered(w.condition, w.threshold, price, pct):
                     self.repo.mark_fired(gid, w, today)
                     out.append(Alert(gid, w.user_id, w, price, pct, cur, as_of, src))
@@ -1098,9 +1582,12 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
         """Latest price of stocks, indexes, FX or commodities, from Yahoo Finance (delayed about
         15-20 minutes). Use for "ราคาหุ้น PTT", "SET วันนี้", "NVDA เท่าไหร่", "S&P 500", "Nikkei",
         "ค่าเงินบาท". Returns price, previous close, change %, currency, market time and a
-        5-day trend per symbol. Never state a price that this tool did not return; if a symbol
-        is `unavailable`, say so. In the answer give the source and time, and add a short "not
-        investment advice" once.
+        5-day trend per symbol. Never state a price that this tool did not return. status "ok" is a
+        direct Yahoo feed (give source and time). status "web_reference" (sources agree) or
+        "estimate" (they differ) came from web pages: say "ราคาอ้างอิงจาก N แหล่ง (อ่านจากหน้าเว็บ)"
+        or "ราคาโดยประมาณ ช่วง A-B", list each source with value, time and link (`sources`), and
+        that it is not an official feed. Only `unavailable` means you cannot get it. Add a short
+        "not investment advice" once.
 
         Args:
             symbols: one or several names or tickers separated by commas: Thai names (ปตท, กสิกร),
@@ -1126,14 +1613,22 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
         """
         return ctx.data.history(symbol, range, market)
 
-    def gold_price() -> dict:
-        """Today's gold prices: Thai gold bar and ornament 96.5% (buy/sell per baht-weight,
-        announcement time and round) from the Gold Traders Association, plus world gold in
-        USD/oz and USD/THB from Yahoo Finance. Use for "ราคาทองวันนี้", "gold price". Give the
-        source and the announcement time; never invent a figure; if a part is `unavailable`, say
-        so. Add a short "not investment advice" once.
+    def gold_price(compare: bool = False) -> dict:
+        """Today's gold prices in TWO separate parts: `thai` (Gold Traders Association, 96.5%,
+        THB per baht-weight = 15.244 g: bar and ornament buy/sell, announcement time and round,
+        change vs previous announcement) and `world` (spot XAU/USD in USD per troy ounce from
+        several sources with median and spread; COMEX futures kept apart). Use for "ราคาทองวันนี้",
+        "gold price", "ทองสากลเท่าไหร่". `summary` / `summary_en` are ready texts with all units.
+        Never mix Thai and world numbers in one figure; always say unit, source and time. A part
+        with status "web_reference" or "estimate" came from web pages: say "ราคาอ้างอิงจาก N แหล่ง
+        (อ่านจากหน้าเว็บ)" or "ราคาโดยประมาณ ช่วง A-B", list each source with value, time and link. Only if a part is `unavailable` say
+        you cannot get it. Add a short "not investment advice" once.
+
+        Args:
+            compare: true when the user asks to compare Thai vs world or to convert the world
+                price to baht-weight; adds `conversion` (with the FX rate and its source).
         """
-        return ctx.data.gold()
+        return ctx.data.gold(bool(compare))
 
     def news(query: str = "", topic: str = "", lang: str = "th", max: int = 5) -> dict:  # noqa: A002
         """Latest news headlines from Google News: title, source, time and link (no article
@@ -1151,7 +1646,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
         return ctx.data.news(query, topic, lang, max)
 
     def market_watch(
-        action: str, symbol: str = "", condition: str = "", value: float = 0.0
+        action: str, symbol: str = "", condition: str = "", value: float = 0.0, target: str = ""
     ) -> dict:
         """Price alerts for the asker. "แจ้งเตือนถ้า PTT ต่ำกว่า 30" -> add, PTT, below, 30.
         "ทองขึ้นเกิน 1% บอกด้วย" -> add, gold, up_pct, 1. Salid checks during market hours and
@@ -1159,8 +1654,11 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
 
         Args:
             action: "add", "remove" or "list".
-            symbol: ticker or name (PTT, ปตท, AAPL, SET) or "gold" for the Thai gold bar sell
-                price (the % is measured against the previous day's last announcement).
+            symbol: ticker or name (PTT, ปตท, AAPL, SET) or "gold" for gold (see target).
+            target: for gold only: "thai" (default, Thai speakers: the Thai gold bar sell price in
+                THB per baht-weight, % against the previous day's last announcement) or "world"
+                (international spot XAU/USD in USD per troy ounce). Ask which if unclear; it is
+                stored with the alert.
             condition: for add: "above" / "below" (price) or "up_pct" / "down_pct" / "move_pct"
                 (change in percent versus the previous close, either direction for move_pct).
             value: the price or the percent.
@@ -1170,15 +1668,32 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
         if act == "list":
             return {
                 "watches": [
-                    {"id": w.id, "label": w.label, "condition": w.condition, "value": w.threshold}
+                    {
+                        "id": w.id,
+                        "label": w.label,
+                        "condition": w.condition,
+                        "value": w.threshold,
+                        "target": gold_target(w.symbol),
+                    }  # fmt: skip
                     for w in ctx.repo.of_user(gid, uid)
                 ]
             }
         raw = (symbol or "").strip()
         if not raw:
             return {"status": "error", "error": "symbol_required"}
-        if raw.casefold() in GOLD_WORDS or raw in ("ทองแท่ง", "ทองคำแท่ง"):
-            sym, label = "gold", "ทองคำแท่ง 96.5% (สมาคม)"
+        world = (
+            str(target or "").strip().casefold() in WORLD_TARGETS or raw.casefold() in WORLD_TARGETS
+        )
+        if (
+            raw.casefold() in GOLD_WORDS
+            or raw in ("ทองแท่ง", "ทองคำแท่ง")
+            or (world and not raw.isascii())
+            or raw.casefold() in WORLD_TARGETS
+        ):
+            if world:
+                sym, label = WORLD_GOLD, "ทองคำสากล Spot XAU/USD (USD ต่อทรอยออนซ์)"
+            else:
+                sym, label = "gold", "ทองคำแท่ง 96.5% (สมาคม) ขายออก (บาทต่อ 1 บาททองคำ)"
         else:
             cands = candidates(raw)
             if not cands:
@@ -1212,6 +1727,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
         return {
             "status": "ok",
             "watching": label,
+            "target": gold_target(sym) if sym in ("gold", WORLD_GOLD) else None,
             "condition": cond,
             "value": v,
             "checked": "SET 10:00-16:30 / US hours / gold 09:00-17:30, once per day per condition",
@@ -1287,6 +1803,18 @@ MARKETS_PROMPT = (
     "เท่านั้น ห้ามเดาหรือใช้ตัวเลขจากความจำเด็ดขาด. ถ้าเครื่องมือคืน unavailable ให้บอกตรงๆ ว่าตอนนี้ดึงข้อมูลไม่ได้ "
     "(เสนอค้นให้ทางเว็บด้วย read_web ถ้ามี). ทุกคำตอบเรื่องราคาต้องบอกแหล่งที่มาและเวลา (ราคาหุ้นอาจล่าช้า 15-20 นาที) "
     "และปิดท้ายสั้นๆ ว่า “ไม่ใช่คำแนะนำการลงทุน” เพียงครั้งเดียวต่อคำตอบ; ห้ามชี้นำให้ซื้อ/ขาย. "
+    "ที่มาของตัวเลข: status ok = ฟีดตรงจากแหล่งนั้น (บอกชื่อแหล่งและเวลา); web_reference = ราคาอ้างอิงจาก N แหล่ง "
+    "(อ่านจากหน้าเว็บ) ที่ตรงกันใน±0.5%; estimate = ราคาโดยประมาณ ช่วง A–B ที่แหล่งต่างกันหรือขาดเวลา/ลิงก์ "
+    "ต้องบอกว่ายังยืนยันราคาทางการไม่ได้ และลิสต์ทุกแหล่งพร้อมค่า เวลา ลิงก์ (สั้นๆ); ห้ามเรียกว่า “ราคาทางการ”; "
+    "มีแค่ unavailable เท่านั้นที่ตอบว่าดึงราคาไม่ได้. "
+    "ราคาทอง: gold_price แยกสองส่วนเสมอ ห้ามปนกันในตัวเลขเดียว — (A) ราคาทองไทย สมาคมค้าทองคำ ทอง 96.5% หน่วย "
+    "บาทต่อน้ำหนัก 1 บาททองคำ (15.244 กรัม) ทองคำแท่งรับซื้อ/ขายออก ทองรูปพรรณ รับซื้อ(ฐานภาษี)/ขายออก พร้อมวันเวลา(เวลาไทย) "
+    "ครั้งที่ และขึ้น/ลงกี่บาท; (B) ราคาทองสากล Spot XAU/USD หน่วยดอลลาร์สหรัฐต่อทรอยออนซ์ (31.1035 กรัม) บอกแต่ละแหล่ง ค่า เวลา "
+    "ถ้ามีหลายแหล่งให้ค่ากลางและบอกส่วนต่าง ถ้าต่างเกิน 1% ให้บอกตรงๆ; ฟิวเจอร์ส (COMEX GC=F) ให้ติดป้ายว่า Futures แยกจาก Spot. "
+    "ทุกตัวเลขต้องมี หน่วย + แหล่ง + เวลา. ถามเป็นไทย (“ราคาทองวันนี้”) → ตอบทองไทยก่อน แล้วทองสากล; ถามเป็นอังกฤษ "
+    "(“gold price”) → ทองสากลก่อน แล้วทองไทย. เทียบ/แปลงราคาสากลเป็นบาททอง → เรียก gold_price(compare=true) แล้วแสดงสูตร "
+    "อัตราแลกเปลี่ยนและแหล่งของมัน พร้อมบอกว่าราคาสมาคมรวมพรีเมียม/ส่วนต่างจึงต่างกัน; ไม่ถามก็ไม่ต้องแสดงการแปลง. "
+    "แจ้งเตือนราคาทอง: ถามผู้ใช้ว่าจะให้ดูราคาทองไทย (ทองแท่งขายออก, ค่าเริ่มต้นสำหรับคนไทย) หรือสปอตสากล แล้วส่ง target=thai/world. "
     "ข่าว: ให้หัวข้อ แหล่ง เวลา ลิงก์ ถ้าต้องสรุปเนื้อข่าวให้เรียก read_web กับลิงก์นั้น. "
     "ตั้งแจ้งเตือนราคา (“แจ้งเตือนถ้า PTT ต่ำกว่า 30”, “ทองขึ้นเกิน 1% บอกด้วย”) ด้วย market_watch; "
     "“ส่งราคาทองทุกเช้า”/“brief me on markets” ใช้ market_brief; "

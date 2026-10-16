@@ -48,7 +48,10 @@ def routes(**extra) -> dict:
         "%5ESET.BK": fx("yahoo_set.json"),
         "GC%3DF": fx("yahoo_gold.json"),
         "THB%3DX": fx("yahoo_thb.json"),
+        "UpdatePriceList": fx("goldtraders_updates.html"),
         "goldtraders": fx("goldtraders_classic.html"),
+        "gold-api.com": fx("gold_api_xau.json"),
+        "frankfurter": fx("frankfurter_usd_thb.json"),
         "news.google.com": fx("google_news_ptt.xml"),
         "AAPL": fx("yahoo_ptt_bk.json").replace("PTT.BK", "AAPL").replace('"THB"', '"USD"'),
     }
@@ -206,17 +209,171 @@ def test_gold_parse_fails_cleanly_on_other_html():
         mk.parse_gold_page("")
 
 
-def test_gold_price_returns_thai_and_world_and_degrades_per_part(clock):
+def test_gold_updates_page_has_spot_baht_rate_and_change():
+    u = mk.parse_gold_updates(fx("goldtraders_updates.html"))
+    assert u["announced_at"] == "2026-10-16T09:03+07:00" and u["round"] == 1
+    assert (u["bar_buy"], u["bar_sell"]) == (65800.0, 66000.0)
+    assert (u["ornament_buy"], u["ornament_sell"]) == (64490.64, 66800.0)
+    assert u["spot_usd_oz"] == 4155.5 and u["usd_thb"] == 33.55 and u["change_baht"] == 50.0
+    with pytest.raises(mk.MarketError):
+        mk.parse_gold_updates("<html>nothing</html>")
+    down = fx("goldtraders_updates.html").replace(">50<", ">-100<").replace(" 50 ", " -100 ")
+    assert mk.parse_gold_updates(down)["change_baht"] == -100.0
+
+
+def test_gold_api_parsing():
+    g = mk.parse_gold_api(fx("gold_api_xau.json"))
+    assert g["price"] == 4163.100098 and g["updated_at"] == "2026-10-16T02:29:17+00:00"
+    for bad in ('{"price": 0, "symbol": "XAU"}', "{}", "nope", '{"price": 5, "symbol": "XAG"}'):
+        with pytest.raises(mk.MarketError):
+            mk.parse_gold_api(bad)
+
+
+def test_median_spread_and_disagreement():
+    one = mk.combine_spots([{"value": 4000.0}])
+    assert one == {"spot_usd_oz": 4000.0, "spread_pct": 0.0, "disagree": False}
+    two = mk.combine_spots([{"value": 4155.5}, {"value": 4163.1}])
+    assert two["spot_usd_oz"] == 4159.3 and two["spread_pct"] == 0.18 and not two["disagree"]
+    far = mk.combine_spots([{"value": 4000.0}, {"value": 4100.0}])
+    assert far["disagree"] and far["spread_pct"] == 2.47
+
+
+def test_conversion_math_worked_example():
+    # 4,159.30 USD/oz x 33.55 THB/USD = 139,540.5 THB/oz; / 31.1035 g = 4,486.2 THB/g;
+    # x 15.244 g = 68,388 THB per baht-weight of pure gold; x 0.965 = 65,998 (96.5%)
+    assert round(mk.thb_per_baht_weight(4159.30, 33.55)) == 65998
+
+
+def test_gold_price_has_separate_thai_and_world_sections(clock):
     g = mk.MarketData(get=Net(routes()), clock=clock).gold()
-    assert g["thai_gold"]["bar_sell"] == 66000.0
-    assert g["world_gold_usd_per_oz"]["price"] == 4170.0 and g["usd_thb"]["price"] == 32.45
+    th, w = g["thai"], g["world"]
+    assert th["status"] == "ok" and "15.244" in th["unit"] and th["purity"] == "96.5%"
+    assert (th["bar_buy"], th["bar_sell"]) == (65800.0, 66000.0)
+    assert (th["ornament_buy"], th["ornament_sell"]) == (64490.64, 66800.0)
+    assert th["announced_at"] == "2026-10-16T09:03+07:00" and th["round"] == 1
+    assert th["change"]["baht"] == 50.0 and th["change"]["direction"] == "ขึ้น"
+    names = [x["name"] for x in w["spot_sources"]]
+    assert names == ["Spot (อ้างอิงจากสมาคมค้าทองคำ)", "Spot gold-api.com (XAU/USD)"]
+    assert [x["value"] for x in w["spot_sources"]] == [4155.5, 4163.100098]
+    assert w["spot_usd_oz"] == 4159.3 and w["spot_basis"] == "exact" and not w["disagree"]
+    assert (
+        w["futures_usd_oz"] == 4170.0 and "Futures" in w["futures_label"]
+    )  # never in the spot list
+    assert 4170.0 not in [x["value"] for x in w["spot_sources"]]
+    assert "conversion" not in g
+
+
+def test_gold_summary_states_units_sources_and_times(clock):
+    g = mk.MarketData(get=Net(routes()), clock=clock).gold()
+    th, en = g["summary"], g["summary_en"]
+    for needle in ("บาทต่อน้ำหนัก 1 บาททองคำ", "15.244 กรัม", "96.5%", "16/10/2026 09:03", "ครั้งที่ 1",
+                   "65,800", "66,000", "ฐานภาษี", "ขึ้น 50 บาท", "USD per troy ounce", "ฟิวเจอร์ส (COMEX GC=F",
+                   "ไม่ใช่สปอต", "4,159.30"):  # fmt: skip
+        assert needle in th, needle
+    assert th.index("ราคาทองไทย") < th.index("ราคาทองสากล")
+    for needle in ("THB per 1 baht-weight = 15.244 g", "Bangkok time", "USD per troy ounce",
+                   "median of 2 sources", "Futures (COMEX GC=F, not spot)"):  # fmt: skip
+        assert needle in en, needle
+
+
+def test_spot_sources_disagreeing_over_one_percent_are_called_out(clock):
+    far = json.dumps(
+        {"price": 4300.0, "symbol": "XAU", "currency": "USD", "updatedAt": "2026-10-16T02:29:17Z"}
+    )
+    g = mk.MarketData(get=Net(routes(**{"gold-api.com": far})), clock=clock).gold()
+    assert g["world"]["disagree"] and "ต่างกันเกิน 1%" in g["summary"]
+    assert "4,300.00" in g["summary"] and "4,155.50" in g["summary"]  # each source shown
+
+
+def test_conversion_only_when_asked_with_fx_source(clock):
+    d = mk.MarketData(get=Net(routes()), clock=clock)
+    c = d.gold(compare=True)["conversion"]
+    assert c["status"] == "ok" and c["thb_per_baht_weight_96_5"] == 65998
+    assert c["usd_thb"] == 33.55 and "สมาคม" in c["usd_thb_source"] and "×" in c["formula"]
+    assert "พรีเมียม" in c["note"] and "premiums" in c["note"]
+    assert (
+        "65,998" in d.gold(compare=True)["summary"] and "พรีเมียม" in d.gold(compare=True)["summary"]
+    )
+    # without the association's baht rate, Frankfurter (ECB) is the FX source
+    only_api = routes(**{"UpdatePriceList": mk.MarketError("http 500")})
+    c2 = mk.MarketData(get=Net(only_api), clock=Clock()).gold(compare=True)["conversion"]
+    assert c2["usd_thb"] == 33.54 and "Frankfurter" in c2["usd_thb_source"]
+
+
+def test_gold_degrades_per_part(clock):
     half = mk.MarketData(
-        get=Net(routes(goldtraders=mk.MarketError("http 500"))), clock=clock
+        get=Net(
+            routes(goldtraders=mk.MarketError("http 500"), UpdatePriceList=mk.MarketError("x"))
+        ),
+        clock=clock,
     ).gold()
-    assert half["thai_gold"]["status"] == "unavailable"
-    assert half["world_gold_usd_per_oz"]["status"] == "ok"
-    none = mk.MarketData(get=Net(routes(goldtraders="<html>changed</html>")), clock=clock).gold()
-    assert none["thai_gold"]["status"] == "unavailable"
+    assert half["thai"]["status"] == "unavailable" and "ดึงข้อมูลไม่ได้" in half["summary"]
+    assert half["world"]["spot_sources"][0]["name"].startswith("Spot gold-api")
+    # the updates page alone still gives the Thai prices
+    only_upd = mk.MarketData(get=Net(routes(goldtraders=mk.MarketError("x"))), clock=Clock()).gold()
+    assert only_upd["thai"]["bar_sell"] == 66000.0
+    nothing = mk.MarketData(
+        get=Net({"x": "y", "yahoo": mk.MarketError("http 500")}), clock=Clock()
+    ).gold()
+    assert nothing["status"] == "unavailable" and nothing["world"]["spot_usd_oz"] is None
+
+
+def wgq(symbol, price, as_of="2026-10-16 10:30 ICT", url="https://a.example/x", title="A", **kw):
+    return gq(symbol, price, as_of=as_of, source_url=url, source_title=title, currency="USD", **kw)
+
+
+def test_three_tiers_for_a_stock_quote(clock):
+    # tier 1: direct Yahoo feed
+    assert mk.MarketData(get=Net(routes()), clock=clock).quote("PTT.BK")["status"] == "ok"
+    # tier 2: web sources with value, name, link and time that agree within 0.5%
+    agree = [
+        gq("PTT.BK", 30.5, source_title="SET", source_url="https://set.or.th/x"),
+        gq("PTT.BK", 30.55, source_title="Settrade", source_url="https://settrade.com/y"),
+    ]
+    d, _ = blocked_data(clock, GClient(json.dumps(agree)))
+    q = d.quote("PTT.BK")
+    assert q["status"] == "web_reference" and q["price"] == 30.525 and q["n_sources"] == 2
+    assert q["confidence"] == "medium" and {x["url"] for x in q["sources"]} == {
+        "https://set.or.th/x", "https://settrade.com/y"}  # fmt: skip
+    assert "ราคาอ้างอิงจาก 2 แหล่ง (อ่านจากหน้าเว็บ)" in q["estimate_text"]
+    assert "https://set.or.th/x" in q["estimate_text"] and "2026-10-16 10:30" in q["estimate_text"]
+    # tier 3: sources differ (> 0.5%) or lack a time -> range, low confidence
+    differ = [
+        gq("PTT.BK", 30.0),
+        gq("PTT.BK", 31.0, source_url="https://b.example/z", source_title="B"),
+    ]
+    q = blocked_data(Clock(), GClient(json.dumps(differ)))[0].quote("PTT.BK")
+    assert q["status"] == "estimate" and q["range"] == {"low": 30.0, "high": 31.0}
+    assert q["price"] == 30.5 and q["confidence"] == "low"
+    assert "ราคาโดยประมาณ" in q["estimate_text"] and "ช่วง 30.00–31.00" in q["estimate_text"]
+    no_time = blocked_data(Clock(), GClient(json.dumps([gq("PTT.BK", 30.5, as_of="")])))[0].quote(
+        "PTT.BK"
+    )
+    assert no_time["status"] == "estimate" and no_time["sources"][0]["as_of"] == "ไม่ระบุเวลา"
+    assert no_time["sources"][0]["missing"] == ["เวลา"] and "ขาด: เวลา" in no_time["estimate_text"]
+    # tier 4: nothing usable
+    for bad in ("[]", "no idea", json.dumps([gq("PTT.BK", price="n/a")])):
+        assert blocked_data(Clock(), GClient(bad))[0].quote("PTT.BK")["status"] == "unavailable"
+
+
+def test_gold_tiers_when_exact_sources_are_missing(clock):
+    # no gold-api, no association spot: world spot from web pages (two agreeing sources)
+    web = [wgq("XAU", 4160.0), wgq("XAU", 4162.0, url="https://b.example/g", title="B")]
+    thai = [gq("TH_GOLD_BAR", 66000.0, currency="THB"), gq("TH_GOLD_BAR", 66500.0, currency="THB", source_url="https://c.example/t", source_title="C")]  # fmt: skip
+    client = GClient(json.dumps(thai), json.dumps(web))  # Thai is asked first
+    net = Net({"yahoo": mk.MarketError("http 429"), "gold-api.com": mk.MarketError("x"),
+               "goldtraders": mk.MarketError("x")})  # fmt: skip
+    d = mk.MarketData(get=net, clock=clock, grounded=mk.Grounded(client, "m", clock))
+    g = d.gold()
+    w, th = g["world"], g["thai"]
+    assert w["spot_basis"] == "web_reference" and w["spot_usd_oz"] == 4161.0
+    assert "จากการค้นเว็บ ความแม่นยำต่ำกว่า" in w["spot_sources"][0]["name"]
+    assert w["futures_usd_oz"] is None  # futures are never filled from web search
+    assert (
+        th["status"] == "estimate" and th["bar_sell"] == 66250.0 and th["range"]["high"] == 66500.0
+    )
+    assert "ราคาโดยประมาณ" in g["summary"] and "ราคาอ้างอิงจาก 2 แหล่ง" in g["summary"]
+    assert "https://c.example/t" in g["summary"]
 
 
 # ------------------------------------------------------------------ news
@@ -451,7 +608,8 @@ def test_agent_tools_wrap_the_data_layer(docs, data):
     q = tool(c, "stock_quote")("PTT, ปตท, S&P 500")
     assert [x["status"] for x in q["quotes"]][0] == "ok" and len(q["quotes"]) == 3
     assert tool(c, "stock_quote")("")["status"] == "error"
-    assert tool(c, "gold_price")()["thai_gold"]["status"] == "ok"
+    assert tool(c, "gold_price")()["thai"]["status"] == "ok"
+    assert "conversion" in tool(c, "gold_price")(True)
     n = tool(c, "news")("ปตท", "", "th", 2)
     assert n["status"] == "ok" and len(n["items"]) == 2
     assert tool(c, "stock_history")("PTT.BK", "1y")["range"] == "1y"
@@ -595,8 +753,9 @@ def test_yahoo_429_falls_back_to_one_grounded_call_and_trips_the_breaker(clock):
     assert cfg.temperature == 0.0 and cfg.tools[0].google_search is not None
     assert "delayed" in client.calls[0][1] and "never estimate" in client.calls[0][1]
     a, b = res
-    assert a["status"] == "ok" and a["price"] == 30.5 and a["source"] == "Google Search (grounded)"
-    assert a["confidence"] == "web" and a["source_url"] == "https://set.or.th/x"
+    assert a["status"] == "web_reference" and a["price"] == 30.5
+    assert a["source"] == "Google Search (grounded)"
+    assert a["confidence"] == "medium" and a["source_url"] == "https://set.or.th/x"
     assert a["change_pct"] == round(-0.25 / 30.75 * 100, 2) and a["as_of"].startswith("2026-10-16")
     assert b["price"] == 4170.5 and b["currency"] == "USD"
     n = len(net.urls)
@@ -630,7 +789,6 @@ def test_grounded_result_is_cached_for_a_minute(clock):
 @pytest.mark.parametrize(
     "bad",
     [
-        json.dumps([gq("PTT.BK", as_of="")]),  # no time
         json.dumps([gq("PTT.BK", price=None)]),  # no number
         json.dumps([gq("PTT.BK", price="n/a")]),
         json.dumps([gq("PTT.BK", price=-3)]),
@@ -679,11 +837,12 @@ def test_history_and_world_gold_fall_back_too(clock):
     client = GClient(json.dumps([hist]), json.dumps([gq("GC=F", 4170.5), gq("THB=X", 32.4)]))
     d, _ = blocked_data(clock, client, {"goldtraders": fx("goldtraders_classic.html")})
     h = d.history("PTT.BK", "1mo")
-    assert h["status"] == "ok" and h["change_pct"] == 10.0 and h["confidence"] == "web"
+    assert h["status"] == "ok" and h["change_pct"] == 10.0 and h["confidence"] == "low"
     g = d.gold()
-    assert g["world_gold_usd_per_oz"]["price"] == 4170.5 and g["usd_thb"]["price"] == 32.4
-    assert g["thai_gold"]["status"] == "ok"
-    bad = blocked_data(clock, GClient(json.dumps([{**hist, "as_of": ""}])))[0]
+    assert g["thai"]["status"] == "ok"  # the association page is still reachable
+    # Yahoo is blocked: no futures (never filled from the web), spot comes from gold-api absent -> web
+    assert g["world"]["futures_usd_oz"] is None
+    bad = blocked_data(clock, GClient(json.dumps([{**hist, "end": None}])))[0]
     assert bad.history("PTT.BK")["status"] == "unavailable"
 
 
@@ -710,3 +869,20 @@ def test_poller_batches_grounded_symbols_and_alerts_from_them(docs, clock):
     assert sorted(a.watch.id for a in fired) == ["a", "b"] and len(client.calls) == 1
     assert fired[0].source == "Google Search (grounded)"
     assert "Google Search (grounded)" in mk.format_alert(fired[0], "th")
+
+
+def test_gold_alert_target_thai_default_or_world_spot(docs, data, clock):
+    c = ctx_for(docs, data)
+    watch = tool(c, "market_watch")
+    th = watch("add", "gold", "above", 65000)
+    assert th["status"] == "ok" and th["target"] == "thai"
+    wd = watch("add", "gold", "above", 4000, "world")
+    assert wd["target"] == "world" and "XAU/USD" in wd["watching"]
+    assert {w["target"] for w in watch("list")["watches"]} == {"thai", "world"}
+    syms = {w.symbol for w in mk.WatchRepo(docs).of_user(GUILD, STAFF)}
+    assert syms == {"gold", mk.WORLD_GOLD}
+    repo, poller = make_poller(docs, data, clock)
+    fired = poller.due([GUILD], FRI_10AM)
+    by = {a.watch.symbol: a for a in fired}
+    assert by["gold"].price == 66000.0 and by["gold"].currency == "THB/บาททอง"
+    assert by[mk.WORLD_GOLD].price == 4159.3 and "USD" in by[mk.WORLD_GOLD].currency
