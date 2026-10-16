@@ -220,6 +220,7 @@ class Settings(BaseSettings):
     auto_join_min_humans: int = 1
     auto_join_delay_seconds: float = 0.0
     auto_join_cooldown_minutes: int = 10  # no auto-join where someone told Salid to leave
+    voice_connect_timeout_seconds: float = 20.0  # a voice handshake that hangs is abandoned
     # Email (salid.email_out): Gmail sends only when all three are set (refresh token = secret)
     gmail_client_id: str = ""
     gmail_client_secret: str = ""

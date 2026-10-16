@@ -95,6 +95,9 @@ SPEAK_TIMEOUT_PAD_S = 10.0
 ACK_TEXT = {"th": "ได้เลยค่ะ แป๊บนึงนะคะ", "en": "Sure, one sec!"}
 
 END_REASONS = ("command", "declined", "empty", "timeout", "disconnected", "shutdown", "preempted")
+JOIN_FAIL_LIMIT = 3  # failed joins for one channel ...
+JOIN_FAIL_WINDOW_S = 120.0  # ... within this window stop auto-join for ...
+JOIN_BACKOFF_S = 300.0  # ... this long (a manual join still works)
 BLOCK_AFTER_FAILURE_S = 300.0  # no auto-rejoin this soon after a timeout / lost connection
 
 # ------------------------------------------------------------------ text triggers
@@ -681,6 +684,8 @@ class MeetingManager:
             tuple[int, int], float
         ] = {}  # channel -> no auto-join until (monotonic)
         self._auto_tasks: dict[tuple[int, int], asyncio.Task] = {}
+        self._locks: dict[int, asyncio.Lock] = {}  # one join / resume at a time per guild
+        self._failures: dict[tuple[int, int], list[float]] = {}
         self._bg: set[asyncio.Task] = set()
         self._now = time.monotonic
         self._sleep = asyncio.sleep
@@ -727,10 +732,55 @@ class MeetingManager:
         return hguild, hchan
 
     async def _connect(self, body: VoiceBody, channel):
-        _, hchan = self._body_channel(body, channel.guild, channel)
+        hguild, hchan = self._body_channel(body, channel.guild, channel)
         if hchan is None:
             raise RuntimeError(f"voice body {body.index} cannot see channel {channel.id}")
-        return await hchan.connect(cls=voice_recv.VoiceRecvClient)
+        key = (channel.guild.id, channel.id)
+        old = getattr(hguild, "voice_client", None)
+        if old is not None:
+            here = getattr(getattr(old, "channel", None), "id", None) == hchan.id
+            if _connected(old) and here and key not in self.sessions:
+                logger.info("voice client reused for channel %s", channel.id)
+                return old
+            await self._drop_vc(old, "stale voice client")
+        timeout = float(getattr(self.bot.s, "voice_connect_timeout_seconds", 20.0) or 20.0)
+        try:
+            return await asyncio.wait_for(hchan.connect(cls=voice_recv.VoiceRecvClient), timeout)
+        except Exception as e:
+            logger.warning("voice connect to %s failed (%s)", channel.id, type(e).__name__)
+            # never leave a half-open voice client behind: the next attempt would fail with
+            # "Already connected to a voice channel"
+            leftover = getattr(hguild, "voice_client", None)
+            if leftover is not None:
+                await self._drop_vc(leftover, "failed connect")
+            raise
+
+    @staticmethod
+    async def _drop_vc(vc, why: str) -> None:
+        try:
+            await vc.disconnect(force=True)
+        except Exception:
+            logger.warning("could not disconnect the %s", why, exc_info=True)
+
+    def _join_lock(self, guild_id: int) -> asyncio.Lock:
+        return self._locks.setdefault(guild_id, asyncio.Lock())
+
+    def _note_join_result(self, key: tuple[int, int], ok: bool) -> None:
+        """3 failed joins for one channel within 2 minutes: log once, no auto-join for 5 minutes."""
+        if ok:
+            self._failures.pop(key, None)
+            return
+        now = self._now()
+        recent = [x for x in self._failures.get(key, []) if now - x < JOIN_FAIL_WINDOW_S]
+        recent.append(now)
+        self._failures[key] = recent
+        if len(recent) >= JOIN_FAIL_LIMIT:
+            logger.error(
+                "voice join failed %d times in %d s for channel %s: no auto-join for %d s",
+                len(recent), JOIN_FAIL_WINDOW_S, key[1], JOIN_BACKOFF_S,
+            )  # fmt: skip
+            self._failures.pop(key, None)
+            self._cooldown[key] = now + JOIN_BACKOFF_S
 
     async def _post(self, session: MeetingSession, text: str, files=None):
         """Post to the meeting's text chat (else the fallback channel); the sent message or None."""
@@ -1103,6 +1153,7 @@ class MeetingManager:
         on_end=None,
         meeting_id: str | None = None,
         origin: str | None = None,
+        _locked: bool = False,
     ) -> str:
         guild = member.guild
         if not self.bot.team.enabled(guild.id, "voice_meetings"):
@@ -1115,15 +1166,17 @@ class MeetingManager:
         origin = origin or ("scheduled" if meeting_id else "command")
         if origin == "command":
             self._cooldown.pop(key, None)  # an explicit request always overrides the cooldown
-        existing = self.sessions.get(key)
-        if existing is not None:
-            return t("meet_already", lang, channel=existing.voice_channel.name)
-        if key in self._joining:
-            return t("meet_already", lang, channel=t("meet_joining", lang))
-        # Reserve the channel before the first await so two commands cannot both join it.
-        self._joining.add(key)
+        # One join at a time per guild: a second request waits, then sees the session (or not).
+        lock = self._join_lock(guild.id)
+        held = not _locked
+        if held:
+            await lock.acquire()
         reserved: tuple[int, int] | None = None
         try:
+            existing = self.sessions.get(key)
+            if existing is not None:
+                return t("meet_already", lang, channel=existing.voice_channel.name)
+            self._joining.add(key)
             body, why = await self._claim_body(guild, channel, origin, bool(meeting_id), lang)
             if body is None:
                 return why
@@ -1141,7 +1194,9 @@ class MeetingManager:
                 vc = await self._connect(body, channel)
             except Exception:
                 logger.exception("could not join voice channel %s", channel.id)
+                self._note_join_result(key, False)
                 return t("meet_connect_failed", lang)
+            self._note_join_result(key, True)
             if empty_grace is None:
                 empty_grace = float(getattr(self.bot.s, "leave_empty_seconds", 30.0))
             loop = asyncio.get_running_loop()
@@ -1160,6 +1215,8 @@ class MeetingManager:
             self._joining.discard(key)
             if reserved is not None:
                 self._reserved.discard(reserved)
+            if held:
+                lock.release()
         try:
             vc.listen(MeetingSink(session))
         except Exception:
@@ -1357,15 +1414,19 @@ class MeetingManager:
         starter = SimpleNamespace(
             id=0, guild=guild, voice=SimpleNamespace(channel=ch), display_name="Salid"
         )
-        await self.join(
-            starter,
-            lang=lang
-            if lang in ("th", "en")
-            else resolve_lang(self.bot.team.current(guild.id).default_language),
-            announce="meet_announce_auto",
-            first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
-            origin="auto",
-        )
+        async with self._join_lock(guild.id):
+            if not self._auto_wanted(ch):  # the resume path / another join got there first
+                return
+            await self.join(
+                starter,
+                lang=lang
+                if lang in ("th", "en")
+                else resolve_lang(self.bot.team.current(guild.id).default_language),
+                announce="meet_announce_auto",
+                first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
+                origin="auto",
+                _locked=True,
+            )
 
     def _voice_channels(self, guild) -> list:
         return [*getattr(guild, "voice_channels", ()), *getattr(guild, "stage_channels", ())]
@@ -1477,8 +1538,15 @@ class MeetingManager:
             await self._unpersist((gid, int(rec["voice_channel_id"])))
             return
         key = (gid, channel.id)
-        if key in self.sessions or key in self._joining:
+        if key in self.sessions:
             return
+        async with self._join_lock(gid):
+            if key in self.sessions:  # a join got in first
+                return
+            await self._resume_locked(rec, guild, channel)
+
+    async def _resume_locked(self, rec: dict, guild, channel) -> None:
+        gid, key = guild.id, (guild.id, channel.id)
         started_at = datetime.fromisoformat(rec["started_at"])
         text_ch = guild.get_channel(rec["text_channel_id"]) if rec.get("text_channel_id") else None
         humans = self._humans(channel)
@@ -1502,8 +1570,10 @@ class MeetingManager:
             self._reserved.add((gid, body.index))
             try:
                 vc = await self._connect(body, channel)
+                self._note_join_result(key, True)
             except Exception:
                 logger.exception("could not rejoin voice channel %s", channel.id)
+                self._note_join_result(key, False)
             finally:
                 self._joining.discard(key)
                 self._reserved.discard((gid, body.index))
