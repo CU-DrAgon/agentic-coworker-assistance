@@ -270,6 +270,19 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
 - `MemoryService.delete_guild(guild_id)` wipes a guild's memory; the bot does not call it on removal because it
   keeps every other guild record too (retention expires the data).
 
+**Slide decks (สไลด์นำเสนอ).** Ask Salid for a presentation ("@Salid ทำสไลด์สรุปค่าใช้จ่ายเดือนนี้", "make a
+5-slide pitch for our new menu", "ทำสไลด์สรุปประชุมเมื่อวาน") and it replies with an editable PowerPoint file
+(`.pptx`). The chat agent gathers what it needs with its usual tools (ledger, team memory), then calls the
+`create_deck` tool with a structured outline (`salid/deck.py`): a title slide is added automatically, then up to 12
+slides of four kinds (section, bullets, two columns, chart) with speaker notes. Chart slides are data-bound: the
+outline names a query (spending by category, vendor, submitter or day for a date range) and code fills the numbers
+from the ledger with the asker's scope (non-executives see only their own receipts), so the model never types
+numbers into a chart; charts are native and editable. One 16:9 theme, Thai text in the complex-script font slot
+(Leelawadee UI), fixed strings in the reply language. Decks are built in memory, attached to the reply (with a
+text-only fallback when the bot cannot attach files) and never stored; at most 2 MB. Offered only for normal text
+answers (not voice or unprompted join-mode answers), behind the per-guild feature flag `decks` (hub toggle
+"สไลด์นำเสนอ"). `uv run python scripts/salid_sample_deck.py /tmp/deck.pptx` renders a sample Thai deck offline.
+
 Discord setup (once, by the operator):
 
 1. Create an application and bot at the Discord Developer Portal (name it **Salid**); copy the bot token.

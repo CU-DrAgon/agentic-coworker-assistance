@@ -179,3 +179,39 @@ def test_live_memory_store_queries():
         for name in names.values():
             for snap in client.collection(name).stream():
                 snap.reference.delete()
+
+
+def test_live_deck_request(tmp_path):
+    """Real Gemini builds a spending deck through create_deck (also proves Gemini accepts the
+    tool's nested schema). Local throwaway SQLite ledger only; nothing is posted or stored."""
+    from pptx import Presentation
+
+    from salid.models import Receipt
+    from salid.qa import ask
+    from salid.store import SQLiteStore
+
+    store = SQLiteStore(str(tmp_path / "ledger.db"))
+    for n, (vendor, day, total, cat) in enumerate(
+        [("Makro", "2026-10-03", 4200.0, "วัตถุดิบ"), ("Grab", "2026-10-05", 350.0, "ค่าเดินทาง")]
+    ):
+        store.add_receipt(
+            Receipt(
+                guild_id=GUILD, submitter_id=1, submitter_name="Exec", sha256=f"live-deck-{n}",
+                vendor=vendor, receipt_date=day, effective_date=day, total=total, category=cat,
+                confidence=0.95, created_at=day,
+            )
+        )  # fmt: skip
+    ans = ask(
+        Settings.from_env(),
+        store,
+        "ทำสไลด์สรุปค่าใช้จ่ายเดือนตุลาคม 2026 แยกตามหมวด",
+        guild_id=GUILD,
+        is_exec=True,
+        user_id=1,
+        deck=True,
+    )
+    print(ans.text, ans.tool_calls)
+    [(name, data)] = ans.files
+    prs = Presentation(io.BytesIO(data))
+    assert name.endswith(".pptx") and len(prs.slides) >= 2
+    assert any(s.has_chart for slide in prs.slides for s in slide.shapes)
