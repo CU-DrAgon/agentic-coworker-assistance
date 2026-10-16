@@ -181,11 +181,18 @@ class PlacesMixin:
                 len(res.offers),
                 message.guild.id,
             )
-            lang = resolve_lang(self.team.current(message.guild.id).default_language, text)
+            gid = message.guild.id
+            own = self._profile_of(gid, message.author.id).language
+            lang = resolve_lang(own or self.team.current(gid).default_language, text)
             for c in res.offers:  # asked once; nothing is stored until the person says yes
                 with contextlib.suppress(discord.HTTPException):
                     await message.author.send(
-                        t("place_offer_dm", lang, name=c.name or "บ้าน", address=c.address)
+                        t(
+                            "place_offer_dm",
+                            lang,
+                            name=c.name or ("Home" if lang == "en" else "บ้าน"),
+                            address=c.address,
+                        )
                     )
         except Exception:
             logger.warning("places learn failed", exc_info=True)

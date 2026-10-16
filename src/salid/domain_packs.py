@@ -424,13 +424,14 @@ def pick_packs(text: str, limit: int = MAX_PACKS) -> list[str]:
 
 def pack_text(p: Pack, lang: str = "th") -> str:
     """The full pack as text (for the user: 'what do you know about restaurants?')."""
+    en = lang == "en"
     lines = [f"{pack_name(p, lang)}: {p.about}"]
-    lines.append("คำศัพท์: " + "; ".join(p.vocab))
-    lines.append("งานที่พบบ่อย: " + "; ".join(p.tasks))
+    lines.append(("Vocabulary: " if en else "คำศัพท์: ") + "; ".join(p.vocab))
+    lines.append(("Common tasks: " if en else "งานที่พบบ่อย: ") + "; ".join(p.tasks))
     lines.append("KPI: " + ", ".join(p.kpis))
-    lines.append("เครื่องมือที่ช่วยได้: " + ", ".join(p.hints))
+    lines.append(("Helpful tools: " if en else "เครื่องมือที่ช่วยได้: ") + ", ".join(p.hints))
     if p.caution:
-        lines.append("ข้อควรระวัง: " + p.caution)
+        lines.append(("Caution: " if en else "ข้อควรระวัง: ") + p.caution)
     return "\n".join(lines)
 
 

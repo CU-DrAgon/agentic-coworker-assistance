@@ -42,6 +42,7 @@ from .tasks import TaskRepo, TaskTracker, due_for_followup
 logger = logging.getLogger(__name__)
 
 REPORT_CHANNEL_NAME = "รายงานจากสลิด"
+REPORT_CHANNEL_NAME_EN = "reports-from-salid"  # in guilds whose default language is English
 COO_TICK_S = 30.0
 FOLLOWUP_WINDOW = timedelta(hours=3)  # sent when due and the bot is up within this time
 REPORT_WINDOW = timedelta(hours=4)
@@ -280,7 +281,7 @@ class CooMixin:
         owner = pick_owner(hits, self._ranks(guild))
         if not owner or owner == member.id:
             return {"error": "no owner could be determined for the withheld information"}
-        owner_lang = resolve_lang(self.team.current(guild.id).default_language)
+        owner_lang = self._person_lang(guild.id, owner)
         doc, created = self.disclosures.request(
             guild_id=guild.id,
             owner_id=owner,
@@ -356,7 +357,11 @@ class CooMixin:
                 await self.deliver_to_person(
                     guild,
                     asker,
-                    t("disc_asker_declined", resolve_lang("auto", doc.question), topic=doc.topic),
+                    t(
+                        "disc_asker_declined",
+                        self._person_lang(doc.guild_id, doc.grantee_id, doc.question),
+                        topic=doc.topic,
+                    ),
                 )
         except Exception:
             logger.warning("could not deliver disclosure answer", exc_info=True)
@@ -365,7 +370,7 @@ class CooMixin:
         """Answer the asker by DM with exactly the approved records unlocked."""
         from .qa import ask  # late: qa imports a lot
 
-        lang = resolve_lang("auto", doc.question or doc.topic)
+        lang = self._person_lang(guild.id, asker.id, doc.question or doc.topic)
         await asyncio.to_thread(self.team.current, guild.id)
         memory = await self._memory_tools(SimpleNamespace(guild=None, channel=None), guild, asker)
         q = (
@@ -382,7 +387,7 @@ class CooMixin:
                 guild_id=guild.id,
                 is_exec=self.is_exec_member(asker),
                 user_id=asker.id,
-                language="auto",
+                language=lang,
                 memory=memory,
             )
             text = t("disc_asker_approved", lang, topic=doc.topic) + ans.text
@@ -404,7 +409,7 @@ class CooMixin:
         if not text:
             return False, ""
         marked, only = parse_private_marker(text)
-        lang = resolve_lang("auto", text)
+        lang = self._person_lang(gid, member.id, text)
         uid = member.id
         if only:
             at = getattr(message, "created_at", None) or datetime.now(UTC)
@@ -448,7 +453,9 @@ class CooMixin:
             with contextlib.suppress(discord.HTTPException):
                 # in the member's private channel in a server it is not a DM: say so
                 notice = "dm_notice" if message.guild is None else "dm_notice_room"
-                await message.channel.send(t(notice, resolve_lang("auto", message.content or "")))
+                await message.channel.send(
+                    t(notice, self._person_lang(guild.id, message.author.id, message.content or ""))
+                )
 
     def _claim(self, guild_id: int, key: str) -> bool:
         """True the first time `key` is claimed for the guild (survives restarts)."""
@@ -499,12 +506,12 @@ class CooMixin:
 
     async def _send_followups(self, guild, day: date) -> int:
         tasks = await asyncio.to_thread(self.tasks.list, guild.id, status="open")
-        lang = resolve_lang(self.team.current(guild.id).default_language)
         n = 0
         for uid, items in due_for_followup(tasks, day).items():
             member = guild.get_member(uid)
             if member is None or getattr(member, "bot", False):
                 continue
+            lang = self._person_lang(guild.id, uid)
             lines = [t("fu_header", lang, name=getattr(member, "display_name", ""))]
             lines += [t("fu_line", lang, id=x.id, title=x.title, due=x.due) for x in items[:10]]
             lines.append(t("fu_footer", lang, id=items[0].id))
@@ -537,7 +544,8 @@ class CooMixin:
         cid = self.team.report_channel_id(guild.id)
         if cid:
             return guild.get_channel(cid)
-        return next((c for c in guild.text_channels if c.name == REPORT_CHANNEL_NAME), None)
+        names = (REPORT_CHANNEL_NAME, REPORT_CHANNEL_NAME_EN)
+        return next((c for c in guild.text_channels if c.name in names), None)
 
     async def _report_channel(self, guild, *, create: bool = True):
         """The private reports channel: the configured/existing one, else created (needs Manage
@@ -548,11 +556,12 @@ class CooMixin:
         me = getattr(guild, "me", None)
         perms = getattr(me, "guild_permissions", None)
         lang = resolve_lang(self.team.current(guild.id).default_language)
+        report_name = REPORT_CHANNEL_NAME_EN if lang == "en" else REPORT_CHANNEL_NAME
         if getattr(perms, "manage_channels", False) or getattr(perms, "administrator", False):
             names = self.team.exec_role_names(guild.id, self.s.exec_role_names)
             try:
                 channel = await guild.create_text_channel(
-                    REPORT_CHANNEL_NAME,
+                    report_name,
                     overwrites=plan_report_overwrites(guild, me, names, self.s.exec_user_ids),
                     topic=t("report_channel_topic", lang),
                     reason="Salid daily reports",
@@ -565,7 +574,7 @@ class CooMixin:
             owner = guild.get_member(getattr(guild, "owner_id", 0))
             if owner is not None:
                 with contextlib.suppress(discord.HTTPException):
-                    await owner.send(t("report_need_channel", lang, name=REPORT_CHANNEL_NAME))
+                    await owner.send(t("report_need_channel", lang, name=report_name))
         return None
 
     def _report_text(self, guild, audience: set[int], day: date, lang: str) -> str:

@@ -84,7 +84,7 @@ class PrivateChatMixin:
                 category = await guild.create_category(cat_name, reason="Salid private chats")
             nick = self._profile_of(guild.id, member.id).nickname or member.display_name
             ch = await guild.create_text_channel(
-                channel_name(nick),
+                channel_name(nick, lang),
                 category=category,
                 overwrites=overwrites(guild, member),
                 topic=t("pc_topic", lang),
@@ -155,6 +155,42 @@ class PrivateChatMixin:
         if ch is not None:
             with contextlib.suppress(discord.HTTPException):
                 await ch.delete(reason="Salid private chat removed")
+
+    async def _pc_rename_for_language(self, guild, lang: str) -> None:
+        """The server switched language: rename the private categories and channels to match
+        (paced for Discord's rate limits; every failure is only logged)."""
+        try:
+            rows = await asyncio.to_thread(self.private_chats.all, guild.id)
+            other = "en" if lang == "th" else "th"
+            old_base, new_base = t("pc_category", other), t("pc_category", lang)
+            seen: set[int] = set()
+            for uid, cid in rows:
+                ch = guild.get_channel(cid)
+                if ch is None:
+                    continue
+                cat = getattr(ch, "category", None)
+                if cat is not None and cat.id not in seen:
+                    seen.add(cat.id)
+                    if cat.name == old_base or cat.name.startswith(old_base + " "):
+                        try:
+                            await cat.edit(name=new_base + cat.name[len(old_base) :])
+                            await self._pc_sleep(self._pc_pace)
+                        except discord.HTTPException:
+                            logger.warning("could not rename category %s", cat.id, exc_info=True)
+                nick = self._profile_of(guild.id, uid).nickname
+                if not nick:
+                    member = guild.get_member(uid)
+                    nick = member.display_name if member is not None else ""
+                name = channel_name(nick, lang) if nick else ""
+                if not name or ch.name == name:
+                    continue
+                try:
+                    await ch.edit(name=name, topic=t("pc_topic", lang))
+                    await self._pc_sleep(self._pc_pace)
+                except discord.HTTPException:
+                    logger.warning("could not rename channel %s", cid, exc_info=True)
+        except Exception:
+            logger.warning("private channel rename failed", exc_info=True)
 
     async def _pc_cap_notice(self, guild) -> None:
         """Once per run: the server is close to Discord's channel limit, so DMs are used."""

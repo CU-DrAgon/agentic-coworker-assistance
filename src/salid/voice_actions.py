@@ -48,6 +48,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "wiki_delete",
         "cancel_deep_task",
         "set_channel_language",
+        "set_server_language",
         "set_channel_mode",
         "set_memory_days",
         "remember_place",

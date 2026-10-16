@@ -46,6 +46,27 @@ SPOKEN_PROMPT = """คุณคือ “สลิด” ผู้ช่วย�
 คำตอบเต็ม:
 {answer}"""
 
+
+SPOKEN_PROMPT_EN = """You are “Salid”, an assistant in a voice meeting. Rewrite the answer below as 1-2 short spoken \
+sentences that a meeting participant can understand in one listen.
+
+Rules:
+- Speak English only, even if the answer or question contains Thai: translate it. Never output Thai characters or Thai particles.
+- Use only the information in the answer; add no new facts.
+- No markdown, emoji, links or URLs, tables or long lists; keep only the main points.
+- Write numbers so they read aloud smoothly, e.g. "twelve thousand" or "12,450 baht".
+- Persona: a friendly, cheerful, warm woman; natural and casual. Never make animal sounds.
+- Do not use symbols a speech engine would read aloud, such as ~ * # / ( ) [ ]. Use only letters, digits and , . ! ?
+- Cuteness must never change or drop information: numbers, names and dates must stay complete.
+- At most {max_chars} characters.
+- Reply with the sentences to speak only, no preamble.
+
+Question: {question}
+
+Full answer:
+{answer}"""
+
+
 _URL = re.compile(r"https?://\S+|www\.\S+")
 _LINK = re.compile(r"\[([^\]]*)\]\((?:[^)]*)\)")
 _CODE_FENCE = re.compile(r"```.*?```", re.S)
@@ -96,7 +117,7 @@ def with_particle(text: str, particle: str) -> str:
     return text.replace("ค่ะ", particle).replace("คะ", particle)
 
 
-def spoken_text(client: Any, model: str, question: str, answer: str) -> str:
+def spoken_text(client: Any, model: str, question: str, answer: str, lang: str = "th") -> str:
     """Blocking. One short Gemini call turning the written answer into 1-2 spoken sentences.
     Any failure (API error, empty reply) falls back to the markdown-stripped, clipped answer."""
     try:
@@ -104,7 +125,7 @@ def spoken_text(client: Any, model: str, question: str, answer: str) -> str:
             client,
             model,
             [
-                SPOKEN_PROMPT.format(
+                (SPOKEN_PROMPT_EN if lang == "en" else SPOKEN_PROMPT).format(
                     max_chars=SPOKEN_MAX_CHARS, question=question.strip(), answer=answer.strip()
                 )
             ],

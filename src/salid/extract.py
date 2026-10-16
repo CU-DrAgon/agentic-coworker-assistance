@@ -102,6 +102,23 @@ class IngestResult:
     receipt: Receipt | None = None
 
 
+CATEGORY_EN = {
+    "วัตถุดิบ": "Ingredients / materials",
+    "อุปกรณ์": "Equipment",
+    "ค่าเดินทาง": "Travel",
+    "สาธารณูปโภค": "Utilities",
+    "ค่าเช่า": "Rent",
+    "ค่าแรง": "Labor",
+    "การตลาด": "Marketing",
+    "อื่นๆ": "Other",
+}
+
+
+def category_label(category: str | None, lang: str = "th") -> str:
+    """The stored (Thai) expense category as shown to a person: English names for `en`."""
+    return CATEGORY_EN.get(category or "", category or "") if lang == "en" else category or ""
+
+
 def fmt_money(x: float | None, currency: str = "THB", lang: str = "th") -> str:
     if x is None:
         return t("unknown", lang)
@@ -115,10 +132,10 @@ def confirmation_text(r: Receipt, dup: Receipt | None, needs_check: bool, lang: 
         t("rc_vendor", lang, v=r.vendor or t("unknown", lang)),
         t("rc_date", lang, v=r.receipt_date or t("rc_date_unknown", lang)),
         t("rc_total", lang, v=fmt_money(r.total, r.currency, lang)),
-        t("rc_category", lang, v=r.category),
+        t("rc_category", lang, v=category_label(r.category, lang)),
     ]
     if needs_check:
-        lines.append(t("rc_unclear", lang))
+        lines.append(t("rc_unclear_pure", lang))
     if dup:
         lines.append(t("rc_possible_dup", lang, id=dup.id))
     return "\n".join(lines)
@@ -305,7 +322,7 @@ def apply_correction(
 ) -> str:
     fields = parse_correction(client, settings, text, receipt)
     if not fields:
-        return t("corr_unclear", lang)
+        return t("corr_unclear_pure", lang)
     r = store.update_receipt(receipt.id, {**fields, "confidence": 1.0})  # human-verified
     names = {
         "total": t("corr_total", lang),

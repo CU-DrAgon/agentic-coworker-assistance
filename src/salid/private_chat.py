@@ -19,6 +19,7 @@ GUILD_CHANNEL_CAP = 450  # Discord allows 500 per server: stop auto-creating wel
 BACKFILL_PACE_S = 2.0  # seconds between channels made for existing members
 CATEGORY_LIMIT = 50  # Discord: channels per category
 CHANNEL_PREFIX = "สลิด"
+CHANNEL_PREFIX_EN = "salid"
 PRIVATE_COMMANDS = ("ห้องส่วนตัว", "private-chat")
 MAX_NAME = 90
 
@@ -50,11 +51,13 @@ def is_confirm(text: str) -> bool:
     return bool(_CONFIRM.match(text or ""))
 
 
-def channel_name(nickname: str) -> str:
-    """`สลิด-<nickname>`: lower case, spaces to dashes, Thai kept, other symbols dropped."""
+def channel_name(nickname: str, lang: str = "th") -> str:
+    """`สลิด-<nickname>` (`salid-<nickname>` in English): lower case, spaces to dashes, Thai kept,
+    other symbols dropped."""
+    prefix = CHANNEL_PREFIX_EN if lang == "en" else CHANNEL_PREFIX
     slug = re.sub(r"[^\w฀-๿-]+", "-", (nickname or "").strip().casefold())
     slug = re.sub(r"-{2,}", "-", slug).strip("-_")
-    return f"{CHANNEL_PREFIX}-{slug}"[:MAX_NAME] if slug else CHANNEL_PREFIX
+    return f"{prefix}-{slug}"[:MAX_NAME] if slug else prefix
 
 
 def category_name(base: str, n: int) -> str:
@@ -139,6 +142,11 @@ class PrivateChatRepo:
             lambda d: bool(d.get("delete_at")) and datetime.fromisoformat(d["delete_at"]) <= now,
         )
         return [int(d["user_id"]) for d in docs]
+
+    def all(self, guild_id: int) -> list[tuple[int, int]]:
+        """(user id, channel id) of every private channel of the guild."""
+        docs = self.docs.find(PRIVATE_CHATS, guild_id, lambda d: "channel_id" in d)
+        return [(int(d["user_id"]), int(d["channel_id"])) for d in docs]
 
     def delete(self, guild_id: int, user_id: int) -> None:
         self.docs.delete(PRIVATE_CHATS, guild_id, str(user_id))

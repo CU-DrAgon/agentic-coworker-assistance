@@ -328,11 +328,25 @@ def select_provider(aerodatabox_key: str = "", aviationstack_key: str = "",
 STATUS_INSTRUCTION = (
     "You look up flight facts on the web for a Thai assistant. Report only what the search "
     "results actually say. Never guess, never fill a gap from the usual schedule. If you cannot "
-    "find a fact, write 'ไม่พบข้อมูล'. Be brief and structured."
+    "find a fact, write 'ไม่พบข้อมูล' (or 'not found' when asked to answer in English). Be brief "
+    "and structured."
 )
 
 
-def status_prompt(flight: dict, day: str, today: str) -> str:
+def status_prompt(flight: dict, day: str, today: str, lang: str = "th") -> str:
+    if lang == "en":
+        return (
+            f"Find the status of flight {flight['display']} (IATA {flight['iata']}"
+            + (f", ICAO {flight['icao']}" if flight["icao"] else "")
+            + f") departing on {day}. Today is {today}.\n"
+            "Return exactly these lines, in English:\n"
+            "Airline / route (origin -> destination, with IATA codes)\n"
+            "Departure: scheduled time and expected actual time (local time of the origin airport)\n"
+            "Arrival: scheduled time and expected actual time (local time of the destination airport)\n"
+            "Terminal / gate\n"
+            "Status (on time, delayed, cancelled, departed, landed)\n"
+            "State which page each fact comes from. Use only information for this exact date."
+        )
     return (
         f"Find the status of flight {flight['display']} (IATA {flight['iata']}"
         + (f", ICAO {flight['icao']}" if flight["icao"] else "")
@@ -348,12 +362,12 @@ def status_prompt(flight: dict, day: str, today: str) -> str:
 
 
 def prices_prompt(origin: str, dest: str, depart: str, ret: str, adults: int, cabin: str,
-                  today: str) -> str:  # fmt: skip
+                  today: str, lang: str = "th") -> str:  # fmt: skip
     trip = f"round trip returning {ret}" if ret else "one way"
     return (
         f"Find indicative airfares for flights from {origin} to {dest} departing {depart}, {trip}, "
         f"{adults} adult(s), {cabin} cabin. Today is {today}.\n"
-        "Return in Thai: the cheapest airlines found and the price range for each (currency "
+        f"Return in {'English' if lang == 'en' else 'Thai'}: the cheapest airlines found and the price range for each (currency "
         "exactly as shown on the source, prefer THB when the source shows it), whether it is "
         "direct or has stops, and which page each price comes from. These are web-search "
         "snapshots, not bookable quotes. If you find no prices, say so; never estimate a fare."
@@ -385,7 +399,7 @@ class FlightService:
             return {"error": "web search is not available"}
         return web_read.grounded_search(self.client, self.model, prompt, STATUS_INSTRUCTION)
 
-    def status(self, flight_number: str, day: str = "") -> dict:
+    def status(self, flight_number: str, day: str = "", lang: str = "th") -> dict:
         flight = normalize_flight(flight_number)
         if flight is None:
             return {"error": "could not read the flight number; use e.g. 'TG 676'"}
@@ -394,10 +408,10 @@ class FlightService:
             date_cls.fromisoformat(day)
         except ValueError:
             return {"error": "date must be YYYY-MM-DD"}
-        return self._cached(("status", flight["iata"], day), STATUS_CACHE_S,
-                            lambda: self._status(flight, day))  # fmt: skip
+        return self._cached(("status", flight["iata"], day, lang), STATUS_CACHE_S,
+                            lambda: self._status(flight, day, lang))  # fmt: skip
 
-    def _status(self, flight: dict, day: str) -> dict:
+    def _status(self, flight: dict, day: str, lang: str = "th") -> dict:
         links = flight_links(flight)
         base = {"flight": flight["display"], "date": day, "links": links,
                 "checked_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")}  # fmt: skip
@@ -409,7 +423,7 @@ class FlightService:
                 info = None
             if info:
                 return {**base, "confidence": "provider", "source": self.provider.name, **info}
-        res = self._ground(status_prompt(flight, day, self._today().isoformat()))
+        res = self._ground(status_prompt(flight, day, self._today().isoformat(), lang))
         if "error" in res:
             return {**base, "error": res["error"], "note": "give the links so the user can check"}
         return {
@@ -417,11 +431,16 @@ class FlightService:
             "confidence": "web",
             "text": res["text"],
             "sources": res.get("sources", []),
-            "note": "ข้อมูลจากการค้นเว็บ อาจไม่ใช่เวลาจริงล่าสุด ให้ตรวจที่ลิงก์ FlightAware/สายการบินอีกครั้ง",
+            "note": (
+                "Data from a web search; it may not be the latest real time. Check the FlightAware "
+                "/ airline link again."
+                if lang == "en"
+                else "ข้อมูลจากการค้นเว็บ อาจไม่ใช่เวลาจริงล่าสุด ให้ตรวจที่ลิงก์ FlightAware/สายการบินอีกครั้ง"
+            ),
         }
 
     def prices(self, origin: str, destination: str, depart_date: str, return_date: str = "",
-               adults: int = 1, cabin: str = "economy") -> dict:  # fmt: skip
+               adults: int = 1, cabin: str = "economy", lang: str = "th") -> dict:  # fmt: skip
         o = resolve_airport(origin) or (origin or "").strip()
         d = resolve_airport(destination) or (destination or "").strip()
         if not o or not d:
@@ -447,7 +466,9 @@ class FlightService:
         links = prices_links(o, d, dep_s, ret_s, adults, cabin)
 
         def make() -> dict:
-            res = self._ground(prices_prompt(o, d, dep_s, ret_s, adults, cabin, today.isoformat()))
+            res = self._ground(
+                prices_prompt(o, d, dep_s, ret_s, adults, cabin, today.isoformat(), lang)
+            )
             base = {"origin": o, "destination": d, "depart_date": dep_s, "return_date": ret_s,
                     "adults": adults, "cabin": cabin, "searched_on": today.isoformat(),
                     "confidence": "web", "links": links}  # fmt: skip
@@ -457,11 +478,17 @@ class FlightService:
                 **base,
                 "text": res["text"],
                 "sources": res.get("sources", []),
-                "label": "ราคาโดยประมาณจากการค้นเว็บ ณ วันนี้ ราคาจริงเปลี่ยนตลอด",
+                "label": (
+                    "Indicative prices from a web search today; real fares change constantly."
+                    if lang == "en"
+                    else "ราคาโดยประมาณจากการค้นเว็บ ณ วันนี้ ราคาจริงเปลี่ยนตลอด"
+                ),
                 "label_en": "Indicative prices from a web search today; real fares change constantly.",
             }
 
-        return self._cached(("prices", o, d, dep_s, ret_s, adults, cabin), PRICES_CACHE_S, make)
+        return self._cached(
+            ("prices", o, d, dep_s, ret_s, adults, cabin, lang), PRICES_CACHE_S, make
+        )
 
 
 # --------------------------------------------------------------------------- tracking
@@ -580,7 +607,7 @@ class FlightTracker:
 
 # --------------------------------------------------------------------------- agent tools
 def flight_tools(svc: FlightService, tracker: FlightTracker, guild_id: int, user_id: int,
-                 today: Callable[[], date_cls] = date_cls.today) -> list:  # fmt: skip
+                 today: Callable[[], date_cls] = date_cls.today, lang: str = "th") -> list:  # fmt: skip
     def flight_status(flight_number: str, date: str = "") -> dict:
         """Status of a flight: airline, route, scheduled/estimated times (local), terminal/gate,
         status. Without a flight-data provider this comes from a web search (confidence "web"):
@@ -591,7 +618,7 @@ def flight_tools(svc: FlightService, tracker: FlightTracker, guild_id: int, user
             flight_number: e.g. "TG 676", "tg676" or "การบินไทย 676".
             date: YYYY-MM-DD of departure; empty = today.
         """
-        return svc.status(flight_number, date)
+        return svc.status(flight_number, date, lang)
 
     def flight_prices(origin: str, destination: str, depart_date: str, return_date: str = "",
                       adults: int = 1, cabin: str = "economy") -> dict:  # fmt: skip
@@ -608,7 +635,7 @@ def flight_tools(svc: FlightService, tracker: FlightTracker, guild_id: int, user
             adults: number of adult passengers.
             cabin: economy, premium_economy, business or first.
         """
-        return svc.prices(origin, destination, depart_date, return_date, adults, cabin)
+        return svc.prices(origin, destination, depart_date, return_date, adults, cabin, lang)
 
     def track_flight(flight_number: str, date: str, notify: bool = True) -> dict:
         """Watch a flight and DM the requester about a delay of 15+ minutes, a gate change,

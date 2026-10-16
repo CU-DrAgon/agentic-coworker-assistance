@@ -63,6 +63,18 @@ _LANG_COMMANDS = (
         r"|auto(?:matic)?(?:\s+language)?|(?:language|lang)\s+auto(?:matic)?",
     ),
 )
+_SERVER_VERB = (
+    r"(?:ใช้|เปลี่ยน|ตั้ง|สลับ|พูด|ตอบ|คุย|ปรับ|ให้|switch|change|set|use|make|put|speak|reply|answer|"
+    r"talk|respond|please|go|run|turn)"
+)
+_SERVER_SCOPE = re.compile(
+    r"ทั้งเซิร์?ฟ(?:เวอร์)?|ทั้งหมด|ทุกห้อง|ทุกที่|ทั้งเซิ[ร์ฟ]*|เซิร์?ฟเวอร์|ทั้งบริษัท|ทุกอย่าง"
+    r"|\bserver\b|server-?wide|everywhere|all\s+channels|every\s+channel|\bwhole\b|\bentire\b"
+    r"|everything|all\s+of\s+salid",
+    re.I,
+)
+_SERVER_LANG = re.compile(r"ภาษา\s?อังกฤษ|อังกฤษ|english|ภาษา\s?ไทย|ไทย|thai", re.I)
+_SERVER_START = re.compile(rf"^\s*(?:@\S+\s+)?{_SERVER_VERB}", re.I)
 _LANG_RES = [(v, re.compile(rf"^(?:{p})(?:{_FILLER})$", re.I)) for v, p in _LANG_COMMANDS]
 
 
@@ -77,6 +89,22 @@ def parse_language_command(text: str) -> str | None:
         if rx.match(s):
             return value
     return None
+
+
+def parse_server_language_command(text: str) -> str | None:
+    """ "ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์" / "switch the whole server to English" -> "en", the same with
+    Thai -> "th", anything else None. Needs a verb at the start, a scope word (server, everywhere,
+    ทั้งหมด...) and a language; the last language named wins ("from Thai to English")."""
+    s = (text or "").strip().strip(" \t\n/,.:;!-–—…")
+    if not s or len(s) > 90 or not _SERVER_START.match(s) or not _SERVER_SCOPE.search(s):
+        return None
+    if s.rstrip("?？").lower() != s.lower():
+        return None
+    langs = [m.group(0).lower() for m in _SERVER_LANG.finditer(s)]
+    if not langs:
+        return None
+    last = langs[-1]
+    return "en" if ("อังกฤษ" in last or "english" in last) else "th"
 
 
 def _bi(th: str, en: str) -> dict[str, str]:
@@ -425,7 +453,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /ภาษา แล้วเลือกภาษาค่ะ "
         "(หรือแท็กสลิดแล้วพิมพ์ “speak English” / “พูดไทย”)",
         "en": "Admins or executives can change it with /language and then pick a language "
-        "(or tag Salid and say “speak English” / “พูดไทย”).",
+        "(or tag Salid and say “speak English” / “speak Thai”).",
     },
     "lang_denied": {
         "th": "เปลี่ยนภาษาได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารค่ะ",
@@ -438,6 +466,14 @@ CATALOG: dict[str, dict[str, str]] = {
     "lang_set": {
         "th": "ตั้งภาษาของห้องนี้เป็น {label} แล้วค่ะ",
         "en": "This channel's language is now {label}.",
+    },
+    "server_lang_set": {
+        "th": "เปลี่ยนสลิดเป็นภาษา{label}ทั้งเซิร์ฟเวอร์แล้วค่ะ",
+        "en": "Salid now speaks {label} across the whole server.",
+    },
+    "server_lang_set_default": {
+        "th": "ตั้งภาษาหลักของเซิร์ฟเวอร์เป็น{label}แล้วค่ะ (ห้องที่ตั้งภาษาไว้เองยังคงเดิม)",
+        "en": "The server's default language is now {label} (channels with their own language are unchanged).",
     },
     "lang_label_th": {"th": "ไทย", "en": "Thai"},
     "lang_label_en": {"th": "อังกฤษ (English)", "en": "English"},
@@ -1537,5 +1573,30 @@ CATALOG: dict[str, dict[str, str]] = {
     "wiki_post_footer": {
         "th": "อัปเดตล่าสุด {date} · เขียนโดย {who} · สลิด",
         "en": "Last updated {date} · written by {who} · via Salid",
+    },
+    # ---- english-audit A (proactive)
+    "translate_nothing_pure": {
+        "th": "ข้อความนี้ไม่มีตัวอักษรให้แปลค่ะ · There is no text in that message to translate.",
+        "en": "There is no text in that message to translate.",
+    },
+    "translate_failed_pure": {
+        "th": "แปลไม่สำเร็จค่ะ ลองใหม่อีกครั้งนะคะ · I couldn't translate that, please try again.",
+        "en": "I couldn't translate that, please try again.",
+    },
+    "rc_unclear_pure": {
+        "th": 'อ่านข้อมูลไม่ชัด ตอบข้อความนี้เพื่อแก้ไข เช่น "ยอดจริง 450" หรือ "หมวด ค่าเดินทาง"',
+        "en": 'Some details were hard to read. Reply to this message to fix them, e.g. "total 450" '
+        'or "category Travel"',
+    },
+    "corr_unclear_pure": {
+        "th": 'ไม่เข้าใจคำแก้ไข ลองพิมพ์ เช่น "ยอดจริง 450", "หมวด ค่าเดินทาง", "ร้าน ABC" หรือ "วันที่ 2026-10-12"',
+        "en": 'I did not understand that correction. Try e.g. "total 450", "category Travel", '
+        '"vendor ABC" or "date 2026-10-12"',
+    },
+    # ---- english-audit B (voice, meeting)
+    # ---- english-audit C (documents, tools)
+    "deep_timeout": {
+        "th": "งานใหญ่ใช้เวลานานเกิน {seconds} วินาที จึงยกเลิก",
+        "en": "The big task ran longer than {seconds} seconds, so it was cancelled",
     },
 }
