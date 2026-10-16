@@ -176,6 +176,37 @@ def to_telegram(text: str) -> str:
     return to_line(text)
 
 
+def to_whatsapp(text: str) -> str:
+    """Markdown from the model -> WhatsApp formatting: *bold*, _italic_, ~strike~, ```code```.
+    Headings become bold, bullets become dots, links become `label (url)`, tables are fenced."""
+    stash: list[str] = []
+
+    def keep(rendered: str) -> str:
+        stash.append(rendered)
+        return f"\x00{len(stash) - 1}\x00"
+
+    s = _fence_tables(text or "")
+    s = _FENCE.sub(lambda m: keep("```" + m.group(1).strip("\n") + "```"), s)
+    s = _INLINE.sub(lambda m: keep("```" + m.group(1) + "```"), s)
+    s = re.sub(r"^\s{0,3}#{1,6}\s+(.+?)[ \t]*#*[ \t]*$", lambda m: keep(f"*{m[1]}*"), s, flags=re.M)
+    s = re.sub(
+        r"\*\*(?!\s)(.+?)(?<!\s)\*\*|__(?!\s)(.+?)(?<!\s)__",
+        lambda m: keep(f"*{m[1] or m[2]}*"),
+        s,
+    )
+    s = re.sub(r"^\s*([-*_])(?:\s*\1){2,}\s*$", "", s, flags=re.M)  # horizontal rules
+    s = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", s, flags=re.M)
+    s = re.sub(
+        r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)",
+        lambda m: keep(m[2] if m[1].strip() == m[2] else f"{m[1]} ({m[2]})"),
+        s,
+    )
+    s = re.sub(r"(?<![*\w])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![*\w])", r"_\1_", s)  # *italic*
+    s = re.sub(r"~~(?!\s)(.+?)(?<!\s)~~", r"~\1~", s)
+    s = re.sub(r"\x00(\d+)\x00", lambda m: stash[int(m.group(1))], s)
+    return re.sub(r"\n{3,}", "\n\n", s).strip()
+
+
 # ------------------------------------------------------------------ Slack input
 
 _SLACK_TOKEN = re.compile(r"<([^<>]+)>")

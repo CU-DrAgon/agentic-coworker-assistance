@@ -1,6 +1,6 @@
 """What `scripts/platforms_smoke.py` prints: which platforms would start, and whether their tokens
-work, using one read-only API call each (Slack auth.test, LINE get bot info, Telegram getMe). Never prints a
-secret, only whether it is set and what it is called."""
+work, using one read-only API call each (Slack auth.test, LINE get bot info, Telegram getMe,
+WhatsApp phone number lookup). Never prints a secret, only whether it is set and what it is called."""
 
 from __future__ import annotations
 
@@ -30,9 +30,18 @@ def plan(ps: PlatformSettings) -> list[str]:
         )
         + (f" (webhook port {ps.line_port})" if ps.line_enabled else ""),
         "telegram: " + need(telegram_bot_token=bool(ps.telegram_bot_token)),
+        "whatsapp: "
+        + need(
+            whatsapp_access_token=bool(ps.whatsapp_access_token),
+            whatsapp_app_secret=bool(ps.whatsapp_app_secret),
+            whatsapp_verify_token=bool(ps.whatsapp_verify_token),
+            whatsapp_phone_number_id=bool(ps.whatsapp_phone_number_id),
+        )
+        + (f" (webhook port {ps.whatsapp_port})" if ps.whatsapp_enabled else ""),
         f"slack executives: {len(ps.slack_exec_user_ids)} id(s) plus workspace admins/owners",
         f"line executives:  {len(ps.line_exec_user_ids)} id(s)",
         f"telegram executives: {len(ps.telegram_exec_user_ids)} id(s) (group admins do not count)",
+        f"whatsapp executives: {len(ps.whatsapp_exec_numbers)} number(s)",
     ]
 
 
@@ -41,6 +50,7 @@ async def check(
     slack_check: Checker | None = None,
     line_check: Checker | None = None,
     telegram_check: Checker | None = None,
+    whatsapp_check: Checker | None = None,
 ) -> list[str]:
     """Validate the tokens of the platforms that would start."""
     out: list[str] = []
@@ -56,6 +66,10 @@ async def check(
         if telegram_check is None:
             from .telegram import check as telegram_check
         out.append(await _one("telegram", telegram_check, ps))
+    if ps.whatsapp_enabled:
+        if whatsapp_check is None:
+            from .whatsapp import check as whatsapp_check
+        out.append(await _one("whatsapp", whatsapp_check, ps))
     return out
 
 

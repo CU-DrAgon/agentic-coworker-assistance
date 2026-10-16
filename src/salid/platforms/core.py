@@ -1,4 +1,4 @@
-"""Platform-neutral Salid for chat platforms (Slack, LINE, Telegram).
+"""Platform-neutral Salid for chat platforms (Slack, LINE, Telegram, WhatsApp).
 
 `Incoming` is one message as an adapter saw it; `Port` is what the adapter offers back (who is in
 the room, how to send). `Assistant` does the rest, the same way the Discord bot does for a
@@ -92,9 +92,9 @@ class FileRef:
 
 @dataclass
 class Incoming:
-    platform: str  # slack | line | telegram
-    tenant: str  # Slack team_id / LINE bot user id / Telegram bot id
-    room: str  # Slack channel id / LINE groupId, roomId or userId (1:1) / Telegram chat id
+    platform: str  # slack | line | telegram | whatsapp
+    tenant: str  # Slack team_id / LINE bot user id / Telegram bot id / WhatsApp phone number id
+    room: str  # Slack channel id / LINE groupId, roomId or userId (1:1) / Telegram chat id / WhatsApp wa_id
     user: str
     user_name: str
     text: str  # plain text, Salid's own @mention already removed
@@ -299,6 +299,7 @@ class Assistant:
             "slack": ps.slack_exec_user_ids,
             "line": ps.line_exec_user_ids,
             "telegram": ps.telegram_exec_user_ids,
+            "whatsapp": ps.whatsapp_exec_numbers,
         }
         self.sem = asyncio.Semaphore(max(ps.platform_max_concurrent, 1))
         # (tenant, room) -> name, for summaries

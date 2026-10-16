@@ -175,6 +175,31 @@ async def run_telegram(a: Assistant, ps: PlatformSettings) -> None:
         await api.aclose()
 
 
+async def run_whatsapp(a: Assistant, ps: PlatformSettings) -> None:
+    import uvicorn
+
+    from . import whatsapp
+
+    api = whatsapp.WhatsAppApi(
+        ps.whatsapp_access_token, ps.whatsapp_phone_number_id, ps.whatsapp_api_version
+    )
+    try:
+        port = whatsapp.WhatsAppPort(api)
+        adapter = whatsapp.WhatsAppAdapter(a, port, ps.whatsapp_phone_number_id)
+        app = whatsapp.create_app(ps.whatsapp_app_secret, ps.whatsapp_verify_token, adapter)
+        config = uvicorn.Config(
+            app, host=ps.whatsapp_host, port=ps.whatsapp_port, log_config=None, access_log=False
+        )
+        logger.info(
+            "whatsapp webhook on %s:%d%s tenant=%d",
+            ps.whatsapp_host, ps.whatsapp_port, whatsapp.WEBHOOK_PATH,
+            ids.tenant_id("whatsapp", ps.whatsapp_phone_number_id),
+        )  # fmt: skip
+        await uvicorn.Server(config).serve()
+    finally:
+        await api.aclose()
+
+
 async def run(s: Settings, ps: PlatformSettings) -> None:
     a = build_assistant(s, ps)
     jobs = [asyncio.create_task(memory_loop(a))]
@@ -184,5 +209,7 @@ async def run(s: Settings, ps: PlatformSettings) -> None:
         jobs.append(asyncio.create_task(run_line(a, ps)))
     if ps.telegram_enabled:
         jobs.append(asyncio.create_task(run_telegram(a, ps)))
+    if ps.whatsapp_enabled:
+        jobs.append(asyncio.create_task(run_whatsapp(a, ps)))
     logger.info("platforms started: %s", ", ".join(ps.enabled_platforms()))
     await asyncio.gather(*jobs)

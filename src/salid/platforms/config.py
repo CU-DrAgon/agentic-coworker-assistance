@@ -7,6 +7,7 @@ and never logged.
 
 from __future__ import annotations
 
+import re
 from typing import Annotated
 
 from pydantic import Field, field_validator
@@ -36,6 +37,16 @@ class PlatformSettings(BaseSettings):
     telegram_bot_token: str = Field(default="", repr=False)  # from @BotFather
     telegram_exec_user_ids: Annotated[set[str], NoDecode] = Field(default_factory=set)
 
+    # WhatsApp Business Platform (Cloud API): a webhook served on `whatsapp_host:whatsapp_port`.
+    whatsapp_access_token: str = Field(default="", repr=False)
+    whatsapp_app_secret: str = Field(default="", repr=False)  # signs every webhook POST
+    whatsapp_verify_token: str = Field(default="", repr=False)  # answers the GET handshake
+    whatsapp_phone_number_id: str = ""  # the business number's id = the tenant
+    whatsapp_api_version: str = "v26.0"
+    whatsapp_exec_numbers: Annotated[set[str], NoDecode] = Field(default_factory=set)
+    whatsapp_host: str = "127.0.0.1"  # TLS in front (Meta only calls https); 0.0.0.0 in a container
+    whatsapp_port: int = 8092
+
     # Behaviour shared by all platforms.
     platform_window_seconds: float = 180.0  # follow-ups of the person Salid just answered
     platform_thread_seconds: float = 3600.0  # a thread Salid answered in keeps counting this long
@@ -44,12 +55,29 @@ class PlatformSettings(BaseSettings):
     platform_max_concurrent: int = 6  # model calls running at once
 
     @field_validator(
-        "slack_exec_user_ids", "line_exec_user_ids", "telegram_exec_user_ids", mode="before"
+        "slack_exec_user_ids",
+        "line_exec_user_ids",
+        "telegram_exec_user_ids",
+        "whatsapp_exec_numbers",
+        mode="before",
     )
     @classmethod
     def _csv(cls, v):
         if isinstance(v, str):
             return {x.strip() for x in v.split(",") if x.strip()}
+        return v
+
+    @field_validator("whatsapp_exec_numbers", mode="after")
+    @classmethod
+    def _digits(cls, v: set[str]) -> set[str]:
+        """+66 81 234 5678, 66812345678 and (66)812345678 are one wa_id."""
+        return {d for d in ("".join(c for c in x if c.isdigit()) for x in v) if d}
+
+    @field_validator("whatsapp_api_version")
+    @classmethod
+    def _version(cls, v: str) -> str:
+        if not re.fullmatch(r"v\d{1,3}\.\d{1,3}", v):  # it becomes part of a URL path
+            raise ValueError("SALID_WHATSAPP_API_VERSION must look like v26.0")
         return v
 
     @property
@@ -64,10 +92,20 @@ class PlatformSettings(BaseSettings):
     def telegram_enabled(self) -> bool:
         return bool(self.telegram_bot_token)
 
+    @property
+    def whatsapp_enabled(self) -> bool:
+        return bool(
+            self.whatsapp_access_token
+            and self.whatsapp_app_secret
+            and self.whatsapp_verify_token
+            and self.whatsapp_phone_number_id
+        )
+
     def enabled_platforms(self) -> list[str]:
         flags = (
             ("slack", self.slack_enabled),
             ("line", self.line_enabled),
             ("telegram", self.telegram_enabled),
+            ("whatsapp", self.whatsapp_enabled),
         )
         return [n for n, on in flags if on]

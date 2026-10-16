@@ -20,7 +20,9 @@ def main() -> None:
         sys.exit(
             "No platform configured: set SALID_SLACK_BOT_TOKEN + SALID_SLACK_APP_TOKEN and/or "
             "SALID_LINE_CHANNEL_SECRET + SALID_LINE_CHANNEL_ACCESS_TOKEN and/or "
-            "SALID_TELEGRAM_BOT_TOKEN (see docs/platforms/)"
+            "SALID_TELEGRAM_BOT_TOKEN and/or SALID_WHATSAPP_ACCESS_TOKEN + "
+            "SALID_WHATSAPP_APP_SECRET + SALID_WHATSAPP_VERIFY_TOKEN + "
+            "SALID_WHATSAPP_PHONE_NUMBER_ID (see docs/platforms/)"
         )
     asyncio.run(run(s, ps))
 

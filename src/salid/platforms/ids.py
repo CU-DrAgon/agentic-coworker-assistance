@@ -1,4 +1,4 @@
-"""Stable integer ids for Slack / LINE / Telegram objects, in ranges that cannot collide with Discord.
+"""Stable integer ids for Slack / LINE / Telegram / WhatsApp objects, in ranges that cannot collide with Discord.
 
 Salid's stores key everything by integers (guild, channel, user, message). Slack and LINE ids are
 strings, so each one is mapped to an int by hashing; nothing needs to be persisted and the same
@@ -7,7 +7,8 @@ input always gives the same id.
 * **Tenant** (`tenant_id`, used as `guild_id` everywhere): `2**62 | platform << 60 | hash60`.
   Discord snowflakes are `timestamp_ms_since_2015 << 22`; they stay below `2**62` until about
   October 2049, so ids at or above `2**62` are never Discord guilds. Bits 60-61 hold the platform
-  (1 Slack, 2 LINE, 3 Telegram), the other 60 bits a SHA-256 prefix of the workspace / channel key (a collision
+  (1 Slack, 2 LINE, 3 Telegram, 0 WhatsApp: the field has two bits, so the fourth platform takes the
+  free value 0 instead of changing any existing id), the other 60 bits a SHA-256 prefix of the workspace / channel key (a collision
   among N tenants has probability about N**2 / 2**61: negligible). The value fits a signed int64
   (Firestore, SQLite). Collisions are still refused, not trusted away: the tenant's settings document
   records its owner (`guild_name`, see core.tenant_label) and a message from a different owner whose
@@ -23,8 +24,8 @@ from __future__ import annotations
 import hashlib
 
 DISCORD_CEILING = 1 << 62  # Discord snowflakes are below this until ~2049
-SLACK, LINE, TELEGRAM = "slack", "line", "telegram"
-_PLATFORM_CODE = {SLACK: 1, LINE: 2, TELEGRAM: 3}
+SLACK, LINE, TELEGRAM, WHATSAPP = "slack", "line", "telegram", "whatsapp"
+_PLATFORM_CODE = {SLACK: 1, LINE: 2, TELEGRAM: 3, WHATSAPP: 0}
 _LOW60 = (1 << 60) - 1
 _LOW62 = (1 << 62) - 1
 
@@ -46,7 +47,9 @@ def is_platform_tenant(guild_id: int) -> bool:
 
 
 def platform_of(guild_id: int) -> str | None:
-    code = (guild_id >> 60) & 0b11 if guild_id >= DISCORD_CEILING else 0
+    if guild_id < DISCORD_CEILING:
+        return None
+    code = (guild_id >> 60) & 0b11
     return {v: k for k, v in _PLATFORM_CODE.items()}.get(code)
 
 
