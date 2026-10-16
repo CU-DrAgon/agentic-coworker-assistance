@@ -146,8 +146,9 @@ message, at most every 5 s, with a Cancel button for the requester or an admin):
 1. **Storyboard**: one call to the main model with a JSON schema. `Storyboard(title, scenes[4-6])`,
    each `Scene(image_prompt_en ≤ 300, caption_th ≤ 40, voice_th ≤ 120, seconds 2-8,
    source "ai" | "photo:N" | "hero")`; total = `seconds` ± 1; prompts English-only; at most
-   `hero_shots` hero scenes; narration length fitted to the scene (≈ 12 Thai chars/s, trimmed by
-   code). Safety rules in the instructions: no celebrities or real public figures, no children,
+   `hero_shots` hero scenes; narration length fitted to the scene (a chars-per-second constant,
+   starting at ≈ 12 Thai chars/s and tuned from measured `pcm_duration_s`; a line that would
+   overrun its scene is shortened by one re-ask, then trimmed at a word boundary by code). Safety rules in the instructions: no celebrities or real public figures, no children,
    no health/cure claims for food, cosmetics or supplements, products from the shop's photos when
    given. One re-ask on validation failure, then fail with a clear message.
 2. **Stills**: `generate_images(... aspect="9:16", size="2K")` per AI scene (in parallel, max 3);
