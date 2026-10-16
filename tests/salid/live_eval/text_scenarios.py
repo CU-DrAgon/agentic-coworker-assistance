@@ -806,7 +806,7 @@ def build_scenarios() -> list[Scn]:
         return run
 
     def no_thai(st):
-        return ["Thai characters in an English-server reply"] if THAI.search(replies(st)) else []
+        return ["Thai characters in an English-server reply"] if THAI.search(replies(st).replace("฿", "")) else []
 
     sc.append(S("en_server_greeting", "English server: greeting", "English reply, no Thai, no tools",
                 english_server(lambda w: one(w, "somchai", "general", "Hi Salid, what can you help me with?", mention=True)),
