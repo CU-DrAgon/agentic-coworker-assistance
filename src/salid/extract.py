@@ -29,7 +29,7 @@ MIME_BY_EXT = {
 
 PROMPT = """You extract data from a receipt / invoice / bill image or PDF (usually Thai restaurant or shop expenses).
 - If it is NOT a receipt, invoice or bill (selfie, food photo, screenshot of chat, etc.) set is_receipt=false and leave the rest empty.
-- Bank transfer slips (สลิปโอนเงิน, PromptPay or mobile-banking "transfer successful" screens) ARE expenses: is_receipt=true, total = the amount transferred, vendor = the receiver's name (or biller), receipt_date = the transfer date, payment_method = "โอนเงิน". Use the submitter's note to pick the category, otherwise "อื่นๆ". Keep confidence at 0.6 or lower for slips (the receiver may not be the real vendor).
+- Bank transfer slips (สลิปโอนเงิน, PromptPay or mobile-banking "transfer successful" screens) ARE expenses: is_receipt=true, total = the amount transferred, vendor = the receiver's name (or biller), receipt_date = the transfer date, payment_method = "โอนเงิน". Use the submitter's note to pick the category, otherwise "อื่นๆ". invoice_no = the slip's transaction reference number. Keep confidence at 0.6 or lower for slips (the receiver may not be the real vendor).
 - receipt_date: ISO YYYY-MM-DD in the Gregorian calendar. Thai Buddhist years (e.g. 2569 or 69) must be converted (BE - 543). null if not visible.
 - currency default THB. Numbers are plain floats (no thousands separators). total is the final amount paid incl. VAT.
 - category must be one of: {cats}. Pick the best fit (ingredients/food/ice/meat/veg -> วัตถุดิบ; tools, machines -> อุปกรณ์; fuel/taxi/toll -> ค่าเดินทาง; water/electric/internet -> สาธารณูปโภค; rent -> ค่าเช่า; wages -> ค่าแรง; ads/printing -> การตลาด).

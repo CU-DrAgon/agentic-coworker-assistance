@@ -1182,6 +1182,30 @@
   "th": "ไอเดียที่เจ้าของแชร์ให้ทีมจะแสดงในคลังเอกสารของ Command Center",
   "en": "Ideas shared with the team appear in the Command Center documents library"
  },
+ "f_bizfin_n": {
+  "th": "การเงินธุรกิจและเทียบตลาด",
+  "en": "Business finance and benchmarking"
+ },
+ "f_bizfin_d": {
+  "th": "สลิดคำนวณจุดคุ้มทุน ตั้งราคาจากต้นทุน (แยก VAT 7%) ROI/Payback/NPV/IRR และประมาณการ 12-36 เดือนด้วยโค้ดที่แม่นยำ แนบ Excel เทียบตลาดและคู่แข่งพร้อมแหล่งอ้างอิง ตรวจลิงก์/ข้อความหลอกลวง และเช็กลิสต์สลิดโอนเงิน",
+  "en": "Salid calculates break-even, cost-based pricing (VAT 7% shown separately), ROI / payback / NPV / IRR and 12-36 month projections exactly in code with an Excel file, benchmarks markets and competitors with citations, checks links and messages for scams, and runs a payment-slip checklist."
+ },
+ "f_bizfin_w": {
+  "th": "ตัวเลขเป็นผลจากสมมติฐานที่ผู้ใช้ให้ ตรวจสลิดไม่สามารถยืนยันกับธนาคารได้",
+  "en": "Figures follow the user's assumptions; slip checks cannot confirm with the bank"
+ },
+ "f_link_guard_n": {
+  "th": "เตือนลิงก์อันตราย",
+  "en": "Dangerous link guard"
+ },
+ "f_link_guard_d": {
+  "th": "เมื่อมีข้อความในช่องที่มีลิงก์ที่เห็นชัดว่าหลอกลวง (โดเมนปลอมเลียนแบบธนาคาร ไฟล์ .apk ลิงก์ซ่อนปลายทาง) สลิดตอบเตือนสั้นๆ หนึ่งครั้ง ไม่เตือนเว็บที่รู้จัก และไม่เตือนถี่",
+  "en": "When a channel message holds a clearly scammy link (bank lookalike domain, .apk file, masked destination) Salid replies once with a short warning. Known sites are never flagged and warnings are rate-limited."
+ },
+ "f_link_guard_w": {
+  "th": "ไม่ทำงานในช่องโหมดเงียบ/ปิด และการตรวจเป็นการประเมิน ไม่ใช่การรับรอง",
+  "en": "Not active in off / listen channels; the check is an estimate, not a guarantee"
+ },
  "morning_time_l": {
   "th": "เวลาสรุปเช้า (DM)",
   "en": "Morning brief time (DM)"
@@ -1348,8 +1372,10 @@ const FEATURES = [
   { id: "travel" },
   { id: "markets" },
   { id: "ideas" },
+  { id: "bizfin" },
+  { id: "link_guard" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, bizfin: true, link_guard: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1582,7 +1608,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, ...s.features, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, ...s.features, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, bizfin: true, link_guard: true };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1666,7 +1692,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, bizfin: features.bizfin, link_guard: features.link_guard },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

@@ -22,6 +22,7 @@ from . import gate
 from .ack import Ack, ack_flavor, ack_text
 from .approvals_bot import ApprovalButton, ApprovalMixin
 from .archive import make_archive
+from .bizfin_bot import BizfinMixin
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
 from .broadcast_bot import BroadcastMixin
@@ -318,6 +319,7 @@ class SecretaryBot(
     TravelMixin,
     MarketsMixin,
     IdeasMixin,
+    BizfinMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -471,6 +473,7 @@ class SecretaryBot(
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
+        self._bizfin_init()  # finance calculators, benchmark, security (salid.bizfin_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -741,6 +744,10 @@ class SecretaryBot(
             if await self._maybe_delete_own(message):
                 return
             mentioned = mentions_bot(message, self.user)
+            if not (
+                mentioned or self._starts_with_name(message)
+            ):  # asked directly: the agent checks
+                await self._link_guard_maybe(message, mode)  # dangerous-link warning (link_guard)
             receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
             qa_on = self.team.enabled(gid, "qa")
             # Receipts are recognised by content, never by channel name. A configured or learned
@@ -2036,6 +2043,7 @@ class SecretaryBot(
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]

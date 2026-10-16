@@ -62,6 +62,12 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "idea_export",
         "idea_share",
         "business_framework",
+        # bizfin: calculators can save into the asker's idea; verify_slip reads the asker's ledger
+        "unit_economics",
+        "price_from_cost",
+        "investment_metrics",
+        "financial_projection",
+        "verify_slip",
     }
 )
 
