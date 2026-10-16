@@ -11,7 +11,7 @@ import io
 import re
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Literal
 
 from pptx import Presentation
@@ -48,13 +48,18 @@ INK = RGBColor(0x22, 0x22, 0x22)
 MUTED = RGBColor(0x6B, 0x72, 0x80)
 WHITE = RGBColor(0xFF, 0xFF, 0xFF)
 LIGHT = RGBColor(0xC9, 0xD3, 0xE3)
-CHART_COLORS = [
+CHART_COLORS = [  # 11 distinct colours: a pie can have top 10 slices + "Other"
     ACCENT,
     RGBColor(0xF5, 0x9E, 0x0B),
     RGBColor(0x10, 0xB9, 0x81),
     RGBColor(0xEF, 0x44, 0x44),
     RGBColor(0x8B, 0x5C, 0xF6),
     RGBColor(0x64, 0x74, 0x8B),
+    RGBColor(0x06, 0xB6, 0xD4),
+    RGBColor(0xEC, 0x48, 0x99),
+    RGBColor(0x84, 0xCC, 0x16),
+    RGBColor(0xF9, 0x73, 0x16),
+    RGBColor(0x7C, 0x2D, 0x12),
 ]
 SLIDE_W, SLIDE_H = Inches(13.333), Inches(7.5)
 MARGIN = Inches(0.8)
@@ -148,40 +153,62 @@ def deck_filename(title: str, today: date) -> str:
 def chart_data(summary: dict, query: ChartQuery, lang: str) -> ChartData:
     """What a chart slide plots, from a ledger summary (`store.build_summary` shape: groups
     biggest first, or by date for `day`). Non-day charts keep the `top` groups and sum the rest
-    per currency into "Other"; day charts keep every day, labelled MM-DD. One series per
-    currency, THB first."""
+    per currency into "Other" (a real category with the same name, e.g. the ledger's "อื่นๆ",
+    goes into that bucket instead of becoming a second bar); day charts have one category per
+    day of the range (days without receipts are 0), labelled MM-DD. One series per currency,
+    THB first. No data at all gives an empty ChartData (the slide shows the no-data text)."""
     groups = list(summary.get("groups") or [])
     if not groups:
         return ChartData()
-    day = query.group_by == "day"
-    kept, rest = (groups, []) if day else (groups[: query.top], groups[query.top :])
 
     def by(g: dict) -> dict:
         return g.get("totals_by_currency") or {}
 
-    def label(key) -> str:
-        if key in (None, ""):
-            return "—"
-        return str(key)[5:10] if day else str(key)
-
     currencies = sorted({c for g in groups for c in by(g)}, key=lambda c: (c != "THB", c))
-    categories = [label(g.get("key")) for g in kept]
+    if query.group_by == "day":
+        totals = {str(g.get("key"))[:10]: by(g) for g in groups}
+        first, last = date.fromisoformat(query.start_date), date.fromisoformat(query.end_date)
+        days = [(first + timedelta(days=n)).isoformat() for n in range((last - first).days + 1)]
+        series = {c: [float(totals.get(d, {}).get(c, 0)) for d in days] for c in currencies}
+        return ChartData([d[5:10] for d in days], series)
+
+    other = t("deck_other", lang)
+
+    def label(g: dict) -> str:
+        key = g.get("key")
+        return "—" if key in (None, "") else str(key)
+
+    named = [g for g in groups if label(g) != other]
+    kept = named[: query.top]
+    rest = named[query.top :] + [g for g in groups if label(g) == other]
+    categories = [label(g) for g in kept]
     series = {c: [float(by(g).get(c, 0)) for g in kept] for c in currencies}
     if rest:
-        categories.append(t("deck_other", lang))
+        categories.append(other)
         for c in currencies:
             series[c].append(round(sum(by(g).get(c, 0) for g in rest), 2))
     return ChartData(categories, series)
 
 
 # ---------------------------------------------------------------------------- rendering
+def _xml_char(ch: str) -> bool:
+    """A character the slide XML accepts (XML 1.0 Char, minus control characters)."""
+    if ch == "\n":
+        return True
+    if unicodedata.category(ch) in ("Cc", "Cs"):
+        return False
+    cp = ord(ch)
+    return 0x20 <= cp <= 0xD7FF or 0xE000 <= cp <= 0xFFFD or cp >= 0x10000
+
+
 def clean_text(s: str, keep_newlines: bool = False) -> str:
-    """Text safe for the slide XML: control characters dropped (python-pptx rejects them), line
-    breaks turned into spaces unless `keep_newlines` (speaker notes), runs of spaces collapsed."""
+    """Text safe for the slide XML: control characters, surrogates and other characters XML
+    rejects (e.g. U+FFFF) dropped, line breaks turned into spaces unless `keep_newlines` (speaker
+    notes), runs of spaces collapsed. Used for model text and ledger labels alike."""
     s = (s or "").replace("\r", "\n").replace("\t", " ")
     if not keep_newlines:
         s = s.replace("\n", " ")
-    s = "".join(ch for ch in s if ch == "\n" or unicodedata.category(ch) not in ("Cc", "Cs"))
+    s = "".join(ch for ch in s if _xml_char(ch))
     return re.sub(r"[ ]{2,}", " ", s).strip()
 
 
@@ -293,15 +320,18 @@ def _chart(slide, query: ChartQuery, data: ChartData | None, lang: str) -> None:
         frame.paragraphs[0].alignment = PP_ALIGN.CENTER
         _run(frame.paragraphs[0], t("deck_no_data", lang), Pt(24), MUTED)
         return
-    currencies = list(data.series)[:1] if query.style == "pie" else list(data.series)
+    # a pie cannot add up different currencies: several currencies are drawn as bars instead
+    style = "bar" if query.style == "pie" and len(data.series) > 1 else query.style
+    currencies = list(data.series)
     cd = CategoryChartData(number_format="#,##0")
-    cd.categories = data.categories
+    cd.categories = [clean_text(c) or "—" for c in data.categories]  # ledger names, cleaned
     for cur in currencies:
-        cd.add_series(cur, data.series[cur])
-    chart = slide.shapes.add_chart(CHART_TYPES[query.style], x, BODY_TOP, w, BODY_H, cd).chart
+        cd.add_series(clean_text(cur) or "?", data.series[cur])
+    chart = slide.shapes.add_chart(CHART_TYPES[style], x, BODY_TOP, w, BODY_H, cd).chart
+    chart.has_title = False  # the slide title says what it is; no automatic "THB" title
     chart.font.size, chart.font.name = Pt(14), LATIN_FONT
     _thai_font(chart.font._rPr)
-    chart.has_legend = len(currencies) > 1 or query.style == "pie"
+    chart.has_legend = len(currencies) > 1 or style == "pie"
     if chart.has_legend:
         chart.legend.position = XL_LEGEND_POSITION.BOTTOM
         chart.legend.include_in_layout = False
@@ -309,14 +339,14 @@ def _chart(slide, query: ChartQuery, data: ChartData | None, lang: str) -> None:
     plot.has_data_labels = True
     plot.data_labels.number_format = "#,##0"
     plot.data_labels.number_format_is_linked = False
-    if query.style == "pie":
+    if style == "pie":
         for i, point in enumerate(plot.series[0].points):
             point.format.fill.solid()
             point.format.fill.fore_color.rgb = CHART_COLORS[i % len(CHART_COLORS)]
         return
     for i, series in enumerate(plot.series):
         color = CHART_COLORS[i % len(CHART_COLORS)]
-        if query.style == "line":
+        if style == "line":
             series.format.line.color.rgb = color
         else:
             series.format.fill.solid()

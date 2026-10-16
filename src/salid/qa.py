@@ -18,6 +18,7 @@ from google.adk.agents import LlmAgent
 from google.adk.agents.run_config import RunConfig
 from google.adk.models import Gemini
 from google.adk.runners import InMemoryRunner
+from google.adk.tools import FunctionTool
 from google.genai import types
 
 from .config import Settings
@@ -1079,6 +1080,15 @@ class Answer:
     tool_ms: dict[str, float] = field(default_factory=dict)  # tool name -> total milliseconds
 
 
+class _RawArgsTool(FunctionTool):
+    """A tool that validates its own arguments: ADK still builds the declaration from the type
+    hints (the model sees the nested schema), but skips its own pydantic conversion, whose
+    failure warnings would log the argument values (slide text from the chat) verbatim."""
+
+    def _preprocess_args(self, args: dict) -> dict:
+        return dict(args)
+
+
 def _create_deck(
     ledger: LedgerTools, sink: DeckSink, title: str, subtitle: str, slides: list
 ) -> dict:
@@ -1269,7 +1279,7 @@ def build_tools(
         return safe("create_deck", a, lambda: _create_deck(ledger, deck, title, subtitle, slides))
 
     if deck is not None:
-        tools.append(create_deck)
+        tools.append(_RawArgsTool(create_deck))
     if memory is None:
         return tools
 

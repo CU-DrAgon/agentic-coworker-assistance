@@ -234,7 +234,8 @@ def test_top_groups_plus_other_per_currency():
 
 def test_day_groups_keep_date_order_and_no_other():
     s = summary([("2026-10-01", {"THB": 5}), ("2026-10-02", {"THB": 7})])
-    cd = chart_data(s, ChartQuery.model_validate({**Q, "group_by": "day", "top": 1}), "en")
+    q = {**Q, "group_by": "day", "top": 1, "end_date": "2026-10-02"}
+    cd = chart_data(s, ChartQuery.model_validate(q), "en")
     assert cd.categories == ["10-01", "10-02"] and cd.series == {"THB": [5, 7]}
 
 
@@ -275,3 +276,74 @@ def test_empty_chart_shows_the_placeholder():
     prs = render(spec, charts={0: ChartData([], {})})
     assert not any(s.has_chart for s in prs.slides[1].shapes)
     assert "ไม่มีข้อมูลในช่วงนี้" in " ".join(texts(prs.slides[1]))
+
+
+# ------------------------------------------------------------------ review fixes
+def _chart_of(prs, slide=1):
+    return next(s.chart for s in prs.slides[slide].shapes if s.has_chart)
+
+
+def test_xml_invalid_characters_anywhere_do_not_break_the_deck():
+    spec = {
+        "title": "t￿",
+        "slides": [
+            {"kind": "bullets", "title": "t", "bullets": ["a￿b"]},
+            {"kind": "chart", "title": "c", "chart": Q},
+        ],
+    }
+    cd = ChartData(["Mak\x0bro", "￿", "\ud800ok"], {"TH\x00B": [1.0, 2.0, 3.0]})
+    prs = render(spec, charts={1: cd})
+    chart = _chart_of(prs, 2)
+    assert list(chart.plots[0].categories) == ["Makro", "—", "ok"]
+    assert chart.plots[0].series[0].name == "THB"
+    assert "ab" in " ".join(texts(prs.slides[1]))
+
+
+def test_a_real_other_category_folds_into_the_other_bucket():
+    s = summary(
+        [
+            ("วัตถุดิบ", {"THB": 10000}),
+            ("อื่นๆ", {"THB": 5000}),
+            ("ค่าเช่า", {"THB": 4000}),
+            ("ค่าแรง", {"THB": 3000}),
+            ("การตลาด", {"THB": 1000}),
+        ]
+    )
+    cd = chart_data(s, ChartQuery.model_validate({**Q, "top": 3}), "th")
+    assert cd.categories == ["วัตถุดิบ", "ค่าเช่า", "ค่าแรง", "อื่นๆ"]
+    assert cd.series == {"THB": [10000, 4000, 3000, 6000]}
+
+
+def test_pie_slices_get_distinct_colours():
+    cats = [f"c{i}" for i in range(11)]  # top 10 + Other
+    spec = {
+        "title": "t",
+        "slides": [{"kind": "chart", "title": "c", "chart": {**Q, "style": "pie"}}],
+    }
+    prs = render(spec, charts={0: ChartData(cats, {"THB": [float(i + 1) for i in range(11)]})})
+    points = _chart_of(prs).plots[0].series[0].points
+    assert len({str(points[i].format.fill.fore_color.rgb) for i in range(11)}) == 11
+
+
+def test_day_charts_have_one_category_per_day_in_the_range():
+    s = summary([("2026-10-01", {"THB": 5}), ("2026-10-03", {"THB": 7})])
+    q = {"group_by": "day", "start_date": "2026-10-01", "end_date": "2026-10-04"}
+    cd = chart_data(s, ChartQuery.model_validate(q), "en")
+    assert cd.categories == ["10-01", "10-02", "10-03", "10-04"]
+    assert cd.series == {"THB": [5, 0, 7, 0]}
+
+
+def test_a_multi_currency_pie_falls_back_to_bars():
+    spec = {
+        "title": "t",
+        "slides": [{"kind": "chart", "title": "c", "chart": {**Q, "style": "pie"}}],
+    }
+    cd = ChartData(["SaaS", "Makro"], {"THB": [0.0, 500.0], "USD": [900.0, 0.0]})
+    chart = _chart_of(render(spec, charts={0: cd}))
+    assert chart.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED and len(chart.plots[0].series) == 2
+
+
+def test_charts_have_no_automatic_title():
+    spec = {"title": "t", "slides": [{"kind": "chart", "title": "c", "chart": Q}]}
+    chart = _chart_of(render(spec, charts={0: ChartData(["a"], {"THB": [1.0]})}))
+    assert chart._chartSpace.chart.autoTitleDeleted.val is True

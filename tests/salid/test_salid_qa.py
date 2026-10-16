@@ -363,6 +363,13 @@ def test_an_invalid_outline_returns_an_error_and_a_fixed_call_succeeds(settings,
     assert len(a.files) == 1
 
 
+def test_invalid_outline_text_never_reaches_the_logs(settings, seeded, caplog):
+    bad = {"title": "t", "slides": [{"kind": "chart", "title": "c", "notes": "ลับมาก"}]}
+    with caplog.at_level("DEBUG"):
+        deck_ask(settings, seeded, fc_resp(("create_deck", bad)), text_resp("ok"))
+    assert not [r.name for r in caplog.records if "ลับมาก" in r.getMessage()]
+
+
 def test_a_second_create_deck_replaces_the_first(settings, seeded):
     other = {"title": "Second", "slides": [{"kind": "bullets", "title": "b", "bullets": ["x"]}]}
     _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)),
