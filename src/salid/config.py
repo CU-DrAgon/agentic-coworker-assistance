@@ -126,6 +126,19 @@ class Settings(BaseSettings):
     # The name seen in the Live session's own input transcript (fast path, no classic transcription
     # needed): force a turn this long after the speaker went quiet if the model has not answered.
     live_name_reply_seconds: float = 1.5
+    # Mouth gate (code, not prompt): the Live model's voice is played only while the session is
+    # engaged (someone called the name) or answers a tool call made while engaged. A name call can
+    # land in the transcript a moment after the model starts answering, so the first
+    # `live_call_grace_seconds` of an unauthorised turn are held back and released if the name shows
+    # up in that window. Off = v0.8.0 behaviour.
+    live_mouth_gate: bool = True  # SALID_LIVE_MOUTH_GATE
+    live_call_grace_seconds: float = 2.5
+    # A name hit (either detector) counts only if real speech is behind it: noise / an unmuted mic
+    # makes the transcriber hallucinate "หวัดดีครับ สลิด". Frames with RMS >= `name_min_rms` are
+    # voiced; the Live path needs `name_min_voiced_seconds` of them in the last 3 s (0 = off), the
+    # classic path (greeting-only utterances) needs >= 0.8 s and 30% voiced frames.
+    name_min_voiced_seconds: float = 0.4  # SALID_NAME_MIN_VOICED_SECONDS
+    name_min_rms: float = 250.0  # SALID_NAME_MIN_RMS
     # A spoken "one moment" clip while a slow tool (ask_salid) runs; a second line if still waiting.
     live_filler: bool = True
     live_filler_again_seconds: float = 8.0

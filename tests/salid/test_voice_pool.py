@@ -3,6 +3,7 @@ clients, fake voice connections, no Discord."""
 
 import asyncio
 import logging
+from array import array
 from types import SimpleNamespace
 
 import discord
@@ -417,7 +418,7 @@ async def test_spoken_leave_also_sets_the_cooldown(world, monkeypatch):
     s = world.mgr.sessions[(GID, A)]
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด ออกประชุม")
     await world.mgr.handle_segment(
-        s, mt.Segment(10, mt.FRAME if hasattr(mt, "FRAME") else bytes(9600) * 100, 0.0, 2.0)
+        s, mt.Segment(10, array("h", [800] * 960).tobytes() * 100, 0.0, 2.0)
     )
     await asyncio.sleep(0.05)
     assert world.mgr.sessions == {}

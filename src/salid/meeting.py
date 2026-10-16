@@ -71,7 +71,7 @@ SILENCE_S = 1.2  # a pause this long ends a segment
 MAX_SEGMENT_S = 20.0
 MIN_SEGMENT_S = 0.4  # shorter segments are dropped (coughs, clicks); 0.6 lost short greetings
 PAD_GAP_S = 0.15  # shorter gaps inside a segment are filled with silence to keep timing
-MIN_RMS = 80  # int16 RMS below this is treated as silence/noise and not sent to the model
+MIN_RMS = 120  # int16 RMS below this is treated as silence/noise and not sent to the model
 TRANSCRIPT_KEEP_S = 3 * 3600
 TRANSCRIPT_MAX_LINES = 6000
 MEETING_MAX_S = 6 * 3600
@@ -312,6 +312,15 @@ def rms(pcm: bytes) -> float:
     return (sum(x * x for x in sub) / len(sub)) ** 0.5
 
 
+def voiced_fraction(pcm: bytes, min_rms: float = 250.0, frame_bytes: int = 3840) -> float:
+    """Share of 20 ms frames (48 kHz stereo s16le) whose RMS is >= `min_rms`: real speech is voiced
+    in many frames, a click or a breath in a few."""
+    frames = [pcm[i : i + frame_bytes] for i in range(0, len(pcm) - frame_bytes + 1, frame_bytes)]
+    if not frames:
+        return 0.0
+    return sum(1 for f in frames if rms(f) >= min_rms) / len(frames)
+
+
 # ------------------------------------------------------------------ transcription / summary
 class _Heard(BaseModel):
     text: str
@@ -321,9 +330,9 @@ TRANSCRIBE_PROMPT = (
     "ถอดเสียงพูดภาษาไทยหรือภาษาอังกฤษในคลิปนี้ (เสียงของคนคนเดียวในการประชุม) ตามที่พูดจริงทุกคำ "
     "ภาษาอังกฤษที่พูดให้คงเป็นภาษาอังกฤษ ไม่ต้องแปล ไม่ต้องใส่ชื่อผู้พูด\n"
     "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ถ้าได้ยินคำนี้ให้เขียนว่า สลิด "
-    "ชื่อนี้ถูกเรียกบ่อยมาก และมักมี “หวัดดีครับ/หวัดดีค่ะ” นำหน้า (เช่น “หวัดดีครับ สลิด”) "
-    "อย่าตัดคำท้ายประโยคทิ้ง และอย่าฟังชื่อนี้เป็นคำอื่น เช่น สนิท สิริ สลิป\n"
+    "ถ้าได้ยินชื่อ สลิด ให้สะกดว่า สลิด (ไม่ใช่ สนิท สิริ สลิป) อย่าตัดคำท้ายประโยคทิ้ง\n"
     "ถ้าไม่มีเสียงพูดชัดเจน (เงียบ เสียงรบกวน เสียงหายใจ) ให้ตอบ text เป็นสตริงว่าง ห้ามแต่งข้อความขึ้นเอง "
+    "ถ้าไม่แน่ใจว่ามีคำพูดจริง ให้ตอบ text ว่าง ห้ามใส่คำทักทายหรือชื่อที่ไม่ได้ยินชัดเจน "
     'ตอบเป็น JSON {"text": "..."}'
 )
 SUMMARY_PROMPT = """คุณคือ “สลิด” เลขาประชุมของทีม จากบันทึกการประชุมด้านล่าง (รูปแบบ [เวลา] ชื่อ: ข้อความ ถอดจากเสียงอัตโนมัติ อาจมีคำผิด) \
@@ -1563,6 +1572,9 @@ class MeetingManager:
         if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
             s.captions.add(name, text)  # human speech only: never Salid's own words or notes
         said = parse_wake(text)
+        if said is not None and not self._real_call(seg, text, said):
+            logger.info("meeting %s: name hit rejected: no voiced audio", s.guild_id)
+            said = None  # noise the transcriber turned into a greeting: not a call
         called = said is not None
         if called and parse_meeting_command(said) == "leave":
             self._spawn(s, self._leave_politely(s))  # "สลิด ออกประชุม"
@@ -1623,6 +1635,19 @@ class MeetingManager:
             s.tasks = [t for t in s.tasks if not t.done()]
             s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
         await self.answer(s, member, name, question)
+
+    def _real_call(self, seg: Segment, text: str, said: str) -> bool:
+        """A bare greeting / name call (the shape noise is hallucinated into) counts only when the
+        audio behind it is real speech: long enough and with enough voiced frames."""
+        if not (is_greeting(said or text) or len(text.strip()) <= 20):
+            return True  # a real sentence: the energy floor in `enqueue` was enough
+        sets = self.bot.s
+        if float(getattr(sets, "name_min_voiced_seconds", 0.4)) <= 0:
+            return True  # energy gate off
+        return (
+            seg.duration_s >= 0.8
+            and voiced_fraction(seg.pcm, float(getattr(sets, "name_min_rms", 250.0))) >= 0.3
+        )
 
     # ---- listening / engaged
     _DISMISS_RE = re.compile(

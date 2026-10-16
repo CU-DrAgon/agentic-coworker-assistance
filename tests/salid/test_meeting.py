@@ -3,6 +3,7 @@ wake-word answers and the summary on leave. No Discord connection, no Vertex."""
 
 import asyncio
 import time
+from array import array
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -307,8 +308,12 @@ async def test_leave_denied_for_outsiders(env):
 
 
 # ------------------------------------------------------------------ transcription + wake word
+SPEECH_FRAME = array("h", [800] * (PCM_BYTES_PER_SECOND // 100)).tobytes()  # 20 ms, RMS 800
+
+
 def segment(uid):
-    return mt.Segment(uid, FRAME * 100, 0.0, 2.0)
+    # real speech (RMS 800): name hits behind silent audio are rejected by the energy gate
+    return mt.Segment(uid, SPEECH_FRAME * 100, 0.0, 2.0)
 
 
 async def start(env):
@@ -815,10 +820,10 @@ async def test_echo_guard_uses_the_audio_timestamps_when_transcription_lags(voic
     now = time.monotonic()
     # Salid spoke from now-20 to now-6 (cooldown over); the segment was heard at now-15.
     s.speaking_since, s.speaking_until = now - 20, now - 6
-    echo = mt.Segment(11, FRAME * 100, now - 15, 2.0)
+    echo = mt.Segment(11, SPEECH_FRAME * 100, now - 15, 2.0)
     await voice.mgr.handle_segment(s, echo)
     assert asked == []
-    later = mt.Segment(11, FRAME * 100, now - 4, 2.0)  # after the cooldown: a real question
+    later = mt.Segment(11, SPEECH_FRAME * 100, now - 4, 2.0)  # after the cooldown: a real question
     await voice.mgr.handle_segment(s, later)
     assert asked == ["สรุปให้หน่อย"]
     await voice.mgr.end((1000, 77))

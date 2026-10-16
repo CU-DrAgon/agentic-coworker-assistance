@@ -216,9 +216,11 @@ async def test_live_fallback_answers_through_the_agent_and_tts(env, monkeypatch)
 
 
 # ------------------------------------------------------------------ 6. transcription hint
-def test_transcription_prompt_knows_the_assistants_name_and_its_usual_greeting():
+def test_transcription_prompt_knows_the_assistants_name_but_does_not_prime_a_greeting():
+    # v0.8.1: the "usually preceded by หวัดดีครับ" hint made the model hallucinate greetings on noise
     p = mt.TRANSCRIBE_PROMPT
-    assert "สลิด" in p and "Salid" in p and "หวัดดีครับ" in p and "ตามที่พูดจริงทุกคำ" in p
+    assert "สลิด" in p and "Salid" in p and "ตามที่พูดจริงทุกคำ" in p
+    assert "หวัดดีครับ" not in p
 
 
 # ------------------------------------------------------------------ 7. classic greeting

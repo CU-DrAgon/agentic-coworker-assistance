@@ -216,6 +216,13 @@ def ask_salid(question: str) -> dict:
     return {}
 
 
+# Mouth gate: tools the Live model may not call while nobody has called Salid (side effects, or a
+# spoken question). `post_note` (taking notes is her job) is always allowed.
+GATED_TOOLS = frozenset(
+    {"set_captions", "set_recording", "set_minutes_destination", "ask_salid", "answer_privately"}
+)
+NOBODY_ASKED = {"error": "nobody asked: stay silent"}
+FRAME_S = 0.02  # one frame from `feed`
 HEARD_GAP_S = 3.0  # input-transcript text after this much quiet starts a new utterance
 NAME_DEDUPE_S = 10.0  # a classic name hit this soon after a Live-transcript hit is the same call
 # Hand-written fallback pools (i18n ack_voice_* / ack_again_*): a line written for the question is
@@ -514,7 +521,9 @@ def build_instruction_en(
         "- Persona: a friendly, cheerful, easygoing woman's voice. Speak plain natural English only. "
         "Never use Thai words or Thai particles, and refer to yourself only as “Salid”. Never make "
         "animal sounds.\n"
-        "- When you join the room, do not say anything yet: wait until someone greets you or talks to you.\n"
+        "- When you join the room, do not say anything yet: wait until someone greets you or talks to you. "
+        "If nobody calls your name, the system never plays your voice at all, so do not speak on your own "
+        "when you join or when you hear someone unmute their mic / background noise.\n"
         "- If it is unclear whether this is a meeting (no schedule, relaxed chat) and nobody has talked "
         "to you for a while, you may ask like a colleague, e.g. “Is this a meeting today?”, by calling "
         "ask_consent (text by default so it does not disturb; spoken only when someone is talking "
@@ -614,7 +623,8 @@ def build_instruction(
         "ไม่ใช่การเรียกชื่อ ให้เงียบ\n"
         "- ตอบสั้น 1-3 ประโยค เป็นธรรมชาติเหมือนคุยกันจริง ไม่อ่านเป็นรายการยาว ๆ\n"
         "- บุคลิกน่ารัก ร่าเริง เป็นกันเอง เสียงผู้หญิง ลงท้ายด้วย “ค่ะ” “คะ” “นะคะ” ห้ามส่งเสียงสัตว์\n"
-        "- ตอนเข้าห้องอย่าเพิ่งพูดอะไร รอจนมีคนทักหรือคุยกับคุณ\n"
+        "- ตอนเข้าห้องอย่าเพิ่งพูดอะไร รอจนมีคนทักหรือคุยกับคุณ ถ้าไม่มีใครเรียกชื่อคุณ ระบบจะไม่ส่งเสียงของคุณออกไปเลย "
+        "ดังนั้นอย่าพูดเองตอนเข้าห้องหรือตอนได้ยินคนเปิดไมค์ / เสียงรบกวน\n"
         "- ถ้าไม่ชัดว่านี่คือการประชุมไหม (ไม่มีนัดหมาย คุยกันสบาย ๆ) และไม่มีใครคุยกับคุณมาสักพัก คุณถามได้เองแบบเพื่อนร่วมงาน "
         "เช่น “วันนี้ประชุมกันหรือเปล่าคะ” โดยเรียก ask_consent (เป็นข้อความโดยปริยาย จะได้ไม่รบกวน; พูดเฉพาะเมื่อมีคนคุยกับคุณอยู่) "
         "ถ้าตอบว่าไม่ใช่การประชุม/ไม่ต้องจด ให้เรียก set_recording(false) แล้วพูดสั้น ๆ ว่าไม่จดแล้ว และเงียบรอให้เรียก "
@@ -729,6 +739,17 @@ class LiveVoice:
         self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
         self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
+        self._voiced: list[float] = []  # arrival times of recent voiced frames
+        self._rejected_logged = False
+        # mouth gate (see `_gate_audio`)
+        self._held: list[
+            bytes
+        ] = []  # audio of a not-yet-authorised turn, kept for the grace window
+        self._held_since = 0.0  # monotonic time the first held chunk arrived
+        self._turn_ok = False  # this model turn is authorised to be heard
+        self._answer_auth = False  # the last tool call was made while engaged
+        self._muted_logged = False  # the "muted" line was logged for this turn
+        self._gated_turn = False  # this turn had audio the gate held or dropped
         # name heard in the Live input transcript (fast path)
         self._heard_buf = ""
         self._heard_at = 0.0
@@ -789,6 +810,14 @@ class LiveVoice:
             now = time.monotonic()
             self._track_speaker(user_id, now)
             self._check_talkover(user_id, pcm, now)
+            floor = float(getattr(getattr(self.bot, "s", None), "name_min_rms", 250.0))
+            if rms(pcm) >= floor:
+                self._voiced.append(now)  # a voiced 20 ms frame (see `_voiced_s`)
+
+    def _voiced_s(self, now: float) -> float:
+        """Seconds of voiced audio (frames with RMS >= `name_min_rms`) in the last 3 s, any speaker."""
+        self._voiced = [t for t in self._voiced if now - t <= HEARD_GAP_S]
+        return len(self._voiced) * FRAME_S
 
     def _check_talkover(self, uid: int, pcm: bytes, now: float) -> None:
         """Stop when the person Salid is answering clearly talks over her. Anyone else (a side
@@ -975,6 +1004,8 @@ class LiveVoice:
     def notify_state(self, engaged: bool) -> None:
         """Tell the model whether it is engaged in a conversation or only listening."""
         self._engaged = engaged
+        if engaged:
+            self._release_held()  # the name arrived while the first words were being held back
         self._spawn(self._send_state())
 
     async def _send_state(self) -> None:
@@ -1034,6 +1065,14 @@ class LiveVoice:
         said = parse_wake(self._heard_buf)  # the same detector as the classic path
         if said is None:
             return
+        need = float(getattr(self.bot.s, "name_min_voiced_seconds", 0.4))
+        if need > 0 and self._voiced_s(now) < need:
+            # noise / an unmuted mic hallucinated into a greeting: not a call (a later part of the
+            # same utterance with real speech can still be one)
+            if not self._rejected_logged:
+                self._rejected_logged = True
+                logger.info("live: name hit rejected: no voiced audio")
+            return
         self._heard_hit = True
         if parse_meeting_command(said) == "leave":
             return  # "สลิด ออกประชุม": the meeting manager leaves; no reply to force
@@ -1063,6 +1102,7 @@ class LiveVoice:
         puts it back to listening (like the classic path), then start a fresh buffer."""
         text, hit = self._heard_buf.strip(), self._heard_hit
         self._heard_buf, self._heard_hit = "", False
+        self._rejected_logged = False
         if text and not hit and self._engaged:
             mgr = self.bot.meetings
             if mgr.is_dismissal(text):
@@ -1199,8 +1239,8 @@ class LiveVoice:
         if sc.model_turn is not None and not self._muted_turn:
             for part in sc.model_turn.parts or []:
                 data = part.inline_data.data if part.inline_data is not None else None
-                if data:
-                    self._on_audio(data)
+                if data and not self._muted_turn:  # a gate drop mutes the rest of the message too
+                    self._gate_audio(data)
         it = sc.input_transcription
         if it is not None and it.text:
             self._on_heard(it.text)
@@ -1455,19 +1495,49 @@ class LiveVoice:
     async def _on_tool_call(self, live: Any, tool_call: Any) -> None:
         """The tools run in the background: the receiver keeps handling audio, transcripts and
         interruptions while the brain works (a re-asked question can then join / replace it)."""
-        self._awaiting_answer = True  # the turn_complete that follows is not the end of the answer
-        task = asyncio.create_task(self._run_tool_call(live, tool_call))
+        engaged = self._gate_open()
+        self._answer_auth = engaged  # a spoken answer to a call made while engaged may be heard
+        if any(
+            self._refusal(fc.name, dict(fc.args or {}), engaged) is None
+            for fc in tool_call.function_calls or []
+        ):
+            # the turn_complete that follows is not the end of the answer (a call refused below
+            # produces no answer to wait for)
+            self._awaiting_answer = True
+        task = asyncio.create_task(self._run_tool_call(live, tool_call, engaged))
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
 
-    async def _run_tool_call(self, live: Any, tool_call: Any) -> None:
+    def _gate_open(self) -> bool:
+        """Someone called Salid (or the mouth gate is off): she may speak and act."""
+        return not getattr(self.bot.s, "live_mouth_gate", True) or bool(self.session.engaged)
+
+    @staticmethod
+    def _refusal(name: str, args: dict, engaged: bool) -> dict | None:
+        """Mouth gate for tools: while nobody has called Salid the model may only take notes. A
+        refused call has no side effect (and no filler); `ask_consent` stays free as text."""
+        if engaged or name == "post_note":
+            return None
+        if name == "ask_consent":
+            return None if str(args.get("medium", "text")) == "text" else NOBODY_ASKED
+        return NOBODY_ASKED if name in GATED_TOOLS else None
+
+    async def _run_tool_call(self, live: Any, tool_call: Any, engaged: bool = True) -> None:
         try:
             responses = []
             for fc in tool_call.function_calls or []:
                 logger.info("live: tool call %s", fc.name)  # name only: arguments may hold PII
-                filler = self._start_filler(fc.name, dict(fc.args or {}))
+                args = dict(fc.args or {})
+                result = self._refusal(fc.name, args, engaged)
+                if result is not None:
+                    logger.info("live: tool call %s refused (listening)", fc.name)
+                    responses.append(
+                        types.FunctionResponse(id=fc.id, name=fc.name, response=result)
+                    )
+                    continue
+                filler = self._start_filler(fc.name, args)
                 try:
-                    result = await self._run_tool(fc.name, dict(fc.args or {}))
+                    result = await self._run_tool(fc.name, args)
                 finally:
                     if filler is not None:
                         filler.cancel()
@@ -1481,6 +1551,58 @@ class LiveVoice:
             self._awaiting_answer = False
 
     # ---- audio out
+    # Mouth gate. The model is told to stay silent while listening, but sometimes speaks anyway
+    # (an unmuted mic or a noise starts a turn). So the rule is in code: model audio is played only
+    # if the session is engaged (the name was heard by either detector), or if it answers a tool
+    # call made while engaged. A turn that is neither is held for `live_call_grace_seconds`
+    # (the name can reach the transcript a moment after the model starts to answer); the name in
+    # that window releases it (`notify_state(True)`), otherwise it is dropped for the whole turn.
+    def _gate_audio(self, data: bytes) -> None:
+        if not getattr(self.bot.s, "live_mouth_gate", True):
+            self._on_audio(data)
+            return
+        if self._turn_ok or self.session.engaged or (self._awaiting_answer and self._answer_auth):
+            self._turn_ok = True
+            self._release_held()
+            self._on_audio(data)
+            return
+        now = time.monotonic()
+        if not self._held:
+            self._held_since = now
+        grace = float(getattr(self.bot.s, "live_call_grace_seconds", 2.5))
+        if now - self._held_since <= grace:
+            self._held.append(data)
+            self._gated_turn = True
+            return
+        self._drop_unsolicited()  # no name in time: this turn stays muted to its end
+
+    def _release_held(self) -> None:
+        """The name arrived: play what was held back, if it was held for no longer than the grace."""
+        held, self._held = self._held, []
+        if not held:
+            return
+        grace = float(getattr(self.bot.s, "live_call_grace_seconds", 2.5))
+        if time.monotonic() - self._held_since > grace:  # too late: the rest of the turn too
+            self._gated_turn = True
+            self._muted_turn = self._turn_open
+            self._log_muted()
+            return
+        self._turn_ok = True
+        self._gated_turn = False
+        for chunk in held:
+            self._on_audio(chunk)
+
+    def _drop_unsolicited(self) -> None:
+        self._held.clear()
+        self._gated_turn = True
+        self._muted_turn = self._turn_open  # the rest of this turn is dropped like a "stop"
+        self._log_muted()
+
+    def _log_muted(self) -> None:
+        if not self._muted_logged:
+            self._muted_logged = True
+            logger.info("live: unsolicited audio muted (listening)")
+
     def _on_audio(self, data: bytes) -> None:
         s = self.session
         if s.ending or s.leaving or not self.bot.s.voice_reply or not _connected(s.vc):
@@ -1783,6 +1905,13 @@ class LiveVoice:
 
     def _turn_complete(self) -> None:
         self._turn_open = False
+        if self._gated_turn and not self._turn_ok:
+            # unsolicited turn: its held audio is discarded and its words are never posted
+            self._held.clear()
+            self._log_muted()
+            self._muted_turn = True
+            self._awaiting_answer = False  # nothing will be answered out loud
+        self._turn_ok = self._gated_turn = self._muted_logged = False
         if self._muted_turn:  # the rest of a turn somebody stopped: never posted or played
             self._muted_turn = False
             self._said.clear()
@@ -1817,6 +1946,7 @@ class LiveVoice:
             self._filler_task.cancel()
         self.stop_playback()
         self._said.clear()
+        self._held.clear()
         self._turn_audio = False
         self._awaiting_answer = False
 
@@ -1835,6 +1965,7 @@ class LiveVoice:
         if self._source is not None:
             self._source.finish()
         self._said.clear()
+        self._held.clear()
         self._turn_audio = self._awaiting_answer = False
 
     def _spawn(self, coro: Any) -> None:
