@@ -37,6 +37,7 @@ from pydantic import BaseModel
 
 from meeting_scribe.audio import to_flac
 
+from . import meeting_doc as md
 from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
 from .gate import GateLine, notes_from_transcript
@@ -49,6 +50,7 @@ from .minutes import (
     resolve_channel,
 )
 from .naming import find_call
+from .pdf_report import find_fonts
 from .permissions import channel_missing, permission_message
 from .speech import pcm_duration_s, pcm_source, say, spoken_text, with_particle
 from .voice_pool import Claim, VoiceBody, VoicePool, pick_victim, room_score
@@ -523,6 +525,9 @@ class MeetingSession:
     # Recording state: "unknown" (joined by itself, not known to be a meeting), "recording" or
     # "not_recording" (nothing is logged to memory, no summary). See MeetingManager.set_recording.
     recording: str = "recording"
+    # Wall-clock time of the last "not recording" switch: lines before it were forgotten, so the
+    # minutes document (and its rebuild from memory) starts here.
+    transcript_from: datetime | None = None
     consent: str | None = None  # None = not asked, "pending", "answered", "assumed"
     consent_until: float = 0.0
     consent_medium: str = "text"
@@ -635,13 +640,14 @@ class MeetingManager:
             raise RuntimeError(f"voice body {body.index} cannot see channel {channel.id}")
         return await hchan.connect(cls=voice_recv.VoiceRecvClient)
 
-    async def _post(self, session: MeetingSession, text: str):
+    async def _post(self, session: MeetingSession, text: str, files=None):
         """Post to the meeting's text chat (else the fallback channel); the sent message or None."""
+        kw = {"files": files} if files else {}
         for ch in (session.text_channel, session.fallback_channel):
             if ch is None:
                 continue
             try:
-                return await ch.send(text)
+                return await ch.send(text, **kw)
             except discord.HTTPException:
                 logger.warning("could not post to channel %s", getattr(ch, "id", "?"))
         return None
@@ -707,6 +713,7 @@ class MeetingManager:
         if s.leaving:  # leaving is the system's job, not "stop taking notes"
             return {"status": "ignored", "reason": "leaving the meeting; say only a short goodbye"}
         s.recording = "not_recording"
+        s.transcript_from = self.bot.s.now()
         s.transcript.lines.clear()
         s.captions.turn_off()  # no notes means no subtitles either, unless asked for again
         return {"status": "not_recording"}
@@ -1205,6 +1212,9 @@ class MeetingManager:
             "first_grace": s.first_grace,
             "minutes_channel_id": s.minutes_channel_id,
             "recording": s.recording,
+            "transcript_from": s.transcript_from.isoformat(timespec="seconds")
+            if s.transcript_from
+            else None,
         }
         try:
             await asyncio.to_thread(store.put_active_meeting, rec)
@@ -1305,12 +1315,15 @@ class MeetingManager:
             body=body or self.pool.main, origin=rec.get("origin") or "command",
             minutes_channel_id=rec.get("minutes_channel_id"),
             recording=rec.get("recording") or "recording",
+            transcript_from=(
+                datetime.fromisoformat(rec["transcript_from"]) if rec.get("transcript_from") else None
+            ),
         )  # fmt: skip
         for m in humans:
             session.attendee_ids.add(m.id)
         try:
             for at, speaker, text in await asyncio.to_thread(
-                self._logged_lines, guild, channel, started_at
+                self._logged_lines, guild, channel, session.transcript_from or started_at
             ):
                 session.transcript.add(at, speaker, text)
         except Exception:
@@ -1803,6 +1816,7 @@ class MeetingManager:
             s.speech_ready = True
             if not bot.s.voice_reply or s.ending:
                 return
+            await self._log_salid_line(s, spoken)
             await self._play(s, pcm)  # waits for a playing acknowledgment instead of cutting it off
         except asyncio.CancelledError:
             raise
@@ -1811,6 +1825,19 @@ class MeetingManager:
         finally:
             s.speech_pending = False
             s.speech_ready = False
+
+    async def _log_salid_line(self, s: MeetingSession, spoken: str) -> None:
+        """Salid's own spoken answer joins the transcript (as "สลิด") and the voice log, so the
+        minutes document shows both sides. Not while not recording. Never raises."""
+        if s.recording == "not_recording" or not spoken.strip():
+            return
+        try:
+            now = self.bot.s.now()
+            s.transcript.add(now, md.SALID_SPEAKER, spoken)
+            uid = getattr(getattr(self.bot, "user", None), "id", 0) or 0
+            await self.bot.record_voice(s.voice_channel, uid, md.SALID_SPEAKER, spoken, now)
+        except Exception:
+            logger.warning("could not log Salid's spoken line", exc_info=True)
 
     async def _play(self, s: MeetingSession, pcm: bytes) -> None:
         """Play PCM (24 kHz mono) and wait until it ends; clips queue on `play_lock` so they never
@@ -1890,17 +1917,72 @@ class MeetingManager:
                 except Exception:
                     logger.exception("meeting end callback failed")
 
-    async def _post_minutes(self, s: MeetingSession, text: str):
+    async def _post_minutes(self, s: MeetingSession, text: str, files=None):
         """The summary goes to the channel chosen for the minutes, else (or if that fails) to the
         meeting's own text channel."""
+        kw = {"files": files} if files else {}
         if s.minutes_channel_id is not None:
             ch = s.voice_channel.guild.get_channel(s.minutes_channel_id)
             if ch is not None:
                 try:
-                    return await ch.send(text)
+                    return await ch.send(text, **kw)
                 except discord.HTTPException:
                     logger.warning("could not post the minutes to channel %s", ch.id)
+        if files:
+            return await self._post(s, text, files=files)
         return await self._post(s, text)
+
+    def _attendee_names(self, s: MeetingSession) -> list[str]:
+        """Display names of everyone who was in the room or spoke (humans only)."""
+        guild = s.voice_channel.guild
+        names: list[str] = []
+        for uid in sorted(s.attendee_ids):
+            m = guild.get_member(uid)
+            if m is None or getattr(m, "bot", False):
+                continue
+            n = getattr(m, "display_name", "")
+            if n and n not in names:
+                names.append(n)
+        return names
+
+    async def _minutes_doc_file(self, s: MeetingSession, ended: datetime):
+        """The minutes document (summary + who said what) as a PDF `discord.File`, attached to the
+        first summary message. Flag `meeting_transcript_doc`; never for a not-recording / declined
+        meeting. None when off or on failure; never raises."""
+        try:
+            bot = self.bot
+            if s.recording == "not_recording" or not bot.team.enabled(
+                s.guild_id, "meeting_transcript_doc"
+            ):
+                return None
+            lines = [(ln.at, ln.speaker, ln.text) for ln in s.transcript.lines]
+            info = md.MeetingInfo(
+                room=getattr(s.voice_channel, "name", ""),
+                started_at=s.started_at,
+                ended_at=ended,
+                attendees=self._attendee_names(s),
+                summary=s.summary_text,
+            )
+            lang = s.lang
+            markdown = md.render_markdown(info, md.group_turns(lines), lang)
+
+            def fonts():
+                return find_fonts(bot.s.pdf_font)
+
+            try:
+                fmt = "pdf"
+                data = await asyncio.to_thread(
+                    md.build_file, fmt, markdown, org=getattr(s.voice_channel.guild, "name", ""),
+                    lang=lang, generated_at=ended, fonts=fonts,
+                )  # fmt: skip
+            except Exception:
+                logger.warning("minutes PDF failed; attaching Markdown", exc_info=True)
+                fmt, data = "md", markdown.encode("utf-8")
+            name = f"{md.file_stem(s.started_at)}.{fmt}"
+            return discord.File(io.BytesIO(data), filename=name)
+        except Exception:
+            logger.warning("could not build the minutes document", exc_info=True)
+            return None
 
     def _store_minutes(self, s: MeetingSession, reason: str) -> None:
         """Keep the summary text so it can be sent elsewhere later (deliver_minutes). Never raises."""
@@ -1921,6 +2003,10 @@ class MeetingManager:
                     "ended_at": ended,
                     "reason": reason,
                     "language": s.language,
+                    "attendee_names": self._attendee_names(s),
+                    "transcript_from": s.transcript_from.isoformat(timespec="seconds")
+                    if s.transcript_from
+                    else None,
                     "summary": s.summary_text[:SUMMARY_MAX_CHARS],
                 },
             )
@@ -1952,8 +2038,9 @@ class MeetingManager:
         why = t(f"end_{reason}", s.lang) if reason in END_REASONS else reason
         header = t("meet_summary_header", s.lang, reason=why)
         s.summary_text = body
+        doc = await self._minutes_doc_file(s, self.bot.s.now())
         for i, part in enumerate(chunks(header + body, 1900)):
-            sent = await self._post_minutes(s, part)
+            sent = await self._post_minutes(s, part, files=[doc] if i == 0 and doc else None)
             if i == 0 and sent is not None:
                 s.summary_url = getattr(sent, "jump_url", "") or ""
         await asyncio.to_thread(self._store_minutes, s, reason)

@@ -21,6 +21,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         # chat actions
         "send_dm",
         "deliver_minutes",
+        "meeting_document",  # sends the file to the speaker only
         "set_my_notifications",
         # coordinator
         "update_task",

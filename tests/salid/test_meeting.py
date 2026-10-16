@@ -1124,3 +1124,93 @@ async def test_spoken_leave_ends_the_meeting(env, monkeypatch):
     await env.mgr.handle_segment(s, segment(10))
     await asyncio.sleep(0.05)
     assert (1000, 77) not in env.mgr.sessions
+
+
+# ------------------------------------------------------------------ minutes document at the end
+class FileChannel(FakeVoiceChannel):
+    def __init__(self):
+        super().__init__()
+        self.files = []
+
+    async def send(self, text, files=None, **_):
+        self.sent.append(text)
+        self.files.append(list(files or []))
+
+
+async def _doc_env(env):
+    env.chan = FileChannel()
+    env.chan.guild = env.guild
+    return await start(env)
+
+
+async def test_end_attaches_the_minutes_pdf_to_the_first_summary_message(env):
+    s = await _doc_env(env)
+    now = env.bot.s.now()
+    s.transcript.add(now, "แอน", "ให้บอยส่งรายงานวันศุกร์")
+    s.transcript.add(now, mt.md.SALID_SPEAKER, "รับทราบค่ะ")
+    s.attendee_ids |= {10, 11}
+    env.llm.models.script = [text_resp("**สรุปการประชุม**\nบอยส่งรายงานวันศุกร์")]
+    await env.mgr.end((1000, 77), "command")
+    assert "สรุปการประชุม" in env.chan.sent[-1]  # the summary text is unchanged
+    doc = env.chan.files[-1]
+    assert len(doc) == 1 and doc[0].filename.startswith("minutes-")
+    assert doc[0].filename.endswith((".pdf", ".md"))
+    doc[0].fp.seek(0)
+    data = doc[0].fp.read()
+    if doc[0].filename.endswith(".pdf"):
+        assert data.startswith(b"%PDF")
+    else:
+        text = data.decode()
+        assert "แอน" in text and "สลิด" in text and "บทพูดของแต่ละคน" in text
+
+
+async def test_no_minutes_document_when_the_flag_is_off(env):
+    env.bot.guilds_store.save_settings(
+        1000, GuildSettingsUpdate(features=dict(meeting_transcript_doc=False)), "x"
+    )
+    await asyncio.to_thread(env.bot.team.current, 1000)
+    s = await _doc_env(env)
+    s.transcript.add(env.bot.s.now(), "แอน", "ให้บอยส่งรายงานวันศุกร์")
+    env.llm.models.script = [text_resp("**สรุปการประชุม**\nx")]
+    await env.mgr.end((1000, 77), "command")
+    assert env.chan.sent and all(f == [] for f in env.chan.files)
+
+
+async def test_no_minutes_document_when_not_recording(env):
+    s = await _doc_env(env)
+    s.transcript.add(env.bot.s.now(), "แอน", "ก่อนหยุด")
+    env.mgr.set_recording(s, False)
+    assert s.transcript_from is not None and len(s.transcript) == 0
+    await env.mgr.end((1000, 77), "command")
+    assert all(f == [] for f in env.chan.files)
+
+
+async def test_lines_before_a_pause_are_not_in_the_document(env):
+    s = await _doc_env(env)
+    s.transcript.add(env.bot.s.now(), "แอน", "ความลับก่อนหยุด")
+    env.mgr.set_recording(s, False)
+    env.mgr.set_recording(s, True)
+    s.transcript.add(env.bot.s.now(), "บอย", "หลังกลับมา")
+    s.attendee_ids.add(10)
+    env.llm.models.script = [text_resp("**สรุปการประชุม**\nx")]
+    await env.mgr.end((1000, 77), "command")
+    doc = env.chan.files[-1][0]
+    doc.fp.seek(0)
+    data = doc.fp.read()
+    if doc.filename.endswith(".md"):
+        assert (
+            b"\xe0\xb8\x84\xe0\xb8\xa7\xe0\xb8\xb2\xe0\xb8\xa1\xe0\xb8\xa5\xe0\xb8\xb1\xe0\xb8\x9a"
+            not in data
+        )
+    assert "ความลับก่อนหยุด" not in env.llm.models.calls[0][1][0]
+
+
+async def test_salid_spoken_line_is_logged_to_the_transcript(env):
+    s = await _doc_env(env)
+    await env.mgr._log_salid_line(s, "รับทราบค่ะ")
+    assert [(ln.speaker, ln.text) for ln in s.transcript.lines] == [
+        (mt.md.SALID_SPEAKER, "รับทราบค่ะ")
+    ]
+    env.mgr.set_recording(s, False)
+    await env.mgr._log_salid_line(s, "ไม่ควรถูกเก็บ")
+    assert len(s.transcript) == 0

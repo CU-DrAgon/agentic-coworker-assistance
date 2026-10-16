@@ -91,6 +91,7 @@ from .markets_bot import MarketsMixin
 from .media import media_candidates
 from .media_bot import MediaMixin
 from .meeting import MeetingManager, parse_meeting_command
+from .meeting_doc_bot import MeetingDocMixin
 from .memory import (
     MemoryScheduler,
     MemoryService,
@@ -321,6 +322,7 @@ class SecretaryBot(
     TravelMixin,
     MarketsMixin,
     IdeasMixin,
+    MeetingDocMixin,
     CompanyMixin,
     ContestsMixin,
     BizfinMixin,
@@ -2043,6 +2045,7 @@ class SecretaryBot(
                 else self._poll_form_tools(message, guild, asker, is_exec, lang, new_id())
             ),
             *([] if interjection else self._catchup_tools(guild, asker, memory)),
+            *([] if interjection else self._meeting_doc_tools(message, guild, asker, lang, loop)),
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
             *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._places_tools(message, guild, asker, is_exec)),
