@@ -106,6 +106,8 @@ class BriefingMixin:
         )
         if inp.catchup:  # deterministic and link-complete: appended, never rewritten by the model
             text = f"{text}\n\n{inp.catchup}"
+        if inp.notes:  # leave-time and weather lines, built in code from the member's own places
+            text = text + "\n\n" + "\n".join(inp.notes)
         for chunk in split_message(text):
             res = await send_dm(member, chunk)
             if not res.ok:
@@ -170,6 +172,12 @@ class BriefingMixin:
                 if prefs.doc_alerts != "off" and (d.get("important") or prefs.doc_alerts == "all")
             ]
             inp.catchup = self._catchup_brief_text(guild, member, now, prefs.weekends)
+            if self.s.maps_enabled and not inp.is_empty():  # leave-time + office weather lines
+                mine = [
+                    m for m in self.scheduler.upcoming(gid, a, b)
+                    if uid in m.get("attendee_ids", []) and m.get("place_id")
+                ]  # fmt: skip
+                inp.notes = self._maps_brief_notes(guild, member, mine, now, self._guild_lang(gid))
             return inp
         iso = today.isoformat()
         stores = self.secretary_store.list_meetings(

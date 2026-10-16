@@ -990,6 +990,14 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "สลิดเห็นว่าคุณพิมพ์ที่อยู่ “{name}” ไว้ในห้องแชต: {address}\nให้สลิดจำไว้เป็นที่ส่วนตัวของคุณไหมคะ (เห็นได้คนเดียว แชร์ให้ใครทีหลังได้ ลืมได้ทุกเมื่อ) ตอบ “จำไว้” หรือ “ไม่ต้อง” ได้เลยค่ะ สลิดจะถามแค่ครั้งนี้ครั้งเดียว",
         "en": "Salid noticed you wrote the address “{name}” in a channel: {address}\nShall Salid remember it as your own private place (only you can see it; you can share it later and I can forget it any time)? Just reply “remember it” or “no thanks”. I will only ask this once.",
     },
+    "bf_leave_line": {
+        "th": "ควรออกจาก{origin} ประมาณ {leave} (ใช้เวลา ~{minutes} นาที) ไปประชุม “{title}” ที่{place}",
+        "en": "Leave {origin} around {leave} (~{minutes} min) for “{title}” at {place}",
+    },
+    "bf_weather_line": {
+        "th": "อากาศที่{place}วันนี้: {summary}",
+        "en": "Weather at {place} today: {summary}",
+    },
     "place_event_dm": {
         "th": "📍 {where}\n🗺️ {maps}",
         "en": "📍 {where}\n🗺️ {maps}",

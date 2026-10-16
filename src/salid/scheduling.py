@@ -401,7 +401,7 @@ class MeetingService:
     ) -> dict:
         """`place`: a remembered place every invitee may know (salid.places.place_for_event). The
         address goes into the invitation DMs; into the Discord event (visible to the whole server)
-        only when the whole server may know it. It is not kept on the meeting record."""
+        only when the whole server may know it. The record keeps only its id (never the address)."""
         end = start + timedelta(minutes=duration_minutes)
         link = normalize_link(link) if link else ""
         shown = bool(place and place.get("public"))
@@ -429,6 +429,9 @@ class MeetingService:
             "text_channel_id": tc,
             "link": link,
             "link_type": classify_link(link),
+            "place_id": place["id"]
+            if place and place.get("id")
+            else "",  # an id, never the address
             "organizer_id": organizer.id,
             "organizer_name": organizer.display_name,
             "attendee_ids": [a.id for a in attendees],

@@ -72,6 +72,7 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .maps_bot import MapsMixin
 from .media import media_candidates
 from .media_bot import MediaMixin
 from .meeting import MeetingManager, parse_meeting_command
@@ -275,6 +276,7 @@ class SecretaryBot(
     PrivateChatMixin,
     BroadcastMixin,
     PlacesMixin,
+    MapsMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -1874,6 +1876,7 @@ class SecretaryBot(
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
             *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._places_tools(message, guild, asker, is_exec)),
+            *([] if interjection else self._maps_tools(message, guild, asker, is_exec, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]

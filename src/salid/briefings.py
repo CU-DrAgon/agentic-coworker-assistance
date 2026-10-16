@@ -462,6 +462,7 @@ class BriefInput:
     still_open: list[dict] = field(default_factory=list)  # evening: {id, title, due}
     tomorrow: list[dict] = field(default_factory=list)  # evening: {time, title, link}
     catchup: str = ""  # morning: short "while you were away" text, appended after the brief
+    notes: list[str] = field(default_factory=list)  # morning: maps lines, appended verbatim
     approvals: list[dict] = field(
         default_factory=list
     )  # morning: {id, requester, title, amount, days}

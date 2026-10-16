@@ -1122,6 +1122,18 @@
   "th": "สถานที่ส่วนตัวเห็นได้เฉพาะผู้ที่เจ้าตัวอนุญาต",
   "en": "Personal places are visible only to who the owner allows"
  },
+ "f_maps_n": {
+  "th": "เวลาเดินทางและสภาพอากาศ",
+  "en": "Travel time and weather"
+ },
+ "f_maps_d": {
+  "th": "สลิดประเมินเวลาเดินทางและเส้นทางด้วย Google Maps (รถติดแค่ไหน ควรออกกี่โมง) และดูพยากรณ์อากาศ (ฝนตกไหม) ให้เมื่อมีคนถาม",
+  "en": "Salid estimates travel time and routes with Google Maps (traffic, when to leave) and checks the weather forecast (will it rain) when asked."
+ },
+ "f_maps_w": {
+  "th": "ต้องเปิดใช้ Google Maps API ฝั่งเซิร์ฟเวอร์ (SALID_MAPS_ENABLED) ด้วย; ที่อยู่ส่วนตัวไม่ถูกเปิดเผยในห้องรวม",
+  "en": "Also needs the Google Maps APIs enabled server-side (SALID_MAPS_ENABLED); private addresses are never shown in shared rooms"
+ },
  "morning_time_l": {
   "th": "เวลาสรุปเช้า (DM)",
   "en": "Morning brief time (DM)"
@@ -1283,8 +1295,9 @@ const FEATURES = [
   { id: "polls" },
   { id: "wiki" },
   { id: "places" },
+  { id: "maps" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1517,7 +1530,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, ...s.features, private_channels: true };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, ...s.features, private_channels: true, maps: true };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1601,7 +1614,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

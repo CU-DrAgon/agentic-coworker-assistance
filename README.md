@@ -495,6 +495,14 @@ SALID_GEMINI_CLI_PATH=/path/to/gemini SALID_DB_PATH=./data/demo.db \
 uv run pytest -m live -q                                 # one real Vertex call (skipped by default)
 ```
 
+### Travel time and weather (Google Maps Platform)
+
+Off by default. Enable `routes.googleapis.com`, `places.googleapis.com` and `weather.googleapis.com`
+on the project, give the Cloud Run service account access (it authenticates with ADC, no key), then
+set `SALID_MAPS_ENABLED=true`. Per guild the `maps` flag (hub) turns it off. If the Weather API
+rejects OAuth, put an API key in Secret Manager and expose it as `SALID_MAPS_API_KEY` (fallback
+only, never logged). Optional WeatherNext 2 ensemble: `SALID_WEATHERNEXT_BQ_DATASET=<project>.<dataset>`.
+
 ## Deploying Salid
 
 Salid runs as a Cloud Run **worker pool** (no HTTP port; it holds the Discord gateway connection).
