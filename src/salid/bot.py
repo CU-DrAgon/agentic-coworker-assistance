@@ -22,6 +22,7 @@ from .archive import make_archive
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
 from .captions import captions_tools
+from .catchup_bot import CatchupMixin
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
 from .chat_tools import ChatActions
 from .config import Settings
@@ -259,6 +260,7 @@ class SecretaryBot(
     TranslateMixin,
     FreetimeMixin,
     PollsMixin,
+    CatchupMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -1821,6 +1823,7 @@ class SecretaryBot(
                 if interjection
                 else self._poll_form_tools(message, guild, asker, is_exec, lang, new_id())
             ),
+            *([] if interjection else self._catchup_tools(guild, asker, memory)),
         ]
         return {
             "language": setting,
@@ -2222,6 +2225,7 @@ class SecretaryBot(
                     app_commands.Command(name=name, description=desc, callback=cb)
                 )
         self._register_coo_commands()  # /รายงาน /report
+        self._register_catchup_commands()  # /ตามทัน /catchup
 
     async def handle_summary(
         self,

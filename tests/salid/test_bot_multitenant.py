@@ -419,6 +419,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "สรุป",
         "summary",
         "รายงาน",
+        "ตามทัน",
+        "catchup",
         "report",
     }
     assert all(c.guild_only for c in cmds.values())

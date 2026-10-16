@@ -104,6 +104,8 @@ class BriefingMixin:
         text = await asyncio.to_thread(
             bf.build_brief, self.llm, self.s.gemini_model, inp, lang, profile_block(profile)
         )
+        if inp.catchup:  # deterministic and link-complete: appended, never rewritten by the model
+            text = f"{text}\n\n{inp.catchup}"
         for chunk in split_message(text):
             res = await send_dm(member, chunk)
             if not res.ok:
@@ -166,6 +168,7 @@ class BriefingMixin:
                 for d in self.alerts.since(gid, uid, since)
                 if prefs.doc_alerts != "off" and (d.get("important") or prefs.doc_alerts == "all")
             ]
+            inp.catchup = self._catchup_brief_text(guild, member, now, prefs.weekends)
             return inp
         iso = today.isoformat()
         stores = self.secretary_store.list_meetings(
