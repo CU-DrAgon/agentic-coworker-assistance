@@ -104,6 +104,7 @@ from .permissions import (
     guild_missing,
     permission_message,
 )
+from .places_bot import PlacesMixin
 from .profiles import ProfileMixin, effective_language, profile_block
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
@@ -248,7 +249,9 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client):
+class SecretaryBot(
+    CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, PlacesMixin, discord.Client
+):
     def __init__(
         self,
         settings: Settings,
@@ -366,6 +369,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
+        self._places_init()  # remembered places (salid.places_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1786,6 +1790,8 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         chat_actions = self._chat_actions(
             message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
         )
+        if not interjection:  # remembered places (salid.places): same tools in chat and voice
+            coo_tools = [*coo_tools, *self._places_tools(message, guild, asker, is_exec)]
         return {
             "language": setting,
             "memory": memory,
@@ -1798,12 +1804,13 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         }
 
     @staticmethod
-    def room_message(guild, asker, channel):
+    def room_message(guild, asker, channel, room=None):
         """What a message-bound tool needs from a voice meeting: the room's text channel as the
-        current channel, the asker as author, and no attachments or reply."""
+        current channel, the asker as author, and no attachments or reply. `room`: the ids of the
+        humans present (the audience of every answer)."""
         return SimpleNamespace(
             id=0, guild=guild, channel=channel, author=asker, content="", attachments=[],
-            reference=None,
+            reference=None, room=frozenset(room) if room is not None else None,
         )  # fmt: skip
 
     def _room_secretary(self, guild, asker, is_exec: bool, lang: str, text_channel_id: int | None):
@@ -1830,6 +1837,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             state=self.secretary_state,
             run=lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=60),
             service=self.scheduler,
+            places=self._places_resolver(guild, asker, is_exec),
             sender=self.email_sender,
             documents=on["documents"],
             scheduling=on["scheduling"],
@@ -2667,6 +2675,8 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             record = self._memory_message(message, own, cid, thread_id)
             if record is not None:
                 self._memory_enqueue(partial(self.memory.record, record))
+                if not own:
+                    self._places_hook(message, cid)  # address-looking text -> remembered places
             if previous == "off" and not own:  # switched on elsewhere (hub): tell the channel once
                 target = message.channel if thread_id is None else message.channel.parent
                 await self._memory_notice(target or message.channel, gid)
@@ -2747,6 +2757,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
     async def on_raw_message_delete(self, payload) -> None:
         if payload.guild_id is not None:
             self._asks_forget(payload.guild_id, {payload.message_id})
+            await self._places_source_deleted(payload.guild_id, {payload.message_id})
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, [payload.message_id])
             )
@@ -2754,6 +2765,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
     async def on_raw_bulk_message_delete(self, payload) -> None:
         if payload.guild_id is not None:
             self._asks_forget(payload.guild_id, set(payload.message_ids))
+            await self._places_source_deleted(payload.guild_id, set(payload.message_ids))
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, sorted(payload.message_ids))
             )

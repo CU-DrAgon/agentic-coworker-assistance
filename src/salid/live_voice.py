@@ -778,7 +778,7 @@ class LiveVoice:
         if guild is not None:
             here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
             kw = bot._agent_kwargs(
-                bot.room_message(guild, asker, here),
+                bot.room_message(guild, asker, here, room={h.id for h in humans}),
                 guild,
                 asker,
                 everyone_exec,

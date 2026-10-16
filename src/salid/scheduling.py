@@ -397,10 +397,17 @@ class MeetingService:
         description: str,
         organizer,
         text_channel_id: int | None,
+        place: dict | None = None,
     ) -> dict:
+        """`place`: a remembered place every invitee may know (salid.places.place_for_event). The
+        address goes into the invitation DMs; into the Discord event (visible to the whole server)
+        only when the whole server may know it. It is not kept on the meeting record."""
         end = start + timedelta(minutes=duration_minutes)
         link = normalize_link(link) if link else ""
-        loc = link or "Discord"
+        shown = bool(place and place.get("public"))
+        loc = link or (place["address"][:100] if shown else "Discord")
+        if shown and not description.endswith(place["maps_link"]):
+            description = f"{description}\n{place['maps_link']}".strip()
         spec = EventSpec(title, start, end, description, voice_channel, loc)
         event_id, url = await self.calendar.create_event(guild, spec)
         tc = voice_channel.id if voice_channel is not None else text_channel_id
@@ -451,6 +458,13 @@ class MeetingService:
             by=organizer.display_name,
             link=join_link(m),
         )
+        if place:
+            invite += "\n" + t(
+                "place_event_dm",
+                lang,
+                where=f"{place['name']}: {place['address']}",
+                maps=place["maps_link"],
+            )
         for a in attendees:
             if a.id == organizer.id:
                 continue

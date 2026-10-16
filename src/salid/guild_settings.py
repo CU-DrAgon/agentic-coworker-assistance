@@ -80,6 +80,7 @@ FEATURES = (
     "followups",
     "reports",
     "briefings",
+    "places",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -133,6 +134,7 @@ class Features(BaseModel):
     followups: bool = True  # daily DM to members with open tasks (needs `memory`)
     reports: bool = True  # evening report to the private reports channel (needs `memory`)
     briefings: bool = True  # personal morning / evening briefs, doc alerts, ask reminders (DM)
+    places: bool = True  # remembers head office / branches / consented personal places
 
 
 class Channel(BaseModel):

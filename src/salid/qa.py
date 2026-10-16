@@ -25,6 +25,7 @@ from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
 from .memory_store import MemoryMessage, MemoryStore
 from .memory_summary import render_summary
+from .places import PLACES_PROMPT
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
 from .web_read import make_read_web
@@ -1136,6 +1137,7 @@ def system_prompt(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    places: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1163,6 +1165,8 @@ def system_prompt(
         p += MEMORY_PROMPT
     if coo:
         p += COO_PROMPT
+    if places:
+        p += PLACES_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1507,6 +1511,7 @@ def build_agent(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    places: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1524,6 +1529,7 @@ def build_agent(
         people=people,
         coo=coo,
         profile=profile,
+        places=places,
     )
     model_calls = 0
 
@@ -1672,8 +1678,9 @@ async def ask_async(
         secretary=bool(secretary_tools),
         chat=bool(chat_tools),
         people=people,
-        coo=bool(extra_tools),
+        coo=any(getattr(f, "salid_group", "") != "places" for f in extra_tools or []),
         profile=profile,
+        places=any(getattr(f, "salid_group", "") == "places" for f in extra_tools or []),
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
