@@ -1826,7 +1826,7 @@ class SecretaryBot(
             *coo_tools,
             *(self._captions_tools(asker) if coo_tools else []),  # only with the COO/memory setup
             *([] if interjection else self._translate_tools(message, guild, asker, is_exec, loop)),
-            *self._freetime_tools(guild, asker, lang),
+            *([] if interjection else self._freetime_tools(guild, asker, lang)),
             *(
                 []
                 if interjection

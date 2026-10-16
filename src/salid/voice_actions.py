@@ -36,16 +36,16 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "start_form",
         "set_captions",
         "set_captions_tool",
-        # found by the builder-parity test: also act with the asker's identity and rights
+        # found by the builder-parity test: also act with the asker's identity and rights.
+        # Not wiki_write / wiki_publish: they read memory and return page text to the model, so in
+        # a shared room they must stay at the room's scope.
         "send_email",
         "draft_email",
         "deliver_file",
         "remember_my_preference",
         "forget_my_preferences",
         "set_auto_translate",
-        "wiki_write",
         "wiki_delete",
-        "wiki_publish",
         "cancel_deep_task",
         "set_channel_language",
         "set_channel_mode",
