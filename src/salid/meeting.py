@@ -321,6 +321,66 @@ def voiced_fraction(pcm: bytes, min_rms: float = 250.0, frame_bytes: int = 3840)
     return sum(1 for f in frames if rms(f) >= min_rms) / len(frames)
 
 
+@dataclass(frozen=True)
+class SpeechStats:
+    """Energy statistics over 20 ms frames: what separates speech from stationary noise and clicks."""
+
+    duration_s: float
+    rms: float  # whole-segment loudness
+    voiced_s: float  # voiced frames x 0.02
+    voiced_fraction: float
+    cv: float  # stdev / mean of the frame RMS (speech rises and falls; hiss and hum do not)
+
+
+def stats_from_frame_rms(values: list[float], min_rms: float = 250.0) -> SpeechStats:
+    """`SpeechStats` from per-frame RMS values (20 ms each)."""
+    n = len(values)
+    if not n:
+        return SpeechStats(0.0, 0.0, 0.0, 0.0, 0.0)
+    mean = sum(values) / n
+    voiced = sum(1 for v in values if v >= min_rms)
+    cv = (sum((v - mean) ** 2 for v in values) / n) ** 0.5 / mean if mean > 0 else 0.0
+    return SpeechStats(
+        n * 0.02,
+        (sum(v * v for v in values) / n) ** 0.5,
+        voiced * 0.02,
+        voiced / n,
+        cv,
+    )
+
+
+def speech_stats(pcm: bytes, min_rms: float = 250.0, frame_bytes: int = 3840) -> SpeechStats:
+    """One pass over the 20 ms frames (48 kHz stereo s16le) of a segment."""
+    values = [
+        rms(pcm[i : i + frame_bytes]) for i in range(0, len(pcm) - frame_bytes + 1, frame_bytes)
+    ]
+    return stats_from_frame_rms(values, min_rms)
+
+
+def looks_like_speech(stats: SpeechStats, settings) -> tuple[bool, str]:
+    """The name-hit energy gate: (ok, reason). Voiced seconds, voiced fraction, frame-RMS
+    variation and overall loudness; a real bare "สลิด" (~0.5 s) passes, a click, a burst of noise
+    or stationary hiss / hum does not."""
+    floor = float(getattr(settings, "name_min_rms", 250.0))
+    if stats.voiced_s < float(getattr(settings, "name_min_voiced_seconds", 0.35)):
+        return False, "too little voiced audio"
+    if stats.voiced_fraction < 0.3:
+        return False, "low voiced fraction"
+    if stats.cv < float(getattr(settings, "name_min_cv", 0.25)):
+        return False, "steady noise"
+    if stats.rms < floor:
+        return False, "too quiet"
+    return True, ""
+
+
+def stats_line(stats: SpeechStats) -> str:
+    """Numbers only (never text) for the log."""
+    return (
+        f"dur={stats.duration_s:.2f} rms={stats.rms:.0f} voiced={stats.voiced_s:.2f} "
+        f"vf={stats.voiced_fraction:.2f} cv={stats.cv:.2f}"
+    )
+
+
 # ------------------------------------------------------------------ transcription / summary
 class _Heard(BaseModel):
     text: str
@@ -551,6 +611,7 @@ class MeetingSession:
     engaged: bool = False  # False = listening (speaks only when its name is called)
     engaged_until: float = 0.0
     called_at: float = -1e9  # monotonic time she was last called by name / engaged
+    called_by: int = 0  # user id of whoever called her (their utterances are always addressed)
     unaddressed: int = 0  # consecutive utterances, while engaged, not addressed to Salid
     state_msg: Any = None  # the last state line posted to the text chat (edited on a quick flip)
     state_at: float = -1e9  # monotonic time of that post
@@ -1572,8 +1633,7 @@ class MeetingManager:
         if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
             s.captions.add(name, text)  # human speech only: never Salid's own words or notes
         said = parse_wake(text)
-        if said is not None and not self._real_call(seg, text, said):
-            logger.info("meeting %s: name hit rejected: no voiced audio", s.guild_id)
+        if said is not None and not self._real_call(s, seg, text, said):
             said = None  # noise the transcriber turned into a greeting: not a call
         called = said is not None
         if called and parse_meeting_command(said) == "leave":
@@ -1595,9 +1655,9 @@ class MeetingManager:
                 self._spawn(s, self._say_text(s, self._sp(s, "meet_dismiss_ack")))
             return
         if called:
-            self._set_engaged(s, True, name=name if member is not None else "")
+            self._set_engaged(s, True, name=name if member is not None else "", by=seg.user_id)
         elif s.engaged and not self._is_echo(s, seg):
-            self._engaged_utterance(s, text, now)
+            self._engaged_utterance(s, text, now, seg.user_id)
         if s.voice_mode == "live":
             if called and s.live is not None:
                 # Deterministic: the name was said, so Salid must answer. If the Live model has
@@ -1636,18 +1696,23 @@ class MeetingManager:
             s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
         await self.answer(s, member, name, question)
 
-    def _real_call(self, seg: Segment, text: str, said: str) -> bool:
+    def _real_call(self, s, seg: Segment, text: str, said: str) -> bool:
         """A bare greeting / name call (the shape noise is hallucinated into) counts only when the
-        audio behind it is real speech: long enough and with enough voiced frames."""
+        audio behind it looks like speech (`looks_like_speech`). Logs the numbers, never the text."""
         if not (is_greeting(said or text) or len(text.strip()) <= 20):
             return True  # a real sentence: the energy floor in `enqueue` was enough
         sets = self.bot.s
-        if float(getattr(sets, "name_min_voiced_seconds", 0.4)) <= 0:
+        if float(getattr(sets, "name_min_voiced_seconds", 0.35)) <= 0:
             return True  # energy gate off
-        return (
-            seg.duration_s >= 0.8
-            and voiced_fraction(seg.pcm, float(getattr(sets, "name_min_rms", 250.0))) >= 0.3
+        stats = speech_stats(seg.pcm, float(getattr(sets, "name_min_rms", 250.0)))
+        ok, reason = looks_like_speech(stats, sets)
+        logger.info(
+            "meeting %s: name hit %s %s",
+            s.guild_id,
+            "accepted" if ok else f"rejected: {reason}",
+            stats_line(stats),
         )
+        return ok
 
     # ---- listening / engaged
     _DISMISS_RE = re.compile(
@@ -1675,13 +1740,13 @@ class MeetingManager:
         return bool(cls._DISMISS_RE.search(text))
 
     def _engage_s(self) -> float:
-        return float(getattr(self.bot.s, "engaged_timeout_seconds", 30.0))
+        return float(getattr(self.bot.s, "engaged_timeout_seconds", 45.0))
 
     # Not addressed to Salid: the heuristics are deliberately simple and live here in code.
     # While engaged, an utterance counts as addressed to her when it (a) says her name (handled
     # by the caller), (b) comes within REPLY_WINDOW_S of her own voice (an answer to her), or
     # (c) looks like a question or a request (`_ASK_RE`) within QUESTION_WINDOW_S of her last
-    # words. Two utterances in a row that are none of these end the conversation silently.
+    # words. Three utterances in a row that are none of these end the conversation silently.
     _ASK_RE = re.compile(
         r"\?|ไหม|มั้ย|หรือเปล่า|หรือไม่|เหรอ|หรอ|อะไร|ทำไม|ยังไง|อย่างไร|เท่าไร|เท่าไหร่|เมื่อไร"
         r"|เมื่อไหร่|ใคร|ที่ไหน|ช่วย|ขอ|หน่อย|(?<![a-z])(?:what|who|when|where|why|how|which|can\s+you"
@@ -1690,7 +1755,7 @@ class MeetingManager:
     )
     REPLY_WINDOW_S = 6.0
     QUESTION_WINDOW_S = 20.0
-    UNADDRESSED_LIMIT = 2
+    UNADDRESSED_LIMIT = 3
 
     def _addressed(self, s: MeetingSession, text: str, now: float) -> bool:
         """Is this utterance (heard while engaged, no name in it) meant for Salid?"""
@@ -1701,8 +1766,10 @@ class MeetingManager:
             return True
         return gap <= self.QUESTION_WINDOW_S and bool(self._ASK_RE.search(text or ""))
 
-    def _engaged_utterance(self, s: MeetingSession, text: str, now: float) -> None:
-        if self._addressed(s, text, now):
+    def _engaged_utterance(
+        self, s: MeetingSession, text: str, now: float, user_id: int = 0
+    ) -> None:
+        if (user_id and user_id == s.called_by) or self._addressed(s, text, now):
             s.unaddressed = 0
             s.engaged_until = now + self._engage_s()  # talking with Salid keeps it engaged
             return
@@ -1710,13 +1777,15 @@ class MeetingManager:
         if s.unaddressed >= self.UNADDRESSED_LIMIT:
             self._set_engaged(s, False)  # people talk among themselves: back to listening
 
-    def _set_engaged(self, s: MeetingSession, on: bool, name: str = "") -> None:
+    def _set_engaged(self, s: MeetingSession, on: bool, name: str = "", by: int = 0) -> None:
         """listening <-> engaged. The Live model is told the state so it stays silent when
         listening, and the change is shown in the meeting's text chat. `name`: who called her."""
         s.engaged_until = time.monotonic() + self._engage_s() if on else 0.0
         s.unaddressed = 0
         if on:
             s.called_at = time.monotonic()
+            if by:
+                s.called_by = by
         if s.engaged == on:
             return
         s.engaged = on
