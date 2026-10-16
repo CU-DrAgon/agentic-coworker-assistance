@@ -851,6 +851,22 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "📝 Meeting summary ({reason})\n",
     },
     "meet_participant": {"th": "ผู้ร่วมประชุม {n}", "en": "Participant {n}"},
+    # Attendance log (who entered / left the voice room, and when)
+    "attend_joined": {
+        "th": "{icon} {time} {names} เข้าห้องประชุม",
+        "en": "{icon} {time} {names} joined the meeting",
+    },
+    "attend_left": {
+        "th": "{icon} {time} {names} ออกจากห้องประชุม",
+        "en": "{icon} {time} {names} left the meeting",
+    },
+    "attend_header": {"th": "👥 ผู้เข้าร่วม", "en": "👥 Attendees"},
+    "attend_total": {"th": "ทั้งหมด {n} คน", "en": "Total: {n}"},
+    "attend_minutes": {"th": "{n} นาที", "en": "{n} min"},
+    "attend_lt_minute": {"th": "ไม่ถึง 1 นาที", "en": "under 1 min"},
+    "mdoc_attendance": {"th": "ผู้เข้าร่วม", "en": "Attendance"},
+    "mdoc_col_present": {"th": "ช่วงเวลาในห้อง", "en": "Time in the room"},
+    "mdoc_col_total": {"th": "รวม (นาที)", "en": "Total (min)"},
     "mdoc_title": {"th": "รายงานการประชุม", "en": "Meeting minutes"},
     "mdoc_room": {"th": "ห้องประชุม", "en": "Meeting room"},
     "mdoc_date": {"th": "วันที่", "en": "Date"},
