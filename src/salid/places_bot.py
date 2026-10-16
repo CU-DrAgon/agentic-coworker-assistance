@@ -90,6 +90,7 @@ class PlacesMixin:
             message_id=message_id,
             message_link=link,
             now=self.s.now,
+            shared=lambda: self.sharing.public_places(guild.id, self.places),
         )
 
     @staticmethod

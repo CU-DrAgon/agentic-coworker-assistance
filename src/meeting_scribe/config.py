@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     # Firestore collection with one settings doc per Discord guild (shared with the bot).
     salid_guild_collection: str = "salid_guilds"
 
+    # Command center connectors (`salid.connectors`); each is disabled unless its credentials are
+    # set. Secrets: never logged or returned by the API.
+    slack_client_id: str = ""
+    slack_client_secret: str = ""
+    slack_signing_secret: str = ""
+    clickup_client_id: str = ""
+    clickup_client_secret: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

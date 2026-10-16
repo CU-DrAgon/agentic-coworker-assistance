@@ -101,6 +101,10 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ตอนนี้ปิดงานใหญ่อยู่ค่ะ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
         "en": "Big tasks are switched off right now. You can turn them on in Salid's command center.",
     },
+    "unlicensed": {
+        "th": "เซิร์ฟเวอร์นี้ยังไม่ได้เปิดใช้สลิดค่ะ ให้ผู้ดูแลสมัครที่ {url}",
+        "en": "Salid is not activated on this server yet. An admin can subscribe at {url}",
+    },
     "dm": {
         "th": "สลิดแยกข้อมูลของแต่ละเซิร์ฟเวอร์ค่ะ รบกวนแท็ก {mention} ถามในห้องแชตของเซิร์ฟเวอร์ที่ต้องการนะคะ",
         "en": "Salid keeps each server's data separate. Please tag {mention} in the chat channel of "

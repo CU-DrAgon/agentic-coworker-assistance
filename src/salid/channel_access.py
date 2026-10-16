@@ -23,6 +23,25 @@ def access_flags(channel, me) -> tuple[bool, bool]:
     return visible, history
 
 
+def is_public(channel, guild) -> bool:
+    """Everyone in the server (the @everyone role) can see the channel and read its history.
+    Unknown permissions count as NOT public: sharing across workspaces needs a positive answer."""
+    role = getattr(guild, "default_role", None)
+    if role is None:
+        return False
+    try:
+        perms = channel.permissions_for(role)
+    except Exception:
+        return False
+    return bool(getattr(perms, "view_channel", False)) and bool(
+        getattr(perms, "read_message_history", False)
+    )
+
+
+def public_channel_ids(guild) -> list[str]:
+    return [str(c.id) for c in _channels(guild) if is_public(c, guild)]
+
+
 def _channels(guild) -> list:
     """Text and announcement, forum and voice channels (categories and stages are skipped)."""
     out: list = []

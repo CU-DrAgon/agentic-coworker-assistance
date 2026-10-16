@@ -88,6 +88,7 @@ class WikiMixin:
                 unpost=lambda page: self._wiki_run(loop, self._wiki_unpost(guild, page)),
             ),
         )
+        w.shared = lambda: self.sharing.public_wiki_pages(guild.id, self.wiki)
         return wiki_tools(w)
 
     @staticmethod

@@ -154,6 +154,14 @@ class Settings(BaseSettings):
     ask_reminder_hours: float = 2.0
     doc_alerts_per_day: int = 10  # real-time document alerts per person per day
     # Where `/ตั้งค่า` links point: the web service that serves /hub.
+    # Licensing (salid.licensing): unlicensed guilds get no ingestion and no answers. Existing
+    # guilds (installed before the first licensing lookup) get a free trial until `grandfather_until`.
+    license_enforce: bool = True
+    license_grace_days: int = 3
+    grandfather_until: str = "2026-12-31"
+    # Web uploads of the command center: GCS (`receipt_bucket` + this prefix) or a local folder.
+    docs_prefix: str = "salid-docs/"
+    docs_local_dir: str = "./data/uploads"
     hub_url: str = "https://meeting-scribe-638191001920.asia-southeast1.run.app"
 
     @field_validator("receipt_channel_ids", "ask_channel_ids", "exec_user_ids", mode="before")
