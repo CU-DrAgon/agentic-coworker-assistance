@@ -886,3 +886,10 @@ def test_gold_alert_target_thai_default_or_world_spot(docs, data, clock):
     by = {a.watch.symbol: a for a in fired}
     assert by["gold"].price == 66000.0 and by["gold"].currency == "THB/บาททอง"
     assert by[mk.WORLD_GOLD].price == 4159.3 and "USD" in by[mk.WORLD_GOLD].currency
+
+
+def test_gold_conversion_shows_the_ecb_rate_next_to_the_associations(data):
+    c = data.gold(compare=True)["conversion"]
+    assert c["usd_thb"] == 33.55 and "สมาคม" in c["usd_thb_source"]
+    assert c["usd_thb_ecb"] and c["usd_thb_ecb_as_of"]  # currency.py's Frankfurter rate, 2nd source
+    assert isinstance(c["fx_disagree"], bool)

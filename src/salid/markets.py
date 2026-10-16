@@ -34,6 +34,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
+from .currency import Converter
 from .i18n import CATALOG, t
 from .web_read import grounded_generate
 
@@ -908,6 +909,14 @@ def gold_summary(g: dict, lang: str = "th") -> str:
             f"{cv['thb_per_baht_weight_96_5']:,} บาทต่อน้ำหนัก 1 บาททองคำ (96.5%) "
             "ราคาสมาคมค้าทองคำรวมพรีเมียม/ส่วนต่าง จึงต่างจากตัวเลขนี้"
         )
+        if cv.get("usd_thb_ecb") and cv.get("fx_disagree"):
+            L.append(
+                f"USD/THB differs between sources: association {cv['usd_thb']:.2f}, "
+                f"ECB {cv['usd_thb_ecb']:.2f}."
+                if en
+                else f"อัตรา USD/THB ต่างกันระหว่างแหล่ง: สมาคม {cv['usd_thb']:.2f}, "
+                f"ECB {cv['usd_thb_ecb']:.2f}"
+            )
     return "\n".join(L)
 
 
@@ -919,8 +928,12 @@ class MarketData:
         get: Callable[[str], str] = http_get,
         clock: Callable[[], float] = time.monotonic,
         grounded: Grounded | None = None,
+        fx: Converter | None = None,
     ):
         self._get, self._clock, self.grounded = get, clock, grounded
+        # the ONE currency source (salid.currency: Frankfurter/ECB, then open.er-api), here through
+        # this object's own http getter so a test's fake network covers it
+        self._fx = fx or Converter(fetch=lambda url: json.loads(self._get(url)), clock=clock)
         self._blocked_until = -1e12  # Yahoo circuit breaker (set after a 429)
         self._cache: dict[str, tuple[float, float, object]] = {}  # key -> (at, ttl, value)
         self._lock = threading.Lock()
@@ -1120,12 +1133,9 @@ class MarketData:
             return None
 
     def _frankfurter(self) -> dict | None:
-        try:
-            return self._cached(  # type: ignore[return-value]
-                "fx:ecb", 3600.0, lambda: parse_frankfurter(self._get(FX_URL))
-            )
-        except MarketError:
-            return None
+        """USD/THB from currency.py (ECB reference rate), or None."""
+        r = self._fx.rate("USD", "THB")
+        return None if "error" in r else r
 
     def _futures(self) -> dict | None:
         """COMEX GC=F from Yahoo only (never the grounded fallback: futures must not be mixed in)."""
@@ -1241,15 +1251,14 @@ class MarketData:
 
     def _conversion(self, thai: dict, world: dict) -> dict:
         spot = world.get("spot_usd_oz")
+        assoc, ecb = thai.get("gta_usd_thb"), self._frankfurter()
         fx, fx_src, fx_at = (
-            thai.get("gta_usd_thb"),
+            assoc,
             "สมาคมค้าทองคำ (Baht / US$)",
             thai.get("announced_at", ""),
         )
-        if not fx:
-            f = self._frankfurter()
-            if f:
-                fx, fx_src, fx_at = f["rate"], "Frankfurter (ECB)", f["date"]
+        if not fx and ecb:
+            fx, fx_src, fx_at = ecb["rate"], "Frankfurter (ECB)", ecb["date"]
         if not spot or not fx:
             return {"status": "unavailable", "reason": "need spot and USD/THB"}
         v = thb_per_baht_weight(spot, fx)
@@ -1258,6 +1267,10 @@ class MarketData:
             "thb_per_baht_weight_96_5": round(v),
             "formula": "spot_usd_per_oz × usd_thb ÷ 31.1035 × 15.244 × 0.965",
             "spot_usd_oz": spot, "usd_thb": fx, "usd_thb_source": fx_src, "usd_thb_as_of": fx_at,
+            # the second FX source (currency.py), shown next to the association's baht rate
+            "usd_thb_ecb": ecb["rate"] if ecb else None,
+            "usd_thb_ecb_as_of": ecb["date"] if ecb else "",
+            "fx_disagree": bool(assoc and ecb and abs(assoc - ecb["rate"]) / ecb["rate"] > 0.01),
             "note": "ราคาคำนวณจากสปอตสากลล้วนๆ ราคาของสมาคมค้าทองคำรวมพรีเมียม/ส่วนต่างของตลาดไทย "
             "จึงต่างจากตัวเลขนี้ / The Thai association price also includes premiums and margins, "
             "so it differs from this figure.",
