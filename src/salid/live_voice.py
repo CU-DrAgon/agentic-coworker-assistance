@@ -1544,11 +1544,14 @@ class LiveVoice:
             return True
         if any(n in ("ask_salid", "answer_privately") for n in names):
             stats = self._speech_stats(time.monotonic())
-            ok, _ = looks_like_speech(stats, self.bot.s)
+            ok, reason = looks_like_speech(stats, self.bot.s)
             if ok:
-                logger.info("live: ask_salid accepted: speech heard, engaging")
+                logger.info(
+                    "live: ask_salid accepted: speech heard, engaging %s", stats_line(stats)
+                )
                 self.bot.meetings._set_engaged(self.session, True)
                 return True
+            logger.info("live: ask_salid refused: %s %s", reason, stats_line(stats))
         return False
 
     @staticmethod
