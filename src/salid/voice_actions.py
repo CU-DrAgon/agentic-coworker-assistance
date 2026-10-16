@@ -54,6 +54,9 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "share_place",
         "forget_place",
         "set_place_secret",
+        "market_watch",
+        "market_brief",
+        "track_news_topic",
     }
 )
 

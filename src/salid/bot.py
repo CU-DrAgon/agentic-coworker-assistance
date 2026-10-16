@@ -70,6 +70,7 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .markets_bot import MarketsMixin
 from .media import media_candidates
 from .media_bot import MediaMixin
 from .meeting import MeetingManager, parse_meeting_command
@@ -269,6 +270,7 @@ class SecretaryBot(
     ApprovalMixin,
     BroadcastMixin,
     PlacesMixin,
+    MarketsMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -399,6 +401,7 @@ class SecretaryBot(
         self._wiki_init()  # company knowledge base (salid.wiki_bot)
         self._approval_init()  # approval requests (salid.approvals_bot)
         self._places_init()  # remembered places (salid.places_bot)
+        self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1839,6 +1842,7 @@ class SecretaryBot(
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
             *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._places_tools(message, guild, asker, is_exec)),
+            *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
@@ -2557,6 +2561,7 @@ class SecretaryBot(
         await self._scheduler_due()
         await self._coo_due()
         await self._polls_forms_due()
+        await self._markets_due()
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""

@@ -1,0 +1,68 @@
+{
+ "chart": {
+  "result": [
+   {
+    "meta": {
+     "currency": "THB",
+     "symbol": "^SET.BK",
+     "fullExchangeName": "Thailand",
+     "shortName": "SET Index",
+     "gmtoffset": 25200,
+     "regularMarketPrice": 1415.5,
+     "regularMarketTime": 1792121400,
+     "chartPreviousClose": 1399.75,
+     "range": "5d"
+    },
+    "timestamp": [
+     1791774000,
+     1791860400,
+     1791946800,
+     1792033200,
+     1792119600
+    ],
+    "indicators": {
+     "quote": [
+      {
+       "close": [
+        1400.0,
+        1410.5,
+        1405.0,
+        1420.0,
+        1415.5
+       ],
+       "high": [
+        1400.5,
+        1411.0,
+        1405.5,
+        1420.5,
+        1416.0
+       ],
+       "low": [
+        1399.5,
+        1410.0,
+        1404.5,
+        1419.5,
+        1415.0
+       ],
+       "open": [
+        1400.0,
+        1410.5,
+        1405.0,
+        1420.0,
+        1415.5
+       ],
+       "volume": [
+        1,
+        1,
+        1,
+        1,
+        1
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "error": null
+ }
+}

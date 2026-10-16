@@ -106,6 +106,8 @@ class BriefingMixin:
         )
         if inp.catchup:  # deterministic and link-complete: appended, never rewritten by the model
             text = f"{text}\n\n{inp.catchup}"
+        if inp.markets:  # opt-in market line: live numbers, appended verbatim
+            text = f"{text}\n\n{inp.markets}"
         for chunk in split_message(text):
             res = await send_dm(member, chunk)
             if not res.ok:
@@ -170,6 +172,7 @@ class BriefingMixin:
                 if prefs.doc_alerts != "off" and (d.get("important") or prefs.doc_alerts == "all")
             ]
             inp.catchup = self._catchup_brief_text(guild, member, now, prefs.weekends)
+            inp.markets = self._market_brief_line(guild, member, prefs, now)
             return inp
         iso = today.isoformat()
         stores = self.secretary_store.list_meetings(

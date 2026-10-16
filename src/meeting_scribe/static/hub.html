@@ -1110,6 +1110,18 @@
   "th": "สถานที่ส่วนตัวเห็นได้เฉพาะผู้ที่เจ้าตัวอนุญาต",
   "en": "Personal places are visible only to who the owner allows"
  },
+ "f_markets_n": {
+  "th": "หุ้น ทอง และข่าว",
+  "en": "Stocks, gold and news"
+ },
+ "f_markets_d": {
+  "th": "สลิดตอบราคาหุ้นไทย/ต่างประเทศ ราคาทอง และข่าวล่าสุด ตั้งแจ้งเตือนราคาให้แต่ละคน ใส่บรรทัด “ตลาดเช้านี้” ในสรุปเช้าเมื่อขอ และผู้บริหารให้ติดตามข่าวลูกค้า/คู่แข่งในรายงานเย็นได้",
+  "en": "Salid answers Thai and global stock prices, gold prices and latest news, sets per-person price alerts, adds a market line to the morning brief on request, and executives can follow customer/competitor news in the evening report."
+ },
+ "f_markets_w": {
+  "th": "ใช้แหล่งข้อมูลสาธารณะ ราคาอาจล่าช้า และไม่ใช่คำแนะนำการลงทุน",
+  "en": "Uses free public sources; prices may be delayed; not investment advice"
+ },
  "morning_time_l": {
   "th": "เวลาสรุปเช้า (DM)",
   "en": "Morning brief time (DM)"
@@ -1270,8 +1282,9 @@ const FEATURES = [
   { id: "polls" },
   { id: "wiki" },
   { id: "places" },
+  { id: "markets" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, markets: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1504,7 +1517,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, markets: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1588,7 +1601,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup , approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup , approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, markets: features.markets },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

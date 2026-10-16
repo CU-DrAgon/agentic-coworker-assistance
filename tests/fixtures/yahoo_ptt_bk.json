@@ -1,0 +1,68 @@
+{
+ "chart": {
+  "result": [
+   {
+    "meta": {
+     "currency": "THB",
+     "symbol": "PTT.BK",
+     "fullExchangeName": "Thailand",
+     "shortName": "PTT PCL",
+     "gmtoffset": 25200,
+     "regularMarketPrice": 30.5,
+     "regularMarketTime": 1792121400,
+     "chartPreviousClose": 30.75,
+     "range": "5d"
+    },
+    "timestamp": [
+     1791774000,
+     1791860400,
+     1791946800,
+     1792033200,
+     1792119600
+    ],
+    "indicators": {
+     "quote": [
+      {
+       "close": [
+        31.0,
+        31.5,
+        31.25,
+        30.75,
+        30.5
+       ],
+       "high": [
+        31.5,
+        32.0,
+        31.75,
+        31.25,
+        31.0
+       ],
+       "low": [
+        30.5,
+        31.0,
+        30.75,
+        30.25,
+        30.0
+       ],
+       "open": [
+        31.0,
+        31.5,
+        31.25,
+        30.75,
+        30.5
+       ],
+       "volume": [
+        1,
+        1,
+        1,
+        1,
+        1
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "error": null
+ }
+}
