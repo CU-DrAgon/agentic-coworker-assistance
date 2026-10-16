@@ -511,7 +511,8 @@ async def test_ask_salid_gets_the_secretary_and_coo_tools_for_the_lone_human(lv,
     s, live = await lv.join(5)
     live.push(tool_msg("ask_salid", {"question": "ประชุมพรุ่งนี้มีอะไรบ้าง"}))
     await until(lambda: live.tool_responses)
-    assert asked["secretary"] == "SEC" and asked["extra_tools"] == ["COO"]
+    assert asked["secretary"] == "SEC" and asked["extra_tools"][0] == "COO"
+    assert [f.__name__ for f in asked["extra_tools"][1:]] == ["post_message", "send_dm_many"]
     assert asked["sec_args"] == (5, True, s.text_channel.id)
     assert asked["coo_args"] == (5, True, "MEM")
     assert "p5" in asked["profile"]  # one person: their own profile

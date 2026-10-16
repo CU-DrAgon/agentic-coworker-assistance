@@ -21,6 +21,7 @@ from .ack import Ack, ack_flavor, ack_text
 from .archive import make_archive
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
+from .broadcast_bot import BroadcastMixin
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
 from .chat_tools import ChatActions
 from .config import Settings
@@ -248,7 +249,9 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client):
+class SecretaryBot(
+    CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, BroadcastMixin, discord.Client
+):
     def __init__(
         self,
         settings: Settings,
@@ -1786,6 +1789,10 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         chat_actions = self._chat_actions(
             message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
         )
+        # post_message + send_dm_many (broadcast.py): chat and voice get them from this one builder
+        broadcast = (
+            [] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())
+        )
         return {
             "language": setting,
             "memory": memory,
@@ -1794,7 +1801,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             **({"profile": profile_block(profile)} if profile is not None else {}),
             **self._web_kw(guild.id),
             **({"secretary": secretary} if secretary is not None else {}),
-            **({"extra_tools": coo_tools} if coo_tools else {}),
+            **({"extra_tools": [*coo_tools, *broadcast]} if coo_tools or broadcast else {}),
         }
 
     @staticmethod

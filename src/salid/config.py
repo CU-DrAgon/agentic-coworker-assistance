@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Annotated
 from zoneinfo import ZoneInfo
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -71,8 +71,19 @@ class Settings(BaseSettings):
     # Voice meetings stay voice: no "🔊" echoes, per-answer text or join announcement in the text
     # chat (the end-of-meeting summary and replies to messages typed to Salid are always posted).
     meeting_text_echo: bool = False
-    # Particle of Salid's spoken lines (the voice is female: ค่ะ, questions use คะ). ครับ also works.
-    voice_particle: str = "ค่ะ"
+    # ONE person, ONE voice: the politeness particle of Salid's typed replies AND spoken lines
+    # (female: ค่ะ, questions use คะ; ครับ also works). SALID_VOICE_PARTICLE is the old name.
+    persona_particle: str = Field(
+        "ค่ะ",
+        validation_alias=AliasChoices(
+            "SALID_PERSONA_PARTICLE", "SALID_VOICE_PARTICLE", "persona_particle", "voice_particle"
+        ),
+    )
+
+    @property
+    def voice_particle(self) -> str:  # old name, same setting
+        return self.persona_particle
+
     # Joined by itself / by schedule and nobody addressed Salid `consent_delay_seconds` after the
     # first speech: it asks (once) whether it may take notes. A "no" is honoured for
     # `consent_window_seconds` after the question; silence or an OK means it carries on.

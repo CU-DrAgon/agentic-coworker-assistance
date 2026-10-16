@@ -280,7 +280,7 @@ async def test_bot_acks_then_posts_result_in_background(bot, monkeypatch):
     monkeypatch.setattr("salid.bot.run_deep_task", fake_run)
     m = FakeMessage()
     await bot._deep(m, GUILD, "ทำรายงาน", is_exec=True)
-    assert "เดี๋ยวสลิดไล่ดูให้นะครับ" in m.replies[0][0] and not m.replies[1:]  # ack first
+    assert "เดี๋ยวสลิดไล่ดูให้นะคะ" in m.replies[0][0] and not m.replies[1:]  # ack first
     await asyncio.gather(*bot._deep_tasks)
     assert "# ผล" in m.replies[1][0] and "tokens 10" in m.replies[1][0]
 

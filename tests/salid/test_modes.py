@@ -383,7 +383,7 @@ async def test_two_replies_then_silence_posts_one_signoff(bot, world):
     bot.clock.advance(2)
     await bot.tick()
     await bot.tick()
-    assert ch.sent == ["ถ้ามีอะไรก็ทักน้องสลิดมาได้เลยนะครับ 👋"]  # once
+    assert ch.sent == ["ถ้ามีอะไรก็ทักน้องสลิดมาได้เลยนะคะ 👋"]  # once
 
 
 async def test_single_answer_gets_a_wave_reaction_instead(bot, world):
@@ -588,7 +588,7 @@ async def test_mode_change_is_refused_for_regular_members(bot, world):
 async def test_mode_change_by_manager_is_public_persisted_and_immediate(bot, world):
     it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
     await bot.handle_mode(it, "join")
-    assert it.sent == [("ตั้งห้องนี้เป็น 🎧 ร่วมวง แล้วครับ", False)]
+    assert it.sent == [("ตั้งห้องนี้เป็น 🎧 ร่วมวง แล้วค่ะ", False)]
     assert bot.guilds_store.get(GUILD).channel_modes == {"10": "join"}
     assert bot._mode(world.gen, GUILD) == "join"  # no waiting for the cache TTL
     assert bot._mode(world.named, GUILD) == "call"  # other channels untouched
@@ -919,7 +919,7 @@ def test_welcome_message_is_short_human_and_has_no_command_list():
     for text in (th, en):
         assert len(text.splitlines()) <= 4 and "/" not in text.replace("</", "")
         assert "90" in text
-    assert "สวัสดีครับ" in th and "ส่งไฟล์" in th and "ปิด" in th
+    assert "สวัสดีค่ะ" in th and "ส่งไฟล์" in th and "ปิด" in th
     assert "Hi, I'm Salid" in en and "just tell me" in en
 
 

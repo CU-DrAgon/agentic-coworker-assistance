@@ -279,7 +279,7 @@ async def test_cross_audience_delivery_needs_a_later_confirmation(bot, world, ch
     out = await deliver(bot, world, *[reply_to(world, chans)[0]], destination="paper-minute",
                         note="ส่งมาให้ครับ")  # fmt: skip
     assert out["status"] == "needs_confirmation"
-    assert "minutes-source" in out["warning"] and "มองไม่เห็น ยืนยันจะส่งไหมครับ" in out["warning"]
+    assert "minutes-source" in out["warning"] and "มองไม่เห็น ยืนยันจะส่งไหมคะ" in out["warning"]
     assert chans.dest.posts == []
     # the same request cannot confirm itself, whatever the model does
     req, _ = reply_to(world, chans)

@@ -94,22 +94,22 @@ def t(key: str, lang: str = "th", **fmt) -> str:
 CATALOG: dict[str, dict[str, str]] = {
     # ---------------------------------------------------------------- bot: general
     "qa_off": {
-        "th": "ตอนนี้ปิดการถามตอบอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
+        "th": "ตอนนี้ปิดการถามตอบอยู่ค่ะ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
         "en": "Q&A is switched off right now. You can turn it on in Salid's command center.",
     },
     "deep_off": {
-        "th": "ตอนนี้ปิดงานใหญ่อยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
+        "th": "ตอนนี้ปิดงานใหญ่อยู่ค่ะ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
         "en": "Big tasks are switched off right now. You can turn them on in Salid's command center.",
     },
     "dm": {
-        "th": "สลิดแยกข้อมูลของแต่ละเซิร์ฟเวอร์ครับ รบกวนแท็ก {mention} ถามในห้องแชตของเซิร์ฟเวอร์ที่ต้องการนะครับ",
+        "th": "สลิดแยกข้อมูลของแต่ละเซิร์ฟเวอร์ค่ะ รบกวนแท็ก {mention} ถามในห้องแชตของเซิร์ฟเวอร์ที่ต้องการนะคะ",
         "en": "Salid keeps each server's data separate. Please tag {mention} in the chat channel of "
         "the server you mean.",
     },
     "welcome": {
-        "th": "สวัสดีครับ ผมสลิด เลขาประจำทีมครับ 🐱 ทักผมได้เลย พิมพ์หรือส่งไฟล์ รูป เสียงมาได้หมด "
-        "ห้องนี้คุยกับผมได้เลยไม่ต้องแท็ก ห้องอื่นแท็ก {mention} หรือเรียกชื่อผมก็พอ ({chat})\n"
-        "ผมจำแค่ห้องที่ผมเห็นได้ ({days} วัน) ไม่อยากให้จำห้องไหน บอกผมได้เลยว่า “ห้องนี้ปิดไว้นะ”",
+        "th": "สวัสดีค่ะ สลิด เลขาประจำทีมค่ะ 🐱 ทักสลิดได้เลย พิมพ์หรือส่งไฟล์ รูป เสียงมาได้หมด "
+        "ห้องนี้คุยกับสลิดได้เลยไม่ต้องแท็ก ห้องอื่นแท็ก {mention} หรือเรียกชื่อสลิดก็พอ ({chat})\n"
+        "สลิดจำแค่ห้องที่สลิดเห็นได้ ({days} วัน) ไม่อยากให้จำห้องไหน บอกสลิดได้เลยว่า “ห้องนี้ปิดไว้นะ”",
         "en": "Hi, I'm Salid, your team's secretary 🐱 Just talk to me: type, or send files, photos "
         "or voice, anything goes. In {chat} you can chat with me without tagging; elsewhere tag "
         "{mention} or call my name.\n"
@@ -121,75 +121,100 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Chat with Salid about anything, no tag needed",
     },
     "greeting": {
-        "th": "ว่าไงครับ มีอะไรให้ช่วยไหม 🙂",
+        "th": "ว่าไงค่ะ มีอะไรให้ช่วยไหม 🙂",
         "en": "Hey, what can I do for you? 🙂",
     },
     "greeting_2": {
-        "th": "ครับผม ว่าเลยครับ",
+        "th": "ค่ะ ว่าเลยค่ะ",
         "en": "Yes? I'm all ears.",
     },
     "greeting_3": {
-        "th": "สลิดอยู่ครับ มีอะไรให้ช่วยบอกได้เลย",
+        "th": "สลิดอยู่ค่ะ มีอะไรให้ช่วยบอกได้เลย",
         "en": "Salid here, tell me what you need.",
     },
     "ack_doc_1": {
-        "th": "ขอเวลาแป๊บนึงนะครับ ขออ่านเอกสารให้เข้าใจก่อน 📄",
+        "th": "ขอเวลาแป๊บนึงนะคะ ขออ่านเอกสารให้เข้าใจก่อน 📄",
         "en": "Give me a moment, I want to read the document properly first 📄",
     },
     "ack_doc_2": {
-        "th": "ขออ่านเอกสารก่อนนะครับ เดี๋ยวมาตอบ 📄",
+        "th": "ขออ่านเอกสารก่อนนะคะ เดี๋ยวมาตอบ 📄",
         "en": "Let me read through this first, back in a moment 📄",
     },
     "ack_image_1": {
-        "th": "ขอดูรูปแป๊บนึงนะครับ 🖼️",
+        "th": "ขอดูรูปแป๊บนึงนะคะ 🖼️",
         "en": "Let me take a look at the picture 🖼️",
     },
     "ack_image_2": {
-        "th": "แป๊บนึงนะครับ ขอดูรูปให้ชัดก่อน",
+        "th": "แป๊บนึงนะคะ ขอดูรูปให้ชัดก่อน",
         "en": "One sec, looking at it closely",
     },
-    "ack_audio_1": {"th": "ขอฟังคลิปก่อนนะครับ 🎧", "en": "Let me listen to the clip first 🎧"},
+    "ack_audio_1": {"th": "ขอฟังคลิปก่อนนะคะ 🎧", "en": "Let me listen to the clip first 🎧"},
     "ack_audio_2": {
-        "th": "ขอเวลาฟังแป๊บนึงนะครับ 🎧",
+        "th": "ขอเวลาฟังแป๊บนึงนะคะ 🎧",
         "en": "Give me a minute to listen to it 🎧",
     },
-    "ack_link_1": {"th": "ขอเปิดลิงก์ดูแป๊บนึงครับ 🔗", "en": "Let me open that link real quick 🔗"},
+    "ack_link_1": {"th": "ขอเปิดลิงก์ดูแป๊บนึงค่ะ 🔗", "en": "Let me open that link real quick 🔗"},
     "ack_link_2": {
-        "th": "เดี๋ยวขออ่านลิงก์ก่อนนะครับ 🔗",
+        "th": "เดี๋ยวขออ่านลิงก์ก่อนนะคะ 🔗",
         "en": "I'll read the link first and get back to you 🔗",
     },
-    "ack_deep_1": {"th": "เดี๋ยวสลิดไล่ดูให้นะครับ", "en": "I'll go through it for you"},
+    "ack_deep_1": {"th": "เดี๋ยวสลิดไล่ดูให้นะคะ", "en": "I'll go through it for you"},
     "ack_deep_2": {
-        "th": "รับทราบครับ ขอเวลาไล่ดูข้อมูลก่อนนะ",
+        "th": "รับทราบค่ะ ขอเวลาไล่ดูข้อมูลก่อนนะ",
         "en": "On it, give me a bit to go through the data",
     },
-    "ack_slow_1": {"th": "แป๊บนึงนะครับ กำลังดูให้อยู่", "en": "One moment, I'm on it"},
+    "ack_slow_1": {"th": "แป๊บนึงนะคะ กำลังดูให้อยู่", "en": "One moment, I'm on it"},
     "ack_slow_2": {
-        "th": "ขอเวลาเช็กให้แป๊บนึงนะครับ",
+        "th": "ขอเวลาเช็กให้แป๊บนึงนะคะ",
         "en": "Give me a second to check that",
     },
     "relay_dm": {
-        "th": "ข้อความจากคุณ {sender} ({server}) ผ่านสลิดครับ: {text}",
+        "th": "ข้อความจากคุณ {sender} ({server}) ผ่านสลิดค่ะ: {text}",
         "en": "A message from {sender} ({server}), passed on by Salid: {text}",
     },
+    "bc_post": {"th": "📢 แจ้งจากคุณ{sender}: {text}", "en": "📢 From {sender}: {text}"},
+    "bc_preview_post": {
+        "th": "จะโพสต์ใน #{channel} {ping}\n“{text}”\nยืนยันไหมคะ",
+        "en": "I'll post in #{channel} {ping}\n“{text}”\nShall I go ahead?",
+    },
+    "bc_cant_see": {
+        "th": "ไม่แท็ก {names} เพราะมองไม่เห็นห้องนี้ ให้สลิดส่ง DM บอกแทนไหมคะ",
+        "en": "Not tagging {names}: they can't see this channel. Shall I DM them instead?",
+    },
+    "bc_preview_dm": {
+        "th": "จะส่ง DM ถึง {count} คน: {names}\n“{text}”\nยืนยันไหมคะ",
+        "en": "I'll DM {count} people: {names}\n“{text}”\nShall I go ahead?",
+    },
+    "bc_report": {
+        "th": "ส่ง DM เสร็จแล้วค่ะ: ส่งสำเร็จ {sent} คน",
+        "en": "DMs done: sent to {sent}",
+    },
+    "bc_report_closed": {
+        "th": "ปิดรับ DM {count} คน ({names})",
+        "en": "DMs closed for {count} ({names})",
+    },
+    "bc_report_failed": {
+        "th": "ส่งไม่สำเร็จ {count} คน ({names})",
+        "en": "failed for {count} ({names})",
+    },
     "dm_closed": {
-        "th": "ส่ง DM หา {name} ไม่ได้ครับ น่าจะปิดรับข้อความส่วนตัวจากสมาชิกในเซิร์ฟเวอร์ไว้ "
-        "ให้เปิดที่ ชื่อเซิร์ฟเวอร์ ({server}) > ความเป็นส่วนตัว (Privacy Settings) > อนุญาตข้อความส่วนตัว (Direct Messages) แล้วบอกผมอีกที",
+        "th": "ส่ง DM หา {name} ไม่ได้ค่ะ น่าจะปิดรับข้อความส่วนตัวจากสมาชิกในเซิร์ฟเวอร์ไว้ "
+        "ให้เปิดที่ ชื่อเซิร์ฟเวอร์ ({server}) > ความเป็นส่วนตัว (Privacy Settings) > อนุญาตข้อความส่วนตัว (Direct Messages) แล้วบอกสลิดอีกที",
         "en": "I couldn't DM {name}; they probably have server DMs turned off. They can switch them "
         "on under {server} > Privacy Settings > Direct Messages, then ask me again.",
     },
     "signoff": {
-        "th": "ถ้ามีอะไรก็ทักน้องสลิดมาได้เลยนะครับ 👋",
+        "th": "ถ้ามีอะไรก็ทักน้องสลิดมาได้เลยนะคะ 👋",
         "en": "If you need anything, just ping Salid 👋",
     },
     "snooze": {
-        "th": "ได้เลยครับ สลิดเงียบในห้องนี้ 1 ชั่วโมง 🤫 พิมพ์ “@Salid คุยได้แล้ว” เมื่อไรก็เรียกกลับได้ครับ",
+        "th": "ได้เลยค่ะ สลิดเงียบในห้องนี้ 1 ชั่วโมง 🤫 พิมพ์ “@Salid คุยได้แล้ว” เมื่อไรก็เรียกกลับได้ค่ะ",
         "en": "Sure, Salid will stay quiet in this channel for 1 hour 🤫 Type “@Salid you can talk” "
         "any time to call me back.",
     },
-    "unsnooze": {"th": "กลับมาคุยแล้วครับ 😊", "en": "I'm back 😊"},
+    "unsnooze": {"th": "กลับมาคุยแล้วค่ะ 😊", "en": "I'm back 😊"},
     "not_snoozed": {
-        "th": "สลิดคุยได้ตามปกติอยู่แล้วครับ 🙂",
+        "th": "สลิดคุยได้ตามปกติอยู่แล้วค่ะ 🙂",
         "en": "Salid is already chatting as usual 🙂",
     },
     "history_meeting": {
@@ -201,12 +226,12 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Only the person who sent the receipt, or an executive, can edit it.",
     },
     "deep_failed": {
-        "th": "❌ งานใหญ่ล้มเหลว ลองใหม่อีกครั้งภายหลังครับ",
+        "th": "❌ งานใหญ่ล้มเหลว ลองใหม่อีกครั้งภายหลังค่ะ",
         "en": "❌ The big task failed. Please try again later.",
     },
     # ---------------------------------------------------------------- bot: slash commands
     "hidden_none": {
-        "th": "สลิดเห็นทุกห้องแล้วครับ 👍",
+        "th": "สลิดเห็นทุกห้องแล้วค่ะ 👍",
         "en": "Salid can see every channel now 👍",
     },
     "hidden_header": {
@@ -232,7 +257,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "4. Tick ✅ View Channel and ✅ Read Message History, then click Save",
     },
     "hidden_footer": {
-        "th": "สลิดจะเริ่มอ่านห้องนั้นและประวัติย้อนหลังให้เองทันที ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มครับ",
+        "th": "สลิดจะเริ่มอ่านห้องนั้นและประวัติย้อนหลังให้เองทันที ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มค่ะ",
         "en": "Salid will start reading that channel and its history by itself right away. "
         "Private channels you don't want Salid to know about: just leave them out.",
     },
@@ -240,27 +265,27 @@ CATALOG: dict[str, dict[str, str]] = {
         "ดูห้องที่สลิดยังมองไม่เห็น และวิธีเพิ่ม", "Channels Salid cannot see, and how to add it"
     ),
     "setup_denied": {
-        "th": "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ครับ",
+        "th": "คำสั่งนี้ใช้ได้เฉพาะเจ้าของเซิร์ฟเวอร์หรือผู้ที่มีสิทธิ์จัดการเซิร์ฟเวอร์ค่ะ",
         "en": "This command is only for the server owner or people who can manage the server.",
     },
     "setup_message": {
         "th": "ลิงก์เชื่อม {name} กับศูนย์บัญชาการของสลิด 🔗\n{url}\n"
         "เปิดลิงก์แล้วเข้าสู่ระบบด้วยบัญชี Google ของคุณ ลิงก์ใช้ได้ครั้งเดียวและหมดอายุใน 15 นาที "
-        "อย่าส่งต่อให้คนอื่นครับ",
+        "อย่าส่งต่อให้คนอื่นค่ะ",
         "en": "Link to connect {name} to Salid's command center 🔗\n{url}\n"
         "Open the link and sign in with your Google account. It works once and expires in 15 "
         "minutes. Please do not share it.",
     },
     "setup_failed": {
-        "th": "สร้างลิงก์ไม่สำเร็จ ลองพิมพ์ /ตั้งค่า อีกครั้งภายหลังครับ",
+        "th": "สร้างลิงก์ไม่สำเร็จ ลองพิมพ์ /ตั้งค่า อีกครั้งภายหลังค่ะ",
         "en": "Could not create the link. Please try /setup again later.",
     },
     "mode_denied": {
-        "th": "ปรับโหมดได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารครับ",
+        "th": "ปรับโหมดได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารค่ะ",
         "en": "Only server admins or executives can change the mode.",
     },
     "mode_failed": {
-        "th": "ตั้งโหมดไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะครับ",
+        "th": "ตั้งโหมดไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะคะ",
         "en": "Could not set the mode. Please try again later.",
     },
     "mode_current": {
@@ -272,30 +297,30 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "(Salid is snoozed for now and acts like Listen mode)",
     },
     "mode_footer": {
-        "th": "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /โหมด แล้วเลือกโหมดครับ",
+        "th": "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /โหมด แล้วเลือกโหมดค่ะ",
         "en": "Admins or executives can change it with /mode and then pick a mode.",
     },
-    "mode_set": {"th": "ตั้งห้องนี้เป็น {label} แล้วครับ", "en": "This channel is now set to {label}."},
+    "mode_set": {"th": "ตั้งห้องนี้เป็น {label} แล้วค่ะ", "en": "This channel is now set to {label}."},
     "lang_current": {
         "th": "ภาษาที่สลิดตอบในห้องนี้ตอนนี้: {label}",
         "en": "Salid's reply language in this channel right now: {label}",
     },
     "lang_footer": {
-        "th": "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /ภาษา แล้วเลือกภาษาครับ "
+        "th": "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /ภาษา แล้วเลือกภาษาค่ะ "
         "(หรือแท็กสลิดแล้วพิมพ์ “speak English” / “พูดไทย”)",
         "en": "Admins or executives can change it with /language and then pick a language "
         "(or tag Salid and say “speak English” / “พูดไทย”).",
     },
     "lang_denied": {
-        "th": "เปลี่ยนภาษาได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารครับ",
+        "th": "เปลี่ยนภาษาได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารค่ะ",
         "en": "Only server admins or executives can change the language.",
     },
     "lang_failed": {
-        "th": "ตั้งภาษาไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะครับ",
+        "th": "ตั้งภาษาไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะคะ",
         "en": "Could not set the language. Please try again later.",
     },
     "lang_set": {
-        "th": "ตั้งภาษาของห้องนี้เป็น {label} แล้วครับ",
+        "th": "ตั้งภาษาของห้องนี้เป็น {label} แล้วค่ะ",
         "en": "This channel's language is now {label}.",
     },
     "lang_label_th": {"th": "ไทย", "en": "Thai"},
@@ -360,20 +385,20 @@ CATALOG: dict[str, dict[str, str]] = {
         "channel off with /mode 🔇, or the whole server in the command center.",
     },
     "memory_set": {
-        "th": "ตั้งให้สลิดจำข้อความไว้ {days} วันแล้วครับ (ใช้กับข้อความเก่าด้วยในการล้างรอบถัดไป)",
+        "th": "ตั้งให้สลิดจำข้อความไว้ {days} วันแล้วค่ะ (ใช้กับข้อความเก่าด้วยในการล้างรอบถัดไป)",
         "en": "Salid will now keep messages for {days} days (this also applies to existing "
         "messages at the next daily cleanup).",
     },
     "memory_denied": {
-        "th": "เปลี่ยนจำนวนวันที่จำข้อความได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารครับ",
+        "th": "เปลี่ยนจำนวนวันที่จำข้อความได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารค่ะ",
         "en": "Only server admins or executives can change how long messages are kept.",
     },
     "memory_bad_days": {
-        "th": "ใส่จำนวนวันเป็นตัวเลข {lo} ถึง {hi} ครับ",
+        "th": "ใส่จำนวนวันเป็นตัวเลข {lo} ถึง {hi} ค่ะ",
         "en": "Please give a number of days from {lo} to {hi}.",
     },
     "memory_failed": {
-        "th": "ตั้งค่าไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะครับ",
+        "th": "ตั้งค่าไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะคะ",
         "en": "Could not save the setting. Please try again later.",
     },
     "memory_notice": {
@@ -436,18 +461,18 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "I can't summarize right now: Q&A or team memory is switched off (turn it on in the command center).",
     },
     "summary_no_access": {
-        "th": "คุณไม่มีสิทธิ์เห็นห้องนั้น หรือสลิดไม่ได้จดห้องนั้นไว้ครับ",
+        "th": "คุณไม่มีสิทธิ์เห็นห้องนั้น หรือสลิดไม่ได้จดห้องนั้นไว้ค่ะ",
         "en": "You can't see that channel, or Salid isn't recording it.",
     },
     "summary_nothing": {
-        "th": "ไม่มีข้อความที่สรุปได้ครับ (ข้อความว่าง ไม่มีไฟล์หรือลิงก์)",
+        "th": "ไม่มีข้อความที่สรุปได้ค่ะ (ข้อความว่าง ไม่มีไฟล์หรือลิงก์)",
         "en": "There is nothing to summarize (no text, files or links).",
     },
     # ---------------------------------------------------------------- meeting
     "meet_announce": {
-        "th": "สลิดเข้ามาฟังและจดบันทึกการประชุมครับ 🎙️ "
+        "th": "สลิดเข้ามาฟังและจดบันทึกการประชุมค่ะ 🎙️ "
         "(เก็บเป็นข้อความในหน่วยความจำเท่านั้น ไม่บันทึกเสียง) "
-        "เรียก “สลิด” แล้วถามได้เลย หรือพิมพ์ /ออกประชุม เพื่อสรุปและให้ผมออก",
+        "เรียก “สลิด” แล้วถามได้เลย หรือพิมพ์ /ออกประชุม เพื่อสรุปและให้สลิดออก",
         "en": "Salid has joined to listen and take meeting notes 🎙️ "
         "(kept as text in memory only, no audio is recorded). "
         "Say “Salid” and ask away, or type /leave-meeting to get the summary and let me go.",
@@ -503,45 +528,45 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "📝 Minutes of the meeting in #{room} ({when}), forwarded by {who}\n",
     },
     "meet_not_in_voice": {
-        "th": "ต้องเข้าห้องเสียง (Voice Channel) ก่อน แล้วค่อยเรียกสลิดเข้าประชุมนะครับ",
+        "th": "ต้องเข้าห้องเสียง (Voice Channel) ก่อน แล้วค่อยเรียกสลิดเข้าประชุมนะคะ",
         "en": "Please join a voice channel first, then ask Salid to join the meeting.",
     },
     "meet_already": {
-        "th": "สลิดกำลังอยู่ในการประชุมของเซิร์ฟเวอร์นี้แล้วครับ ({channel}) พิมพ์ /ออกประชุม เพื่อจบก่อนนะครับ",
+        "th": "สลิดกำลังอยู่ในการประชุมของเซิร์ฟเวอร์นี้แล้วค่ะ ({channel}) พิมพ์ /ออกประชุม เพื่อจบก่อนนะคะ",
         "en": "Salid is already in a meeting on this server ({channel}). Type /leave-meeting to end it first.",
     },
     "meet_joining": {"th": "กำลังเข้า", "en": "joining now"},
     "meet_none": {
-        "th": "ตอนนี้สลิดไม่ได้อยู่ในการประชุมครับ",
+        "th": "ตอนนี้สลิดไม่ได้อยู่ในการประชุมค่ะ",
         "en": "Salid is not in a meeting right now.",
     },
     "meet_leave_denied": {
-        "th": "ต้องอยู่ในห้องประชุมเดียวกัน (หรือเป็นผู้ดูแลเซิร์ฟเวอร์) ถึงจะสั่งให้สลิดออกได้ครับ",
+        "th": "ต้องอยู่ในห้องประชุมเดียวกัน (หรือเป็นผู้ดูแลเซิร์ฟเวอร์) ถึงจะสั่งให้สลิดออกได้ค่ะ",
         "en": "You need to be in the same meeting channel (or be a server admin) to tell Salid to leave.",
     },
     "meet_off": {
-        "th": "ตอนนี้ปิดฟังการประชุมอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
+        "th": "ตอนนี้ปิดฟังการประชุมอยู่ค่ะ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
         "en": "Meeting listening is switched off right now. You can turn it on in Salid's command center.",
     },
     "meet_connect_failed": {
-        "th": "เข้าห้องเสียงไม่สำเร็จครับ ลองใหม่อีกครั้งภายหลังนะครับ",
+        "th": "เข้าห้องเสียงไม่สำเร็จค่ะ ลองใหม่อีกครั้งภายหลังนะคะ",
         "en": "Could not join the voice channel. Please try again later.",
     },
-    "meet_joined": {"th": "สลิดเข้าห้อง {channel} แล้วครับ", "en": "Salid has joined {channel}."},
+    "meet_joined": {"th": "สลิดเข้าห้อง {channel} แล้วค่ะ", "en": "Salid has joined {channel}."},
     "meet_left": {
-        "th": "สลิดออกจากการประชุมแล้วครับ กำลังสรุปให้ในแชตของห้องเสียง",
+        "th": "สลิดออกจากการประชุมแล้วค่ะ กำลังสรุปให้ในแชตของห้องเสียง",
         "en": "Salid has left the meeting. The summary is coming in the voice channel's chat.",
     },
-    "meet_wake_empty": {"th": "ครับ? ว่ามาได้เลยครับ", "en": "Yes? Go ahead."},
+    "meet_wake_empty": {"th": "คะ? ว่ามาได้เลยค่ะ", "en": "Yes? Go ahead."},
     "meet_wake_spoken": {"th": "ค่ะ? ว่ามาได้เลยค่ะ", "en": "Yes? Go ahead."},
     "meet_greet_spoken": {"th": "สวัสดีค่ะ มีอะไรให้ช่วยคะ", "en": "Hi! How can I help?"},
     "meet_bye_spoken": {"th": "แล้วเจอกันนะคะ", "en": "Bye for now!"},
     "meet_no_transcript": {
-        "th": "จบการประชุมแล้วครับ แต่ยังไม่ได้ยินเนื้อหาให้สรุปเลย 🙂",
+        "th": "จบการประชุมแล้วค่ะ แต่ยังไม่ได้ยินเนื้อหาให้สรุปเลย 🙂",
         "en": "The meeting is over, but I did not hear anything to summarize 🙂",
     },
     "meet_summary_failed": {
-        "th": "จบการประชุมแล้วครับ แต่สรุปไม่สำเร็จ ขออภัยด้วยนะครับ",
+        "th": "จบการประชุมแล้วค่ะ แต่สรุปไม่สำเร็จ ขออภัยด้วยนะคะ",
         "en": "The meeting is over, but the summary failed. Sorry about that.",
     },
     "meet_summary_header": {
@@ -556,19 +581,19 @@ CATALOG: dict[str, dict[str, str]] = {
     "end_empty": {"th": "ทุกคนออกจากห้องแล้ว", "en": "everyone left the channel"},
     "end_timeout": {"th": "ประชุมครบ 6 ชั่วโมง", "en": "the meeting reached 6 hours"},
     "meet_rejoined": {
-        "th": "สลิดกลับเข้ามาจดประชุมต่อแล้วครับ (หลุดไปครู่หนึ่ง)",
+        "th": "สลิดกลับเข้ามาจดประชุมต่อแล้วค่ะ (หลุดไปครู่หนึ่ง)",
         "en": "Salid is back and taking notes again (it dropped out for a moment).",
     },
     "meet_reconnected": {
-        "th": "สลิดหลุดไปครู่หนึ่ง แต่กลับเข้าห้องและจดประชุมต่อแล้วครับ",
+        "th": "สลิดหลุดไปครู่หนึ่ง แต่กลับเข้าห้องและจดประชุมต่อแล้วค่ะ",
         "en": "Salid dropped out for a moment but is back in the room and still taking notes.",
     },
     "meet_reconnect_failed": {
-        "th": "สลิดต่อเข้าห้องเสียงกลับไม่ได้ครับ ขอปิดการประชุมและสรุปให้ตอนนี้",
+        "th": "สลิดต่อเข้าห้องเสียงกลับไม่ได้ค่ะ ขอปิดการประชุมและสรุปให้ตอนนี้",
         "en": "Salid could not reconnect to the voice channel, so it is ending the meeting now.",
     },
     "meet_max_warning": {
-        "th": "ประชุมใกล้ครบ 6 ชั่วโมงแล้ว สลิดจะออกและสรุปในอีก 10 นาทีครับ",
+        "th": "ประชุมใกล้ครบ 6 ชั่วโมงแล้ว สลิดจะออกและสรุปในอีก 10 นาทีค่ะ",
         "en": "The meeting hits the 6-hour limit in 10 minutes; Salid will then leave and summarize.",
     },
     "end_disconnected": {"th": "สลิดหลุดจากห้องเสียง", "en": "Salid was disconnected"},
@@ -601,7 +626,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "🔁 Possible duplicates: {n} receipts, {amount} awaiting review",
     },
     "delete_denied": {
-        "th": "ลบได้เฉพาะคนที่สลิดตอบอยู่ ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหารเท่านั้นครับ",
+        "th": "ลบได้เฉพาะคนที่สลิดตอบอยู่ ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหารเท่านั้นค่ะ",
         "en": "Only the person Salid was answering, a server manager or an executive can delete this.",
     },
     "receipt_void_ack": {
@@ -609,15 +634,15 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Receipt #{id} is cancelled (it can be restored).",
     },
     "cancel_done": {
-        "th": "ยกเลิกงานใหญ่ที่กำลังทำอยู่แล้วครับ",
+        "th": "ยกเลิกงานใหญ่ที่กำลังทำอยู่แล้วค่ะ",
         "en": "The running big task has been cancelled.",
     },
     "cancel_none": {
-        "th": "ตอนนี้ไม่มีงานใหญ่ที่กำลังทำอยู่ครับ",
+        "th": "ตอนนี้ไม่มีงานใหญ่ที่กำลังทำอยู่ค่ะ",
         "en": "There is no big task running right now.",
     },
     "cancel_denied": {
-        "th": "ยกเลิกงานใหญ่ได้เฉพาะคนที่สั่งงานนั้น ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหารเท่านั้นครับ",
+        "th": "ยกเลิกงานใหญ่ได้เฉพาะคนที่สั่งงานนั้น ผู้จัดการเซิร์ฟเวอร์ หรือผู้บริหารเท่านั้นค่ะ",
         "en": "Only the person who started the task, a server manager or an executive can cancel it.",
     },
     "cmd_cancel": _bi("ยกเลิกงานใหญ่ที่กำลังทำอยู่", "Cancel the running big task"),
@@ -671,7 +696,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "📎 Receipt from {user} (sent by DM)",
     },
     "fwd_ack": {
-        "th": "ส่งต่อไปที่ #{home} ให้แล้วครับ (ข้อความเดิมลบได้ถ้าต้องการ)",
+        "th": "ส่งต่อไปที่ #{home} ให้แล้วค่ะ (ข้อความเดิมลบได้ถ้าต้องการ)",
         "en": "Forwarded to #{home} (you can delete your original message if you like).",
     },
     "rc_duplicate": {
@@ -695,39 +720,39 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "✏️ Receipt #{id} updated: {changed}\nNow: {now}",
     },
     "qa_failed": {
-        "th": "ขออภัย ตอบไม่ได้ในตอนนี้ ลองถามใหม่อีกครั้งนะครับ",
+        "th": "ขออภัย ตอบไม่ได้ในตอนนี้ ลองถามใหม่อีกครั้งนะคะ",
         "en": "Sorry, I can't answer right now. Please try asking again.",
     },
     # ---------------------------------------------------------------- deep tasks
     "deep_disabled": {
-        "th": "ฟีเจอร์งานใหญ่ยังไม่ได้เปิดใช้งานครับ (ยังไม่ได้ตั้งค่า SALID_GEMINI_CLI_PATH) ลองถามคำถามสั้นๆ แทนได้เลย",
+        "th": "ฟีเจอร์งานใหญ่ยังไม่ได้เปิดใช้งานค่ะ (ยังไม่ได้ตั้งค่า SALID_GEMINI_CLI_PATH) ลองถามคำถามสั้นๆ แทนได้เลย",
         "en": "Big tasks are not enabled yet (SALID_GEMINI_CLI_PATH is not set). Please ask a "
         "short question instead.",
     },
     "deep_not_exec": {
-        "th": "ขออภัยครับ งานใหญ่ใช้ได้เฉพาะผู้บริหารเท่านั้น ถามคำถามสั้นๆ เรื่องใบเสร็จของคุณได้เลยครับ",
+        "th": "ขออภัยค่ะ งานใหญ่ใช้ได้เฉพาะผู้บริหารเท่านั้น ถามคำถามสั้นๆ เรื่องใบเสร็จของคุณได้เลยค่ะ",
         "en": "Sorry, big tasks are for executives only. You can still ask short questions about "
         "your own receipts.",
     },
     "deep_cli_failed": {
-        "th": "Gemini CLI ทำงานไม่สำเร็จ ลองใหม่อีกครั้งภายหลังครับ",
+        "th": "Gemini CLI ทำงานไม่สำเร็จ ลองใหม่อีกครั้งภายหลังค่ะ",
         "en": "Gemini CLI failed. Please try again later.",
     },
     "deep_no_result": {
-        "th": "ไม่ได้รับผลลัพธ์จากงานนี้ครับ",
+        "th": "ไม่ได้รับผลลัพธ์จากงานนี้ค่ะ",
         "en": "This task returned no result.",
     },
     "deep_ack": {
-        "th": "เดี๋ยวสลิดไล่ดูให้นะครับ งานนี้ใหญ่หน่อย อาจใช้เวลา 1-5 นาที เสร็จแล้วส่งผลในห้องนี้ครับ",
+        "th": "เดี๋ยวสลิดไล่ดูให้นะคะ งานนี้ใหญ่หน่อย อาจใช้เวลา 1-5 นาที เสร็จแล้วส่งผลในห้องนี้ค่ะ",
         "en": "I'll go through it for you. This one's a big job, so it may take 1-5 minutes; I'll "
         "post the result right here.",
     },
     "deep_busy": {
-        "th": "ตอนนี้สลิดกำลังทำงานใหญ่อีกงานอยู่ครับ รอให้เสร็จก่อนแล้วสั่งใหม่อีกครั้งนะครับ",
+        "th": "ตอนนี้สลิดกำลังทำงานใหญ่อีกงานอยู่ค่ะ รอให้เสร็จก่อนแล้วสั่งใหม่อีกครั้งนะคะ",
         "en": "Salid is busy with another big task. Please wait for it to finish and ask again.",
     },
     "deep_usage": {
-        "th": "บอกโจทย์ด้วยครับ เช่น งานใหญ่: วิเคราะห์ค่าใช้จ่ายเดือนนี้ หาหมวดที่โตผิดปกติ แล้วเขียนรายงาน",
+        "th": "บอกโจทย์ด้วยค่ะ เช่น งานใหญ่: วิเคราะห์ค่าใช้จ่ายเดือนนี้ หาหมวดที่โตผิดปกติ แล้วเขียนรายงาน",
         "en": "Please tell me the task, e.g. deep task: analyze this month's expenses, find "
         "categories that grew unusually, and write a report",
     },
@@ -868,11 +893,11 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "(no summary yet)",
     },
     "sched_invite_dm": {
-        "th": "สวัสดีครับ มีนัดประชุมใหม่ในเซิร์ฟเวอร์ {guild} จาก {by}\n📅 {title}\n🕑 {when}\n🔗 {link}",
+        "th": "สวัสดีค่ะ มีนัดประชุมใหม่ในเซิร์ฟเวอร์ {guild} จาก {by}\n📅 {title}\n🕑 {when}\n🔗 {link}",
         "en": "Hi! You are invited to a meeting on {guild} by {by}\n📅 {title}\n🕑 {when}\n🔗 {link}",
     },
     "sched_cancelled_dm": {
-        "th": "การประชุม “{title}” ถูกยกเลิกแล้วครับ",
+        "th": "การประชุม “{title}” ถูกยกเลิกแล้วค่ะ",
         "en": "The meeting “{title}” has been cancelled.",
     },
     "sched_moved_dm": {
@@ -884,15 +909,15 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "⏰ “{title}” starts in {mins} minutes ({when})\nJoin: {link}",
     },
     "sched_remind_start": {
-        "th": "🔔 การประชุม “{title}” เริ่มแล้วครับ\nเข้าร่วม: {link}",
+        "th": "🔔 การประชุม “{title}” เริ่มแล้วค่ะ\nเข้าร่วม: {link}",
         "en": "🔔 “{title}” is starting now\nJoin: {link}",
     },
     "sched_reply_if_stuck": {
-        "th": "ถ้าเข้าไม่ได้ ตอบกลับสลิดได้เลยครับ",
+        "th": "ถ้าเข้าไม่ได้ ตอบกลับสลิดได้เลยค่ะ",
         "en": "If you can't join, just reply to me.",
     },
     "sched_nudge_dm": {
-        "th": "การประชุม “{title}” เริ่มแล้วครับ มีปัญหาอะไรหรือเปล่า? ถ้าหาลิงก์ไม่เจอ กดเข้าตรงนี้ได้เลย: {link}\nถ้าเข้าไม่ได้ ตอบกลับสลิดได้เลยครับ",
+        "th": "การประชุม “{title}” เริ่มแล้วค่ะ มีปัญหาอะไรหรือเปล่า? ถ้าหาลิงก์ไม่เจอ กดเข้าตรงนี้ได้เลย: {link}\nถ้าเข้าไม่ได้ ตอบกลับสลิดได้เลยค่ะ",
         "en": "“{title}” has started. Is something wrong? If you can't find the link, join here: {link}\nIf you can't make it, just reply to me.",
     },
     "sched_attended": {
@@ -912,16 +937,16 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "{name} says: {reason} (meeting “{title}”)",
     },
     "sched_absence_ack": {
-        "th": "รับทราบครับ แจ้งผู้จัดการประชุม “{title}” แล้ว",
+        "th": "รับทราบค่ะ แจ้งผู้จัดการประชุม “{title}” แล้ว",
         "en": "Got it, I let the organiser of “{title}” know.",
     },
     "perm_missing": {
-        "th": "ตอนนี้สลิดยังขาดสิทธิ์ {what} อยู่ครับ ให้แอดมินเปิดลิงก์นี้ครั้งเดียวแล้วเลือกเซิร์ฟเวอร์นี้ก็เรียบร้อย {url}",
+        "th": "ตอนนี้สลิดยังขาดสิทธิ์ {what} อยู่ค่ะ ให้แอดมินเปิดลิงก์นี้ครั้งเดียวแล้วเลือกเซิร์ฟเวอร์นี้ก็เรียบร้อย {url}",
         "en": "I'm missing the {what} permission here. An admin just needs to open this link once "
         "and pick this server: {url}",
     },
     "perm_missing_nolink": {
-        "th": "ตอนนี้สลิดยังขาดสิทธิ์ {what} อยู่ครับ ให้แอดมินเปิดสิทธิ์นี้ให้บทบาทของสลิดหน่อยนะครับ",
+        "th": "ตอนนี้สลิดยังขาดสิทธิ์ {what} อยู่ค่ะ ให้แอดมินเปิดสิทธิ์นี้ให้บทบาทของสลิดหน่อยนะคะ",
         "en": "I'm missing the {what} permission here. An admin needs to allow it for my role.",
     },
     "email_not_configured": {
@@ -929,17 +954,17 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Email sending is not configured yet (the draft was recorded but nothing was sent).",
     },
     "meet_announce_scheduled": {
-        "th": "สลิดเข้ามาจดประชุมตามนัดครับ 🎙️ (เก็บเป็นข้อความในความจำเท่านั้น ไม่บันทึกเสียง)",
+        "th": "สลิดเข้ามาจดประชุมตามนัดค่ะ 🎙️ (เก็บเป็นข้อความในความจำเท่านั้น ไม่บันทึกเสียง)",
         "en": "Salid has joined to take notes for the scheduled meeting 🎙️ (kept as text only, no audio is recorded).",
     },
     "meet_announce_auto": {
-        "th": "สลิดเข้ามาจดประชุมนะครับ ไม่ต้องการพิมพ์ “@Salid ออกประชุม” ได้เลย "
+        "th": "สลิดเข้ามาจดประชุมนะคะ ไม่ต้องการพิมพ์ “@Salid ออกประชุม” ได้เลย "
         "(เก็บเป็นข้อความในความจำเท่านั้น ไม่บันทึกเสียง)",
         "en": "Salid has joined to take meeting notes. If you don't need me, just type "
         "“@Salid leave meeting” (kept as text only, no audio is recorded).",
     },
     "meet_preempted": {
-        "th": "ขอไปช่วยประชุมที่นัดไว้ก่อนนะครับ ส่วนที่คุยมาสรุปไว้ให้แล้ว",
+        "th": "ขอไปช่วยประชุมที่นัดไว้ก่อนนะคะ ส่วนที่คุยมาสรุปไว้ให้แล้ว",
         "en": "I have to go help with a scheduled meeting, sorry! The summary of what was said is below.",
     },
     "end_preempted": {
@@ -947,12 +972,12 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Salid moved to a more important meeting",
     },
     "meet_busy": {
-        "th": "ตอนนี้ร่างของสลิดติดประชุมอยู่ครบแล้วครับ ({rooms}) ถ้ามีผู้ช่วยเสียงเพิ่มจะแบ่งร่างไปได้อีก",
+        "th": "ตอนนี้ร่างของสลิดติดประชุมอยู่ครบแล้วค่ะ ({rooms}) ถ้ามีผู้ช่วยเสียงเพิ่มจะแบ่งร่างไปได้อีก",
         "en": "All of Salid's voices are in meetings right now ({rooms}). "
         "More voice helpers would let Salid split further.",
     },
     "meet_leave_which": {
-        "th": "สลิดอยู่ในหลายห้อง ให้พิมพ์สั่งจากในห้องนั้นหรือเข้าห้องที่ต้องการก่อนนะครับ: {rooms}",
+        "th": "สลิดอยู่ในหลายห้อง ให้พิมพ์สั่งจากในห้องนั้นหรือเข้าห้องที่ต้องการก่อนนะคะ: {rooms}",
         "en": "Salid is in several rooms. Type it from that room or join the room first: {rooms}",
     },
     "voice_bodies_title": {
@@ -971,7 +996,7 @@ CATALOG: dict[str, dict[str, str]] = {
     "disc_ask": {
         "th": "{asker} ถามสลิดเรื่อง “{topic}”\nคำถามเดิม: “{question}”\n"
         "สลิดมีข้อมูลที่เป็นของคุณที่เกี่ยวข้อง: {description}\n"
-        "(สลิดยังไม่ได้บอกเนื้อหาให้ใคร) อนุญาตให้สลิดบอก {asker} เรื่องนี้ไหมครับ?",
+        "(สลิดยังไม่ได้บอกเนื้อหาให้ใคร) อนุญาตให้สลิดบอก {asker} เรื่องนี้ไหมคะ?",
         "en": "{asker} asked Salid about “{topic}”.\nOriginal question: “{question}”\n"
         "Salid holds related information of yours: {description}\n"
         "(Nothing has been shared yet.) May Salid tell {asker} about it?",
@@ -979,44 +1004,44 @@ CATALOG: dict[str, dict[str, str]] = {
     "disc_btn_ok": {"th": "อนุญาต", "en": "Approve"},
     "disc_btn_no": {"th": "ไม่อนุญาต", "en": "Decline"},
     "disc_owner_approved": {
-        "th": "✅ อนุญาตแล้ว สลิดจะบอก {asker} เฉพาะข้อมูลชุดนี้ครับ",
+        "th": "✅ อนุญาตแล้ว สลิดจะบอก {asker} เฉพาะข้อมูลชุดนี้ค่ะ",
         "en": "✅ Approved. Salid will tell {asker} only this information.",
     },
     "disc_owner_declined": {
-        "th": "🚫 ไม่อนุญาต สลิดจะไม่บอก {asker} ครับ",
+        "th": "🚫 ไม่อนุญาต สลิดจะไม่บอก {asker} ค่ะ",
         "en": "🚫 Declined. Salid will not tell {asker}.",
     },
     "disc_handled": {
-        "th": "คำขอนี้ตัดสินไปแล้วครับ",
+        "th": "คำขอนี้ตัดสินไปแล้วค่ะ",
         "en": "This request has already been decided.",
     },
     "disc_not_yours": {
-        "th": "คำขอนี้ไม่ใช่ของคุณครับ",
+        "th": "คำขอนี้ไม่ใช่ของคุณค่ะ",
         "en": "This request is not yours to answer.",
     },
     "disc_asker_declined": {
-        "th": "เรื่อง “{topic}”: เจ้าของข้อมูลยังไม่อนุญาตให้บอกครับ ขอโทษด้วยนะครับ ลองถามเจ้าของโดยตรงได้เลย",
+        "th": "เรื่อง “{topic}”: เจ้าของข้อมูลยังไม่อนุญาตให้บอกค่ะ ขอโทษด้วยนะคะ ลองถามเจ้าของโดยตรงได้เลย",
         "en": "About “{topic}”: the owner of that information did not allow sharing it, sorry. "
         "You can ask them directly.",
     },
     "disc_asker_approved": {
-        "th": "เรื่อง “{topic}”: เจ้าของข้อมูลอนุญาตแล้วครับ\n\n",
+        "th": "เรื่อง “{topic}”: เจ้าของข้อมูลอนุญาตแล้วค่ะ\n\n",
         "en": "About “{topic}”: the owner approved sharing it.\n\n",
     },
     "disc_asker_failed": {
-        "th": "เจ้าของข้อมูลอนุญาตแล้ว แต่สลิดเรียบเรียงคำตอบไม่สำเร็จ ลองถามอีกครั้งทาง DM ได้เลยครับ",
+        "th": "เจ้าของข้อมูลอนุญาตแล้ว แต่สลิดเรียบเรียงคำตอบไม่สำเร็จ ลองถามอีกครั้งทาง DM ได้เลยค่ะ",
         "en": "The owner approved, but Salid could not put the answer together. Please ask again in a DM.",
     },
     # ---------------------------------------------------------------- coordinator: DMs
     "dm_notice": {
         "th": "ℹ️ เรื่องงานที่คุณบอกสลิดทาง DM สลิดจะจดไว้ให้ทีม และผู้ที่ตำแหน่ง (role) สูงกว่าคุณอาจเห็นได้ "
-        "ถ้าเรื่องไหนเป็นความลับ พิมพ์ “เรื่องนี้เก็บเป็นความลับ” แล้วสลิดจะเก็บให้คุณคนเดียวครับ",
+        "ถ้าเรื่องไหนเป็นความลับ พิมพ์ “เรื่องนี้เก็บเป็นความลับ” แล้วสลิดจะเก็บให้คุณคนเดียวค่ะ",
         "en": "ℹ️ Work information you tell Salid in a DM is noted for the team, and people with a "
         "higher role than yours may see it. If something is confidential, type “keep this private” "
         "and Salid will keep it to you alone.",
     },
     "dm_private_marked": {
-        "th": "รับทราบครับ เรื่องนี้เก็บเป็นความลับ เห็นเฉพาะคุณคนเดียว สลิดจะไม่เอาไปรายงานหรือบอกใครครับ 🔒",
+        "th": "รับทราบค่ะ เรื่องนี้เก็บเป็นความลับ เห็นเฉพาะคุณคนเดียว สลิดจะไม่เอาไปรายงานหรือบอกใครคะ 🔒",
         "en": "Understood. That stays confidential: only you can see it, and Salid will not report "
         "it or tell anyone. 🔒",
     },
@@ -1026,12 +1051,12 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     # ---------------------------------------------------------------- coordinator: follow-ups
     "fu_header": {
-        "th": "สวัสดีครับ {name} สลิดขอติดตามงานที่ถึงกำหนดหรือเลยกำหนดครับ:",
+        "th": "สวัสดีค่ะ {name} สลิดขอติดตามงานที่ถึงกำหนดหรือเลยกำหนดค่ะ:",
         "en": "Hi {name}, Salid is following up on tasks that are due or overdue:",
     },
     "fu_line": {"th": "• #{id} {title} (กำหนด {due})", "en": "• #{id} {title} (due {due})"},
     "fu_footer": {
-        "th": "ตอบกลับที่นี่ได้เลยว่าถึงไหนแล้ว เช่น “#{id} เสร็จแล้ว” หรือ “ติดเรื่อง…” แล้วสลิดจะอัปเดตให้ครับ",
+        "th": "ตอบกลับที่นี่ได้เลยว่าถึงไหนแล้ว เช่น “#{id} เสร็จแล้ว” หรือ “ติดเรื่อง…” แล้วสลิดจะอัปเดตให้ค่ะ",
         "en": "Just reply here with the status, e.g. “#{id} done” or “blocked on…”, and Salid will "
         "update it.",
     },
@@ -1059,7 +1084,7 @@ CATALOG: dict[str, dict[str, str]] = {
     "pr_title": {"th": "**วันนี้ของคุณ ({day})**", "en": "**Your day ({day})**"},
     "pr_where": {"th": "คุณเขียนใน: {where}", "en": "You wrote in: {where}"},
     "pr_none": {
-        "th": "วันนี้ยังไม่พบข้อความของคุณในห้องที่สลิดจดไว้ครับ",
+        "th": "วันนี้ยังไม่พบข้อความของคุณในห้องที่สลิดจดไว้ค่ะ",
         "en": "Salid has not recorded any message from you today.",
     },
     "pr_done": {"th": "งานที่เสร็จวันนี้: ", "en": "Tasks done today: "},
@@ -1070,29 +1095,29 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "report_need_channel": {
         "th": "สลิดอยากส่งรายงานเย็นให้ผู้บริหารในห้องส่วนตัว “{name}” แต่ไม่มีสิทธิ์จัดการช่อง (Manage Channels) "
-        "รบกวนให้สิทธิ์สลิด หรือสร้างห้องที่เห็นเฉพาะผู้บริหารแล้วเลือกเป็นห้องรายงานในหน้า Hub ครับ",
+        "รบกวนให้สิทธิ์สลิด หรือสร้างห้องที่เห็นเฉพาะผู้บริหารแล้วเลือกเป็นห้องรายงานในหน้า Hub ค่ะ",
         "en": "Salid would like to post the evening report for leadership in a private channel "
         "“{name}” but lacks the Manage Channels permission. Please grant it, or create a "
         "leadership-only channel and pick it as the report channel in the hub.",
     },
     "report_denied": {
-        "th": "รายงานบริษัทดูได้เฉพาะเจ้าของ แอดมิน และผู้บริหารครับ (ดูของตัวเองด้วย /รายงาน ของฉัน)",
+        "th": "รายงานบริษัทดูได้เฉพาะเจ้าของ แอดมิน และผู้บริหารค่ะ (ดูของตัวเองด้วย /รายงาน ของฉัน)",
         "en": "The company report is for the owner, admins and executives (use /report mine for yours).",
     },
     "report_bad_date": {
-        "th": "วันที่ต้องเป็นรูปแบบ ปี-เดือน-วัน เช่น 2026-10-14 ครับ",
+        "th": "วันที่ต้องเป็นรูปแบบ ปี-เดือน-วัน เช่น 2026-10-14 ค่ะ",
         "en": "The date must look like 2026-10-14.",
     },
     "report_off": {
-        "th": "ตอนนี้ปิดความจำหรือรายงานอยู่ครับ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
+        "th": "ตอนนี้ปิดความจำหรือรายงานอยู่ค่ะ เปิดได้ที่หน้าศูนย์บัญชาการของสลิด",
         "en": "Memory or reports are switched off. You can turn them on in Salid's command center.",
     },
     "report_posted": {
-        "th": "ส่งรายงานวันที่ {day} เข้า {channel} แล้วครับ",
+        "th": "ส่งรายงานวันที่ {day} เข้า {channel} แล้วค่ะ",
         "en": "Posted the report for {day} in {channel}.",
     },
     "report_failed": {
-        "th": "สร้างรายงานไม่สำเร็จ ลองใหม่ภายหลังครับ",
+        "th": "สร้างรายงานไม่สำเร็จ ลองใหม่ภายหลังค่ะ",
         "en": "Could not build the report. Please try again later.",
     },
     "cmd_report": _bi("รายงานประจำวันจากสลิด", "Daily report from Salid"),
@@ -1138,7 +1163,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "**Important document** ({kind}): {summary}\nChannel {channel} · {link}",
     },
     "ask_reminder": {
-        "th": "ขอเตือนเบาๆ ครับ {who} ฝากเรื่องนี้ไว้ในห้อง {channel} และยังไม่มีคำตอบจากคุณ: “{text}” {link}",
+        "th": "ขอเตือนเบาๆ ค่ะ {who} ฝากเรื่องนี้ไว้ในห้อง {channel} และยังไม่มีคำตอบจากคุณ: “{text}” {link}",
         "en": "A gentle reminder: {who} asked you something in {channel} and there is no reply "
         "from you yet: “{text}” {link}",
     },
@@ -1152,17 +1177,17 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "The file is too large to attach (over 25 MB); see the original: {url}",
     },
     "deliver_email_body": {
-        "th": "เรียนทุกท่าน\nขอส่งไฟล์ {name} มาพร้อมอีเมลนี้ครับ",
+        "th": "เรียนทุกท่าน\nขอส่งไฟล์ {name} มาพร้อมอีเมลนี้ค่ะ",
         "en": "Hello,\nPlease find the file {name} attached.",
     },
     "deliver_footer_plain": {"th": "ส่งต่อจาก {who}", "en": "Forwarded from {who}"},
     "deliver_original": {"th": "[ต้นฉบับ]({url})", "en": "[original]({url})"},
     "deliver_dm_from": {
-        "th": "ส่งต่อจาก {who} ({server}) ผ่านสลิดครับ",
+        "th": "ส่งต่อจาก {who} ({server}) ผ่านสลิดค่ะ",
         "en": "Forwarded by Salid from {who} ({server}).",
     },
     "deliver_warn_audience": {
-        "th": "เอกสารนี้มาจาก #{source} ซึ่ง {who} มองไม่เห็น ยืนยันจะส่งไหมครับ",
+        "th": "เอกสารนี้มาจาก #{source} ซึ่ง {who} มองไม่เห็น ยืนยันจะส่งไหมคะ",
         "en": "This document comes from #{source}, which {who} cannot see. Send it anyway?",
     },
 }

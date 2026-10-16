@@ -209,7 +209,7 @@ async def test_typed_cancel_command(bot, world):
     bot._deep_jobs[GUILD] = botmod._DeepJob(Job(), DeepHandle(), STAFF)
     m = TMsg(world.g, world.gen, member(world.g, STAFF), "ยกเลิกงาน", mention=True)
     await bot.on_message(m)
-    assert m.replies == ["ยกเลิกงานใหญ่ที่กำลังทำอยู่แล้วครับ"]
+    assert m.replies == ["ยกเลิกงานใหญ่ที่กำลังทำอยู่แล้วค่ะ"]
 
 
 def test_handle_kills_a_real_process_and_run_reports_cancel(tmp_path):

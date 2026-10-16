@@ -585,7 +585,7 @@ This project is source-available under the [PolyForm Noncommercial License 1.0.0
 messages). Salid joins silently; when joined by itself and nobody addresses it within `SALID_CONSENT_DELAY_SECONDS` (20) of the
 first speech it asks once (text by default) whether this is a meeting; "no" -> not_recording (nothing logged, no summary).
 Notes: Live tools `post_note` / `ask_consent` / `set_recording` / `set_minutes_destination`; classic mode batches a gate every
-`SALID_NOTES_BATCH_SECONDS` (60). `SALID_VOICE_PARTICLE` (ค่ะ) sets the particle of spoken lines. Minutes go to the channel
+`SALID_NOTES_BATCH_SECONDS` (60). `SALID_PERSONA_PARTICLE` (ค่ะ; old name `SALID_VOICE_PARTICLE` still works) sets the particle of typed AND spoken lines. Minutes go to the channel
 named by voice/text ("ส่งมติการประชุมไปห้อง X"); later "ส่งสรุปประชุมเมื่อกี้ไปห้อง X" uses `deliver_minutes`.
 `SALID_AUTO_JOIN_COOLDOWN_MINUTES` now defaults to 10 and is cleared when the channel empties.
 

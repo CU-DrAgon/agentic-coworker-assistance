@@ -297,9 +297,7 @@ async def test_one_person_triggers_an_auto_join_with_the_announcement(world):
     assert s.origin == "auto" and s.body.index == 0
     assert world.chans[A].sent == [t("meet_announce_auto", "th")]
     assert (
-        world.chans[A]
-        .sent[0]
-        .startswith("สลิดเข้ามาจดประชุมนะครับ ไม่ต้องการพิมพ์ “@Salid ออกประชุม” ได้เลย")
+        world.chans[A].sent[0].startswith("สลิดเข้ามาจดประชุมนะคะ ไม่ต้องการพิมพ์ “@Salid ออกประชุม” ได้เลย")
     )
     assert "leave meeting" in t("meet_announce_auto", "en")
     await end_all(world)
@@ -442,7 +440,7 @@ async def test_busy_room_with_executive_preempts_a_person_alone(world):
     assert list(world.mgr.sessions) == [(GID, A)]
     await enter(world, B, 5)  # an executive joins B: 2 people incl. executive (40 vs 0)
     assert list(world.mgr.sessions) == [(GID, B)]
-    assert t("meet_preempted", "th") == "ขอไปช่วยประชุมที่นัดไว้ก่อนนะครับ ส่วนที่คุยมาสรุปไว้ให้แล้ว"
+    assert t("meet_preempted", "th") == "ขอไปช่วยประชุมที่นัดไว้ก่อนนะคะ ส่วนที่คุยมาสรุปไว้ให้แล้ว"
     assert t("meet_preempted", "th") in world.chans[A].sent  # the old room was told first
     assert any("สรุป" in x or "ไม่มี" in x for x in world.chans[A].sent[1:])  # then its summary
     await end_all(world)
