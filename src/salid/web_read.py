@@ -169,24 +169,43 @@ def make_read_web(
     return read_web
 
 
-def grounded_search(client, model: str, prompt: str, instruction: str, timeout_s: float = 15.0):
-    """One Google Search grounded call (search only, no url_context) for a strict, self-built
-    prompt (flights). Returns {text, sources} or {error}. Never logs the prompt."""
+GROUNDED_TIMEOUT_S = 20.0  # one Google-Search-grounded call is slower than a REST call
+GROUNDED_RETRY_DELAY_S = 1.0  # exactly one retry, on a 5xx / 429 / timeout (llm.generate decides)
+
+
+def grounded_generate(
+    client,
+    model: str,
+    prompt: str,
+    *,
+    instruction: str | None = None,
+    temperature: float = 0.1,
+    max_output_tokens: int = MAX_OUTPUT_TOKENS,
+):
+    """THE one Google Search grounded Gemini call (search only, no url_context): web_search,
+    flights and the markets fallback all go through it. 20 s timeout, one retry. Raises on failure
+    and never logs the prompt."""
     config = types.GenerateContentConfig(
         system_instruction=instruction,
         tools=[types.Tool(google_search=types.GoogleSearch())],
-        temperature=0.1,
-        max_output_tokens=MAX_OUTPUT_TOKENS,
-        http_options=types.HttpOptions(timeout=int(timeout_s * 1000)),
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        http_options=types.HttpOptions(timeout=int(GROUNDED_TIMEOUT_S * 1000)),
     )
+    return llm.generate(
+        client,
+        model,
+        [types.Content(role="user", parts=[types.Part(text=prompt)])],
+        config,
+        delays=(GROUNDED_RETRY_DELAY_S,),
+    )
+
+
+def grounded_search(client, model: str, prompt: str, instruction: str):
+    """A grounded call for a strict, self-built prompt (flights). Returns {text, sources} or
+    {error}."""
     try:
-        resp = llm.generate(
-            client,
-            model,
-            [types.Content(role="user", parts=[types.Part(text=prompt)])],
-            config,
-            delays=(),  # one attempt: the caller has a hard time budget
-        )
+        resp = grounded_generate(client, model, prompt, instruction=instruction)
     except Exception as e:
         logger.warning("grounded search failed (%s)", type(e).__name__)
         return {"error": f"web search failed ({type(e).__name__})"}

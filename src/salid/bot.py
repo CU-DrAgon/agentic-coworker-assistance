@@ -73,6 +73,7 @@ from .image_memory import (
     receipt_note,
 )
 from .maps_bot import MapsMixin
+from .markets_bot import MarketsMixin
 from .media import media_candidates
 from .media_bot import MediaMixin
 from .meeting import MeetingManager, parse_meeting_command
@@ -281,6 +282,7 @@ class SecretaryBot(
     MapsMixin,
     SearchMixin,
     TravelMixin,
+    MarketsMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -417,6 +419,7 @@ class SecretaryBot(
         dm_module.SENT_HOOK = self._dm_sent_hook  # every Salid DM is tagged with its company
         self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
         self._travel_init()  # currency + flights (salid.travel_bot)
+        self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1884,6 +1887,7 @@ class SecretaryBot(
             *([] if interjection else self._places_tools(message, guild, asker, is_exec)),
             *([] if interjection else self._maps_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
+            *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
@@ -2627,6 +2631,7 @@ class SecretaryBot(
         await self._polls_forms_due()
         await self._pc_sweep()
         await self._travel_due()
+        await self._markets_due()
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""

@@ -60,6 +60,8 @@ class NotifPrefs(BaseModel):
     weekends: bool = False  # briefs on Saturday / Sunday too
     doc_alerts: str = "important"  # all | important | off
     ask_reminders: bool = True
+    markets: bool = False  # opt-in "ตลาดเช้านี้" line in the morning brief (salid.markets)
+    market_items: list[str] = []  # what that line shows; empty = SET and gold
 
 
 def parse_hhmm(text: str | None) -> str | None:
@@ -466,6 +468,7 @@ class BriefInput:
     approvals: list[dict] = field(
         default_factory=list
     )  # morning: {id, requester, title, amount, days}
+    markets: str = ""  # morning: opt-in market line (salid.markets.market_line), appended as is
 
     def is_empty(self) -> bool:
         if self.kind == "morning":
@@ -476,6 +479,7 @@ class BriefInput:
                 or self.asks
                 or self.catchup
                 or self.approvals
+                or self.markets
             )
         # open tasks alone do not make an evening brief (they are listed when something else is)
         return not (self.attended or self.new_tasks or self.done or self.tomorrow or self.asks)

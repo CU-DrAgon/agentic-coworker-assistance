@@ -193,7 +193,7 @@ def test_grounded_status_prompt_links_and_confidence():
     assert "TG676" in prompt and "2026-10-17" in prompt and "gate" in prompt
     assert "ไม่พบข้อมูล" in config.system_instruction and "Never guess" in config.system_instruction
     assert config.tools[0].google_search is not None and config.tools[0].url_context is None
-    assert config.http_options.timeout == 15000
+    assert config.http_options.timeout == 20000
     assert "SALID" not in prompt  # nothing but the flight reaches Google
 
 

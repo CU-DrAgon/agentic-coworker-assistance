@@ -19,10 +19,7 @@ import re
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from google.genai import types
-
-from . import llm
-from .web_read import domain
+from .web_read import domain, grounded_generate
 
 logger = logging.getLogger(__name__)
 QUERY_CHARS = 400
@@ -61,15 +58,6 @@ def instruction(today: date, recency: str | None, site: str) -> str:
     if site:
         parts.append(f"Only use pages from {site}.")
     return " ".join(parts)
-
-
-def search_config(today: date, recency: str | None, site: str) -> types.GenerateContentConfig:
-    return types.GenerateContentConfig(
-        system_instruction=instruction(today, recency, site),
-        tools=[types.Tool(google_search=types.GoogleSearch())],
-        temperature=0.2,
-        max_output_tokens=MAX_OUTPUT_TOKENS,
-    )
 
 
 def build_query(query: str, site: str) -> str:
@@ -155,11 +143,13 @@ def web_search_call(
         return {"error": "give a search query"}
     day = today or today_bangkok()
     try:
-        resp = llm.generate(
+        resp = grounded_generate(
             client,
             model,
-            [types.Content(role="user", parts=[types.Part(text=q)])],
-            search_config(day, recency, host),
+            q,
+            instruction=instruction(day, recency, host),
+            temperature=0.2,
+            max_output_tokens=MAX_OUTPUT_TOKENS,
         )
     except Exception as e:  # never log the query
         logger.warning("web_search failed (%s)", type(e).__name__)

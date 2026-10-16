@@ -595,7 +595,9 @@ class CooMixin:
             scope=scope,
             approvals=self._approval_counts(guild.id, day),
         )
-        return reports.build_company_report(self.llm, self.s.gemini_model, inp, lang)
+        text = reports.build_company_report(self.llm, self.s.gemini_model, inp, lang)
+        news = self._company_news_section(guild, lang)  # followed customers / competitors
+        return f"{text}\n\n{news}" if news else text
 
     async def _post_report(self, guild, day: date):
         """Post the report in the private channel (created if needed). Returns the channel."""

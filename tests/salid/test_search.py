@@ -247,17 +247,21 @@ async def test_english_query_finds_thai_messages_through_expansion_and_files_are
     assert {r["source"] for r in only["results"]} == {"files"}
 
 
-async def test_the_ledger_is_searched_only_for_executives(bot, world):
+async def test_the_ledger_is_searched_for_executives_and_own_receipts_for_the_rest(bot, world):
     mk(bot.store, 1, STAFF, "Somchai", "Makro ABC", "2026-10-10", 1500.0)
+    mk(bot.store, 2, BOSS, "Boss", "Makro XYZ", "2026-10-11", 900.0)
     staff = await tools_for(bot, world, STAFF)
     boss = await tools_for(bot, world, BOSS)
     s = await asyncio.to_thread(staff["search_everything"], "Makro")
-    assert "receipts" not in s["searched"] and not s["results"]
+    assert "receipts" in s["searched"]  # a non-exec searches their OWN receipts only
+    titles = [r["title"] for r in s["results"] if r["source"] == "receipts"]
+    assert len(titles) == 1 and "ABC" in titles[0]
     b = await asyncio.to_thread(boss["search_everything"], "Makro")
     assert "receipts" in b["searched"]
-    assert b["results"][0]["source"] == "receipts" and "Makro" in b["results"][0]["title"]
-    denied = await asyncio.to_thread(staff["search_everything"], "Makro", sources=["receipts"])
-    assert "error" in denied
+    assert {r["title"][:10] for r in b["results"] if r["source"] == "receipts"} >= {
+        "Makro ABC "[:10],
+        "Makro XYZ "[:10],
+    }
 
 
 async def test_meetings_only_where_the_asker_was_invited(bot, world):

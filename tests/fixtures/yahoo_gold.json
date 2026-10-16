@@ -1,0 +1,68 @@
+{
+ "chart": {
+  "result": [
+   {
+    "meta": {
+     "currency": "USD",
+     "symbol": "GC=F",
+     "fullExchangeName": "COMEX",
+     "shortName": "Gold Dec 26",
+     "gmtoffset": -14400,
+     "regularMarketPrice": 4170.0,
+     "regularMarketTime": 1792121400,
+     "chartPreviousClose": 4099.75,
+     "range": "5d"
+    },
+    "timestamp": [
+     1791774000,
+     1791860400,
+     1791946800,
+     1792033200,
+     1792119600
+    ],
+    "indicators": {
+     "quote": [
+      {
+       "close": [
+        4100.0,
+        4120.0,
+        4150.5,
+        4157.26,
+        4170.0
+       ],
+       "high": [
+        4100.5,
+        4120.5,
+        4151.0,
+        4157.76,
+        4170.5
+       ],
+       "low": [
+        4099.5,
+        4119.5,
+        4150.0,
+        4156.76,
+        4169.5
+       ],
+       "open": [
+        4100.0,
+        4120.0,
+        4150.5,
+        4157.26,
+        4170.0
+       ],
+       "volume": [
+        1,
+        1,
+        1,
+        1,
+        1
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "error": null
+ }
+}

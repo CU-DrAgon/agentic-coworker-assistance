@@ -5,7 +5,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel}: bool, all default true
+                         private_channels, maps, search, travel, markets}: bool, all
+                         default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -91,6 +92,7 @@ FEATURES = (
     "maps",
     "search",
     "travel",
+    "markets",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -154,6 +156,9 @@ class Features(BaseModel):
     maps: bool = True  # travel time / routes / weather (also needs SALID_MAPS_ENABLED)
     travel: bool = True  # currency conversion + flight status / prices / tracking
     search: bool = True  # search_everything + web_search + deep_research (the last two need `web`)
+    markets: bool = (
+        True  # stock / gold / news tools, price alerts, market line in the morning brief
+    )
 
 
 class Channel(BaseModel):

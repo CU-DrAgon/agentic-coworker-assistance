@@ -25,6 +25,7 @@ from .flights import FLIGHT_PROMPT
 from .freetime import FREETIME_PROMPT
 from .gmaps import MAPS_PROMPT
 from .i18n import resolve_lang, t
+from .markets import MARKETS_PROMPT
 from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
 from .memory_store import MemoryMessage, MemoryStore
@@ -1176,6 +1177,7 @@ def system_prompt(
     maps: bool = False,
     search: bool = False,
     travel: bool = False,
+    markets: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1215,6 +1217,8 @@ def system_prompt(
         p += SEARCH_PROMPT
     if travel:
         p += CURRENCY_PROMPT + FLIGHT_PROMPT
+    if markets:
+        p += MARKETS_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1566,6 +1570,7 @@ def build_agent(
     maps: bool = False,
     search: bool = False,
     travel: bool = False,
+    markets: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1589,6 +1594,7 @@ def build_agent(
         maps=maps,
         search=search,
         travel=travel,
+        markets=markets,
     )
     model_calls = 0
 
@@ -1755,6 +1761,7 @@ async def ask_async(
         maps="travel_time" in tool_names or "weather" in tool_names,
         search="search_everything" in tool_names,
         travel="convert_currency" in tool_names,
+        markets="stock_quote" in tool_names,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex

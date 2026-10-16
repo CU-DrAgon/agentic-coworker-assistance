@@ -34,7 +34,6 @@ from . import web_read
 logger = logging.getLogger(__name__)
 
 TIMEOUT_S = 8.0
-GROUND_TIMEOUT_S = 15.0  # a grounded Gemini search is slower than a REST call
 STATUS_CACHE_S = 5 * 60
 PRICES_CACHE_S = 30 * 60
 TRACK_KIND = "flight_track"
@@ -384,9 +383,7 @@ class FlightService:
     def _ground(self, prompt: str) -> dict:
         if self.client is None:
             return {"error": "web search is not available"}
-        return web_read.grounded_search(
-            self.client, self.model, prompt, STATUS_INSTRUCTION, GROUND_TIMEOUT_S
-        )
+        return web_read.grounded_search(self.client, self.model, prompt, STATUS_INSTRUCTION)
 
     def status(self, flight_number: str, day: str = "") -> dict:
         flight = normalize_flight(flight_number)

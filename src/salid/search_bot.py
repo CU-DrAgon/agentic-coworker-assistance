@@ -77,11 +77,13 @@ class SearchMixin:
                 list_meetings=lambda a, b: self.secretary_store.list_meetings(
                     gid, a, b, statuses=("scheduled", "started", "done")
                 ),
-                # same rule as the ledger tools: only executives see everyone's receipts
-                ledger=(
-                    LedgerTools(self.store, gid, forced_submitter_id=None, actor=f"user {asker.id}")
-                    if is_exec
-                    else None
+                # same rule as the ledger tools: executives see everyone's receipts, anyone else
+                # only the ones they submitted themselves
+                ledger=LedgerTools(
+                    self.store,
+                    gid,
+                    forced_submitter_id=None if is_exec else asker.id,
+                    actor=f"user {asker.id}",
                 ),
             )
             internal = search_tools(src, self._expander, self.s.now, self.s.zone)
