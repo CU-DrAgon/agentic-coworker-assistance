@@ -21,6 +21,7 @@ from google.adk.runners import InMemoryRunner
 from google.genai import types
 
 from .config import Settings
+from .deck import MAX_DECK_BYTES, DeckSpec, Slide, chart_data, deck_filename, render_deck
 from .embed import NullEmbedder, cosine
 from .gate import extract_keywords
 from .i18n import resolve_lang, t
@@ -918,6 +919,8 @@ CAPABILITIES_PROMPT = (
     "9) อ่านรูปและไฟล์ที่ส่งมา: ส่งรูป PDF หรือไฟล์ข้อความ (ไม่เกิน 4 ไฟล์) ให้สลิดโดยตรง (แท็ก เรียกชื่อ ตอบกลับสลิด ส่ง DM หรือส่งในห้องคุยกับสลิด) "
     "สลิดอ่านแล้วบอกว่าในไฟล์มีอะไร แล้วตัดสินใจเองว่าจะทำอะไรต่อ: ใบเสร็จ/บิล/สลิปโอนเงินบันทึกลงบัญชีให้ "
     "เอกสารหรือภาพหน้าจอสรุปประเด็นแล้วเสนอขั้นตอนต่อไป คำถามในรูปก็ตอบให้.\n"
+    "10) สไลด์นำเสนอ: ขอให้ทำสไลด์ได้ เช่น “ทำสไลด์สรุปค่าใช้จ่ายเดือนนี้” หรือ “ทำสไลด์สรุปประชุมเมื่อวาน” "
+    "สลิดส่งไฟล์ PowerPoint (.pptx) ที่แก้ต่อได้ กราฟใช้ตัวเลขจริงจากบัญชี\n"
     "ข้อจำกัด: ค้นอินเทอร์เน็ตไม่ได้ (ข่าวหรือข้อมูลล่าสุดอาจไม่อัปเดต) และตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ "
     "ถ้าไม่แน่ใจให้แนะนำ /โหมด /ภาษา /ความจำ เพื่อดูสถานะ"
 )
@@ -968,7 +971,17 @@ def is_no_reply(text: str | None) -> bool:
     return len(s) <= 20 and NO_REPLY.casefold() in s.casefold().replace(" ", "_")
 
 
-def stable_prompt(language: str, memory: bool) -> str:
+DECK_PROMPT = (
+    "\nสไลด์นำเสนอ: เรียก create_deck เฉพาะเมื่อผู้ใช้ขอสไลด์ งานนำเสนอ พรีเซนต์ หรือ slides / deck / presentation. "
+    "ถ้าเป็นเรื่องข้อมูลของทีม ให้เก็บข้อมูลด้วยเครื่องมือไม่เกิน 2 รอบ แล้วเรียก create_deck. "
+    "หน้าปกระบบสร้างให้เอง: ใส่สไลด์เนื้อหา 4-8 หน้า หน้าละหนึ่งประเด็น bullet ไม่เกิน 5 ข้อ ข้อละสั้นๆ รายละเอียดใส่ใน notes. "
+    "เรื่องค่าใช้จ่ายให้ใช้สไลด์ชนิด chart (ระบบเติมตัวเลขจากบัญชีเอง) ห้ามพิมพ์ตัวเลขของร้านลงในกราฟเอง. "
+    "เขียนข้อความในสไลด์เป็นภาษาเดียวกับคำตอบ. ถ้าได้ error ให้แก้ตามที่บอกแล้วเรียกใหม่. "
+    "เมื่อสร้างเสร็จ ตอบสั้นๆ ว่าสไลด์มีอะไรบ้าง (ไฟล์แนบไปกับคำตอบแล้ว)."
+)
+
+
+def stable_prompt(language: str, memory: bool, deck: bool = False) -> str:
     """The part of the system prompt that is identical for every request in one language (persona,
     rules, capabilities, duplicate rules, memory guidance). It comes first so Gemini's implicit
     prefix cache can reuse it across requests and tool rounds."""
@@ -986,6 +999,8 @@ def stable_prompt(language: str, memory: bool) -> str:
     p += DUPLICATES_PROMPT
     if memory:
         p += MEMORY_PROMPT
+    if deck:
+        p += DECK_PROMPT
     return p
 
 
@@ -1027,13 +1042,24 @@ def system_prompt(
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
+    deck: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     Stable part first, per-request part last (see `stable_prompt`)."""
     now = now or settings.now()
-    return stable_prompt(language, memory) + volatile_prompt(
+    return stable_prompt(language, memory, deck) + volatile_prompt(
         settings, now, scoped=scoped, interjection=interjection, language=language, files=files
     )
+
+
+@dataclass
+class DeckSink:
+    """Where `create_deck` leaves the rendered file for the answer (at most one deck), plus the
+    language and date its fixed strings use."""
+
+    files: list[tuple[str, bytes]]
+    lang: str
+    today: date
 
 
 @dataclass
@@ -1043,6 +1069,7 @@ class Answer:
     seconds: float
     tool_calls: list[tuple[str, dict]]
     receipts: list[tuple[int, str | None]] = field(default_factory=list)  # (id, reaction) created
+    files: list[tuple[str, bytes]] = field(default_factory=list)  # (filename, data) to attach
     # Cost and latency (summed over every model call of the turn; 0 when not reported).
     model_calls: int = 0
     tokens_in: int = 0
@@ -1052,14 +1079,54 @@ class Answer:
     tool_ms: dict[str, float] = field(default_factory=dict)  # tool name -> total milliseconds
 
 
+def _create_deck(
+    ledger: LedgerTools, sink: DeckSink, title: str, subtitle: str, slides: list
+) -> dict:
+    """create_deck's work: validate the outline, fetch chart numbers through the scoped ledger,
+    render, and leave the file in the sink (replacing an earlier deck of this answer)."""
+    started = time.monotonic()
+    raw = [s.model_dump() if hasattr(s, "model_dump") else s for s in slides or []]
+    try:
+        spec = DeckSpec.model_validate({"title": title, "subtitle": subtitle or "", "slides": raw})
+    except ValueError as e:  # pydantic's ValidationError names the field to fix
+        return {"error": f"invalid outline: {str(e)[:1500]}"}
+    charts = {
+        i: chart_data(
+            ledger.spending_summary(s.chart.start_date, s.chart.end_date, s.chart.group_by),
+            s.chart,
+            sink.lang,
+        )
+        for i, s in enumerate(spec.slides)
+        if s.kind == "chart" and s.chart is not None
+    }
+    try:
+        data = render_deck(spec, charts, lang=sink.lang, today=sink.today)
+    except Exception as e:  # never kill the turn; the model tells the user
+        logger.warning("deck render failed (%s)", type(e).__name__)
+        return {"error": "could not build the deck"}
+    if len(data) > MAX_DECK_BYTES:
+        logger.warning("deck too large (%d bytes)", len(data))
+        return {"error": "could not build the deck"}
+    name = deck_filename(spec.title, sink.today)
+    sink.files[:] = [(name, data)]
+    logger.info(
+        "deck guild=%s slides=%d charts=%d bytes=%d ms=%d",
+        ledger.guild_id, len(spec.slides) + 1, len(charts), len(data),
+        (time.monotonic() - started) * 1000,
+    )  # fmt: skip
+    return {"status": "created", "slides": len(spec.slides) + 1, "file": name}
+
+
 def build_tools(
     ledger: LedgerTools,
     calls: list[tuple[str, dict]] | None = None,
     memory: MemoryTools | None = None,
     timings: dict[str, float] | None = None,
+    deck: DeckSink | None = None,
 ) -> list:
     """The four ledger tools (plus the two memory tools when `memory` is given) as plain functions
-    bound to `ledger` / `memory` (ADK wraps them as FunctionTools).
+    bound to `ledger` / `memory` (ADK wraps them as FunctionTools). With `deck`, also
+    `create_deck`, which leaves the rendered `.pptx` in the sink.
 
     Permission scoping lives in `ledger.forced`: none of these signatures has a submitter
     parameter, so the model cannot pass one (ADK also drops undeclared arguments). Errors are
@@ -1185,6 +1252,24 @@ def build_tools(
         void_receipts,
         restore_receipts,
     ]
+
+    def create_deck(title: str, slides: list[Slide], subtitle: str = "") -> dict:
+        """Build a PowerPoint slide deck (.pptx) that is attached to your reply. A title slide is
+        added automatically. Slide kinds: section (a divider with a big title), bullets (up to 6
+        short bullets), two_column (bullets = left list, right = right list), chart (the
+        system fills the numbers from the shop's ledger for the given query; never type
+        amounts into a chart). Put details in each slide's notes.
+
+        Args:
+            title: deck title, at most 80 characters.
+            slides: 1-12 content slides.
+            subtitle: optional subtitle, at most 120 characters.
+        """
+        a = dict(title=title, subtitle=subtitle, slides=slides)
+        return safe("create_deck", a, lambda: _create_deck(ledger, deck, title, subtitle, slides))
+
+    if deck is not None:
+        tools.append(create_deck)
     if memory is None:
         return tools
 
@@ -1347,6 +1432,7 @@ def build_agent(
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
+    deck: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1358,6 +1444,7 @@ def build_agent(
         memory=memory,
         interjection=interjection,
         files=files,
+        deck=deck,
     )
     model_calls = 0
 
@@ -1407,12 +1494,14 @@ async def ask_async(
     interjection: bool = False,
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
+    deck: bool = False,
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
     whose `forced_submitter_id` is the asker for non-executives. `files`: the message's attachments
     (read by the model itself as multimodal parts, within the size limits); with `actions` the model
-    also gets record_receipt / start_deep_task for them."""
+    also gets record_receipt / start_deep_task for them. `deck`: offer create_deck; the deck it
+    builds comes back in `Answer.files`."""
     started = time.monotonic()
     calls: list[tuple[str, dict]] = []
     tool_ms: dict[str, float] = {}
@@ -1433,7 +1522,12 @@ async def ask_async(
     f_parts, unreadable = file_parts(usable)
     usable = [f for f in usable if f not in unreadable]
     skipped += unreadable
-    tools = build_tools(ledger, calls, memory, tool_ms)
+    sink = (
+        DeckSink([], resolve_lang(language, question), (now or settings.now()).date())
+        if deck
+        else None
+    )
+    tools = build_tools(ledger, calls, memory, tool_ms, sink)
     if usable and actions is not None:
         tools += build_file_tools(usable, actions, calls, created)
     agent = build_agent(
@@ -1447,6 +1541,7 @@ async def ask_async(
         memory=memory is not None,
         interjection=interjection,
         files=bool(usable or skipped),
+        deck=sink is not None,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -1487,6 +1582,7 @@ async def ask_async(
         time.monotonic() - started,
         calls,
         created,
+        files=sink.files if sink is not None else [],
         model_calls=model_calls,
         tool_ms=tool_ms,
         **tokens,
@@ -1509,6 +1605,7 @@ def ask(
     interjection: bool = False,
     files: list[FileInput] | None = None,
     actions: FileActions | None = None,
+    deck: bool = False,
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -1527,5 +1624,6 @@ def ask(
             interjection=interjection,
             files=files,
             actions=actions,
+            deck=deck,
         )
     )
