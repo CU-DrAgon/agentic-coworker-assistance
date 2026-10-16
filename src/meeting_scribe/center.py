@@ -297,7 +297,14 @@ def center_page() -> HTMLResponse:
         client_id = ""
     if not CENTER_HTML.exists():
         raise HTTPException(404, "center.html is not built yet")
-    html = CENTER_HTML.read_text(encoding="utf-8").replace("__HUB_GOOGLE_CLIENT_ID__", client_id)
+    from meeting_scribe.app import salid_invite_url  # late: app imports this module
+
+    invite = salid_invite_url(get_settings().salid_discord_client_id)
+    html = (
+        CENTER_HTML.read_text(encoding="utf-8")
+        .replace("__HUB_GOOGLE_CLIENT_ID__", client_id)
+        .replace("__INVITE_URL__", invite)
+    )
     return HTMLResponse(
         html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
     )
