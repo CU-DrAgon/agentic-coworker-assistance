@@ -1165,4 +1165,9 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "เอกสารนี้มาจาก #{source} ซึ่ง {who} มองไม่เห็น ยืนยันจะส่งไหมครับ",
         "en": "This document comes from #{source}, which {who} cannot see. Send it anyway?",
     },
+    # ---------------------------------------------------------------- wiki (salid.wiki_bot)
+    "wiki_post_footer": {
+        "th": "อัปเดตล่าสุด {date} · เขียนโดย {who} · สลิด",
+        "en": "Last updated {date} · written by {who} · via Salid",
+    },
 }

@@ -118,6 +118,7 @@ from .summary import (
     summary_question,
 )
 from .voice_pool import VoicePool
+from .wiki_bot import WikiMixin
 
 logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
@@ -248,7 +249,9 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMixin, discord.Client):
+class SecretaryBot(
+    CooMixin, BriefingMixin, ProfileMixin, WikiMixin, DeliverMixin, MediaMixin, discord.Client
+):
     def __init__(
         self,
         settings: Settings,
@@ -366,6 +369,7 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
+        self._wiki_init()  # company knowledge base (salid.wiki_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -1786,6 +1790,8 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         chat_actions = self._chat_actions(
             message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
         )
+        if not interjection:  # company wiki tools (salid.wiki_bot)
+            coo_tools = [*coo_tools, *self._wiki_tools(guild, asker, is_exec, memory, lang)]
         return {
             "language": setting,
             "memory": memory,

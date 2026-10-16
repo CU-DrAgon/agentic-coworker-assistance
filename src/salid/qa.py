@@ -28,6 +28,7 @@ from .memory_summary import render_summary
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
 from .web_read import make_read_web
+from .wiki import WIKI_PROMPT
 
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 6
@@ -1136,6 +1137,7 @@ def system_prompt(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    wiki: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1163,6 +1165,8 @@ def system_prompt(
         p += MEMORY_PROMPT
     if coo:
         p += COO_PROMPT
+    if wiki:
+        p += WIKI_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1507,6 +1511,7 @@ def build_agent(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    wiki: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1524,6 +1529,7 @@ def build_agent(
         people=people,
         coo=coo,
         profile=profile,
+        wiki=wiki,
     )
     model_calls = 0
 
@@ -1674,6 +1680,7 @@ async def ask_async(
         people=people,
         coo=bool(extra_tools),
         profile=profile,
+        wiki=any(getattr(f, "__name__", "") == "wiki_search" for f in extra_tools or []),
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
