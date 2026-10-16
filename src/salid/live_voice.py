@@ -37,8 +37,7 @@ from .qa import THAI_DAYS
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
-    from .mentions import tag_candidates
-from .meeting import MeetingSession
+    from .meeting import MeetingSession
 
 logger = logging.getLogger(__name__)
 
