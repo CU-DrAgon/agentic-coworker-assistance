@@ -1,7 +1,7 @@
 """Instant acknowledgement for slow work.
 
 When Salid is addressed and the answer will take a while (files, links, audio, a deep task) it
-replies at once with a short natural line ("ขอเวลาแป๊บนึงนะครับ ขออ่านเอกสารให้เข้าใจก่อน 📄"); for
+replies at once with a short natural line ("ขอเวลาแป๊บนึงนะคะ ขออ่านเอกสารให้เข้าใจก่อน 📄"); for
 anything else the same kind of line goes out if no answer is back after SLOW_AFTER_S seconds. The
 bot then edits that message into the first chunk of the answer.
 """
