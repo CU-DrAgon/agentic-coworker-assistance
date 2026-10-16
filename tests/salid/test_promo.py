@@ -1,5 +1,7 @@
+import inspect
 import io
 import itertools
+import logging
 import re
 
 import httpx
@@ -258,3 +260,133 @@ def test_fallback_scene_contains_the_original_photo():
     assert s.size == (1536, 2752)
     r, g, b = s.getpixel((768, 1376))  # centre shows the sharp photo
     assert r > 180 and g < 60 and b < 60
+
+
+# ------------------------------------------------------------------ tool
+def ctx(**kw):
+    scene = image_response(png_bytes((768, 1376)))
+    base = dict(
+        guild_id=1,
+        day="2026-10-16",
+        default_shop="ร้าน A",
+        photos=[(0, png_bytes((900, 900)))],
+        memory=promo.PromoMemory(),
+        key=(1, 10, 7),
+        client=fake_client(scene, scene),
+        model="m",
+        budget=DailyBudget(20),
+        fonts=cards.card_fonts(),
+    )
+    return promo.PromoCtx(**{**base, **kw})
+
+
+def test_memory_ttl_lru_and_key_isolation():
+    now = [0.0]
+    m = promo.PromoMemory(ttl_s=1800, max_entries=2, clock=lambda: now[0])
+    m.put((1, 1, 1), photo(), FULL)
+    m.put((1, 1, 2), photo(), FULL)
+    assert m.get((1, 1, 1)) and m.get((2, 1, 1)) is None and m.get((1, 2, 1)) is None
+    m.put((1, 1, 3), photo(), FULL)  # evicts the least recently used: (1, 1, 2)
+    assert m.get((1, 1, 2)) is None and m.get((1, 1, 1))
+    now[0] = 1801
+    assert m.get((1, 1, 1)) is None
+
+
+def test_first_kit_ai_scene_and_outbox():
+    c = ctx()
+    [tool] = promo.promo_tools(c)
+    out = tool(headline="ลาเต้เย็น", scene="cafe table", price="59.-")
+    assert out["status"] == "ok" and out["ai_scene"] and out["reason"] == ""
+    assert out["files"] == ["promo-1x1.jpg", "promo-4x5.jpg", "promo-9x16.jpg"]
+    assert [n for n, _ in tool.outbox] == out["files"] and tool.outbox is c.outbox
+    assert out["kits_left_today"] == 19 and "made with AI" in out["note"]
+    assert len(c.client.models.calls) == 1
+
+
+def test_second_call_in_one_turn_replaces_the_files():  # Review Focus 5
+    c = ctx()
+    [tool] = promo.promo_tools(c)
+    tool(headline="a", scene="cafe")
+    tool(headline="b", scene="beach")
+    assert len(tool.outbox) == 3
+
+
+def test_revision_uses_the_remembered_photo_and_fields():
+    c = ctx()
+    promo.promo_tools(c)[0](headline="ลาเต้เย็น", scene="cafe", price="59.-")
+    c2 = ctx(photos=[], memory=c.memory)
+    out = promo.promo_tools(c2)[0](scene="warmer light")
+    assert out["status"] == "ok"
+    _, spec = c.memory.get((1, 10, 7))
+    assert (spec.headline, spec.scene, spec.price) == ("ลาเต้เย็น", "warmer light", "59.-")
+
+
+def test_new_photo_starts_a_fresh_kit():
+    c = ctx()
+    promo.promo_tools(c)[0](headline="old", scene="cafe", price="59.-")
+    c2 = ctx(memory=c.memory)  # a new photo in this message
+    assert promo.promo_tools(c2)[0](scene="beach")["status"] == "error"  # headline required again
+
+
+@pytest.mark.parametrize("reason", ["daily_limit", "disabled"])
+def test_limits_fall_back_without_calling_the_model(reason):
+    budget = DailyBudget(1 if reason == "daily_limit" else 0)
+    budget.add(1, "2026-10-16", 1)  # the only unit is already used
+    c = ctx(budget=budget, client=fake_client(RuntimeError("must not be called")))
+    out = promo.promo_tools(c)[0](headline="h", scene="cafe")
+    assert (out["status"], out["ai_scene"], out["reason"]) == ("ok", False, reason)
+    assert c.client.models.calls == [] and len(c.outbox) == 3
+
+
+def test_blocked_scene_falls_back_and_counts():
+    c = ctx(
+        client=fake_client(
+            image_response(png_bytes((9, 9)), finish=types.FinishReason.IMAGE_SAFETY)
+        )
+    )
+    out = promo.promo_tools(c)[0](headline="h", scene="cafe")
+    assert (out["ai_scene"], out["reason"], out["kits_left_today"]) == (False, "blocked", 19)
+    assert "blocked by safety filters" in out["note"]
+
+
+def test_photo_choice_errors_and_small_photo_note():
+    assert (
+        promo.promo_tools(ctx())[0](headline="h", scene="cafe", file_index=3)["status"] == "error"
+    )
+    assert promo.promo_tools(ctx(photos=[]))[0](headline="h", scene="cafe")["status"] == "no_photo"
+    assert (
+        promo.promo_tools(ctx(photos=[(0, b"junk")]))[0](headline="h", scene="cafe")["error"]
+        == "the photo could not be read"
+    )
+    small = promo.promo_tools(ctx(photos=[(0, png_bytes((300, 300)))]))[0](
+        headline="h", scene="cafe"
+    )
+    assert "under 400 px" in small["note"]
+
+
+def test_tool_never_raises_and_logs_no_user_text(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="salid.promo")
+    c = ctx()
+    promo.promo_tools(c)[0](headline="ความลับร้าน", scene="secret garden")
+    assert "ความลับร้าน" not in caplog.text and "secret garden" not in caplog.text
+    assert "promo kit guild=1 outcome=ai" in caplog.text
+    monkeypatch.setattr(promo, "render_kit", lambda *a: 1 / 0)
+    assert promo.promo_tools(ctx())[0](headline="h", scene="cafe") == {
+        "status": "error",
+        "error": "the promo kit failed; try again",
+    }
+
+
+def test_tool_schema_and_description():
+    [tool] = promo.promo_tools(ctx())
+    assert tool.__name__ == "make_promo_kit"
+    assert "IN ENGLISH" in tool.__doc__ and "30 minutes" in tool.__doc__
+    assert list(inspect.signature(tool).parameters) == [
+        "headline",
+        "scene",
+        "price",
+        "call_to_action",
+        "shop_name",
+        "accent",
+        "file_index",
+    ]

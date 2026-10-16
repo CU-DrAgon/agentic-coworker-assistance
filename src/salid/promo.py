@@ -14,7 +14,12 @@ from __future__ import annotations
 import io
 import logging
 import re
-from dataclasses import dataclass
+import threading
+import time
+from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
 
 import httpx
 from google.genai import types
@@ -104,19 +109,19 @@ def merge_spec(
     }
     defaults = {"shop_name": clean(default_shop)[: LIMITS["shop_name"]], "accent": "red"}
     out: dict[str, str] = {}
-    for field, raw in given.items():
+    for name, raw in given.items():
         value = clean(raw)
         if value == "-":
             value = ""
         elif not value:
-            value = getattr(prev, field) if prev is not None else defaults.get(field, "")
-        out[field] = value
+            value = getattr(prev, name) if prev is not None else defaults.get(name, "")
+        out[name] = value
     out["accent"] = out["accent"].casefold() or "red"
     if out["accent"] not in ACCENTS:
         raise ValueError(f"accent must be one of: {', '.join(ACCENTS)}")
-    for field, limit in LIMITS.items():
-        if len(out[field]) > limit:
-            raise ValueError(f"{field} is longer than {limit} characters; shorten it")
+    for name, limit in LIMITS.items():
+        if len(out[name]) > limit:
+            raise ValueError(f"{name} is longer than {limit} characters; shorten it")
     if not out["headline"]:
         raise ValueError("headline is required (the main line on the image)")
     if len(out["scene"]) < MIN_SCENE:
@@ -319,3 +324,200 @@ def render_format(
 def render_kit(scene: Image.Image, spec: PromoSpec, fonts: CardFonts) -> list[tuple[str, bytes]]:
     """The three JPEGs, in FORMATS order."""
     return [(f.name, cards.to_jpeg(render_format(scene, spec, f, fonts)[0])) for f in FORMATS]
+
+
+# ------------------------------------------------------------------ revision memory
+Key = tuple[int, int, int]  # (guild id, channel id, user id)
+
+
+class PromoMemory:
+    """The last kit's photo and request per person and channel, for revisions without a new
+    upload. Process memory only (never written anywhere), `ttl_s` after the last kit, at most
+    `max_entries` (least recently used dropped). Thread-safe: tools run in worker threads."""
+
+    def __init__(
+        self,
+        ttl_s: float = 1800.0,
+        max_entries: int = 50,
+        clock: Callable[[], float] = time.monotonic,
+    ):
+        self.ttl_s, self.max_entries, self.clock = ttl_s, max_entries, clock
+        self._items: OrderedDict[Key, tuple[float, Photo, PromoSpec]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def put(self, key: Key, photo: Photo, spec: PromoSpec) -> None:
+        with self._lock:
+            self._items[key] = (self.clock(), photo, spec)
+            self._items.move_to_end(key)
+            while len(self._items) > self.max_entries:
+                self._items.popitem(last=False)
+
+    def get(self, key: Key) -> tuple[Photo, PromoSpec] | None:
+        with self._lock:
+            hit = self._items.get(key)
+            if hit is None:
+                return None
+            if self.clock() - hit[0] > self.ttl_s:
+                del self._items[key]
+                return None
+            self._items.move_to_end(key)
+            return hit[1], hit[2]
+
+
+# ------------------------------------------------------------------ the agent tool
+NOTE_ALWAYS = (
+    "Reply in the user's language: say the three images are attached (1:1 for feed and LINE, 4:5 "
+    "for Facebook/Instagram feed, 9:16 for Stories, Reels and TikTok), then give a ready-to-paste "
+    "caption with 3-5 hashtags. Do not list the overlay text again."
+)
+NOTE_AI = (
+    " Mention briefly that the background was made with AI and the product is their own photo."
+)
+NOTE_FALLBACK = {
+    "blocked": " The AI scene was blocked by safety filters, so the kit uses the original photo; "
+    "say so and suggest a different scene.",
+    "error": " The AI scene service failed, so the kit uses the original photo; say so and that "
+    "they can try again.",
+    "daily_limit": " Today's AI scene limit for this server is used up, so the kit uses the "
+    "original photo; say so.",
+    "disabled": " AI scenes are turned off here, so the kit uses the original photo.",
+}
+NOTE_FALLBACK["timeout"] = NOTE_FALLBACK["error"]
+NOTE_SMALL = (
+    " The photo is small (under 400 px); suggest sending a larger photo for sharper results."
+)
+
+
+@dataclass
+class PromoCtx:
+    """One request's promo tool, bound by the bot (guild, channel and author are never model
+    input). `photos`: (attachment index, data) of this message's usable photos."""
+
+    guild_id: int
+    day: str
+    default_shop: str
+    photos: list[tuple[int, bytes]]
+    memory: PromoMemory
+    key: Key
+    client: Any
+    model: str
+    budget: DailyBudget
+    fonts: CardFonts
+    outbox: list[tuple[str, bytes]] = field(default_factory=list)
+
+    def make_kit(
+        self,
+        headline: str = "",
+        scene: str = "",
+        price: str = "",
+        call_to_action: str = "",
+        shop_name: str = "",
+        accent: str = "",
+        file_index: int = -1,
+    ) -> dict:
+        prev: PromoSpec | None = None
+        if file_index is not None and file_index >= 0:
+            data = next((d for i, d in self.photos if i == file_index), None)
+            if data is None:
+                return {
+                    "status": "error",
+                    "error": f"file #{file_index} is not a usable photo (PNG, JPEG or WebP)",
+                }
+            photo = prepare_photo(data)
+        elif self.photos:
+            photo = prepare_photo(self.photos[0][1])
+        else:
+            remembered = self.memory.get(self.key)
+            if remembered is None:
+                return {
+                    "status": "no_photo",
+                    "note": "Ask the user to send the product photo with the request.",
+                }
+            photo, prev = remembered
+        if photo is None:
+            return {"status": "error", "error": "the photo could not be read"}
+        try:
+            spec = merge_spec(
+                prev,
+                headline=headline,
+                scene=scene,
+                price=price,
+                call_to_action=call_to_action,
+                shop_name=shop_name,
+                accent=accent,
+                default_shop=self.default_shop,
+            )
+        except ValueError as e:
+            return {"status": "error", "error": str(e)}
+        t0 = time.monotonic()
+        reason = take_unit(self.budget, self.guild_id, self.day)
+        image = None
+        if not reason:
+            image, reason = generate_scene(self.client, self.model, photo, spec.scene)
+        t1 = time.monotonic()
+        files = render_kit(image if image is not None else fallback_scene(photo), spec, self.fonts)
+        self.outbox[:] = files  # a second call in the same turn replaces the first kit
+        self.memory.put(self.key, photo, spec)
+        logger.info(
+            "promo kit guild=%s outcome=%s model_ms=%d render_ms=%d bytes=%d",
+            self.guild_id,
+            "ai" if image is not None else f"fallback:{reason}",
+            (t1 - t0) * 1000,
+            (time.monotonic() - t1) * 1000,
+            sum(len(d) for _, d in files),
+        )
+        note = NOTE_ALWAYS + (NOTE_AI if image is not None else NOTE_FALLBACK.get(reason, ""))
+        if photo.short_side < LOW_QUALITY_SIDE:
+            note += NOTE_SMALL
+        return {
+            "status": "ok",
+            "files": [name for name, _ in files],
+            "ai_scene": image is not None,
+            "reason": reason,
+            "kits_left_today": max(
+                0, int(self.budget.cap - self.budget.used(self.guild_id, self.day))
+            ),
+            "note": note,
+        }
+
+
+def promo_tools(ctx: PromoCtx) -> list[Callable]:
+    """The function `_agent_kwargs` appends to `extra_tools` (its docstring is the tool
+    description). Files are collected in `ctx.outbox` (`outbox` attribute: see `qa.tool_files`)."""
+
+    def make_promo_kit(
+        headline: str = "",
+        scene: str = "",
+        price: str = "",
+        call_to_action: str = "",
+        shop_name: str = "",
+        accent: str = "",
+        file_index: int = -1,
+    ) -> dict:
+        """Make a promo post kit from the product photo the user sent: the product stays exactly as
+        photographed, AI creates a new scene around it, and Salid typesets the text, giving three images
+        (1:1, 4:5, 9:16). Use for requests like "ทำโพสต์โปรจากรูปนี้", "ทำภาพโฆษณาลาเต้ 59 บาท",
+        "make an ad for this". For a change to the last kit ("ขอโทนอุ่นกว่านี้", "เปลี่ยนราคาเป็น 49")
+        pass only what changes; the photo and the other fields are remembered for 30 minutes.
+
+        Args:
+            headline: main line on the image, max 40 characters, short and catchy, in the user's
+                language; put a space between phrases (Thai too) so it can wrap onto two lines.
+            scene: the setting to create around the product, IN ENGLISH, max 300 characters, e.g.
+                "wooden cafe table, soft morning window light, a few coffee beans". Never describe text.
+            price: optional, max 20 characters, e.g. "59.-" or "ลด 20%". "-" removes it.
+            call_to_action: optional, max 24 characters, e.g. "สั่งเลยวันนี้". "-" removes it.
+            shop_name: optional, max 30 characters; default is the server name. "-" removes it.
+            accent: badge colour: red (default), orange, green, blue, gold or black.
+            file_index: which attached file (the number in its label); -1 = the first photo.
+        """
+        try:
+            return ctx.make_kit(
+                headline, scene, price, call_to_action, shop_name, accent, file_index
+            )
+        except Exception:
+            logger.exception("make_promo_kit failed")
+            return {"status": "error", "error": "the promo kit failed; try again"}
+
+    make_promo_kit.outbox = ctx.outbox  # type: ignore[attr-defined]
+    return [make_promo_kit]
