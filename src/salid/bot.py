@@ -1669,36 +1669,38 @@ class SecretaryBot(
             files=files,
         )
         t_ctx = time.monotonic()
-        async with message.channel.typing():
-            ans = await asyncio.to_thread(
-                ask,
-                self.s,
-                self.store,
-                q,
-                guild_id=gid,
-                is_exec=is_exec,
-                user_id=message.author.id,
-                history=history,
-                language=setting,
-                memory=memory,
-                interjection=interjection,
-                deck=self.team.enabled(gid, "decks") and not interjection,
-                **({"files": files, "actions": actions} if files else {}),
-            )
+        ack = None if interjection else await self._start_ack(message, q, lang)
+        try:
+            async with message.channel.typing():
+                ans = await asyncio.to_thread(
+                    ask,
+                    self.s,
+                    self.store,
+                    q,
+                    guild_id=gid,
+                    is_exec=is_exec,
+                    user_id=message.author.id,
+                    history=history,
+                    interjection=interjection,
+                    deck=self.team.enabled(gid, "decks") and not interjection,
+                    **agent,
+                    **({"files": files, "actions": actions} if files else {}),
+                )
+        except BaseException:
+            await self._ack_failed(ack, lang)
+            raise
         self._log_answer(gid, message.channel.id, is_exec, ans, t0, t_ctx, time.monotonic())
         if interjection and is_no_reply(ans.text):
             logger.info("interjection suppressed (nothing useful to add)")
             return False
-        sent = first = None
-        sent_ids: list[int] = []
-        for i, part in enumerate(chunks(ans.text)):
-            if i == 0:
-                sent = await self._reply_with_files(message, part, getattr(ans, "files", ()), lang)
-            else:
-                sent = await message.channel.send(part)
-            first = first or sent
-            if getattr(sent, "id", None) is not None:
-                sent_ids.append(sent.id)
+        uploads = [
+            discord.File(io.BytesIO(data), filename=name)
+            for name, data in list(getattr(ans, "attachments", ()))[:10]
+        ]
+        everyone = wants_everyone(q, self._may_configure(member))
+        sent, first, sent_ids = await self._deliver(
+            message, guild, ack, ans.text, uploads, everyone
+        )
         if sent_ids:
             self._answers.add(message.channel.id, message.author.id, sent_ids)
         lines = [
@@ -1819,9 +1821,7 @@ class SecretaryBot(
                         **({"attachments": list(uploads)} if uploads else {}),
                     )
                 except discord.HTTPException:
-                    sent = await message.reply(
-                        part, mention_author=False, allowed_mentions=allowed, **extra
-                    )
+                    sent = await self._reply_with_uploads(message, part, allowed, extra)
                     with contextlib.suppress(discord.HTTPException):
                         await acked.delete()
                 else:
@@ -1831,9 +1831,7 @@ class SecretaryBot(
                             partial(self.memory.edit, guild.id, sent.id, part, datetime.now(UTC))
                         )
             elif i == 0:
-                sent = await message.reply(
-                    part, mention_author=False, allowed_mentions=allowed, **extra
-                )
+                sent = await self._reply_with_uploads(message, part, allowed, extra)
             else:
                 sent = await message.channel.send(part, allowed_mentions=allowed)
             first = first or sent
@@ -1843,6 +1841,22 @@ class SecretaryBot(
             with contextlib.suppress(discord.HTTPException):
                 await acked.delete()
         return sent, first, sent_ids
+
+    async def _reply_with_uploads(self, message, part: str, allowed, extra: dict):
+        """Reply with the generated files; if Discord refuses them (no Attach Files permission,
+        too large) the text still goes out, with a note, instead of the whole answer failing."""
+        try:
+            return await message.reply(
+                part, mention_author=False, allowed_mentions=allowed, **extra
+            )
+        except discord.HTTPException as e:
+            if not extra.get("files"):
+                raise
+            logger.warning("could not attach %d file(s) (HTTP %s)", len(extra["files"]), e.status)
+            note = t("attach_failed", self._lang(message))
+            return await message.reply(
+                f"{part}\n{note}", mention_author=False, allowed_mentions=allowed
+            )
 
     def _long_answer_file(self, text: str, lang: str, guild) -> tuple[str, discord.File]:
         """(short summary, the full answer as a PDF; Markdown when the PDF cannot be built)."""
@@ -2306,20 +2320,6 @@ class SecretaryBot(
             self._answers.add(message.channel.id, message.author.id, ids)
         self._note_answer(message, sent)
         return True
-
-    @staticmethod
-    async def _reply_with_files(message, text: str, files, lang: str):
-        """Reply with `text` and any files the agent built (a slide deck). If Discord refuses the
-        upload (no Attach Files permission, too large), the text still goes out with a note."""
-        if not files:
-            return await message.reply(text, mention_author=False)
-        attach = [discord.File(io.BytesIO(data), filename=name) for name, data in files]
-        try:
-            return await message.reply(text, mention_author=False, files=attach)
-        except discord.HTTPException as e:
-            logger.warning("could not attach %d file(s) (HTTP %s)", len(attach), e.status)
-            note = t("deck_attach_failed", lang)
-            return await message.reply(f"{text}\n{note}", mention_author=False)
 
     @staticmethod
     def _log_answer(gid, cid, is_exec, ans, t0: float, t_ctx: float, t_end: float) -> None:

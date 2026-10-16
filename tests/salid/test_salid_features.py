@@ -97,7 +97,7 @@ def _deck_answer(bot, monkeypatch, files=(("deck-20261016.pptx", b"PK\x03\x04dat
         "ask",
         lambda s, store, q, **kw: (
             seen.append(kw)
-            or SimpleNamespace(text="ทำสไลด์ให้แล้วครับ", seconds=0, rounds=0, files=list(files))
+            or SimpleNamespace(text="ทำสไลด์ให้แล้วครับ", seconds=0, rounds=0, attachments=list(files))
         ),
     )
     bot.__dict__.pop("_answer", None)
@@ -135,7 +135,7 @@ async def test_text_is_still_posted_when_the_file_cannot_be_attached(bot, world,
 
     m.reply = reply
     await bot._answer(m, world.g, m.author)
-    assert sent and sent[0].startswith("ทำสไลด์ให้แล้วครับ") and "แนบไฟล์สไลด์ไม่ได้" in sent[0]
+    assert sent and sent[0].startswith("ทำสไลด์ให้แล้วครับ") and "แนบไฟล์ไม่ได้" in sent[0]
 
 
 async def test_no_deck_for_interjections_or_when_the_flag_is_off(bot, world, monkeypatch):

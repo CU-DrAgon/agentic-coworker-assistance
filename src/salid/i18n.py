@@ -1113,9 +1113,9 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ไม่มีข้อมูลในช่วงนี้",
         "en": "No data for this period",
     },
-    "deck_attach_failed": {
-        "th": "(แนบไฟล์สไลด์ไม่ได้ อาจเพราะสลิดไม่มีสิทธิ์แนบไฟล์ในห้องนี้)",
-        "en": "(I couldn't attach the slide file. I may not have permission to attach files here.)",
+    "attach_failed": {
+        "th": "(แนบไฟล์ไม่ได้ อาจเพราะสลิดไม่มีสิทธิ์แนบไฟล์ในห้องนี้ หรือไฟล์ใหญ่เกินไป)",
+        "en": "(I couldn't attach the file. I may not have permission to attach files here, or it is too large.)",
     },
     "deep_stats": {
         "th": "⏱ {seconds:.0f} วินาที · tokens {tokens:,} · โมเดล: {models}",

@@ -371,7 +371,7 @@ def chart_values(data):
 
 def test_create_deck_attaches_a_pptx_with_ledger_numbers(settings, seeded):
     _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("ทำสไลด์ให้แล้วครับ"))
-    [(name, data)] = a.files
+    [(name, data)] = a.attachments
     assert name.endswith(".pptx") and data[:2] == b"PK"
     assert chart_values(data) == {"วัตถุดิบ": 10120.0, "ค่าเดินทาง": 250.5}
 
@@ -379,7 +379,7 @@ def test_create_deck_attaches_a_pptx_with_ledger_numbers(settings, seeded):
 def test_a_non_executive_chart_covers_only_their_own_receipts(settings, seeded):
     _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("ok"),
                     is_exec=False, user_id=ALICE)  # fmt: skip
-    assert chart_values(a.files[0][1]) == {"วัตถุดิบ": 1000.0, "ค่าเดินทาง": 250.5}
+    assert chart_values(a.attachments[0][1]) == {"วัตถุดิบ": 1000.0, "ค่าเดินทาง": 250.5}
 
 
 def test_an_invalid_outline_returns_an_error_and_a_fixed_call_succeeds(settings, seeded):
@@ -394,7 +394,7 @@ def test_an_invalid_outline_returns_an_error_and_a_fixed_call_succeeds(settings,
     ][0]
     blob = json.dumps(first, ensure_ascii=False)
     assert "chart" in blob and "error" in blob
-    assert len(a.files) == 1
+    assert len(a.attachments) == 1
 
 
 def test_invalid_outline_text_never_reaches_the_logs(settings, seeded, caplog):
@@ -408,13 +408,13 @@ def test_a_second_create_deck_replaces_the_first(settings, seeded):
     other = {"title": "Second", "slides": [{"kind": "bullets", "title": "b", "bullets": ["x"]}]}
     _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)),
                     fc_resp(("create_deck", other)), text_resp("ok"))  # fmt: skip
-    assert [n.split("-")[0] for n, _ in a.files] == ["second"]
+    assert [n.split("-")[0] for n, _ in a.attachments] == ["second"]
 
 
 def test_deck_fixed_strings_follow_the_reply_language(settings, seeded):
     _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("done"),
                     question="make slides of this month's spending", language="auto")  # fmt: skip
-    cover = Presentation(io.BytesIO(a.files[0][1])).slides[0]
+    cover = Presentation(io.BytesIO(a.attachments[0][1])).slides[0]
     words = " ".join(s.text_frame.text for s in cover.shapes if s.has_text_frame)
     assert "Made with Salid" in words
 

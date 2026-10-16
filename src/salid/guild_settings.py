@@ -2,7 +2,11 @@
 
 One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
 
-    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, decks}: bool, all default true
+    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
+                         documents, scheduling, email, media_memory, doc_memory, read_receipts,
+                         followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
+                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, promo, decks}: bool, all
+                         default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -66,8 +70,37 @@ FEATURES = (
     "digest",
     "deep_tasks",
     "voice_meetings",
+    "auto_join_meetings",
     "memory",
     "image_memory",
+    "media_memory",
+    "doc_memory",
+    "read_receipts",
+    "web",
+    "documents",
+    "scheduling",
+    "email",
+    "followups",
+    "reports",
+    "briefings",
+    "freetime",
+    "polls",
+    "catchup",
+    "wiki",
+    "approvals",
+    "places",
+    "private_channels",
+    "maps",
+    "search",
+    "travel",
+    "markets",
+    "ideas",
+    "company_learning",
+    "contests",
+    "bizfin",
+    "link_guard",
+    "meeting_transcript_doc",
+    "promo",
     "decks",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
@@ -112,6 +145,36 @@ class Features(BaseModel):
     auto_join_meetings: bool = True  # Salid joins voice channels by itself (needs voice_meetings)
     memory: bool = True
     image_memory: bool = True  # describe images into the memory log (needs `memory`)
+    media_memory: bool = True  # transcribe audio/video into the memory log (needs `memory`)
+    doc_memory: bool = True  # read PDFs / documents into the memory log (needs `memory`)
+    read_receipts: bool = True  # 👀 on files Salid read quietly (not addressed to it)
+    web: bool = True  # read links and search the internet (read_web tool)
+    documents: bool = True  # make_report_pdf: accounting documents as PDF
+    scheduling: bool = True  # schedule_meeting & co: Discord Scheduled Events + reminders
+    email: bool = True  # draft_email / send_email (still needs confirmation and a role)
+    followups: bool = True  # daily DM to members with open tasks (needs `memory`)
+    reports: bool = True  # evening report to the private reports channel (needs `memory`)
+    polls: bool = True  # create_poll / DM forms (start_form)
+    briefings: bool = True  # personal morning / evening briefs, doc alerts, ask reminders (DM)
+    freetime: bool = True  # find_free_time / set_availability: find a time everyone is free
+    catchup: bool = True  # "what did I miss" catch-up (tool, /ตามทัน, morning brief section)
+    wiki: bool = True  # company knowledge base built from memory (needs `memory`)
+    private_channels: bool = True  # a private Salid channel per member (off keeps existing ones)
+    approvals: bool = True  # request_approval & co: approval requests with Approve / Decline DMs
+    places: bool = True  # remembers head office / branches / consented personal places
+    maps: bool = True  # travel time / routes / weather (also needs SALID_MAPS_ENABLED)
+    travel: bool = True  # currency conversion + flight status / prices / tracking
+    search: bool = True  # search_everything + web_search + deep_research (the last two need `web`)
+    markets: bool = (
+        True  # stock / gold / news tools, price alerts, market line in the morning brief
+    )
+    company_learning: bool = True  # company playbook + domain packs (company_brain.py)
+    ideas: bool = True  # idea / project documents, business frameworks (BMC, SWOT...), exports
+    contests: bool = True  # hackathons / grants / tenders: deadlines, plan, mock judge, reminders
+    bizfin: bool = True  # finance calculators (break-even, pricing, NPV/IRR...), market benchmark, security/slip checks
+    link_guard: bool = True  # warns once under a message with a clearly dangerous link
+    meeting_transcript_doc: bool = True  # minutes PDF with who-said-what at meeting end + tool
+    promo: bool = True  # promo post kits from product photos (AI scene + typeset text)
     decks: bool = True  # the chat agent may build .pptx slide decks (salid.deck)
 
 

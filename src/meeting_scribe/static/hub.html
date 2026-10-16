@@ -1440,7 +1440,7 @@ const FEATURES = [
   { id: "promo" },
   { id: "link_guard" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, decks: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, promo: true, decks: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1673,7 +1673,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, ...s.features, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, decks: true, ...s.features, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1757,7 +1757,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, promo: features.promo },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, promo: features.promo, decks: features.decks },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

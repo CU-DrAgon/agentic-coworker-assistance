@@ -425,6 +425,80 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
 - `MemoryService.delete_guild(guild_id)` wipes a guild's memory; the bot does not call it on removal because it
   keeps every other guild record too (retention expires the data).
 
+### Executive assistant / COO mode
+
+Salid acts as the team's executive assistant: it watches what people do on its own (nobody reports to it),
+tracks work, follows up, reports to leadership and keeps confidential information by the Discord role hierarchy.
+Code: `coo.py` (Discord side), `memory_access.py` (rules), `tasks.py`, `disclosure.py`, `reports.py`, `coo_tools.py`.
+
+- **Role hierarchy.** Rank = the member's highest role position; the guild owner is above everyone and
+  Administrator counts as top. Information *about a person's work* from a channel the asker cannot read is visible
+  only if the asker strictly outranks that person (or is that person); the same rank sees each other only through
+  channels both can read. Public channels stay open to everyone who can read them. Such hierarchy-granted
+  information is only used in DMs / private replies, or when *every* reader of the answering channel is that person
+  or outranks them, so nothing reaches a wider audience (pure rules and tests: `memory_access.hierarchy_authors`,
+  `message_visible`). The memory tools take an optional `person` (name or @mention).
+- **Disclosure requests.** If a question hits information the asker may not see, the memory tools withhold it
+  (the code counts the hidden matches, never shows them) and Salid offers to ask the owner. After the asker agrees,
+  the agent's `request_disclosure(topic)` DMs the owner (the highest-ranked author of the hidden records) with the
+  asker, the question and a neutral description (count, dates, place; no content) and **Approve / Decline**
+  buttons. The buttons are persistent (`discord.ui.DynamicItem`, request id in the custom id), so they work after a
+  restart. Approval stores a grant in `salid_disclosures` (guild, owner, grantee, topic, message ids, granted_at,
+  optional expiry); exactly those messages become visible to that one person (in DMs), and Salid DMs them the
+  answer. A decline is relayed politely. Private DM notes are never even hinted at.
+- **DM channel.** A member's DM to Salid (when they share exactly one server with it) is recorded as a `dm` note under
+  a private per-user scope: "พรุ่งนี้ผมลา", "ลูกค้า X ขอเลื่อนส่งของเป็นศุกร์". Higher ranks can read it; saying
+  "เรื่องนี้เก็บเป็นความลับ" / "private" marks it owner-only (a bare marker flips the previous notes), and private notes
+  are not summarised or reported. The first DM carries a one-time notice explaining this.
+- **Tasks and follow-ups.** After each channel-day summary update the memory scheduler calls the task tracker: the
+  summary's `action_items` (meetings are voice channels, DM notes included) become tasks in `salid_tasks` (assignee
+  resolved from names or mentions, due date parsed, duplicates merged by text similarity), and one batched
+  Flash-Lite call marks open tasks done when the new messages say so. Every day at `followup_time` (default 10:00)
+  each member with tasks due or overdue gets a DM; replying updates the task (`update_task`: members only their own,
+  executives any). `list_tasks(person, status)` follows the hierarchy. Feature flag `followups` (the 10:00 DM is
+  sent only when `briefings` is off: the morning brief replaces it).
+- **Personal briefings** (`salid.briefings`, `salid.briefing_bot`; feature flag `briefings`, default on; hub: flag +
+  morning/evening times). Each member gets a morning brief DM (default 08:30, weekdays: today's meetings with
+  one-click links, tasks due / overdue, important documents since yesterday's evening brief, asks still waiting for
+  their reply) and an evening brief (default 18:00: meetings attended with decisions, tasks assigned / done today,
+  tomorrow's meetings, pending asks). Composed by the main model from capped structured input with a plain fallback;
+  nothing is sent when every section is empty; closed DMs are skipped and logged. **Important-document alerts**: the
+  existing PDF / Office / image note call also returns the type, main amount and addressees (no extra call); contracts,
+  legal / official letters, invoices or quotations above `SALID_DOC_ALERT_MIN_AMOUNT` (50,000) and anything
+  addressed to or mentioning members DM the people it concerns (mentioned members, the replied-to author, named
+  addressees, executives for contracts / invoices) who can read the channel, never the uploader, at most 10 a day per
+  person and once per document. **Pending asks**: a message that user-mentions a member and matches a Thai / English
+  request regex is tracked (no model); a later post by that member in the same channel / thread or a reaction answers
+  it; still open after `SALID_ASK_REMINDER_HOURS` (2) the member gets one gentle reminder (08:00-20:00 only), and open
+  asks appear in the briefs. Members tune everything by talking (`set_my_notifications` / `show_my_notifications`:
+  morning / evening on-off and times, weekends, `doc_alerts` all | important | off, ask reminders), stored per
+  (guild, user) in `salid_notif_prefs`.
+- **Personal preferences** (`salid.profiles`, agent tools `remember_my_preference` / `show_my_preferences` /
+  `forget_my_preferences`). "เรียกผมว่าพี่ปัส", "ตอบสั้นๆ", "สนใจเรื่องการตลาด", "สรุปเป็นภาษาอังกฤษ", "ไม่ต้องใส่อีโมจิ",
+  "ผมดูแลบัญชี": a `Profile` per (guild, user) in `salid_profiles` (nickname <= 40 chars, `reply_length`
+  short | normal | detailed, `language` th | en, <= 8 focus topics, role note <= 120, <= 8 style notes). The tools are
+  bound in code to the speaker, so nobody edits another person's profile; only lasting preferences are saved. The
+  asker's own profile (never anyone else's) goes into the prompt as a quoted data block that cannot change
+  permissions, scoping or factual rules. `language` applies in DMs, personal briefs and `auto` channels; a channel set
+  to th / en keeps its language. Briefs also use the recipient's length and focus. Profiles are not in reports or memory
+  search; "forget" deletes them.
+- **Deliver files** (`salid.deliver`, agent tool `deliver_file`). "ส่งเอกสารนี้ไปห้อง… แล้วแท็ก…" (also as a reply to the
+  file): Salid posts the file(s) in the channel (fuzzy Thai / English name match; a Thai-to-Latin guess asks first), DMs
+  a person, or drafts an email with the file (normal confirm flow), with a short polite note, real `@[name]` mentions
+  (nothing else pings) and "ส่งต่อจาก @you · [ต้นฉบับ](link)". In code: the requester must read the source channel and
+  be able to send in the destination, Salid needs Send + Attach; if people at the destination cannot read the source
+  channel a confirmation in a later message is required; files over 25 MB are linked, not attached; every delivery
+  is logged in `salid_deliveries`.
+- **Evening report.** At `report_time` (default 18:30, hub and guild settings; feature flag `reports`) Salid posts a
+  report for leadership in the private channel `รายงานจากสลิด` (created with permission overwrites for the owner,
+  Administrator / Manage Server roles, the executive roles and Salid; without Manage Channels it asks the owner by DM
+  once a day; or pick your own channel in the hub): company brief (spend today / this month per currency, receipts to
+  review, duplicates), per-person work (2-4 lines each), meetings with decisions and action items, risks and
+  suggested next actions. It is generated by the main model from compact inputs (day summaries, task list, ledger
+  summary; capped at 12,000 characters, never raw logs) restricted to what every reader of the channel may see, with
+  a plain deterministic fallback if the model fails. `/รายงาน` (`/report`, executives and managers) posts it now for
+  today or a `date`; `/รายงาน ของฉัน` (`mine`) or "วันนี้ผมทำอะไรไปบ้าง" gives anyone their own day.
+
 **Slide decks (สไลด์นำเสนอ).** Ask Salid for a presentation ("@Salid ทำสไลด์สรุปค่าใช้จ่ายเดือนนี้", "make a
 5-slide pitch for our new menu", "ทำสไลด์สรุปประชุมเมื่อวาน") and it replies with an editable PowerPoint file
 (`.pptx`). The chat agent gathers what it needs with its usual tools (ledger, team memory), then calls the
@@ -433,8 +507,8 @@ slides of four kinds (section, bullets, two columns, chart) with speaker notes. 
 outline names a query (spending by category, vendor, submitter or day for a date range) and code fills the numbers
 from the ledger with the asker's scope (non-executives see only their own receipts), so the model never types
 numbers into a chart; charts are native and editable. One 16:9 theme, Thai text in the complex-script font slot
-(Leelawadee UI), fixed strings in the reply language. Decks are built in memory, attached to the reply (with a
-text-only fallback when the bot cannot attach files) and never stored; at most 2 MB. Offered only for normal text
+(Leelawadee UI), fixed strings in the reply language. Decks are built in memory, attached to the reply like
+the other generated files and never stored; at most 2 MB. Offered only for normal text
 answers (not voice or unprompted join-mode answers), behind the per-guild feature flag `decks` (hub toggle
 "สไลด์นำเสนอ"). `uv run python scripts/salid_sample_deck.py /tmp/deck.pptx` renders a sample Thai deck offline.
 
