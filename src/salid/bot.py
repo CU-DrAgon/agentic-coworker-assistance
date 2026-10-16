@@ -22,6 +22,7 @@ from .approvals_bot import ApprovalButton, ApprovalMixin
 from .archive import make_archive
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
+from .broadcast_bot import BroadcastMixin
 from .captions import captions_tools
 from .catchup_bot import CatchupMixin
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
@@ -265,6 +266,7 @@ class SecretaryBot(
     CatchupMixin,
     WikiMixin,
     ApprovalMixin,
+    BroadcastMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -1833,6 +1835,8 @@ class SecretaryBot(
             *([] if interjection else self._catchup_tools(guild, asker, memory)),
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
             *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
+            # post_message + send_dm_many (broadcast.py)
+            *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
         return {
             "language": setting,

@@ -17,7 +17,10 @@ from .i18n import t
 logger = logging.getLogger(__name__)
 
 
-MAX_DM_PEOPLE = 3  # different people one request may DM
+MAX_DM_PEOPLE = 3  # different people one `send_dm` request may DM (send_dm_many reaches more)
+DM_CONFIRM_OVER = 3  # a bulk send to more people than this needs a confirmation in a later message
+DM_EXEC_OVER = 10  # ... and more than this also needs an executive / manager
+MAX_DM_BULK = 50  # hard cap for one bulk send
 SENSITIVE_DM_RE = re.compile(
     r"โอนเงิน|โอนตัง|เลขบัญชี|เลขที่บัญชี|รหัสผ่าน|พาสเวิร์ด|รหัส\s*otp|\botp\b|password|passcode"
     r"|transfer\s+(?:the\s+)?(?:money|funds?)|wire\s+(?:the\s+)?money|bank\s+account"
@@ -41,10 +44,49 @@ def dm_refusal(text: str, others: set[int], new_target: int, is_self: bool) -> d
         return {
             "error": "too_many_recipients",
             "max": MAX_DM_PEOPLE,
-            "reason": "one request may DM at most 3 different people; decline politely and "
-            "suggest posting in a channel",
+            "reason": "send_dm reaches at most 3 different people per request; for 4 or more "
+            "people use send_dm_many (it asks for a confirmation first), or post_message to a "
+            "channel",
         }
     return None
+
+
+def bulk_refusal(text: str, count: int, may_bulk: bool) -> dict | None:
+    """The hard limits of a bulk DM (`send_dm_many`) to `count` people other than the requester:
+    nobody, over MAX_DM_BULK, money / credential text, or over DM_EXEC_OVER recipients without
+    being an executive / manager (`may_bulk`)."""
+    if count < 1:
+        return {"error": "no_recipients"}
+    if SENSITIVE_DM_RE.search(text or ""):
+        return {
+            "error": "refused_sensitive",
+            "reason": "money transfer or credential request to other people; decline politely "
+            "and suggest they contact those people directly",
+        }
+    if count > MAX_DM_BULK:
+        return {
+            "error": "too_many_recipients",
+            "count": count,
+            "max": MAX_DM_BULK,
+            "reason": f"at most {MAX_DM_BULK} people per bulk DM; suggest post_message to a channel",
+        }
+    if count > DM_EXEC_OVER and not may_bulk:
+        return {
+            "error": "needs_executive",
+            "count": count,
+            "reason": f"DMing more than {DM_EXEC_OVER} people is for executives / server managers; "
+            "suggest post_message to a channel instead",
+        }
+    return None
+
+
+def name_list(names: list[str], lang: str, shown: int = 10) -> str:
+    """ "A, B, ... and N more" with the first `shown` names."""
+    head = ", ".join(names[:shown])
+    rest = len(names) - shown
+    if rest <= 0:
+        return head
+    return f"{head} {'และอีก' if lang != 'en' else 'and'} {rest} {'คน' if lang != 'en' else 'more'}"
 
 
 @dataclass

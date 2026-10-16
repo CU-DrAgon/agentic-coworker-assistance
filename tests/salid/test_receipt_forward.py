@@ -171,7 +171,7 @@ async def test_forward_from_a_wrong_channel(world):
     assert "saved #1" in fwd.text
     assert [f.filename for f in fwd.files] == ["r0.jpg"]
     assert w.store.get_by_reply_message(fwd.id).id == w.state.receipt.id  # reply = the copy
-    assert len(m.replies) == 1 and "ส่งต่อไปที่ #ใบเสร็จ ให้แล้วครับ" in m.replies[0]
+    assert len(m.replies) == 1 and "ส่งต่อไปที่ #ใบเสร็จ ให้แล้วค่ะ" in m.replies[0]
     assert m.replies[0].startswith("saved #1")  # normal reply kept
     assert m.reactions == ["✅"]
 

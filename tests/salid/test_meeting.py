@@ -281,7 +281,7 @@ async def test_join_announces_listens_and_blocks_a_second_meeting(env):
     m = make_member(env.guild, 10, "แอน", env.chan)
     assert "ห้องประชุม" in await env.mgr.join(m)
     assert env.chan.sent == [t("meet_announce", "th")]
-    assert "สลิดเข้ามาฟังและจดบันทึกการประชุมครับ" in env.chan.sent[0]
+    assert "สลิดเข้ามาฟังและจดบันทึกการประชุมค่ะ" in env.chan.sent[0]
     assert isinstance(env.vc.listening, mt.MeetingSink)
     again = await env.mgr.join(m)
     assert "กำลังอยู่ในการประชุม" in again
@@ -923,7 +923,7 @@ async def test_rejoin_on_ready_continues_the_meeting_with_logged_lines(env, monk
     new = env.mgr.sessions[(1000, 77)]
     assert new is not s and isinstance(env.vc.listening, mt.MeetingSink)
     assert [ln.text for ln in new.transcript.lines] == ["ส่งงานวันศุกร์"]
-    assert env.chan.sent == ["สลิดกลับเข้ามาจดประชุมต่อแล้วครับ (หลุดไปครู่หนึ่ง)"]
+    assert env.chan.sent == ["สลิดกลับเข้ามาจดประชุมต่อแล้วค่ะ (หลุดไปครู่หนึ่ง)"]
     assert env.bot.secretary_store.get_active_meeting(1000, 77) is not None
     await env.mgr.end((1000, 77), "command")
 

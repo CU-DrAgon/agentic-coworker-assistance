@@ -89,7 +89,7 @@ def test_messages_none_few_and_many():
     assert "ห้องที่สลิดยังมองไม่เห็น (3 ห้อง)" in msg and "<#1>" in msg and "<#3>" in msg
     for step in ("1. กดชื่อห้องด้านบน แล้วกด ⚙️ (Edit Channel)", "4. ติ๊ก ✅ View Channel"):
         assert step in msg
-    assert "ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มครับ" in msg and "และอีก" not in msg
+    assert "ห้องลับที่ไม่อยากให้สลิดรู้ ไม่ต้องเพิ่มค่ะ" in msg and "และอีก" not in msg
     many = G([Chan(i, f"c{i}", view=False) for i in range(1, 21)])
     (msg,) = hidden_channels_messages(hidden_channels(many, ME), "th")
     assert f"<#{MAX_LISTED}>" in msg and f"<#{MAX_LISTED + 1}>" not in msg

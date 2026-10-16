@@ -272,7 +272,7 @@ def test_prompt_says_dms_are_possible_and_forbids_invented_limits(settings):
     p = system_prompt(settings, scoped=False, chat=True, people=["มิว"])
     assert "send_dm" in p and "ส่งสรุปเข้า DM ผม" in p and "DM รายงานให้หัวหน้า" in p
     assert "ส่ง PDF ให้ผมทาง DM" in p and "ฝากบอกพี่มิวทาง DM" in p
-    assert "ห้ามอ้างข้อจำกัดของ Discord" in p and "ยังทำไม่ได้ครับ" in p
+    assert "ห้ามอ้างข้อจำกัดของ Discord" in p and "ยังทำไม่ได้ค่ะ" in p
     assert "บอตส่ง DM ไม่ได้" in p  # named as the example of what never to claim
 
 
@@ -387,7 +387,7 @@ def test_ack_flavor_by_content():
     assert ackmod.ack_flavor(msg_with(), "เดือนนี้จ่ายไปเท่าไร") is None
     assert ackmod.ack_flavor(msg_with(), "x", deep=True) == "deep"
     assert ackmod.ack_text("doc", "th", lambda xs: xs[0]) == (
-        "ขอเวลาแป๊บนึงนะครับ ขออ่านเอกสารให้เข้าใจก่อน 📄"
+        "ขอเวลาแป๊บนึงนะคะ ขออ่านเอกสารให้เข้าใจก่อน 📄"
     )
 
 

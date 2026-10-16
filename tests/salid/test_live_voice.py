@@ -519,6 +519,7 @@ async def test_ask_salid_gets_the_secretary_and_coo_tools_for_the_lone_human(lv,
     names = {getattr(f, "__name__", f) for f in asked["extra_tools"]}
     assert "set_captions" in names
     assert {"create_poll", "poll_results", "start_form", "form_results"} <= names
+    assert {"post_message", "send_dm_many"} <= names
     assert asked["sec_args"] == (5, True, s.text_channel.id)
     assert asked["coo_args"] == (5, True, "MEM")
     assert "p5" in asked["profile"]  # one person: their own profile
