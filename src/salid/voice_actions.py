@@ -70,6 +70,12 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "contest_add",
         "contest_update",
         "contest_share",
+        # bizfin: calculators can save into the asker's idea; verify_slip reads the asker's ledger
+        "unit_economics",
+        "price_from_cost",
+        "investment_metrics",
+        "financial_projection",
+        "verify_slip",
     }
 )
 

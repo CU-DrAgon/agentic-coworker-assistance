@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # are enabled. Auth is ADC; the API key is only a fallback if the Weather API rejects OAuth.
     maps_enabled: bool = False
     maps_api_key: str = Field(default="", repr=False)  # secret: never logged
+    # Optional Google Safe Browsing Lookup key for security_check / the link guard (empty = off).
+    safe_browsing_key: str = Field(
+        default="",
+        repr=False,
+        validation_alias=AliasChoices("SAFE_BROWSING_API_KEY", "SALID_SAFE_BROWSING_API_KEY"),
+    )  # secret: never logged
     # WeatherNext 2 ensemble in BigQuery (empty = disabled): "<project>.<dataset>"
     weathernext_bq_dataset: str = ""
     weathernext_bq_table: str = "weathernext_2_0_0"
