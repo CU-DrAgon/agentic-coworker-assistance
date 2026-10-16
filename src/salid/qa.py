@@ -20,6 +20,8 @@ from google.genai import types
 
 from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
+from .currency import CURRENCY_PROMPT
+from .flights import FLIGHT_PROMPT
 from .freetime import FREETIME_PROMPT
 from .gmaps import MAPS_PROMPT
 from .i18n import resolve_lang, t
@@ -1173,6 +1175,7 @@ def system_prompt(
     places: bool = False,
     maps: bool = False,
     search: bool = False,
+    travel: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1188,7 +1191,7 @@ def system_prompt(
         f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD\n"
         "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
         "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วยสัญลักษณ์สกุลเงินของใบเสร็จนั้น (฿ = บาท, $ = USD). "
-        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยน (ห้ามประมาณหรือเดาอัตราแลกเปลี่ยนเองเด็ดขาด เว้นแต่ผู้ใช้ขอให้แปลง และมีเครื่องมือค้นเว็บให้อัตราปัจจุบันมา ซึ่งต้องบอกแหล่งและเวลา): ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
+        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยนเอง (ห้ามประมาณหรือเดาอัตราแลกเปลี่ยนเองเด็ดขาด: ถ้าผู้ใช้ขอให้แปลง ให้เรียก convert_currency เท่านั้น แล้วบอกอัตรา วันที่ และแหล่งที่มา; ถ้าไม่มีเครื่องมือนี้ให้บอกว่าแปลงให้ไม่ได้): ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
         "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
@@ -1210,6 +1213,8 @@ def system_prompt(
         p += MAPS_PROMPT
     if search:
         p += SEARCH_PROMPT
+    if travel:
+        p += CURRENCY_PROMPT + FLIGHT_PROMPT
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
@@ -1560,6 +1565,7 @@ def build_agent(
     places: bool = False,
     maps: bool = False,
     search: bool = False,
+    travel: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1582,6 +1588,7 @@ def build_agent(
         places=places,
         maps=maps,
         search=search,
+        travel=travel,
     )
     model_calls = 0
 
@@ -1747,6 +1754,7 @@ async def ask_async(
         places="find_place" in tool_names,
         maps="travel_time" in tool_names or "weather" in tool_names,
         search="search_everything" in tool_names,
+        travel="convert_currency" in tool_names,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex

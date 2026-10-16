@@ -155,6 +155,9 @@ class Settings(BaseSettings):
     gmail_client_secret: str = ""
     gmail_refresh_token: str = ""
     gmail_sender: str = ""  # the From address (the dedicated Google account)
+    # Flights (salid.flights): live status/tracking only with one of these provider keys (secrets)
+    aerodatabox_key: str = Field(default="", repr=False)  # RapidAPI key
+    aviationstack_key: str = Field(default="", repr=False)
     email_daily_limit: int = 20  # emails per guild per day
     # Briefings (salid.briefings): documents above this total (invoice / quotation) are "important",
     # an unanswered request to a member is reminded after this many hours.
