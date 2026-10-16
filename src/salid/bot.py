@@ -2184,7 +2184,7 @@ class SecretaryBot(
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
-            # make_promo_kit: chat only (voice passes no files), with a photo or a remembered kit
+            # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
@@ -50,7 +51,7 @@ from .wiki import WIKI_PROMPT
 
 logger = logging.getLogger(__name__)
 MAX_ROUNDS = 6
-SPOKEN_MAX_ROUNDS = 3  # a spoken answer: 3 tool rounds at most, then it must answer
+SPOKEN_MAX_ROUNDS = 5  # a spoken answer: 5 tool rounds at most, then it must answer
 APP_NAME = "salid"
 # Vertex 429s (shared quota) and 5xx are retried with backoff by the genai HTTP client
 # (same policy as meeting_scribe.agents).
@@ -2154,6 +2155,7 @@ async def ask_async(
     spoken: bool = False,
     tool_overrides: list | None = None,
     deck: bool = False,
+    on_tool_call=None,  # callable(name), for every tool the model calls (from the agent's thread)
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -2274,6 +2276,10 @@ async def ask_async(
             for name, attr in USAGE_FIELDS.items():
                 tokens[name] += getattr(event.usage_metadata, attr, None) or 0
         if event.get_function_calls():
+            if on_tool_call is not None:
+                for fc in event.get_function_calls():
+                    with contextlib.suppress(Exception):  # a hook never breaks the answer
+                        on_tool_call(fc.name)
             if model_calls > max_rounds:
                 continue  # a call after the cap is answered with an error, never run: not a round
             rounds += 1
@@ -2336,6 +2342,7 @@ def ask(
     spoken: bool = False,
     tool_overrides: list | None = None,
     deck: bool = False,
+    on_tool_call=None,  # callable(name), for every tool the model calls (from the agent's thread)
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -2364,5 +2371,6 @@ def ask(
             spoken=spoken,
             tool_overrides=tool_overrides,
             deck=deck,
+            on_tool_call=on_tool_call,
         )
     )

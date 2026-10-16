@@ -1493,7 +1493,7 @@ class MeetingManager:
             self.bot,
             session,
             post=lambda text: self._notice(session, text),
-            echo=lambda text: self._post(session, text),
+            echo=lambda text, files=None: self._post(session, text, files),
             on_failed=lambda: self._live_failed(session),
         )
         session.live.start()

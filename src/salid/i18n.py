@@ -760,6 +760,31 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ขออภัยค่ะ ตรวจสอบให้ไม่ได้ตอนนี้ เครื่องมือค้นข้อมูลขัดข้องค่ะ",
         "en": "Sorry, I can't check that right now. The lookup tool is not working.",
     },
+    "voice_bg_1": {
+        "th": "งานนี้ใช้เวลาหน่อยค่ะ สลิดทำให้อยู่ เดี๋ยวได้แล้วจะบอกนะคะ คุยเรื่องอื่นต่อได้เลยค่ะ",
+        "en": "This one takes a little while. I'm on it and I'll tell you when it's ready; keep talking meanwhile.",
+    },
+    "voice_bg_2": {
+        "th": "ขอเวลาทำสักพักนะคะ เสร็จแล้วสลิดจะแจ้งค่ะ ระหว่างนี้คุยเรื่องอื่นได้เลยค่ะ",
+        "en": "Give me a little while. I'll announce it as soon as it's done, so go on with whatever you like.",
+    },
+    "voice_bg_3": {
+        "th": "อันนี้นานหน่อยค่ะ สลิดทำอยู่เบื้องหลังนะคะ ได้ผลแล้วจะบอกค่ะ",
+        "en": "That will take some time. I'm working on it in the background and will say when I have it.",
+    },
+    "voice_still_working": {
+        "th": "ยังทำอยู่ค่ะ อีกแป๊บนะคะ",
+        "en": "Still working on it, a moment more.",
+    },
+    "voice_jobs_full": {
+        "th": "ขอให้งานก่อนหน้าเสร็จก่อนนะคะ",
+        "en": "Let me finish the earlier jobs first.",
+    },
+    "voice_files_echo": {"th": "📎 ไฟล์ที่ขอไว้ค่ะ", "en": "📎 The files you asked for."},
+    "voice_files_say": {
+        "th": "ส่งไฟล์ไว้ในแชตแล้วนะคะ",
+        "en": "I put the file in the chat.",
+    },
     "ack_longer_1": {
         "th": "ขออภัยค่ะ รอบนี้นานกว่าปกตินะคะ ยังหาอยู่ค่ะ",
         "en": "Sorry, this is taking longer than usual. Still on it.",

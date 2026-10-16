@@ -115,10 +115,18 @@ class Settings(BaseSettings):
     # Every listening <-> engaged change (and the join) is shown as one short line in the meeting's
     # text chat; a flip back within 15 s edits the previous line instead of posting a new one.
     voice_state_posts: bool = True
-    # Live ask_salid: hard limit, and when the brain is still working a spoken "it is taking
-    # longer than usual" line (once). The answer is delivered whenever it arrives before the limit.
+    # Live ask_salid: hard limit for one job. `live_slow_answer_seconds` is no longer used (the
+    # background hand-off replaced the "taking longer" line); kept so old env files still load.
     live_ask_timeout_seconds: float = 150.0
     live_slow_answer_seconds: float = 40.0
+    # Live background jobs (v0.9.0): ask_salid answers within `live_foreground_seconds`, else the
+    # job runs on, the room keeps talking, and the result is announced at the next pause
+    # (`live_result_pause_seconds` of no room audio, waited for at most `live_result_wait_seconds`;
+    # it is always posted to the text chat). At most `live_max_jobs` run at once per session.
+    live_foreground_seconds: float = 12.0
+    live_max_jobs: int = 3
+    live_result_pause_seconds: float = 1.5
+    live_result_wait_seconds: float = 90.0
     # Live: the name was heard but the model has not started to answer after this long (counted from
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
     # (VAD silence + thinking); a cue sent earlier replaced a real answer with a generic greeting.

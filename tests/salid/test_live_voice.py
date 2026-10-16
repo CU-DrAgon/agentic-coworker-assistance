@@ -573,7 +573,7 @@ def tool_names(monkeypatch):
     seen = {}
 
     def grab(settings, tools, **kw):
-        seen["names"] = {getattr(f, "__name__", str(f)) for f in tools}
+        seen["names"] = {getattr(f, "__name__", None) or getattr(f, "name", str(f)) for f in tools}
         raise _Stop
 
     monkeypatch.setattr("salid.qa.build_agent", grab)
@@ -603,16 +603,16 @@ async def test_chat_and_voice_build_the_same_agent_tools(lv, tool_names, monkeyp
         profile=Profile(),
     )  # fmt: skip
     await asyncio.to_thread(_swallow, qa.ask, bot.s, bot.store, "q", guild_id=1000,
-                            is_exec=True, user_id=5, **kw)  # fmt: skip
+                            is_exec=True, user_id=5, deck=bot.team.enabled(1000, "decks"),
+                            **kw)  # fmt: skip
     chat = set(tool_names.pop("names"))
     live.push(tool_msg("ask_salid", {"question": "q"}))
     await until(lambda: live.tool_responses)
     voice = tool_names["names"]
-    # one assistant: the same tools in chat and in a voice room, except the ones that make no
-    # sense out loud (files, long documents): exactly VOICE_TOOL_SKIP, nothing else
-    assert voice == chat - lvm.VOICE_TOOL_SKIP
-    assert {"idea_export", "business_framework", "wiki_write"} <= chat - voice
-    assert {"send_dm", "deliver_file", "read_web"} <= chat  # the chat-only tools are there too
+    # one assistant: exactly the same tools in chat and in a voice room (decks flag included)
+    assert voice == chat
+    assert {"create_deck", "idea_export", "business_framework", "wiki_write"} <= voice
+    assert {"send_dm", "deliver_file", "read_web"} <= voice
     await lv.mgr.end((1000, 77))
 
 

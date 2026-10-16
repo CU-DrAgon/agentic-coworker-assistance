@@ -25,7 +25,7 @@ from salid import live_voice as lvm
 from salid import meeting as mt
 from salid import search as sr
 from salid.i18n import t
-from salid.live_voice import LiveVoice, build_instruction, same_question, voice_tools
+from salid.live_voice import LiveVoice, build_instruction, same_question
 from salid.qa import MAX_ROUNDS, SPOKEN_MAX_ROUNDS, ask
 
 
@@ -309,52 +309,6 @@ async def test_tool_exception_is_echoed_and_the_echo_never_raises_into_the_loop(
     await lv.mgr.end((1000, 77))
 
 
-async def test_slow_answer_line_is_spoken_once_with_the_longer_than_usual_fact(tts_spy, slow_tool):
-    lv = tts_spy
-    stub = lv.bot.fillers = FillerStub("ขอเช็กแป๊บนะคะ", "ยังหาอยู่ค่ะ")
-    stub.lines["again"] = "ยังหาอยู่ค่ะ"
-    lv.bot.s.live_filler_again_seconds = 0.05
-    lv.bot.s.live_slow_answer_seconds = 0.2
-    s, live = await lv.join(5)
-    live.push(tool_msg("ask_salid", {"question": "ยอดเดือนนี้เท่าไร"}))
-    await until(lambda: any(c.get("facts") for c in stub.calls))
-    slow = [c for c in stub.calls if c.get("facts")]
-    assert len(slow) == 1 and slow[0]["stage"] == "again"
-    assert "นานกว่าปกติ" in slow[0]["facts"][0]
-    slow_tool.set()
-    await lv.mgr.end((1000, 77))
-
-
-async def test_slow_answer_line_falls_back_to_the_pool_and_waits_for_the_model(lv, slow_tool):
-    lv.bot.s.live_filler_again_seconds = 0.05
-    lv.bot.s.live_slow_answer_seconds = 0.2
-    s, live = await lv.join(5)
-    await until(lambda: len(s.live._filler_pcm) == 6)
-    live.push(tool_msg("ask_salid", {"question": "q"}))
-    await until(lambda: lv.vc.played)
-    first = play_source(lv).buffered_bytes
-    await until(lambda: play_source(lv).buffered_bytes > first)  # the "again" line
-    again = play_source(lv).buffered_bytes
-    await until(lambda: play_source(lv).buffered_bytes > again)  # the "longer than usual" line
-    slow_tool.set()
-    await lv.mgr.end((1000, 77))
-
-
-async def test_no_slow_line_when_the_model_is_already_speaking(lv, slow_tool):
-    lv.bot.s.live_filler_again_seconds = 0.05
-    lv.bot.s.live_slow_answer_seconds = 0.15
-    s, live = await lv.join(5)
-    await until(lambda: len(s.live._filler_pcm) == 6)
-    live.push(tool_msg("ask_salid", {"question": "q"}))
-    await until(lambda: lv.vc.played)
-    s.live._turn_audio = True  # the model started to talk
-    before = play_source(lv).buffered_bytes
-    await asyncio.sleep(0.4)
-    assert play_source(lv).buffered_bytes <= before
-    slow_tool.set()
-    await lv.mgr.end((1000, 77))
-
-
 # ------------------------------------------------------------------ one brain at a time
 @pytest.mark.parametrize(
     ("a", "b", "same"),
@@ -389,60 +343,43 @@ class Brain:
         return {"answer": f"ตอบ {q}"}
 
 
-async def test_same_question_joins_the_running_brain(lv, monkeypatch):
+async def test_same_question_while_a_job_runs_gets_still_working_and_no_second_agent(
+    lv, monkeypatch
+):
+    lv.bot.s.live_foreground_seconds = 0.05
     brain = Brain()
     monkeypatch.setattr(LiveVoice, "_ask_salid", lambda self, q: brain(self, q))
     s, live = await lv.join(5)
     live.push(tool_msg("ask_salid", {"question": "ยอดเดือนนี้เท่าไร"}, id="a"))
-    await until(lambda: brain.started)
+    await until(lambda: len(live.tool_responses) == 1)  # the first one went to the background
     live.push(tool_msg("ask_salid", {"question": "ยอดเดือนนี้เท่าไร นะ"}, id="b"))
-    await asyncio.sleep(0.1)
-    assert len(brain.started) == 1  # no second agent
-    brain.gates["ยอดเดือนนี้เท่าไร"].set()
     await until(lambda: len(live.tool_responses) == 2)
     got = {r[0].id: r[0].response for r in live.tool_responses}
-    assert got["a"] == got["b"] == {"answer": "ตอบ ยอดเดือนนี้เท่าไร"}
+    assert got["a"]["status"] == "working" and got["b"]["status"] == "working"
+    assert got["b"]["say"] == t("voice_still_working", "th") and got["b"]["job"] == got["a"]["job"]
+    assert len(brain.started) == 1 and not brain.cancelled  # no second agent
+    brain.gates["ยอดเดือนนี้เท่าไร"].set()
+    await until(lambda: "💬 **สลิด:** ตอบ ยอดเดือนนี้เท่าไร" in lv.chan.sent)
     await lv.mgr.end((1000, 77))
 
 
-async def test_a_different_question_cancels_the_running_one_and_drops_its_result(lv, monkeypatch):
+async def test_a_different_question_is_a_new_job_and_nothing_is_cancelled(lv, monkeypatch):
+    lv.bot.s.live_foreground_seconds = 0.05
     brain = Brain()
     monkeypatch.setattr(LiveVoice, "_ask_salid", lambda self, q: brain(self, q))
     s, live = await lv.join(5)
     live.push(tool_msg("ask_salid", {"question": "ยอดเดือนนี้เท่าไร"}, id="a"))
-    await until(lambda: brain.started)
+    await until(lambda: len(live.tool_responses) == 1)
     live.push(tool_msg("ask_salid", {"question": "ใครรับงานแผนไตรมาสสี่"}, id="b"))
     await until(lambda: len(brain.started) == 2)
-    await until(lambda: brain.cancelled)
-    brain.gates["ใครรับงานแผนไตรมาสสี่"].set()
     await until(lambda: len(live.tool_responses) == 2)
-    got = {r[0].id: r[0].response for r in live.tool_responses}
-    assert got["a"] == {"superseded": True}
-    assert got["b"] == {"answer": "ตอบ ใครรับงานแผนไตรมาสสี่"}
-    await asyncio.sleep(0.05)
-    echoes = [x for x in lv.chan.sent if x.startswith("💬 **สลิด:**")]
-    assert echoes == ["💬 **สลิด:** ตอบ ใครรับงานแผนไตรมาสสี่"]  # the old answer is never posted
+    assert not brain.cancelled
+    for q in list(brain.gates):
+        brain.gates[q].set()
+    await until(lambda: len([x for x in lv.chan.sent if x.startswith("💬 **สลิด:**")]) == 2)
+    echoes = {x for x in lv.chan.sent if x.startswith("💬 **สลิด:**")}
+    assert echoes == {"💬 **สลิด:** ตอบ ยอดเดือนนี้เท่าไร", "💬 **สลิด:** ตอบ ใครรับงานแผนไตรมาสสี่"}
     await lv.mgr.end((1000, 77))
-
-
-# ------------------------------------------------------------------ the spoken tool list
-def test_voice_tool_skip_is_the_documented_list_and_filters_extra_tools_only():
-    assert {
-        "idea_export", "business_framework", "contest_pitch", "contest_plan", "deep_research",
-        "meeting_document", "financial_projection", "market_benchmark", "wiki_write",
-        "wiki_publish",
-    } == lvm.VOICE_TOOL_SKIP  # fmt: skip
-
-    def mk(name):
-        f = lambda: None  # noqa: E731
-        f.__name__ = name
-        return f
-
-    kw = {"language": "th", "extra_tools": [mk("idea_export"), mk("list_tasks"), mk("wiki_get")]}
-    out = voice_tools(kw)
-    assert [f.__name__ for f in out["extra_tools"]] == ["list_tasks", "wiki_get"]
-    assert len(kw["extra_tools"]) == 3  # the input is not mutated
-    assert voice_tools({"language": "th"}) == {"language": "th"}
 
 
 # ------------------------------------------------------------------ prompts
@@ -506,14 +443,14 @@ def test_a_failing_shared_search_fails_both_adapters_not_hangs():
 
 
 # ------------------------------------------------------------------ spoken rounds cap
-def test_spoken_answers_get_three_tool_rounds_chat_keeps_six(seeded, settings):
-    assert SPOKEN_MAX_ROUNDS == 3 and MAX_ROUNDS == 6
+def test_spoken_answers_get_five_tool_rounds_chat_keeps_six(seeded, settings):
+    assert SPOKEN_MAX_ROUNDS == 5 and MAX_ROUNDS == 6
     llm = scripted(*[fc_resp(("flagged_receipts", {}))] * SPOKEN_MAX_ROUNDS, text_resp("สรุป"))
     a = ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm,
             spoken=True)  # fmt: skip
     assert a.text == "สรุป" and a.rounds == SPOKEN_MAX_ROUNDS
     assert len(llm.requests) == SPOKEN_MAX_ROUNDS + 1
-    assert not llm.requests[SPOKEN_MAX_ROUNDS].config.tools  # tools withdrawn after round 3
+    assert not llm.requests[SPOKEN_MAX_ROUNDS].config.tools  # tools withdrawn after round 5
 
 
 def test_a_stray_call_after_the_cap_is_not_counted_as_a_round(seeded, settings):

@@ -461,3 +461,27 @@ async def test_ask_salid_with_noise_is_refused_and_side_effects_stay_gated(gl):
     assert live.tool_responses[-1][0].response == {"error": "nobody asked: stay silent"}
     assert not s.captions.on and s.engaged is False
     await gl.mgr.end((1000, 77))
+
+
+async def test_ask_evidence_accepts_the_live_numbers_that_were_wrongly_refused(gl):
+    """Seen live: dur=0.96 rms=363 voiced=0.34 vf=0.35 cv=1.37 is a real question (name hits still
+    need 0.35 s voiced and 30% voiced frames; ask_salid only has to exclude noise)."""
+    from salid.meeting import SpeechStats, looks_like_speech
+
+    s, live = await gl.join(5)
+    stats = SpeechStats(0.96, 363.0, 0.34, 0.35, 1.37)
+    assert s.live._ask_evidence(stats) == (True, "")
+    assert looks_like_speech(stats, gl.bot.s)[0] is False  # the name check is unchanged
+    assert s.live._ask_evidence(SpeechStats(0.96, 363.0, 0.1, 0.1, 1.37))[0] is False  # too short
+    assert s.live._ask_evidence(SpeechStats(1.0, 363.0, 0.5, 0.5, 0.1))[0] is False  # steady noise
+    assert s.live._ask_evidence(SpeechStats(1.0, 100.0, 0.5, 0.5, 1.4))[0] is False  # too quiet
+    await gl.mgr.end((1000, 77))
+
+
+async def test_ask_evidence_looks_back_six_seconds_names_keep_three(gl):
+    s, live = await gl.join(5)
+    now = time.monotonic()
+    s.live._frames = [(now - 5.0 + i * 0.02, 900.0 if i % 3 else 300.0) for i in range(40)]
+    assert s.live._speech_stats(now).voiced_s == 0.0  # the 3 s window sees nothing
+    assert s.live._speech_stats(now, lvm.ASK_EVIDENCE_S).voiced_s >= 0.2
+    await gl.mgr.end((1000, 77))
