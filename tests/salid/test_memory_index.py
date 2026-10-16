@@ -48,7 +48,8 @@ def test_writes_keep_the_index_fresh(settings):
     assert e.items == ["ค่าเช่า"] and len(e.vectors) == 1
     st.add_message(mk(settings, 1, bkk(2, 9).astimezone(UTC)))
     st.delete_messages(GUILD, [1])
-    assert st.summary_entries(GUILD, {10}, "2026-10-02", "2026-10-02")[0].summary.dirty
+    assert st.summary_entries(GUILD, {10}, "2026-10-02", "2026-10-02") == []  # dirty: hidden
+    assert [x.dirty for x in st.all_summaries(GUILD)] == [True]  # the scheduler still sees it
     st.delete_guild(GUILD)
     assert st.summary_entries(GUILD, {10}, "2026-10-01", "2026-10-31") == []
     assert len(loads(base)) == 2  # reloaded once after delete_guild

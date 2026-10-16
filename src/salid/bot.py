@@ -4,6 +4,9 @@ import asyncio
 import contextlib
 import io
 import logging
+import random
+import re
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -14,10 +17,29 @@ from types import SimpleNamespace
 import discord
 from discord import app_commands
 
+from . import dm as dm_module
 from . import gate
+from .ack import Ack, ack_flavor, ack_text
+from .approvals_bot import ApprovalButton, ApprovalMixin
 from .archive import make_archive
-from .channel_access import access_flags, hidden_channels, hidden_channels_messages
+from .bizfin_bot import BizfinMixin
+from .briefing_bot import BriefingMixin
+from .briefings import DocInfo, split_names
+from .broadcast_bot import BroadcastMixin
+from .captions import captions_tools
+from .catchup_bot import CatchupMixin
+from .channel_access import (
+    access_flags,
+    hidden_channels,
+    hidden_channels_messages,
+    public_channel_ids,
+)
+from .chat_tools import ChatActions
+from .company_brain_bot import CompanyMixin, PlaybookButton
 from .config import Settings
+from .contests_bot import ContestsMixin
+from .coo import CooMixin, DisclosureButton
+from .coo_store import make_doc_store
 from .deep_task import (
     REPORT_NAME,
     DeepCancelled,
@@ -27,7 +49,12 @@ from .deep_task import (
     reply_parts,
     run_deep_task,
 )
+from .deliver import DeliverMixin
 from .digest import build_daily_digest
+from .dm import closed_dm_message, dm_refusal, send_dm
+from .dm_guild import SWITCH_COMMANDS, CompanyButton, DMGuildMixin, SwitchButton
+from .docs import doc_kind
+from .email_out import make_sender
 from .embed import make_embedder
 from .extract import (
     apply_correction,
@@ -36,6 +63,8 @@ from .extract import (
     ingest_attachment,
     parse_void_command,
 )
+from .fillers import FillerPool, FillerWriter, RecentLines, within
+from .freetime_bot import FreetimeMixin
 from .gate import GateLine, is_join_candidate
 from .guild_settings import (
     MAX_RETENTION_DAYS,
@@ -45,7 +74,16 @@ from .guild_settings import (
     make_guild_store,
     valid_retention_days,
 )
-from .i18n import LANGS, LANGUAGE_LABELS, parse_language_command, resolve_lang, t
+from .i18n import (
+    LANGS,
+    LANGUAGE_LABELS,
+    parse_language_command,
+    parse_server_language_command,
+    resolve_lang,
+    t,
+)
+from .ideas_bot import IdeasMixin
+from .ideas_pdf import markdown_pdf
 from .image_memory import (
     MAX_IMAGE_BYTES,
     MAX_IMAGES_PER_MESSAGE,
@@ -55,7 +93,14 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .licensing import Licensing, make_licensing
+from .longtext import needs_attachment, split_sections, summary_of
+from .maps_bot import MapsMixin
+from .markets_bot import MarketsMixin
+from .media import media_candidates
+from .media_bot import MediaMixin
 from .meeting import MeetingManager, parse_meeting_command
+from .meeting_doc_bot import MeetingDocMixin
 from .memory import (
     MemoryScheduler,
     MemoryService,
@@ -69,10 +114,19 @@ from .memory_import import MemoryImporter, Target, import_progress
 from .memory_index import IndexedMemoryStore
 from .memory_store import MemoryStore, SQLiteMemoryStore, make_memory_store
 from .memory_summary import render_summary
-from .message_control import AnswerLog, parse_cancel_task, parse_delete_message
+from .mentions import (
+    allowed_mentions_for,
+    defang_raw_mentions,
+    match_members,
+    resolve_mentions,
+    tag_candidates,
+    wants_everyone,
+)
+from .message_control import AnswerLog, is_thanks, parse_cancel_task, parse_delete_message
 from .modes import (
-    CHAT_CHANNEL_NAME,
+    CHAT_CHANNEL_NAME,  # noqa: F401  (re-exported)
     MODES,
+    chat_channel_name,
     is_chat_channel_name,
     mode_choice_name,
     mode_help,
@@ -80,19 +134,49 @@ from .modes import (
     parse_snooze_command,
 )
 from .naming import command_text, mentions_name
+from .pdf_report import find_fonts
+from .permissions import (
+    channel_missing,
+    guild_missing,
+    permission_message,
+)
+from .places_bot import PlacesMixin
+from .polls_bot import PollsMixin
+from .private_chat import PRIVATE_COMMANDS
+from .private_chat_bot import PrivateChatMixin
+from .profiles import ProfileMixin, effective_language, profile_block
+from .promo_bot import PromoMixin
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
+from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .recent import RecentMessages
+from .scheduling import DiscordCalendar, MeetingService
+from .search_bot import SearchMixin
+from .secretary import SecretaryContext, SecretaryState
+from .secretary_store import SecretaryStore, make_secretary_store, new_id
+from .sharing import make_sharing
+from .sharing import set_default as set_sharing_default
 from .store import Store
+from .summary import (
+    PERIODS,
+    is_summarize_request,
+    message_summary_question,
+    summary_question,
+)
+from .translate_bot import TranslateMixin
+from .travel_bot import TravelMixin
+from .voice_pool import VoicePool
+from .wiki_bot import WikiMixin
 
 logger = logging.getLogger(__name__)
 ATTACH_LIMIT = 15 * 1024 * 1024
 SYNC_MIN_INTERVAL_S = 30.0  # channel-list writes per guild are batched to one per interval
 MAX_SYNCED_CHANNELS = 500
-RECEIPT_CHANNEL_HINTS = (
-    "ใบเสร็จ", "receipt", "invoice", "ใบกำกับ", "สลิป", "slip", "บิล", "bill", "expense",
-    "ค่าใช้จ่าย", "เบิก",
-)  # fmt: skip  # a channel whose name has one of these takes receipts (case-insensitive)
-# CHAT_CHANNEL_NAME (salid.modes) is created on join (needs Manage Channels): mode "chat".
+READ_REACTION = "👀"
+GREETING_KEYS = ("greeting", "greeting_2", "greeting_3")
+DM_PER_GUILD_PER_HOUR = 20  # private messages the DM tool may send per guild per hour
+RECEIPT_COUNTS_TTL_S = 600.0  # cache of "receipts per channel, last 30 days" (learned channels)
+# CHAT_CHANNEL_NAME (salid.modes) is created on join (needs Manage Channels); its mode "chat" is
+# saved by channel id. Channel names never decide behaviour.
 # A bare @mention right after the same person's message is treated as a question about it.
 FOLLOWUP_WINDOW_SECONDS = 120
 # After Salid answers in a channel, messages there need no @mention for this long (a gate decides
@@ -107,6 +191,7 @@ MAX_JOIN_CANDIDATES = 5
 INTERJECT_SAME_USER_COOLDOWN = 600  # join mode: no second unprompted answer to one person
 SNOOZE_SECONDS = 3600
 TICK_SECONDS = 5.0
+SCHEDULER_TICK_SECONDS = 15.0  # how often meeting reminders are checked
 MEMORY_TICK_SECONDS = 30.0  # how often the memory scheduler looks for due summary updates
 MEMORY_QUEUE_MAX = 20000
 IMPORT_PAGE_SLEEP_S = 1.0  # pause between history pages (discord.py also rate-limits)
@@ -126,25 +211,23 @@ HISTORY_CHARS = 8000  # oldest lines are dropped first
 HISTORY_LINE_CHARS = 500
 CHANNELS_COMMANDS = ("ห้อง", "channels")
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
-JOIN_COMMANDS = ("เข้าประชุม", "join")
-LEAVE_COMMANDS = ("ออกประชุม", "leave")
+JOIN_COMMANDS = ("เข้าประชุม", "join-meeting")
+LEAVE_COMMANDS = ("ออกประชุม", "leave-meeting")
 CANCEL_COMMANDS = ("ยกเลิก", "cancel")
+SUMMARY_COMMANDS = ("สรุป", "summary")
+MENU_SUMMARIZE = "Summarize with Salid"  # context menu; Thai name via SalidTranslator
+MENU_TRANSLATE = "Translate with Salid"  # context menu; Thai name via SalidTranslator
 
 
 def chunks(text: str, n: int = 1900):
-    while text:
-        yield text[:n]
-        text = text[n:]
+    """Messages of at most `n` characters, cut between sections / paragraphs, never in the middle
+    of one that fits (see salid.longtext)."""
+    yield from split_sections(text, n)
 
 
 def own_receipt(is_receipt_post, receipts_on: bool) -> bool:
     """True when the receipt pipeline will read this post's images (no second reading)."""
     return bool(is_receipt_post) and receipts_on
-
-
-def is_receipt_channel_name(name: str | None) -> bool:
-    low = (name or "").casefold()
-    return any(h in low for h in RECEIPT_CHANNEL_HINTS)
 
 
 def has_receipt_file(message) -> bool:
@@ -178,6 +261,17 @@ def mentions_other(message: discord.Message, me: discord.ClientUser | None) -> b
     )
 
 
+class SalidTranslator(app_commands.Translator):
+    """Localizes the message context menu name (everything else is bilingual in its text)."""
+
+    async def translate(self, string, locale, context):
+        if str(string) == MENU_SUMMARIZE and str(locale.value).startswith("th"):
+            return t("menu_summarize", "th")
+        if str(string) == MENU_TRANSLATE and str(locale.value).startswith("th"):
+            return t("menu_translate", "th")
+        return None
+
+
 @dataclass
 class _Convo:
     """A running conversation with Salid in one channel (call/join modes)."""
@@ -205,7 +299,56 @@ class _DeepJob:
     starter_id: int
 
 
-class SecretaryBot(discord.Client):
+class _LicensedTree(app_commands.CommandTree):
+    """Slash commands stay quiet in unlicensed guilds, except the `/ตั้งค่า` link flow."""
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        bot, guild = interaction.client, interaction.guild
+        licensing = getattr(bot, "licensing", None)
+        name = getattr(interaction.command, "name", "")
+        if guild is None or licensing is None or name in SETUP_COMMANDS:
+            return True
+        if await asyncio.to_thread(licensing.is_licensed, guild.id):
+            return True
+        with contextlib.suppress(discord.HTTPException):
+            try:
+                lang = resolve_lang(bot.team.current(guild.id).default_language)
+            except Exception:
+                lang = "th"
+            await interaction.response.send_message(
+                t("unlicensed", lang, url=licensing.url), ephemeral=True
+            )
+        return False
+
+
+class SecretaryBot(
+    TranslateMixin,
+    FreetimeMixin,
+    PollsMixin,
+    CatchupMixin,
+    WikiMixin,
+    ApprovalMixin,
+    DMGuildMixin,
+    PrivateChatMixin,
+    BroadcastMixin,
+    PlacesMixin,
+    MapsMixin,
+    SearchMixin,
+    TravelMixin,
+    MarketsMixin,
+    IdeasMixin,
+    MeetingDocMixin,
+    CompanyMixin,
+    ContestsMixin,
+    BizfinMixin,
+    CooMixin,
+    BriefingMixin,
+    ProfileMixin,
+    DeliverMixin,
+    PromoMixin,
+    MediaMixin,
+    discord.Client,
+):
     def __init__(
         self,
         settings: Settings,
@@ -214,6 +357,8 @@ class SecretaryBot(discord.Client):
         guilds: GuildStore | None = None,
         clock=time.monotonic,
         memory: MemoryStore | None = None,
+        secretary_store: SecretaryStore | None = None,
+        licensing: Licensing | None = None,
     ) -> None:
         intents = discord.Intents(
             guilds=True,
@@ -222,14 +367,22 @@ class SecretaryBot(discord.Client):
             members=True,
             dm_messages=True,
             voice_states=True,
+            guild_scheduled_events=True,
+            reactions=True,  # a reaction answers a pending ask (salid.briefing_bot)
         )
         super().__init__(intents=intents)
         self.s, self.store, self.llm = settings, store, llm
         # Per-guild settings document (Firestore, or in memory for local dev).
         self.guilds_store = guilds or make_guild_store(settings)
         self.team = BotGuildSettings(self.guilds_store)
+        # License gate (salid.licensing): an unlicensed guild gets no features at all
+        self.licensing = licensing or make_licensing(settings, store, self.guilds_store)
+        self.team.license_gate = self.licensing.is_licensed
+        # ShareLinks between the workspaces of one org (salid.sharing); wiki_search / find_place
+        self.sharing = make_sharing(self.licensing.orgs, self.guilds_store)
+        set_sharing_default(self.sharing)
         self.archive = make_archive(settings)
-        self.tree = app_commands.CommandTree(self)
+        self.tree = _LicensedTree(self)
         self._clock = clock  # injectable so conversation timers are testable without sleeping
         self._convos: dict[int, _Convo] = {}  # channel -> running conversation
         self._pending: dict[int, _Pending] = {}  # join mode: channel -> candidates
@@ -240,12 +393,44 @@ class SecretaryBot(discord.Client):
         self._digest_task: asyncio.Task | None = None
         self._digest_sent: dict[int, date] = {}
         self._agent_msgs: set[int] = set()  # messages whose files went to the agent
+        self._chat_perm_missing: set[int] = (
+            set()
+        )  # guilds where the chat channel needs a permission
+        self._perm_noted: dict[tuple[int, str], float] = {}  # (guild, what) -> last notice time
+        self._choose = random.choice  # variants of fixed lines (greeting, acknowledgement)
+        self.fillers = FillerWriter(  # model-written "one moment" lines + their generic-line pool
+            llm, settings, FillerPool(make_doc_store(settings, store), settings)
+        )
+        self.recent_acks = RecentLines()  # the last lines said per channel, so they do not repeat
+        self._sleep = asyncio.sleep  # injectable: the "still working" timer needs no real wait
+        self._recent_authors: dict[int, list[str]] = {}  # message id -> people in recent chat
+        self._dm_sent: dict[int, list[float]] = {}  # guild id -> times of DM-tool messages
+        self._reacted: dict[int, None] = {}  # messages that already got the read reaction
+        self._intaken: dict[int, None] = {}  # recent message ids the receipt pipeline has read
+        # guild -> (cached at, {channel id: receipts in the last 30 days}); see receipt_forward
+        self._receipt_counts: dict[int, tuple[float, dict[int, int]]] = {}
         self._deep_tasks: set[asyncio.Task] = set()  # strong refs so tasks are not GC'd
         self._deep_jobs: dict[int, _DeepJob] = {}  # guild -> the running deep task
         self._answers = AnswerLog(clock)  # chunk ids of Salid's answers, ~24 h
         self._sync_last: dict[int, float] = {}
         self._sync_pending: dict[int, asyncio.Task] = {}
+        self.voice_pool = VoicePool(
+            self, list(getattr(settings, "voice_tokens", []) or []), on_leave=self._helper_left
+        )
         self.meetings = MeetingManager(self)
+        # Secretary: scheduled meetings, PDFs, email (see salid.secretary / scheduling / email_out)
+        self.secretary_store = secretary_store or make_secretary_store(settings, store)
+        self.secretary_state = SecretaryState()
+        self.email_sender = make_sender(settings)
+        self.scheduler = MeetingService(
+            self.secretary_store,
+            DiscordCalendar(),
+            settings,
+            self.team,
+            self.meetings,
+            self.get_guild,
+        )
+        self._sched_last = float("-inf")
         # Organisational memory: raw log + day summaries (see salid.memory).
         self.embedder = make_embedder(settings, llm)  # NullEmbedder without a client (tests)
         # The index serves summary reads from memory; every memory write must go through it.
@@ -261,7 +446,7 @@ class SecretaryBot(discord.Client):
                 llm,
                 now=settings.now,
                 lang_of=lambda gid: resolve_lang(self.team.current(gid).default_language),
-                retention_of=self.team.memory_retention_days,
+                retention_of=self.team.fresh_memory_retention_days,
                 channel_name_of=self._channel_name,
                 enabled=lambda gid: self.team.enabled(gid, "memory"),
                 embedder=self.embedder,
@@ -279,6 +464,8 @@ class SecretaryBot(discord.Client):
         self._image_sem = asyncio.Semaphore(2)  # at most two images described at once
         self._image_notes: dict[int, dict[int, str]] = {}  # message id -> attachment idx -> note
         self.image_stats = {"described": 0, "failed": 0, "skipped": 0}  # cost visibility
+        self._init_media()
+        self._init_promo()
         self.importer = MemoryImporter(
             self.memory_store,
             settings,
@@ -295,7 +482,27 @@ class SecretaryBot(discord.Client):
         # Short-term context: recent messages per channel from gateway events (see salid.recent).
         self.recent = RecentMessages(per_channel=HISTORY_MESSAGES + 10, max_age_s=HISTORY_SECONDS)
         self._recent_swept = float("-inf")
-        self._viewers: dict[int, tuple[float, frozenset[int]]] = {}
+        self._viewers: dict[tuple[int, int], tuple[float, frozenset[int]]] = {}  # (guild, channel)
+        self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
+        self._polls_init()  # polls and DM forms (salid.polls_bot)
+        self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
+        self._profile_init()  # personal preferences (salid.profiles)
+        self._translate_init()  # translation + auto-translate (salid.translate_bot)
+        self._freetime_init()  # find a time everyone is free (salid.freetime)
+        self._wiki_init()  # company knowledge base (salid.wiki_bot)
+        self._approval_init()  # approval requests (salid.approvals_bot)
+        self._places_init()  # remembered places (salid.places_bot)
+        self._dm_guild_init()  # which company a DM is about (salid.dm_guild)
+        self._pc_init()  # a private Salid channel per person (salid.private_chat)
+        dm_module.ROUTER = self._private_route
+        dm_module.SENT_HOOK = self._dm_sent_hook  # every Salid DM is tagged with its company
+        self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
+        self._travel_init()  # currency + flights (salid.travel_bot)
+        self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
+        self._ideas_init()  # idea / project documents (salid.ideas_bot)
+        self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
+        self._contests_init()  # hackathons / grants / tenders (salid.contests_bot)
+        self._bizfin_init()  # finance calculators, benchmark, security (salid.bizfin_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -304,12 +511,21 @@ class SecretaryBot(discord.Client):
         return SQLiteMemoryStore(getattr(store, "path", None) or ":memory:", settings.zone)
 
     def _channel_name(self, guild_id: int, channel_id: int) -> str:
+        if channel_id < 0:  # a member's DM notes (salid.memory_access.dm_scope)
+            return "DM"
         guild = next((g for g in self.guilds if g.id == guild_id), None)
         channel = guild.get_channel(channel_id) if guild else None
         return getattr(channel, "name", None) or str(channel_id)
 
     async def setup_hook(self):
+        self.voice_pool.start()  # voice helpers log in in the background
         self._register_commands()
+        self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
+        self.add_dynamic_items(ApprovalButton)  # same for approval requests
+        self.add_dynamic_items(PlaybookButton)  # company-playbook suggestions for admins
+        self.add_dynamic_items(SwitchButton)
+        self.add_dynamic_items(CompanyButton)  # the "which company?" DM buttons
+        await self.tree.set_translator(SalidTranslator())
         try:
             await self.tree.sync()  # global commands; Discord may take a while to show them
         except discord.HTTPException:
@@ -322,7 +538,10 @@ class SecretaryBot(discord.Client):
         self.recent.reset()
         for guild in self.guilds:
             await self._sync_guild(guild)
+            self._pc_backfill_start(guild)  # a private channel for every member, paced
         self._start_import()
+        await self.meetings.resume_all()  # rejoin meetings a restart cut off
+        self.meetings.scan_all()  # people already in voice channels: join by importance
 
     async def on_resumed(self):
         self.recent.reset()  # a gateway outage may have dropped events
@@ -344,6 +563,7 @@ class SecretaryBot(discord.Client):
                 for c in guild.text_channels
                 for flags in [access_flags(c, getattr(guild, "me", None))]
             ][:MAX_SYNCED_CHANNELS],
+            "public_channel_ids": public_channel_ids(guild),
         }
 
     async def _sync_guild(self, guild: discord.Guild, *, installed: bool = False) -> None:
@@ -380,6 +600,7 @@ class SecretaryBot(discord.Client):
     async def on_guild_join(self, guild: discord.Guild):
         logger.info("joined guild %s", guild.id)
         await asyncio.to_thread(self.team.current, guild.id)
+        self._pc_backfill_start(guild)
         lang = resolve_lang(self.team.current(guild.id).default_language)
         chat = await self._ensure_chat_channel(guild, lang)
         if chat is not None:  # a reused channel must answer everything, whatever its name
@@ -394,7 +615,7 @@ class SecretaryBot(discord.Client):
                 (c for c in guild.text_channels if c.permissions_for(guild.me).send_messages), None
             )
         if target is not None:
-            where = chat.mention if chat else f"#{CHAT_CHANNEL_NAME}"
+            where = chat.mention if chat else f"#{chat_channel_name(lang)}"
             with contextlib.suppress(discord.HTTPException):
                 await target.send(
                     t(
@@ -405,22 +626,29 @@ class SecretaryBot(discord.Client):
                         days=self.team.memory_retention_days(guild.id),
                     )
                 )
+                if guild.id in self._chat_perm_missing:  # say exactly what is missing, once
+                    self._chat_perm_missing.discard(guild.id)
+                    await target.send(
+                        permission_message(["manage_channels"], lang, self.application_id)
+                    )
 
     async def _ensure_chat_channel(self, guild: discord.Guild, lang: str = "th"):
         """The guild's Salid chat channel: an existing one with its name, else a new one."""
         existing = next((c for c in guild.text_channels if is_chat_channel_name(c.name)), None)
         if existing is not None:
             return existing
-        perms = getattr(guild.me, "guild_permissions", None)
-        if not getattr(perms, "manage_channels", False):
+        if guild_missing(guild, ("manage_channels",)):
             logger.info("no Manage Channels in guild %s: chat channel not created", guild.id)
+            self._chat_perm_missing.add(guild.id)
             return None
         try:
             return await guild.create_text_channel(
-                CHAT_CHANNEL_NAME, topic=t("chat_topic", lang), reason="Salid chat channel"
+                chat_channel_name(lang), topic=t("chat_topic", lang), reason="Salid chat channel"
             )
         except discord.HTTPException:
             logger.warning("could not create chat channel in guild %s", guild.id, exc_info=True)
+            if guild_missing(guild, ("manage_channels",)):
+                self._chat_perm_missing.add(guild.id)
             return None
 
     async def on_guild_remove(self, guild: discord.Guild):
@@ -439,22 +667,45 @@ class SecretaryBot(discord.Client):
     async def on_guild_channel_update(self, before, after):
         if before.name != after.name:
             self._request_sync(after.guild)
-        if before.overwrites != after.overwrites:  # permissions changed: maybe newly readable
-            self._request_sync(after.guild)
-            self._request_import()
+        category_moved = getattr(before, "category", None) is not getattr(after, "category", None)
+        if before.overwrites != after.overwrites or category_moved:
+            # permissions changed: maybe newly readable, and the cached readers are stale
+            gid = after.guild.id
+            self._invalidate_viewers(gid, getattr(after, "id", None))  # None: the whole guild
+            for child in getattr(after, "channels", None) or ():  # a category's overwrites
+                self._invalidate_viewers(gid, child.id)  # reach its synced children
+            if before.overwrites != after.overwrites:
+                self._request_sync(after.guild)
+                self._request_import()
 
     async def on_member_update(self, before, after):
+        if before.roles != after.roles:  # anyone's roles: who can read what may have changed
+            self._invalidate_viewers(after.guild.id)
         if self.user is not None and after.id == self.user.id and before.roles != after.roles:
             self._request_sync(after.guild)  # the owner changed Salid's roles
             self._request_import()
 
     async def on_guild_role_update(self, before, after):
+        if before.permissions != after.permissions:
+            self._invalidate_viewers(after.guild.id)
         me = getattr(after.guild, "me", None)
         if me is not None and after in me.roles and before.permissions != after.permissions:
             self._request_sync(after.guild)
             self._request_import()
 
+    async def on_guild_role_delete(self, role):
+        self._invalidate_viewers(role.guild.id)
+
+    async def on_member_join(self, member):
+        self._invalidate_viewers(member.guild.id)
+        await super().on_member_join(member)
+
+    async def on_member_remove(self, member):
+        self._invalidate_viewers(member.guild.id)
+        await super().on_member_remove(member)
+
     async def on_guild_channel_delete(self, channel):
+        self._invalidate_viewers(channel.guild.id, channel.id)
         self._request_sync(channel.guild)
 
     # ------------------------------------------------------------- permissions
@@ -467,9 +718,33 @@ class SecretaryBot(discord.Client):
         return bool(names & {r.name for r in member.roles})
 
     # ------------------------------------------------------------- routing
+    async def _licensed(self, guild_id: int) -> bool:
+        if not self.licensing.enforce:
+            return True
+        return await asyncio.to_thread(self.licensing.is_licensed, guild_id)
+
+    async def _unlicensed_notice(self, message: discord.Message) -> None:
+        """Unlicensed guild: nothing is read or stored; when addressed, one short line per day."""
+        try:
+            if not (mentions_bot(message, self.user) or self._starts_with_name(message)):
+                return
+            gid = message.guild.id
+            day = self.s.today().isoformat()
+            if await asyncio.to_thread(self.licensing.claim_notice, gid, day):
+                await message.reply(
+                    t("unlicensed", self._lang(message), url=self.licensing.url),
+                    mention_author=False,
+                )
+        except Exception:
+            logger.warning("could not send the license notice", exc_info=True)
+
     async def on_message(self, message: discord.Message):
         self.recent.add(message)
         own = message.author == self.user
+        if message.guild is not None and not await self._licensed(message.guild.id):
+            if not own and not getattr(message.author, "bot", False):
+                await self._unlicensed_notice(message)
+            return  # unlicensed: no ingestion, no answers
         logged = False
         if message.guild is not None and (own or not getattr(message.author, "bot", False)):
             logged = await self._memory_record(message, own)
@@ -480,6 +755,11 @@ class SecretaryBot(discord.Client):
                 await self._direct_message(message)
                 return
             gid = message.guild.id
+            owner = await self._pc_owner(gid, message.channel.id)
+            if owner is not None:  # somebody's private Salid channel: theirs alone, like a DM
+                if message.author.id == owner:
+                    await self._personal_message(message, message.guild, message.author)
+                return
             await asyncio.to_thread(self.team.current, gid)  # refresh the cache off the loop
             mode = self._mode(message.channel, gid)
             receipts_on = self.team.enabled(gid, "receipts")
@@ -487,17 +767,31 @@ class SecretaryBot(discord.Client):
                 return
             if mode == "off":
                 return
+            await self._autotranslate_maybe(message)  # per-channel auto-translate, off by default
+            if await self.meetings.on_chat_text(message):  # "ไม่ต้องจด" answering the notes question
+                return
+            await self._asks_observe(message)  # pending asks (answers and new requests)
             if await self._maybe_delete_own(message):
                 return
             mentioned = mentions_bot(message, self.user)
+            if not (
+                mentioned or self._starts_with_name(message)
+            ):  # asked directly: the agent checks
+                await self._link_guard_maybe(message, mode)  # dangerous-link warning (link_guard)
             receipt_ids = self.team.receipt_channel_ids(gid, self.s.receipt_channel_ids)
             qa_on = self.team.enabled(gid, "qa")
-            # Receipt channels read receipts directly (reliable, quiet in listen mode). Elsewhere a
-            # message to Salid with files goes to the agent, which decides what to do; only with
-            # Q&A off does "@Salid + receipt file" still mean direct intake.
+            # Receipts are recognised by content, never by channel name. A configured or learned
+            # receipt channel (hub setting, or 3+ receipts in the last 30 days) is a fast path:
+            # direct intake, quiet in listen mode. Elsewhere images go through the describer
+            # (receipt-like -> intake), PDFs through intake, and a message to Salid with files goes
+            # to the agent; only with Q&A off does "@Salid + receipt file" mean direct intake.
             is_receipt_post = message.attachments and (
                 message.channel.id in receipt_ids
-                or is_receipt_channel_name(getattr(message.channel, "name", ""))
+                or (
+                    receipts_on
+                    and has_receipt_file(message)
+                    and message.channel.id in learned_channels(await self._counts(gid))
+                )
                 or (mentioned and has_receipt_file(message) and not qa_on)
             )
             describe = not own_receipt(is_receipt_post, receipts_on)
@@ -508,16 +802,26 @@ class SecretaryBot(discord.Client):
             finally:
                 # images -> text for memory (and receipts anywhere nobody is talking to Salid),
                 # in the background. A message the agent read is not run through receipt intake.
+                to_agent = message.id in self._agent_msgs
+                # a quiet read (nobody addressed Salid, no receipt pipeline reaction): 👀 when done
+                react = (
+                    not to_agent and not is_receipt_post and self.team.enabled(gid, "read_receipts")
+                )
+                self._media_soon(message, logged, react=react)
+                self._doc_soon(message, logged, react=react)
                 if describe:
-                    to_agent = message.id in self._agent_msgs
                     self._agent_msgs.discard(message.id)
-                    self._describe_soon(
-                        message,
-                        logged,
-                        intake_mode=mode
-                        if receipts_on and not is_receipt_post and not to_agent
-                        else None,
+                    content_path = (
+                        receipts_on
+                        and not is_receipt_post
+                        and not to_agent
+                        and message.id not in self._intaken
                     )
+                    self._describe_soon(
+                        message, logged, intake_mode=mode if content_path else None, react=react
+                    )
+                    if content_path and self._pdf_attachments(message):
+                        self._spawn(self._intake(message, quiet=mode == "listen", pdf_only=True))
         except Exception:
             logger.exception("handler failed")
 
@@ -544,6 +848,8 @@ class SecretaryBot(discord.Client):
             return
         if called and await self._language_command(message):
             return
+        if called and await self._private_command(message, message.guild, message.author):
+            return
         # Q&A off and no image describer: images are receipt candidates when Salid is addressed
         if (
             receipts_on
@@ -553,6 +859,16 @@ class SecretaryBot(discord.Client):
             and (mode == "chat" or (mode in ("call", "join") and called))
             and await self._intake(message)
         ):
+            return
+        if (
+            mode in ("chat", "call", "join")
+            and not message.attachments
+            and (mode == "chat" or self._window_open(message.channel.id))
+            and not mentions_other(message, self.user)
+            and is_thanks(message.content)
+        ):  # gratitude / acknowledgement: a reaction, not a reply (no LLM)
+            with contextlib.suppress(discord.HTTPException):
+                await message.add_reaction(self._choose(("👍", "🙏")))
             return
         if mode == "listen":
             if mentioned and self._is_snoozed(message.channel.id):
@@ -582,12 +898,37 @@ class SecretaryBot(discord.Client):
 
     # ------------------------------------------------------------- reply language
     def _lang_setting(self, target) -> str:
-        """th / en / auto for the channel of `target` (a message or a channel). DMs: auto."""
+        """th / en / auto for the channel of `target` (a message or a channel). DMs: see `_dm_setting`."""
         guild = getattr(target, "guild", None)
         if guild is None:
-            return "auto"
+            return self._dm_setting(target)
         channel = getattr(target, "channel", None) or target
         return self.team.channel_language(guild.id, getattr(channel, "id", 0))
+
+    def _dm_setting(self, target) -> str:
+        """th / en / auto for a DM: the person's own language if set, else the default language
+        of the company the DM is about (the only shared server, or the one they picked) when that is
+        English. Otherwise, or when it is unclear and the shared servers disagree: auto."""
+        user = getattr(target, "author", None) or getattr(target, "user", None)
+        uid = getattr(user, "id", None)
+        if uid is None:
+            return "auto"
+        try:
+            shared = [g for g, _ in self._shared_guilds(uid)]
+            if len(shared) > 1:
+                active = self.dm_guilds.active(uid)
+                picked = [g for g in shared if g.id == active]
+                shared = picked or shared
+            langs = set()
+            for g in shared:
+                default = self.team.current(g.id).default_language
+                # a Thai default keeps today's DM behaviour (auto: follow the words they write)
+                langs.add(
+                    self._profile_of(g.id, uid).language or (default if default == "en" else "auto")
+                )
+        except Exception:  # a store hiccup must never stop an answer
+            return "auto"
+        return langs.pop() if len(langs) == 1 else "auto"
 
     def _lang(self, target, text: str | None = None) -> str:
         """Language (th or en) for Salid's fixed replies to `target`. `auto` follows `text`, by
@@ -726,7 +1067,8 @@ class SecretaryBot(discord.Client):
         """'@Salid พูดภาษาอังกฤษ' / 'speak English' etc.: sets this channel's reply language.
         Executives and server managers only; others get a short refusal."""
         text = self._command_text(message)
-        cmd = parse_language_command(text)
+        server_cmd = parse_server_language_command(text) if message.guild else None
+        cmd = server_cmd or parse_language_command(text)
         if cmd is None or message.guild is None:
             return False
         user = message.author
@@ -736,6 +1078,16 @@ class SecretaryBot(discord.Client):
             await message.reply(t("lang_denied", self._lang(message)), mention_author=False)
             return True
         new = resolve_lang(cmd, text)  # the reply follows the language just chosen
+        if server_cmd:
+            try:
+                await self._apply_server_language(message.guild, server_cmd, True)
+            except Exception:
+                logger.exception("could not save server language")
+                await message.reply(t("lang_failed", new), mention_author=False)
+                return True
+            label = t(f"lang_label_{server_cmd}", new)
+            await message.reply(t("server_lang_set", new, label=label), mention_author=False)
+            return True
         try:
             await asyncio.to_thread(
                 self.team.set_channel_language, message.guild.id, message.channel.id, cmd
@@ -748,6 +1100,26 @@ class SecretaryBot(discord.Client):
         await message.reply(t("lang_set", new, label=label), mention_author=False)
         return True
 
+    async def _apply_server_language(self, guild, language: str, apply_all: bool) -> None:
+        """Save the guild default (and clear or restore per-channel overrides), then rename the
+        private channels in the background."""
+        await asyncio.to_thread(self.team.set_server_language, guild.id, language, apply_all)
+        self._spawn(self._pc_rename_for_language(guild, language))
+
+    async def _join_voice_tool(self, message, member, lang: str) -> dict:
+        """Agent tool: join the voice channel the requester is in (explicit: overrides cooldowns)."""
+        channel = getattr(getattr(member, "voice", None), "channel", None)
+        if channel is None:
+            return {"error": "not_in_voice", "note": "the requester is not in a voice channel"}
+        reply = await self.meetings.join(member, fallback_channel=message.channel, lang=lang)
+        if self.meetings.session_in(member.guild.id, channel.id) is None:
+            return {"error": reply}
+        return {"status": "joined", "channel": channel.name}
+
+    async def _leave_voice_tool(self, message, member, lang: str) -> dict:
+        reply = await self.meetings.leave(member, lang=lang, text_channel_id=message.channel.id)
+        return {"result": reply}
+
     async def _meeting_command(self, message: discord.Message) -> bool:
         """'@Salid เข้าประชุม' / 'join' / 'ออกประชุม' / 'leave' typed in a text channel."""
         cmd = parse_meeting_command(self._command_text(message))
@@ -759,14 +1131,44 @@ class SecretaryBot(discord.Client):
                 message.author, fallback_channel=message.channel, lang=lang
             )
         else:
-            reply = await self.meetings.leave(message.author, lang=lang)
+            reply = await self.meetings.leave(
+                message.author, lang=lang, text_channel_id=message.channel.id
+            )
         await message.reply(reply, mention_author=False)
         return True
 
+    async def on_scheduled_event_create(self, event) -> None:
+        """Somebody made a Discord event: track it (reminders, no-show logic for voice events)."""
+        await self._sched_event(self.scheduler.track_discord_event, event)
+
+    async def on_scheduled_event_update(self, before, after) -> None:
+        await self._sched_event(self.scheduler.update_discord_event, after)
+
+    async def on_scheduled_event_delete(self, event) -> None:
+        await self._sched_event(self.scheduler.delete_discord_event, event)
+
+    @staticmethod
+    async def _sched_event(fn, event) -> None:
+        try:
+            await fn(event)
+        except Exception:
+            logger.exception("could not track scheduled event")
+
     async def on_voice_state_update(self, member, before, after):
-        """Salid itself was disconnected (kicked, channel deleted): end that meeting."""
+        """Salid itself was disconnected (network, gateway, kicked): reconnect, else end."""
         if member == self.user and after.channel is None and before.channel is not None:
-            await self.meetings.end(before.channel.guild.id, "disconnected")
+            await self.meetings.on_disconnected(before.channel.guild.id)
+        guild = getattr(member, "guild", None)
+        if guild is not None and not await self._licensed(guild.id):
+            return  # unlicensed: no auto-join
+        try:
+            await self.meetings.on_voice_activity(member, before, after)
+        except Exception:
+            logger.exception("auto-join check failed")
+
+    async def _helper_left(self, body_index: int, guild_id: int) -> None:
+        """A voice helper lost its connection (network, kicked): reconnect it or end the meeting."""
+        await self.meetings.on_disconnected(guild_id, body_index)
 
     async def close(self):
         if self._tick_task is not None:
@@ -774,20 +1176,53 @@ class SecretaryBot(discord.Client):
         if self._memory_worker is not None:
             self._memory_worker.cancel()
         await self.meetings.shutdown()
+        await self.voice_pool.close()
         await super().close()
 
     async def _direct_message(self, message: discord.Message):
         """DMs have no guild: answer only when the asker shares exactly one guild with Salid."""
-        shared = [(g, g.get_member(message.author.id)) for g in self.guilds]
-        shared = [(g, m) for g, m in shared if m is not None]
-        if len(shared) != 1:
+        if message.author == self.user or getattr(message.author, "bot", False):
+            return  # Salid's own (and other bots') DMs are never answered or recorded
+        shared = self._shared_guilds(message.author.id)
+        if not shared:
             await message.reply(
                 t("dm", self._lang(message), mention=self.user.mention), mention_author=False
             )
             return
-        guild, member = shared[0]
+        resolved = await self._dm_resolve(message, shared)  # which company (salid.dm_guild)
+        if resolved is None:  # Salid asked "which company?" (or switched); nothing recorded yet
+            return
+        guild, member = resolved
+        if not await self._licensed(guild.id):  # the license gate comes before any routing
+            return
+        self._dm_note_footer(message, len(shared), guild)
+        await self._personal_message(message, guild, member)
+
+    async def _personal_message(self, message, guild, member) -> None:
+        """A message to Salid that is the member's own business (a DM, resolved to `guild`, or their
+        private channel in it): private-channel commands, replies to reminders and forms, the
+        private note, then the answer. Nothing here leaves `guild`."""
+        if await self._private_command(message, guild, member):
+            return
         await asyncio.to_thread(self.team.current, guild.id)
-        await self._answer(message, guild, member)
+        ack = await self.scheduler.handle_dm_reply(
+            message.author.id, message.content, guild_id=guild.id
+        )
+        if ack:  # (b) the reason an attendee gave after a meeting reminder / no-show nudge
+            await message.reply(ack, mention_author=False)
+            return
+        if await self._form_dm_answer(message, guild, member):  # an answer to a form question
+            return
+        try:  # (c) every other DM is work information: noted for the team (salid.coo)
+            handled, note = await self._coo_dm_record(message, guild, member)
+        except Exception:
+            logger.warning("could not record a DM note", exc_info=True)
+            handled, note = False, ""
+        if handled:  # only "keep it private": already answered
+            return
+        await self._answer(message, guild, member, **({"note": note} if note else {}))  # (d)
+        with contextlib.suppress(Exception):
+            await self._coo_dm_notice(message, guild)
 
     async def _maybe_correction(self, message: discord.Message) -> bool:
         ref = message.reference
@@ -856,18 +1291,104 @@ class SecretaryBot(discord.Client):
         if res.reaction:
             with contextlib.suppress(discord.HTTPException):
                 await message.add_reaction(res.reaction)
+        fwd = await self._forward(
+            message, message.guild, [(att.filename, data)], res, self._lang(message)
+        )
         if not quiet:  # listen mode: reaction only, no text reply
-            sent = await message.reply(res.reply, mention_author=False)
+            text = res.reply
+            if fwd is not None:
+                text += "\n" + t("fwd_ack", self._lang(message), home=fwd.channel.name)
+            sent = await message.reply(text, mention_author=False)
             if res.status == "created":
                 self.store.set_reply_message(res.receipt.id, sent.id)
+        if fwd is not None and res.status == "created":  # replies in the home channel win
+            self.store.set_reply_message(res.receipt.id, fwd.id)
         return res
 
-    async def _intake(self, message: discord.Message, quiet: bool = False) -> bool:
-        """Read every attachment as a receipt. True when at least one was a receipt (saved or a
-        duplicate); images that are not receipts are described for memory instead."""
+    async def _forward(self, message, guild, files, res, lang):
+        """Copy a created / duplicate receipt to the guild's receipt home channel when it was
+        posted elsewhere (see salid.receipt_forward). The sent copy, or None."""
+        if res.status not in ("created", "duplicate") or guild is None:
+            return None
+        await self._note_home_permissions(message, guild, lang)
+        try:
+            return await forward_receipt(
+                guild=guild,
+                settings=self.team.current(guild.id),
+                env_receipt_ids=self.s.receipt_channel_ids,
+                counts=await self._counts(guild.id),
+                source=message.channel if message.guild is not None else None,
+                author=message.author,
+                jump_url=getattr(message, "jump_url", None),
+                files=files,
+                text=res.reply,
+                lang=lang,
+            )
+        except Exception:
+            logger.exception("receipt forward failed")
+            return None
+
+    @staticmethod
+    def _pdf_attachments(message) -> list:
+        return [
+            a
+            for a in message.attachments
+            if guess_mime(a.filename, getattr(a, "content_type", None)) == "application/pdf"
+        ]
+
+    async def _counts(self, guild_id: int) -> dict[int, int]:
+        """Receipts recorded per channel in the last 30 days (cached ~10 min, fail quiet): which
+        channels have learned to be receipt channels, and where receipts are copied to."""
+        now = self._clock()
+        hit = self._receipt_counts.get(guild_id)
+        if hit is not None and now - hit[0] < RECEIPT_COUNTS_TTL_S:
+            return hit[1]
+        since = (self.s.now().date() - timedelta(days=LEARN_DAYS)).isoformat()
+        try:
+            counts = await asyncio.to_thread(self.store.receipt_channel_counts, guild_id, since)
+        except Exception:
+            logger.warning("could not count receipts per channel", exc_info=True)
+            counts = hit[1] if hit else {}
+        self._receipt_counts[guild_id] = (now, counts)
+        return counts
+
+    async def _note_home_permissions(self, message, guild, lang: str) -> None:
+        """The hub-chosen receipt home exists but Salid cannot post files there: say what is
+        missing (at most once every 10 minutes per guild) instead of failing silently."""
+        settings = self.team.current(guild.id)
+        home_id = settings.receipt_home_channel_id
+        if not settings.receipt_forward or not home_id:
+            return
+        home = guild.get_channel(int(home_id))
+        lacking = (
+            channel_missing(home, guild, ("view_channel", "send_messages", "attach_files"))
+            if home is not None
+            else []
+        )
+        now = self._clock()
+        key = (guild.id, "home")
+        if not lacking or now - self._perm_noted.get(key, float("-inf")) < 600:
+            return
+        self._perm_noted[key] = now
+        with contextlib.suppress(discord.HTTPException):
+            await message.reply(
+                permission_message(lacking, lang, self.application_id), mention_author=False
+            )
+
+    async def _intake(
+        self, message: discord.Message, quiet: bool = False, pdf_only: bool = False
+    ) -> bool:
+        """Read every attachment as a receipt (`pdf_only`: just the PDFs). True when at least one
+        was a receipt (saved or a duplicate); images that are not receipts are described for
+        memory instead."""
         found = False
+        self._intaken[message.id] = None
+        while len(self._intaken) > IMAGE_NOTES_KEPT:
+            self._intaken.pop(next(iter(self._intaken)))
         for idx, att in enumerate(message.attachments):
             if att.size > ATTACH_LIMIT:
+                continue
+            if pdf_only and att not in self._pdf_attachments(message):
                 continue
             data = await att.read()
             res = await self._ingest_one(message, att, data, quiet)
@@ -903,6 +1424,22 @@ class SecretaryBot(discord.Client):
             text = text.replace(f"<@&{role.id}>", "")
         return text.strip()
 
+    def _name_mentions(self, text: str, message: discord.Message) -> str:
+        """`<@123>` of other people -> `@display name`, so the model can use the name in a tool
+        ("ฝากบอก @Jemm ทาง DM" -> send_dm(to="Jemm")) instead of searching chat for a number.
+        Salid's own tag is already gone (see `_strip_mentions`)."""
+        guild = getattr(message, "guild", None)
+        pool = {m.id: m for m in getattr(message, "mentions", ()) or ()}
+
+        def one(m: re.Match) -> str:
+            uid = int(m.group(1))
+            who = pool.get(uid) or (guild.get_member(uid) if guild is not None else None)
+            if who is None or uid == getattr(self.user, "id", None):
+                return m.group(0)
+            return f"@{getattr(who, 'display_name', None) or getattr(who, 'name', uid)}"
+
+        return re.sub(r"<@!?(\d{1,25})>", one, text)
+
     async def _recent_chat(self, message: discord.Message) -> str:
         """The room's recent conversation, oldest first: every participant (not only the asker)
         with local times, plus the message being replied to and today's summary of this channel
@@ -911,6 +1448,7 @@ class SecretaryBot(discord.Client):
             return ""
         zone = self.s.zone
         lines: list[str] = []
+        authors: list[str] = []
         for prev in await self._history(message.channel, HISTORY_MESSAGES + 10, before=message):
             if (message.created_at - prev.created_at).total_seconds() > HISTORY_SECONDS:
                 break
@@ -921,22 +1459,27 @@ class SecretaryBot(discord.Client):
                 text = " ".join(f"[{a.filename}]" for a in prev.attachments)
             if text:
                 who = "สลิด" if prev.author == self.user else prev.author.display_name
+                if who not in authors:
+                    authors.append(who)
                 at = prev.created_at.astimezone(zone).strftime("%H:%M")
                 lines.append(f"[{at}] {who}: {text[:HISTORY_LINE_CHARS]}")
             if len(lines) >= HISTORY_MESSAGES:
                 break
+        self._recent_authors[message.id] = authors
+        while len(self._recent_authors) > 50:
+            self._recent_authors.pop(next(iter(self._recent_authors)))
         lines.reverse()
         while lines and sum(len(x) + 1 for x in lines) > HISTORY_CHARS:
             lines.pop(0)
         parts = []
         summary = await self._today_summary(message)
         if summary:
-            parts.append(f"สรุปห้องนี้วันนี้ (ก่อนหน้าแชตด้านล่าง):\n{summary}")
+            parts.append(f"Summary of this room today (precedes the chat below):\n{summary}")
         ref = getattr(message, "reference", None)
         replied = getattr(ref, "resolved", None) if ref else None
         if getattr(replied, "content", None):
             who = "สลิด" if replied.author == self.user else replied.author.display_name
-            parts.append(f"ข้อความที่ผู้ถามกำลังตอบกลับ:\n{who}: {replied.content[:1000]}")
+            parts.append(f"The message the asker is replying to:\n{who}: {replied.content[:1000]}")
         if lines:
             parts.append("\n".join(lines))
         return "\n\n".join(parts)
@@ -950,7 +1493,9 @@ class SecretaryBot(discord.Client):
             day = datetime.now(self.s.zone).date().isoformat()
             channel = getattr(message.channel, "parent", None) or message.channel
             got = await asyncio.to_thread(self.memory_store.get_summary, guild.id, channel.id, day)
-            return render_summary(got.summary, max_chars=1500) if got and got.summary else ""
+            if got is None or got.dirty or not got.summary:  # dirty: a deleted text may remain
+                return ""
+            return render_summary(got.summary, max_chars=1500)
         except Exception:
             logger.warning("could not read today's summary", exc_info=True)
             return ""
@@ -981,8 +1526,21 @@ class SecretaryBot(discord.Client):
             )
             for i, a in enumerate(atts)
         ]
+        media_idx = {i for i, _a in media_candidates(message)}
+        office_idx = {
+            i for i, a in enumerate(atts) if doc_kind(a) in ("docx", "xlsx", "pptx", "doc", "xls")
+        }
+        for i in media_idx | office_idx:  # read in code (transcript / text), not as raw bytes
+            inputs[i].mime, inputs[i].size = "text/plain", 0
         usable, _skipped = select_files(inputs)
         for f in usable:
+            if f.index in media_idx:
+                async with message.channel.typing():
+                    await self._fill_media_input(message, f, atts[f.index])
+                continue
+            if f.index in office_idx:
+                await self._fill_office_input(f, atts[f.index])
+                continue
             try:
                 f.data = await atts[f.index].read()
                 f.size = len(f.data)
@@ -992,7 +1550,7 @@ class SecretaryBot(discord.Client):
         return inputs
 
     def _file_actions(
-        self, message, guild, member, is_exec: bool, setting: str, loop
+        self, message, guild, member, is_exec: bool, setting: str, loop, forwards=None
     ) -> FileActions:
         """The side effects the agent may trigger for this message. Guild, submitter, channel and
         message are bound here; the model only chooses which attachment."""
@@ -1000,7 +1558,7 @@ class SecretaryBot(discord.Client):
         lang = self._lang(message)
 
         def record(f: FileInput, note: str):
-            return ingest_attachment(
+            res = ingest_attachment(
                 self.store,
                 self.llm,
                 self.s,
@@ -1016,6 +1574,9 @@ class SecretaryBot(discord.Client):
                 archive=self.archive,
                 lang=lang,
             )
+            if forwards is not None:
+                forwards.append((f, res))  # posted to the receipt home channel by _answer
+            return res
 
         def deep(task: str) -> str:
             status = self._deep_status(gid, task, is_exec)
@@ -1036,23 +1597,30 @@ class SecretaryBot(discord.Client):
         member,
         *,
         interjection: bool = False,
+        note: str = "",
     ) -> bool:
         """Answer `message`. `interjection`: Salid was not asked (join mode), so the model may
         stay silent (NO_REPLY). Attachments (images, PDFs, text files) go to the agent with the
         text, and it decides what to do with them (record a receipt, summarise, ...); not for an
         interjection, which was not addressed to Salid. Returns True when something was posted."""
         t0 = time.monotonic()
-        q = self._strip_mentions(message.content, message)
+        q = self._name_mentions(self._strip_mentions(message.content, message), message)
         with_files = bool(message.attachments) and not interjection
         if not q and not with_files:
             q = await self._previous_text(message)
         if not q and not with_files:
-            sent = await message.reply(t("greeting", self._lang(message, "")), mention_author=False)
+            sent = await message.reply(
+                t(self._choose(GREETING_KEYS), self._lang(message, "")), mention_author=False
+            )
             self._note_answer(message, sent)
             return True
+        if note:  # e.g. the user marked a DM note confidential
+            q = f"{q}\n{note}"
         gid = guild.id
         is_exec = self.is_exec_member(member)
         setting = self._lang_setting(message)  # th / en / auto: auto lets the model follow the user
+        profile = self._profile_of(gid, member.id)  # the asker's own preferences, never others'
+        setting = effective_language(setting, profile)  # a channel's th / en wins over it
         lang = resolve_lang(setting, q)
         task = parse_deep_trigger(q)
         if task is not None:
@@ -1066,19 +1634,40 @@ class SecretaryBot(discord.Client):
                 return False
             await message.reply(t("qa_off", lang), mention_author=False)
             return True
+        if not interjection and is_summarize_request(q):
+            target = await self._referenced_message(message)
+            if target is not None:  # "สรุป" as a reply: summarise the message it answers
+                return await self._reply_summary(message, guild, member, target, setting)
         history = await self._recent_chat(message)
         meeting = self.meetings.context_for(message.channel.id)
         if meeting:  # talking in a live meeting's chat: the spoken transcript is context too
             history = t("history_meeting", lang, meeting=meeting, chat=history).rstrip()
         memory = await self._memory_tools(message, guild, member)
         files: list[FileInput] = []
+        forwards: list = []  # (file, IngestResult) of receipts the agent recorded
         actions = None
         if with_files:
             self._agent_msgs.add(message.id)  # the agent reads these: no separate receipt intake
             files = await self._file_inputs(message)
             actions = self._file_actions(
-                message, guild, member, is_exec, setting, asyncio.get_running_loop()
+                message, guild, member, is_exec, setting, asyncio.get_running_loop(), forwards
             )
+            q, files = self._voice_question(message, q, files)
+            lang = resolve_lang(setting, q)
+        agent = self._agent_kwargs(
+            message,
+            guild,
+            member,
+            is_exec,
+            setting=setting,
+            lang=lang,
+            question=q,
+            memory=memory,
+            profile=profile,
+            interjection=interjection,
+            people=tag_candidates(message.channel, self._recent_authors.pop(message.id, ())),
+            files=files,
+        )
         t_ctx = time.monotonic()
         async with message.channel.typing():
             ans = await asyncio.to_thread(
@@ -1112,12 +1701,609 @@ class SecretaryBot(discord.Client):
                 sent_ids.append(sent.id)
         if sent_ids:
             self._answers.add(message.channel.id, message.author.id, sent_ids)
+        lines = [
+            receipt_note(r)
+            for rid, _rx in getattr(ans, "receipts", ())
+            if (r := self.store.get(rid)) is not None
+        ]
+        if lines:  # the document note reuses these: a receipt is never ingested twice
+            self._agent_receipts[message.id] = lines
         for n, (receipt_id, reaction) in enumerate(getattr(ans, "receipts", ())):
             if n == 0 and first is not None:  # a correction by reply finds this receipt
                 self.store.set_reply_message(receipt_id, first.id)
             if reaction:
                 with contextlib.suppress(discord.HTTPException):
                     await message.add_reaction(reaction)
+        forwarded = None
+        for f, res in forwards[:4]:
+            fwd = await self._forward(message, guild, [(f.filename, f.data)], res, lang)
+            if fwd is not None and res.status == "created":
+                self.store.set_reply_message(res.receipt.id, fwd.id)
+            forwarded = forwarded or fwd
+        if forwarded is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await message.reply(
+                    t("fwd_ack", lang, home=forwarded.channel.name), mention_author=False
+                )
+        self._note_answer(message, sent)
+        return True
+
+    async def _start_ack(self, message, text: str, lang: str, *, target=None):
+        """Acknowledge slow work at once (files, links, audio: `target` is the message that has
+        them, the replied-to one for "summarise"), or after SLOW_AFTER_S seconds without an
+        answer. The Ack is stopped by `_deliver` / `_ack_failed`."""
+        flavor = ack_flavor(target or message, text)
+        kind = flavor or "slow"
+        key = getattr(message.channel, "id", None)
+        particle = str(getattr(self.s, "persona_particle", "ค่ะ") or "ค่ะ")
+        avoid = self.recent_acks.get(key)
+        pending = None
+        if self.fillers.enabled():  # written while the timer runs / the answer starts
+            pending = asyncio.create_task(
+                self.fillers.write(
+                    kind=kind, question=text, lang=lang, particle=particle, avoid=avoid
+                )
+            )
+        ack = Ack(
+            message,
+            ack_text(kind, lang, self._choose, avoid, particle),
+            sleep=self._sleep,
+            pending=pending,
+            timeout=float(getattr(self.s, "ack_llm_timeout_s", 2.0)),
+            on_text=lambda line: self.recent_acks.add(key, line),
+        )
+        if flavor:
+            await ack.now()
+        else:
+            ack.after()
+        return ack
+
+    async def _deep_ack_text(self, message, task: str, lang: str) -> str:
+        """The "big task started" reply: a line for this task that still says how long it takes and
+        that the result comes here; the catalog wording when the model is slow or fails."""
+        facts = (
+            ("a big job: it may take 1-5 minutes", "the result will be posted right here")
+            if lang == "en"
+            else ("งานใหญ่ อาจใช้เวลา 1-5 นาที", "เสร็จแล้วจะส่งผลในห้องนี้")
+        )
+        line = await within(
+            asyncio.create_task(
+                self.fillers.write(
+                    kind="deep",
+                    question=task,
+                    lang=lang,
+                    particle=str(getattr(self.s, "persona_particle", "ค่ะ") or "ค่ะ"),
+                    facts=facts,
+                )
+            ),
+            float(getattr(self.s, "ack_llm_timeout_s", 2.0)),
+        )
+        return line or t("deep_ack", lang)
+
+    async def _ack_failed(self, ack: Ack | None, lang: str) -> None:
+        """The answer blew up: do not leave "one moment..." hanging."""
+        if ack is None:
+            return
+        await ack.finish()
+        if ack.sent is not None:
+            with contextlib.suppress(discord.HTTPException):
+                await ack.sent.edit(content=t("qa_failed", lang))
+
+    async def _deliver(self, message, guild, ack, text: str, uploads=(), everyone: bool = False):
+        """Post an answer: mentions resolved (`@[name]` -> real tags, see salid.mentions), the
+        first chunk replaces the acknowledgement message (edited in place; when that fails the
+        answer is sent normally and the ack deleted), the rest follow as messages. Returns
+        (last sent, first sent, ids of every answer message)."""
+        if ack is not None:
+            await ack.finish()
+        text = resolve_mentions(defang_raw_mentions(text, guild), guild, allow_everyone=everyone)
+        text += self._dm_footers.pop(message.id, "")  # DM with 2+ companies: "— Company: X"
+        parts = split_sections(text)
+        if needs_attachment(
+            parts
+        ):  # more than ~3 messages: a short summary + the full text as a file
+            summary, long_file = self._long_answer_file(text, self._lang(message), guild)
+            uploads = [*uploads, long_file][:10]
+            parts = split_sections(f"{summary}\n\n{t('long_answer_note', self._lang(message))}")
+        allowed = allowed_mentions_for("\n".join(parts), allow_everyone=everyone)
+        acked = ack.sent if ack is not None else None
+        sent = first = None
+        sent_ids: list[int] = []
+        for i, part in enumerate(parts):
+            extra = {"files": list(uploads)} if i == 0 and uploads else {}
+            if i == 0 and acked is not None:
+                try:
+                    sent = await acked.edit(
+                        content=part,
+                        allowed_mentions=allowed,
+                        **({"attachments": list(uploads)} if uploads else {}),
+                    )
+                except discord.HTTPException:
+                    sent = await message.reply(
+                        part, mention_author=False, allowed_mentions=allowed, **extra
+                    )
+                    with contextlib.suppress(discord.HTTPException):
+                        await acked.delete()
+                else:
+                    sent = sent or acked
+                    if guild is not None:  # the memory log still holds the ack text
+                        self._memory_enqueue(
+                            partial(self.memory.edit, guild.id, sent.id, part, datetime.now(UTC))
+                        )
+            elif i == 0:
+                sent = await message.reply(
+                    part, mention_author=False, allowed_mentions=allowed, **extra
+                )
+            else:
+                sent = await message.channel.send(part, allowed_mentions=allowed)
+            first = first or sent
+            if getattr(sent, "id", None) is not None:
+                sent_ids.append(sent.id)
+        if first is None and acked is not None:  # nothing to say after all
+            with contextlib.suppress(discord.HTTPException):
+                await acked.delete()
+        return sent, first, sent_ids
+
+    def _long_answer_file(self, text: str, lang: str, guild) -> tuple[str, discord.File]:
+        """(short summary, the full answer as a PDF; Markdown when the PDF cannot be built)."""
+        summary = summary_of(text)
+        try:
+            data = markdown_pdf(
+                org=getattr(guild, "name", "") or "Salid",
+                title="Salid",
+                markdown=text,
+                lang=lang,
+                generated_at=self.s.now(),
+                fonts=find_fonts(self.s.pdf_font),
+            )
+            name = "salid-answer.pdf"
+        except Exception:
+            logger.warning("long answer PDF failed; attaching Markdown", exc_info=True)
+            data, name = text.encode("utf-8"), "salid-answer.md"
+        return summary, discord.File(io.BytesIO(data), filename=name)
+
+    def _chat_actions(
+        self, message, guild, member, is_exec: bool, setting: str, loop, secretary=None
+    ):
+        """The settings tools for this message: guild, channel and author are bound here, never
+        model input. Same permission rules as the slash commands (managers / executives)."""
+        gid, channel = guild.id, message.channel
+        lang = self._lang(message)
+
+        def run(coro):
+            return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
+
+        def allowed() -> bool:
+            return self._may_configure(member)
+
+        def pick(ref: str | None):
+            return self._find_text_channel(guild, ref, channel)
+
+        def set_mode(mode: str, ref: str | None = None) -> dict:
+            if mode not in MODES:
+                return {"error": "unknown mode", "modes": list(MODES)}
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            target = pick(ref)
+            if target is None:
+                return {"error": "channel_not_found"}
+            run(self._apply_mode(guild, target, mode))
+            return {"status": "ok", "channel": target.name, "mode": mode}
+
+        def set_language(language: str, ref: str | None = None) -> dict:
+            if language not in LANGS:
+                return {"error": "unknown language", "languages": list(LANGS)}
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            target = pick(ref)
+            if target is None:
+                return {"error": "channel_not_found"}
+            self.team.set_channel_language(gid, target.id, language)
+            return {"status": "ok", "channel": target.name, "language": language}
+
+        def set_server_lang(language: str, apply_to_all_channels: bool = True) -> dict:
+            if language not in ("th", "en"):
+                return {"error": "unknown language", "languages": ["th", "en"]}
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            run(self._apply_server_language(guild, language, bool(apply_to_all_channels)))
+            return {
+                "status": "ok",
+                "language": language,
+                "applied_to_all_channels": bool(apply_to_all_channels),
+                "note": "answer this confirmation in the NEW language",
+            }
+
+        def set_days(days: int) -> dict:
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            if valid_retention_days(days) is None:
+                return {
+                    "error": "bad_days",
+                    "min": MIN_RETENTION_DAYS,
+                    "max": MAX_RETENTION_DAYS,
+                }
+            previous = self.team.memory_retention_days(gid)
+            self.team.set_memory_retention_days(gid, days)
+            if days < previous:
+                self._purge_soon(gid)
+            return {"status": "ok", "days": days}
+
+        def show() -> dict:
+            mode = self._mode(channel, gid)
+            return {
+                "channel": getattr(channel, "name", ""),
+                "mode": mode,
+                "mode_meaning": mode_help(mode, "en", self.team.memory_retention_days(gid)),
+                "snoozed": self._is_snoozed(channel.id),
+                "reply_language": self.team.channel_language(gid, channel.id),
+                "memory_on": self.team.enabled(gid, "memory"),
+                "memory_days": self.team.memory_retention_days(gid),
+                "auto_join_meetings": self.team.enabled(gid, "auto_join_meetings"),
+                "voice_bodies": self.voice_pool.status_rows(gid, lang),
+                "voice_helper_invites": [
+                    {"name": n, "link": u} for n, u in self.voice_pool.invite_links(gid)
+                ],
+                "meetings_now": [
+                    {"channel": x.voice_channel.name, "body": getattr(x.body, "name", "Salid")}
+                    for x in self.meetings.sessions_in_guild(gid)
+                ],
+            }
+
+        def hidden() -> dict:
+            if not allowed():
+                return {"error": "not_allowed", "needs": "server manager or executive"}
+            rows = hidden_channels(guild, guild.me)
+            return {
+                "count": len(rows),
+                "channels": [
+                    {"mention": f"<#{r['id']}>", "name": r["name"], "problem": r["missing"]}
+                    for r in rows[:25]
+                ],
+                "how_to_add": t("hidden_steps", lang),
+            }
+
+        def cancel() -> dict:
+            return {"result": run(self._cancel_deep(gid, member, lang))}
+
+        dm_people: set[int] = set()  # other people this request has DMed (hard cap)
+
+        def dm(text: str, to: str = "me", attach: str | None = None) -> dict:
+            return run(
+                self._send_dm_tool(
+                    guild, member, text, to, attach, lang, secretary, dm_people=dm_people
+                )
+            )
+
+        notif_on = self.team.enabled(gid, "briefings")
+        request_id = new_id()  # one per request: a delivery confirms only in a later message
+
+        return ChatActions(
+            set_channel_mode=set_mode,
+            set_channel_language=set_language,
+            set_server_language=set_server_lang,
+            set_memory_days=set_days,
+            show_settings=show,
+            hidden_channels=hidden,
+            cancel_deep_task=cancel,
+            send_dm=dm,
+            set_my_notifications=(
+                (lambda **kw: self._notif_set(gid, member.id, **kw)) if notif_on else None
+            ),
+            show_my_notifications=(
+                (lambda: self._notif_show(gid, member.id)) if notif_on else None
+            ),
+            deliver_file=self._deliver_actions(
+                message, guild, member, lang, loop, secretary, request_id
+            ),
+            join_voice=lambda: run(self._join_voice_tool(message, member, lang)),
+            leave_voice=lambda: run(self._leave_voice_tool(message, member, lang)),
+            deliver_minutes=self._minutes_actions(message, guild, member, lang, loop),
+            **self._profile_actions(gid, member.id),
+        )
+
+    @staticmethod
+    def _find_text_channel(guild, ref: str | None, current):
+        """`ref` (mention, id or name; None = the current channel) as one of the guild's text
+        channels: exact name first, then a unique partial match."""
+        if not ref:
+            return current
+        digits = "".join(ch for ch in str(ref) if ch.isdigit())
+        chans = list(guild.text_channels)
+        if digits:
+            hit = next((c for c in chans if str(c.id) == digits), None)
+            if hit is not None:
+                return hit
+        want = str(ref).strip().lstrip("#").casefold()
+        exact = [c for c in chans if c.name.casefold() == want]
+        if len(exact) == 1:
+            return exact[0]
+        part = [c for c in chans if want and want in c.name.casefold()]
+        return part[0] if len(part) == 1 else None
+
+    async def _apply_mode(self, guild, channel, mode: str) -> str:
+        """Save a channel's mode and reset what depended on the old one. Returns the previous
+        mode (an off -> on switch starts the memory notice and import)."""
+        previous = self.team.channel_mode(
+            guild.id, channel.id, getattr(channel, "name", None), self.s.ask_channel_ids
+        )
+        await asyncio.to_thread(self.team.set_channel_mode, guild.id, channel.id, mode)
+        self._snoozed.pop(channel.id, None)
+        self._convos.pop(channel.id, None)
+        self._pending.pop(channel.id, None)
+        self._seen_mode[channel.id] = mode
+        if previous == "off" and mode != "off":
+            await self._memory_notice(channel, guild.id)
+            self._start_import()
+        return previous
+
+    async def _send_dm_tool(
+        self,
+        guild,
+        member,
+        text: str,
+        to: str,
+        attach: str | None,
+        lang: str,
+        secretary=None,
+        dm_people: set[int] | None = None,
+    ) -> dict:
+        """The send_dm tool. "me" DMs the requester; someone else gets a relay that says who it
+        is from. A PDF goes only to the requester, or to a recipient who can see at least as much
+        (executive / manager). At most DM_PER_GUILD_PER_HOUR per guild per hour."""
+        now = self._clock()
+        sent = [x for x in self._dm_sent.get(guild.id, []) if now - x < 3600]
+        if len(sent) >= DM_PER_GUILD_PER_HOUR:
+            return {"error": "rate_limited", "per_hour": DM_PER_GUILD_PER_HOUR}
+        me_words = {"", "me", "myself", "ฉัน", "ผม", "เรา", "ตัวเอง", "ผู้ถาม"}
+        mine = to.strip().casefold() in me_words
+        if mine:
+            target = member
+        else:
+            found = match_members(guild, to)
+            if not found:
+                return {"error": "person_not_found", "person": to}
+            if len(found) > 1:
+                return {
+                    "error": "ambiguous",
+                    "candidates": [m.display_name for m in found[:10]],
+                }
+            target = found[0]
+            if target.id == member.id:
+                mine = True
+        if dm_people is None:
+            dm_people = set()
+        refused = dm_refusal(text, dm_people, target.id, mine)
+        if refused:
+            return refused
+        files = []
+        if attach:
+            data = self.secretary_state.recall_pdf(guild.id, member.id, attach)
+            if data is None:
+                return {"error": "attachment_not_found", "attach": attach}
+            if not mine and not self._may_configure(target):
+                return {"error": "attachment_only_for_requester_or_executives"}
+            files = [discord.File(io.BytesIO(data), filename=attach)]
+        body = (
+            text[:1900]
+            if mine
+            else t(
+                "relay_dm", lang, sender=member.display_name, server=guild.name, text=text[:1500]
+            )
+        )
+        res = await send_dm(target, body, files)
+        if not res.ok:
+            if res.reason == "closed":
+                return {
+                    "error": "dms_closed",
+                    "person": target.display_name,
+                    "guidance": closed_dm_message(target.display_name, guild.name, lang),
+                }
+            return {"error": "could_not_dm", "person": target.display_name}
+        self._dm_sent[guild.id] = [*sent, now]
+        if not mine:
+            dm_people.add(target.id)
+        if attach and secretary is not None:  # delivered privately: not also posted in the channel
+            secretary.attachments[:] = [a for a in secretary.attachments if a[0] != attach]
+        return {"status": "sent", "to": "requester" if mine else target.display_name}
+
+    def _agent_kwargs(
+        self,
+        message,
+        guild,
+        asker,
+        is_exec: bool,
+        *,
+        setting: str,
+        lang: str,
+        question: str,
+        memory,
+        profile,
+        interjection: bool = False,
+        people=(),
+        files: list | None = None,
+    ) -> dict:
+        """Everything `ask` gets besides the question, history and files: memory, the secretary,
+        COO and settings tools, tag candidates, profile, web, language. The ONE place chat and
+        voice build their agent, so they cannot drift apart. `message` is a Discord message, or
+        a room stand-in (`room_message`) for a voice meeting; `asker` acts for the requester."""
+        secretary = (
+            None
+            if interjection
+            else self._room_secretary(
+                guild,
+                asker,
+                is_exec,
+                self._lang(message),
+                message.channel.id if message.guild is not None else None,
+            )
+        )
+        coo_tools = (
+            self._coo_tools(guild, asker, is_exec, memory, question, lang)
+            if memory is not None and not interjection
+            else []
+        )
+        chat_actions = self._chat_actions(
+            message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
+        )
+        loop = asyncio.get_running_loop()
+        # every feature's agent tools, in one list (COO first); each keeps its own guards
+        extra_tools = [
+            *coo_tools,
+            *(self._captions_tools(asker) if coo_tools else []),  # only with the COO/memory setup
+            *([] if interjection else self._translate_tools(message, guild, asker, is_exec, loop)),
+            *([] if interjection else self._freetime_tools(guild, asker, lang)),
+            *(
+                []
+                if interjection
+                else self._poll_form_tools(message, guild, asker, is_exec, lang, new_id())
+            ),
+            *([] if interjection else self._catchup_tools(guild, asker, memory)),
+            *([] if interjection else self._meeting_doc_tools(message, guild, asker, lang, loop)),
+            *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
+            *([] if interjection else self._approval_tools(guild, asker, is_exec, lang)),
+            *([] if interjection else self._places_tools(message, guild, asker, is_exec)),
+            *([] if interjection else self._maps_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
+            *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
+            *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
+            # make_promo_kit: chat only (voice passes no files), with a photo or a remembered kit
+            *([] if interjection else self._promo_tools(message, guild, asker, files)),
+            # post_message + send_dm_many (broadcast.py)
+            *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
+        ]
+        if not interjection:  # search_everything reads through the tools built above, then web
+            extra_tools += self._search_tools(
+                message, guild, asker, is_exec, memory, extra_tools, lang
+            )
+        company = self._company_block(message, guild, asker, is_exec, question, interjection, lang)
+        return {
+            "language": setting,
+            "memory": memory,
+            "chat_actions": chat_actions,
+            "people": list(people),
+            **({"profile": profile_block(profile)} if profile is not None else {}),
+            **({"company": company} if company else {}),
+            **self._web_kw(guild.id),
+            **({"secretary": secretary} if secretary is not None else {}),
+            **({"extra_tools": extra_tools} if extra_tools else {}),
+        }
+
+    def _captions_tools(self, asker) -> list:
+        """`set_captions`: only for someone sitting in the voice channel of a running meeting."""
+
+        def session_of():
+            ch = getattr(getattr(asker, "voice", None), "channel", None)
+            gid = getattr(getattr(asker, "guild", None), "id", None)
+            return self.meetings.session_in(gid, ch.id) if ch is not None else None
+
+        return captions_tools(session_of, self.meetings.set_captions)
+
+    @staticmethod
+    def room_message(guild, asker, channel, room=None):
+        """What a message-bound tool needs from a voice meeting: the room's text channel as the
+        current channel, the asker as author, and no attachments or reply. `room`: the ids of the
+        humans present (the audience of every answer)."""
+        return SimpleNamespace(
+            id=0, guild=guild, channel=channel, author=asker, content="", attachments=[],
+            reference=None, room=frozenset(room) if room is not None else None,
+        )  # fmt: skip
+
+    def _room_secretary(self, guild, asker, is_exec: bool, lang: str, text_channel_id: int | None):
+        """The same bindings without a message (a voice meeting): `asker` stands for the room."""
+        gid = guild.id
+        on = {f: self.team.enabled(gid, f) for f in ("scheduling", "documents", "email")}
+        if not any(on.values()):
+            return None
+        loop = asyncio.get_running_loop()
+        senders = set(self.team.current(gid).email_senders)
+        can_email = is_exec or bool(senders & {r.name for r in asker.roles})
+        return SecretaryContext(
+            settings=self.s,
+            guild_id=gid,
+            guild_name=getattr(guild, "name", ""),
+            author_id=asker.id,
+            author_name=asker.display_name,
+            is_exec=is_exec,
+            can_email=can_email,
+            lang=lang,
+            app_id=self.application_id,
+            text_channel_id=text_channel_id,
+            store=self.secretary_store,
+            state=self.secretary_state,
+            run=lambda coro: asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=60),
+            service=self.scheduler,
+            places=self._places_resolver(guild, asker, is_exec),
+            sender=self.email_sender,
+            documents=on["documents"],
+            scheduling=on["scheduling"],
+            email=on["email"],
+        )
+
+    def _web_kw(self, guild_id: int) -> dict:
+        """read_web (links + Google Search) for `ask`: only with the `web` feature on."""
+        if self.llm is not None and self.team.enabled(guild_id, "web"):
+            return {"web_client": self.llm}
+        return {}
+
+    async def _referenced_message(self, message) -> discord.Message | None:
+        """The message `message` is a reply to (None when it is not a reply or is gone)."""
+        ref = getattr(message, "reference", None)
+        if ref is None:
+            return None
+        found = getattr(ref, "resolved", None)
+        if found is None and getattr(ref, "message_id", None):
+            with contextlib.suppress(discord.HTTPException, AttributeError):
+                found = await message.channel.fetch_message(ref.message_id)
+        return found if getattr(found, "author", None) is not None else None
+
+    async def _summarize_message(self, target, guild, member, setting: str) -> str | None:
+        """Ask for a summary of one message: its text and links in the question, its attachments
+        as file parts (no receipt/deep-task actions, no chat memory). None: nothing to summarise."""
+        content = self._strip_mentions(getattr(target, "content", "") or "", target)
+        files = await self._file_inputs(target) if getattr(target, "attachments", None) else []
+        if not content and not files:
+            return None
+        profile = self._profile_of(guild.id, member.id)
+        setting = effective_language(setting, profile)
+        lang = resolve_lang(setting, content)
+        q = message_summary_question(lang, target.author.display_name, content)
+        ans = await asyncio.to_thread(
+            ask,
+            self.s,
+            self.store,
+            q,
+            guild_id=guild.id,
+            is_exec=self.is_exec_member(member),
+            user_id=member.id,
+            language=setting,
+            profile=profile_block(profile),
+            **({"files": files} if files else {}),
+            **self._web_kw(guild.id),
+        )
+        logger.info("summarised a message in %.1fs", ans.seconds)
+        return ans.text
+
+    async def _reply_summary(self, message, guild, member, target, setting: str) -> bool:
+        lang = resolve_lang(setting, message.content)
+        # the files / links that make this slow are in the message being summarised
+        ack = await self._start_ack(
+            message, getattr(target, "content", "") or "", lang, target=target
+        )
+        try:
+            async with message.channel.typing():
+                text = await self._summarize_message(target, guild, member, setting)
+        except BaseException:
+            await self._ack_failed(ack, lang)
+            raise
+        if text is None:
+            text = t("summary_nothing", lang)
+        sent, _first, ids = await self._deliver(message, guild, ack, text)
+        if ids:
+            self._answers.add(message.channel.id, message.author.id, ids)
         self._note_answer(message, sent)
         return True
 
@@ -1183,7 +2369,8 @@ class SecretaryBot(discord.Client):
         Allowed for whoever started it, server managers and executives."""
         job = self._deep_jobs.get(guild_id)
         if job is None or job.task.done():
-            return t("cancel_none", lang)
+            stopped = self._research_cancel(guild_id, user, lang)  # a running deep_research
+            return stopped if stopped is not None else t("cancel_none", lang)
         if user.id != job.starter_id and not (
             hasattr(user, "guild_permissions") and self.is_exec_member(user)
         ):
@@ -1265,7 +2452,7 @@ class SecretaryBot(discord.Client):
         reply = message.reply
         status = self._deep_status(guild_id, task, is_exec)
         if status == "ok":
-            await reply(t("deep_ack", lang), mention_author=False)
+            await reply(await self._deep_ack_text(message, task, lang), mention_author=False)
             self._launch_deep(message, guild_id, task, setting)
         else:
             key = {
@@ -1372,6 +2559,66 @@ class SecretaryBot(discord.Client):
             self.tree.add_command(
                 app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
             )
+
+        async def private_cb(interaction: discord.Interaction):
+            await self.handle_private_chat(interaction)
+
+        private_cb = app_commands.guild_only()(private_cb)
+        for name in PRIVATE_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_private"), callback=private_cb)
+            )
+
+        async def company_cb(interaction: discord.Interaction, name: str | None = None):
+            await self.handle_company(interaction, name)
+
+        company_cb = app_commands.describe(name=t("cmd_company_arg"))(company_cb)
+        for name in SWITCH_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_company"), callback=company_cb)
+            )
+
+        async def summary_cb(
+            interaction: discord.Interaction,
+            period: str = "today",
+            channel: discord.TextChannel | None = None,
+            all_channels: bool = False,
+            topic: str | None = None,
+            private: bool = False,
+        ):
+            await self.handle_summary(interaction, period, channel, all_channels, topic, private)
+
+        summary_cb = app_commands.guild_only()(summary_cb)
+        summary_cb = app_commands.describe(
+            period=t("cmd_summary_period"),
+            channel=t("cmd_summary_channel"),
+            all_channels=t("cmd_summary_all"),
+            topic=t("cmd_summary_topic"),
+            private=t("cmd_summary_private"),
+        )(summary_cb)
+        summary_cb = app_commands.choices(
+            period=[app_commands.Choice(name=t(f"period_{p}"), value=p) for p in PERIODS]
+        )(summary_cb)
+        for name in SUMMARY_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_summary"), callback=summary_cb)
+            )
+
+        async def summarize_menu(interaction: discord.Interaction, message: discord.Message):
+            await self.handle_summarize_menu(interaction, message)
+
+        summarize_menu = app_commands.guild_only()(summarize_menu)
+        self.tree.add_command(
+            app_commands.ContextMenu(name=MENU_SUMMARIZE, callback=summarize_menu)
+        )
+
+        async def translate_menu(interaction: discord.Interaction, message: discord.Message):
+            await self.handle_translate_menu(interaction, message)
+
+        translate_menu = app_commands.guild_only()(translate_menu)
+        self.tree.add_command(
+            app_commands.ContextMenu(name=MENU_TRANSLATE, callback=translate_menu)
+        )
         for names, handler, desc in (
             (CANCEL_COMMANDS, self.handle_cancel, t("cmd_cancel")),
             (CHANNELS_COMMANDS, self.handle_channels, t("cmd_channels")),
@@ -1383,6 +2630,85 @@ class SecretaryBot(discord.Client):
                 self.tree.add_command(
                     app_commands.Command(name=name, description=desc, callback=cb)
                 )
+        self._register_coo_commands()  # /รายงาน /report
+        self._register_catchup_commands()  # /ตามทัน /catchup
+
+    async def handle_summary(
+        self,
+        interaction: discord.Interaction,
+        period: str = "today",
+        channel=None,
+        all_channels: bool = False,
+        topic: str | None = None,
+        private: bool = False,
+    ) -> None:
+        """/สรุป: summarise a period of chat memory through the normal ask. The channels the
+        model may read are computed for the invoker and for where the reply is posted (a private
+        reply: just the invoker's own access)."""
+        guild, user, here = interaction.guild, interaction.user, interaction.channel
+        await interaction.response.defer(ephemeral=bool(private))
+        await asyncio.to_thread(self.team.current, guild.id)
+        profile = self._profile_of(guild.id, user.id)
+        setting = effective_language(self._lang_setting(interaction), profile)
+        lang = self._interaction_lang(interaction)
+        if setting != "auto":
+            lang = setting
+        send = partial(interaction.followup.send, ephemeral=bool(private))
+        if not (self.team.enabled(guild.id, "qa") and self.team.enabled(guild.id, "memory")):
+            await send(t("summary_unavailable", lang))
+            return
+        where = SimpleNamespace(guild=None if private else guild, channel=here)
+        memory = await self._memory_tools(where, guild, user)
+        target = channel or here
+        found = self._memory_channel(target)
+        if memory is None or (
+            not all_channels and (found is None or found[0] not in memory.allowed)
+        ):
+            await send(t("summary_no_access", lang))
+            return
+        q = summary_question(
+            lang,
+            period=period if period in PERIODS else "today",
+            today=self.s.now().date(),
+            tz=self.s.tz,
+            channel_name=None if all_channels else getattr(target, "name", None),
+            topic=topic,
+        )
+        ans = await asyncio.to_thread(
+            ask,
+            self.s,
+            self.store,
+            q,
+            guild_id=guild.id,
+            is_exec=self.is_exec_member(user),
+            user_id=user.id,
+            language=setting if setting != "auto" else lang,
+            memory=memory,
+            profile=profile_block(profile),
+            **self._web_kw(guild.id),
+        )
+        logger.info("summary command answered in %.1fs (%d rounds)", ans.seconds, ans.rounds)
+        for part in chunks(ans.text):
+            await send(part)
+
+    async def handle_summarize_menu(self, interaction: discord.Interaction, message) -> None:
+        """Message context menu "Summarize with Salid": summarise the right-clicked message."""
+        guild, user = interaction.guild, interaction.user
+        await interaction.response.defer(ephemeral=True)
+        await asyncio.to_thread(self.team.current, guild.id)
+        setting = self._lang_setting(interaction)
+        lang = self._interaction_lang(interaction)
+        send = partial(interaction.followup.send, ephemeral=True)
+        if not self.team.enabled(guild.id, "qa"):
+            await send(t("summary_unavailable", lang))
+            return
+        text = await self._summarize_message(
+            message, guild, user, setting if setting != "auto" else lang
+        )
+        if text is None:
+            text = t("summary_nothing", lang)
+        for part in chunks(text):
+            await send(part)
 
     @staticmethod
     def _command_callback(handler):
@@ -1406,7 +2732,9 @@ class SecretaryBot(discord.Client):
         """/ออกประชุม: leave and post the summary."""
         await asyncio.to_thread(self.team.current, interaction.guild.id)
         reply = await self.meetings.leave(
-            interaction.user, lang=self._interaction_lang(interaction)
+            interaction.user,
+            lang=self._interaction_lang(interaction),
+            text_channel_id=getattr(interaction.channel, "id", None),
         )
         await interaction.response.send_message(reply, ephemeral=True)
 
@@ -1513,6 +2841,8 @@ class SecretaryBot(discord.Client):
             logger.exception("could not save memory retention")
             await send(t("memory_failed", lang), ephemeral=True)
             return
+        if days < current:
+            self._purge_soon(guild.id)  # shortened: delete what is now past it, without waiting
         await send(t("memory_set", lang, days=days))
 
     async def handle_language(self, interaction: discord.Interaction, language: str | None) -> None:
@@ -1616,6 +2946,21 @@ class SecretaryBot(discord.Client):
         await self._signoff_due()
         await self._join_due()
         await self._memory_due()
+        await self._scheduler_due()
+        await self._coo_due()
+        await self._polls_forms_due()
+        await self._pc_sweep()
+        await self._travel_due()
+        await self._markets_due()
+        await self._contests_due()
+
+    async def _scheduler_due(self) -> None:
+        """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""
+        now = self._clock()
+        if not self.guilds or now - self._sched_last < SCHEDULER_TICK_SECONDS:
+            return
+        self._sched_last = now
+        await self.scheduler.tick()
 
     async def _signoff_due(self) -> None:
         """Conversations whose window ran out: one short sign-off (or a 👋 reaction after a
@@ -1784,6 +3129,8 @@ class SecretaryBot(discord.Client):
         try:
             guild = message.guild
             gid = guild.id
+            if await self._pc_owner(gid, message.channel.id) is not None:
+                return False  # a private channel is kept as the member's private notes instead
             await asyncio.to_thread(self.team.current, gid)
             where = self._memory_channel(message.channel)
             if where is None:
@@ -1796,6 +3143,8 @@ class SecretaryBot(discord.Client):
             record = self._memory_message(message, own, cid, thread_id)
             if record is not None:
                 self._memory_enqueue(partial(self.memory.record, record))
+                if not own:
+                    self._places_hook(message, cid)  # address-looking text -> remembered places
             if previous == "off" and not own:  # switched on elsewhere (hub): tell the channel once
                 target = message.channel if thread_id is None else message.channel.parent
                 await self._memory_notice(target or message.channel, gid)
@@ -1880,6 +3229,8 @@ class SecretaryBot(discord.Client):
     async def on_raw_message_delete(self, payload) -> None:
         self.recent.delete(getattr(payload, "channel_id", None), [payload.message_id])
         if payload.guild_id is not None:
+            self._asks_forget(payload.guild_id, {payload.message_id})
+            await self._places_source_deleted(payload.guild_id, {payload.message_id})
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, [payload.message_id])
             )
@@ -1887,6 +3238,8 @@ class SecretaryBot(discord.Client):
     async def on_raw_bulk_message_delete(self, payload) -> None:
         self.recent.delete(getattr(payload, "channel_id", None), payload.message_ids)
         if payload.guild_id is not None:
+            self._asks_forget(payload.guild_id, set(payload.message_ids))
+            await self._places_source_deleted(payload.guild_id, set(payload.message_ids))
             self._memory_enqueue(
                 partial(self.memory.delete, payload.guild_id, sorted(payload.message_ids))
             )
@@ -1923,7 +3276,7 @@ class SecretaryBot(discord.Client):
     async def _import_all(self) -> None:
         for guild in list(self.guilds):
             await asyncio.to_thread(self.team.current, guild.id)
-            if not self.team.enabled(guild.id, "memory"):
+            if not await self._licensed(guild.id) or not self.team.enabled(guild.id, "memory"):
                 continue
             targets = await self._import_targets(guild)
             res = await self.importer.run_guild(guild.id, targets)
@@ -1931,12 +3284,15 @@ class SecretaryBot(discord.Client):
                 self._import_resume_at = self._clock() + IMPORT_RESUME_S
             if self.team.enabled(guild.id, "image_memory"):
                 await self._image_backlog(guild, {t.cid for t in targets})
+            await self._media_doc_backlog(guild, {t.cid for t in targets})
 
     async def _import_targets(self, guild) -> list[Target]:
         """Readable, non-off channels (text, voice chat) and threads (active, and archived ones
         of readable text channels). Private threads are skipped."""
         me = guild.me
-        floor = self.s.now() - timedelta(days=self.team.memory_retention_days(guild.id))
+        floor = self.s.now() - timedelta(
+            days=self.team.fresh_memory_retention_days(guild.id, fail_closed=True)
+        )
 
         def usable(ch):
             where = self._memory_channel(ch)
@@ -1974,13 +3330,36 @@ class SecretaryBot(discord.Client):
             return None
         return self._memory_message(message, own, target.cid, target.thread_id)
 
+    def _purge_soon(self, guild_id: int) -> None:
+        """Retention was shortened: purge that guild's memory and drop its index now, in the
+        background (the daily purge would leave expired data readable for up to a day)."""
+
+        def purge() -> None:
+            try:
+                m, s = self.memory.scheduler.purge_guild(guild_id)
+                logger.info("retention shortened: purged %d messages, %d summaries", m, s)
+            except Exception:
+                logger.warning("could not purge after shortening retention", exc_info=True)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # called from a tool thread
+            threading.Thread(target=purge, daemon=True).start()
+            return
+        self._spawn(asyncio.to_thread(purge))
+
     def _memory_triggers(self) -> None:
         """Start an import when memory was switched on or retention lengthened (hub or
         command), and resume a run the guild cap stopped."""
         for guild in self.guilds:
-            now = (self.team.enabled(guild.id, "memory"), self.team.memory_retention_days(guild.id))
+            now = (
+                self.team.enabled(guild.id, "memory"),
+                self.team.fresh_memory_retention_days(guild.id),
+            )
             before = self._memory_cfg_seen.get(guild.id)
             self._memory_cfg_seen[guild.id] = now
+            if before is not None and now[1] < before[1]:  # shortened (e.g. in the hub)
+                self._purge_soon(guild.id)
             if before is not None and now[0] and (not before[0] or now[1] > before[1]):
                 self._start_import()
         if self._import_resume_at is not None and self._clock() >= self._import_resume_at:
@@ -2000,14 +3379,19 @@ class SecretaryBot(discord.Client):
     def _images_enabled(self, guild_id: int) -> bool:
         return self.team.enabled(guild_id, "memory") and self.team.enabled(guild_id, "image_memory")
 
-    def _describe_soon(self, message, logged: bool = True, intake_mode: str | None = None) -> None:
+    def _describe_soon(
+        self, message, logged: bool = True, intake_mode: str | None = None, react: bool = False
+    ) -> None:
         """Describe the message's images in the background (never delays a reply). With
         `intake_mode` set, images the describer takes for receipts also go through receipt
         intake (quietly in listen mode)."""
         cands = self._image_candidates(message)
-        if cands and self._images_enabled(message.guild.id) and (logged or intake_mode):
+        notes_on = self._images_enabled(message.guild.id)
+        if cands and (intake_mode or (notes_on and logged)):  # receipts need no image memory
             self._spawn(
-                self._describe_message(message, cands, intake_mode=intake_mode, apply=logged)
+                self._describe_message(
+                    message, cands, intake_mode=intake_mode, apply=logged and notes_on, react=react
+                )
             )
 
     async def _read_describe(self, att) -> tuple[bytes | None, ImageNote | None]:
@@ -2033,8 +3417,23 @@ class SecretaryBot(discord.Client):
         _data, note = await self._read_describe(att)
         return format_note(note) if note is not None else None
 
+    async def _read_react(self, message) -> None:
+        """👀 on a message whose files Salid has just read quietly (once per message)."""
+        if message.id in self._reacted:
+            return
+        self._reacted[message.id] = None
+        while len(self._reacted) > IMAGE_NOTES_KEPT:
+            self._reacted.pop(next(iter(self._reacted)))
+        with contextlib.suppress(discord.HTTPException):
+            await message.add_reaction(READ_REACTION)
+
     async def _describe_message(
-        self, message, cands, intake_mode: str | None = None, apply: bool = True
+        self,
+        message,
+        cands,
+        intake_mode: str | None = None,
+        apply: bool = True,
+        react: bool = False,
     ) -> tuple[bool, dict[int, str]]:
         """Describe images; receipt-like ones also run receipt intake when `intake_mode` is set.
         Returns (a receipt was handled, notes by attachment index)."""
@@ -2045,6 +3444,14 @@ class SecretaryBot(discord.Client):
             if note is None:
                 continue
             notes[i] = format_note(note)
+            self._doc_alert_soon(
+                message,
+                i,
+                DocInfo(
+                    getattr(att, "filename", "") or "image", "image", note.type,
+                    note.description, note.amount_value, split_names(note.addressed_to),
+                ),
+            )  # fmt: skip
             if intake_mode and data is not None and note.is_receipt_like:
                 try:
                     res = await self._ingest_one(message, att, data, intake_mode == "listen")
@@ -2061,6 +3468,8 @@ class SecretaryBot(discord.Client):
         )  # fmt: skip
         if notes and apply:
             self._apply_notes(message, notes)
+        if react and notes and not handled:  # a recorded receipt already got its own reaction
+            await self._read_react(message)
         return handled, notes
 
     def _apply_notes(self, message, notes: dict[int, str]) -> None:
@@ -2080,7 +3489,11 @@ class SecretaryBot(discord.Client):
         gstate = self.importer.guild_state(gid)
         cap = self.s.memory_import_images_per_day
         now = self.s.now()
-        start = (now - timedelta(days=self.team.memory_retention_days(gid))).date().isoformat()
+        start = (
+            (now - timedelta(days=self.team.fresh_memory_retention_days(gid, fail_closed=True)))
+            .date()
+            .isoformat()
+        )
         rows = await asyncio.to_thread(
             self.memory_store.messages, gid, channel_ids, start, now.date().isoformat(),
             keyword="[image:", limit=5000,
@@ -2190,17 +3603,28 @@ class SecretaryBot(discord.Client):
             getattr(perms, "read_messages", False) and getattr(perms, "read_message_history", False)
         )
 
-    def _channel_viewers(self, guild, channel) -> frozenset[int]:
-        """Humans who can read `channel`, cached for a minute."""
-        hit = self._viewers.get(channel.id)
-        if hit is not None and self._clock() - hit[0] < VIEWERS_TTL_S:
+    def _channel_viewers(self, guild, channel, *, fresh: bool = False) -> frozenset[int]:
+        """Humans who can read `channel`, cached for a minute (and dropped by the permission
+        events). `fresh=True` ignores the cache: the audience an answer is posted to must always
+        be computed live, so a channel that just opened up never looks private."""
+        key = (guild.id, channel.id)
+        hit = self._viewers.get(key)
+        if not fresh and hit is not None and self._clock() - hit[0] < VIEWERS_TTL_S:
             return hit[1]
         members = guild.members.values() if isinstance(guild.members, dict) else guild.members
         viewers = frozenset(
             m.id for m in members if not getattr(m, "bot", False) and self._can_read(channel, m)
         )
-        self._viewers[channel.id] = (self._clock(), viewers)
+        self._viewers[key] = (self._clock(), viewers)
         return viewers
+
+    def _invalidate_viewers(self, guild_id: int, channel_id: int | None = None) -> None:
+        """Forget cached readers: one channel, or (None) every channel of the guild."""
+        if channel_id is not None:
+            self._viewers.pop((guild_id, channel_id), None)
+            return
+        for key in [k for k in self._viewers if k[0] == guild_id]:
+            del self._viewers[key]
 
     def _memory_scope(self, guild, member, answering_channel_id: int | None) -> dict[int, str]:
         """Channel id -> name the asker may get memory from (see salid.memory_access). Blocking:
@@ -2214,8 +3638,10 @@ class SecretaryBot(discord.Client):
         for c in channels:
             if self.team.channel_mode(guild.id, c.id, c.name, self.s.ask_channel_ids) == "off":
                 continue
-            viewers = self._channel_viewers(guild, c) - {member.id}
-            if self._can_read(c, member):  # the asker is checked live, not from the cache
+            # the channel the answer goes to and the asker are read live, never from the cache
+            live = c.id == answering_channel_id
+            viewers = self._channel_viewers(guild, c, fresh=live) - {member.id}
+            if self._can_read(c, member):
                 viewers |= {member.id}
             access.append(ChannelAccess(c.id, c.name, viewers))
         allowed = allowed_channel_ids(access, member.id, answering_channel_id)
@@ -2249,13 +3675,89 @@ class SecretaryBot(discord.Client):
         except Exception:
             logger.warning("could not compute memory scope", exc_info=True)
             return None
+        vis = None
+        try:  # role hierarchy and disclosure grants (salid.memory_access); failing = plain scope
+            allowed, vis = await asyncio.to_thread(
+                self._coo_scope, guild, member, answering, allowed
+            )
+        except Exception:
+            logger.warning("could not compute the role hierarchy scope", exc_info=True)
+        allowed, vis = self.sharing.with_shared_docs(guild.id, allowed, vis)  # org uploads
         return MemoryTools(
             self.memory_store,
             guild.id,
             allowed,
             self.s,
             self.team.memory_retention_days(guild.id),
+            opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
+            visibility=vis,
             embedder=self.embedder,
+            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(
+                gid, fail_closed=True
+            ),
+        )
+
+    def _room_scope(self, guild, voice_channel, humans) -> dict[int, str]:
+        """Channel id -> name that EVERY human in a voice room can read (the audience of a spoken
+        answer), plus the voice channel itself. Blocking: run in a thread."""
+        ids = {h.id for h in humans}
+        allowed: dict[int, str] = {}
+        channels = [
+            *guild.text_channels,
+            *getattr(guild, "voice_channels", ()),
+            *getattr(guild, "stage_channels", ()),
+        ]
+        for c in channels:
+            if self.team.channel_mode(guild.id, c.id, c.name, self.s.ask_channel_ids) == "off":
+                continue
+            viewers = set(self._channel_viewers(guild, c)) - ids
+            viewers |= {h.id for h in humans if self._can_read(c, h)}  # live, not from the cache
+            if c.id == voice_channel.id or ids <= viewers:
+                allowed[c.id] = c.name
+        return allowed
+
+    async def _room_memory_tools(
+        self, guild, voice_channel, humans, *also: int, asker=None
+    ) -> MemoryTools | None:
+        """Memory tools for an answer spoken to everyone in `voice_channel`: only channels all of
+        them can read, and hierarchy-granted work only when every human outranks its author.
+        With `asker` (typed echo of the answer): also only what everyone who reads the voice
+        channel's chat, and each channel id in `also` (the fallback it may be posted to), can read."""
+        humans = list(humans)
+        if not humans or not self.team.enabled(guild.id, "memory"):
+            return None
+        try:
+            allowed = await asyncio.to_thread(self._room_scope, guild, voice_channel, humans)
+            if asker is not None:
+                for other in dict.fromkeys((voice_channel.id, *also)):
+                    more = await asyncio.to_thread(self._memory_scope, guild, asker, other)
+                    allowed = {cid: name for cid, name in allowed.items() if cid in more}
+        except Exception:
+            logger.warning("could not compute the room memory scope", exc_info=True)
+            return None
+        vis = None
+        try:
+            ranks = await asyncio.to_thread(self._ranks, guild)
+            lowest = min(humans, key=lambda h: ranks.get(h.id, -1))
+            room = frozenset(h.id for h in humans)
+            allowed, vis = await asyncio.to_thread(
+                self._coo_scope, guild, lowest, None, allowed, room
+            )
+        except Exception:
+            logger.warning("could not compute the room hierarchy scope", exc_info=True)
+        allowed, vis = self.sharing.with_shared_docs(guild.id, allowed, vis)  # org uploads
+        return MemoryTools(
+            self.memory_store,
+            guild.id,
+            allowed,
+            self.s,
+            self.team.memory_retention_days(guild.id),
+            opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
+            visibility=vis,
+            embedder=self.embedder,
+            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(
+                gid, fail_closed=True
+            ),
         )
 
     # ------------------------------------------------------------- digest

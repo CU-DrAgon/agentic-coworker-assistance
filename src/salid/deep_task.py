@@ -69,6 +69,14 @@ class DeepTaskError(RuntimeError):
     pass
 
 
+class DeepTaskTimeout(DeepTaskError):
+    """The CLI ran past its timeout (run_deep_task re-raises it in the reply language)."""
+
+    def __init__(self, seconds: int):
+        super().__init__(f"งานใหญ่ใช้เวลานานเกิน {seconds} วินาที จึงยกเลิก")
+        self.seconds = seconds
+
+
 @dataclass
 class DeepResult:
     text: str
@@ -120,7 +128,7 @@ def _aggregates(rows: list[Receipt]) -> dict:
     by_month_cat: dict[str, dict] = defaultdict(dict)
     for (month, cat), v in tally_pairs(rows).items():
         by_month_cat[month][cat] = v
-    vendors = tally(lambda r: r.vendor or "(ไม่ทราบ)")
+    vendors = tally(lambda r: r.vendor or "(unknown)")
     top = dict(
         sorted(vendors.items(), key=lambda kv: -sum(kv[1]["totals_by_currency"].values()))[:20]
     )
@@ -387,7 +395,7 @@ def _run(
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
-        raise DeepTaskError(f"งานใหญ่ใช้เวลานานเกิน {int(timeout)} วินาที จึงยกเลิก") from None
+        raise DeepTaskTimeout(int(timeout)) from None
     if handle is not None and handle.cancelled:
         raise DeepCancelled("cancelled")
     return proc.returncode, out, err
@@ -426,9 +434,12 @@ def run_deep_task(
             json.dumps(build_cli_settings(settings.deep_task_model)), encoding="utf-8"
         )
         prepare_workspace(ws, store, settings, task, guild_id, submitter_id, lang)
-        rc, out, err = runner(
-            build_command(settings), build_env(settings, home), ws, settings.deep_task_timeout
-        )
+        try:
+            rc, out, err = runner(
+                build_command(settings), build_env(settings, home), ws, settings.deep_task_timeout
+            )
+        except DeepTaskTimeout as e:
+            raise DeepTaskError(t("deep_timeout", msg_lang, seconds=e.seconds)) from None
         try:
             data = parse_cli_output(out)
         except DeepTaskError:

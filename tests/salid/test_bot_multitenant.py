@@ -6,6 +6,7 @@ from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import discord
 import pytest
 from conftest import ALICE, GUILD, OTHER_GUILD, FixedClockSettings
 
@@ -106,8 +107,9 @@ def bot(world, seeded):
         FixedClockSettings(exec_user_ids={BOSS}), seeded, None, guilds=MemoryGuildStore()
     )
     b.calls = []
+    b._choose = lambda xs: xs[0]
 
-    async def intake(m, quiet=False):
+    async def intake(m, quiet=False, pdf_only=False):
         b.calls.append(("intake-quiet" if quiet else "intake", m.guild.id))
 
     async def answer(m, guild, who):
@@ -118,11 +120,15 @@ def bot(world, seeded):
 
 
 # ------------------------------------------------------------------ receipt intake without setup
-async def test_receipt_named_channels_work_without_any_config(bot, world):
+async def test_configured_receipt_channels_are_a_fast_path(bot, world):
     u = member(world.a, STAFF)
+    for g, ch in ((world.a, world.a.text_channels[1]), (world.b, world.b.text_channels[0])):
+        bot.guilds_store.save_settings(
+            g.id, GuildSettingsUpdate(receipt_channel_ids=[str(ch.id)]), "x"
+        )
     await bot.on_message(Msg(world.a, world.a.text_channels[1], u, attachments=[photo()]))
     await bot.on_message(Msg(world.b, world.b.text_channels[0], u, attachments=[photo()]))
-    assert bot.calls == [("intake", GUILD), ("intake", OTHER_GUILD)]  # ใบเสร็จ / Receipts (any case)
+    assert bot.calls == [("intake", GUILD), ("intake", OTHER_GUILD)]
 
 
 async def test_other_channels_need_a_mention_with_a_file(bot, world):
@@ -156,6 +162,13 @@ async def test_toggles_are_per_guild(bot, world):
     bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features={"receipts": False}), "x")
     for g in (world.a, world.b):
         ch = g.text_channels[1] if g is world.a else g.text_channels[0]
+        bot.guilds_store.save_settings(
+            g.id,
+            GuildSettingsUpdate(
+                receipt_channel_ids=[str(ch.id)], features={"receipts": g is not world.a}
+            ),
+            "x",
+        )
         await bot.on_message(Msg(g, ch, member(g, STAFF), attachments=[photo()]))
     assert bot.calls == [("intake", OTHER_GUILD)]
 
@@ -193,7 +206,18 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
     m = Msg(world.b, world.b.text_channels[1], member(world.b, STAFF), "ยอดเท่าไร", mention=True)
     await bot._answer(m, world.b, m.author)
     mem = seen[0].pop("memory")  # no read permissions in the fakes: only the channel itself
+    assert seen[0].pop("extra_tools")  # the coordinator tools (salid.coo_tools)
     assert (mem.guild_id, mem.allowed) == (OTHER_GUILD, {21: "chat"})
+    sec = seen[0].pop("secretary")  # bound to the message's guild and author, not model input
+    assert (sec.guild_id, sec.author_id, sec.is_exec, sec.can_email) == (
+        OTHER_GUILD,
+        STAFF,
+        False,
+        False,
+    )
+    assert seen[0].pop("chat_actions").show_settings is not None  # bound settings tools
+    assert seen[0].pop("people") == []  # nobody else can see that channel in the fakes
+    assert seen[0].pop("profile") == ""  # no saved preferences: an empty block
     assert seen == [
         {
             "guild_id": OTHER_GUILD,
@@ -276,10 +300,10 @@ async def test_dm_answers_only_when_exactly_one_shared_guild(bot, world):
     dm = Msg(None, FakeChannel(1), SimpleNamespace(id=STAFF, bot=False), "ยอด")
     await bot.on_message(dm)
     assert answered == [GUILD]
-    member(world.b, STAFF)  # now in both guilds: ambiguous
+    member(world.b, STAFF)  # now in both guilds: ambiguous, so Salid asks which company
     dm2 = Msg(None, FakeChannel(1), SimpleNamespace(id=STAFF, bot=False), "ยอด")
     await bot.on_message(dm2)
-    assert answered == [GUILD] and "แท็ก <@999>" in dm2.replies[0]
+    assert answered == [GUILD] and dm2.replies[0].startswith(t("dmg_ask", "th"))
 
 
 # ------------------------------------------------------------------ lifecycle
@@ -291,8 +315,8 @@ async def test_join_registers_guild_and_welcomes(bot, world):
     assert g.guild_name == "A" and g.icon_url.endswith("icon.png") and g.active and g.installed_at
     assert [c.name for c in g.channels] == ["ทั่วไป", "ใบเสร็จ-ร้าน"]
     welcome = sys_ch.sent[0]
-    assert "สลิด" in welcome and "ใบเสร็จ" in welcome and "receipt" in welcome
-    assert "<@999>" in welcome and "/ตั้งค่า" in welcome
+    assert "สลิด" in welcome and "<@999>" in welcome and "ส่งไฟล์" in welcome
+    assert "/ตั้งค่า" not in welcome  # no command list
 
 
 async def test_welcome_falls_back_to_first_sendable_channel(bot, world):
@@ -375,16 +399,16 @@ async def test_setup_command_allows_the_owner_and_admins(bot, world):
 
 def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
     bot._register_commands()
-    cmds = {c.name: c for c in bot.tree.get_commands()}
+    cmds = {c.name: c for c in bot.tree.get_commands(type=discord.AppCommandType.chat_input)}
     assert set(cmds) == {
         "ยกเลิก",
         "cancel",
         "ตั้งค่า",
         "setup",
         "เข้าประชุม",
-        "join",
+        "join-meeting",
         "ออกประชุม",
-        "leave",
+        "leave-meeting",
         "โหมด",
         "mode",
         "ภาษา",
@@ -393,8 +417,18 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "memory",
         "ห้อง",
         "channels",
+        "บริษัท",
+        "company",
+        "ห้องส่วนตัว",
+        "private-chat",
+        "สรุป",
+        "summary",
+        "รายงาน",
+        "ตามทัน",
+        "catchup",
+        "report",
     }
-    assert all(c.guild_only for c in cmds.values())
+    assert all(c.guild_only for n, c in cmds.items() if n not in ("บริษัท", "company"))
 
 
 # ------------------------------------------------------------------ digest

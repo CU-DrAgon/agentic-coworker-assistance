@@ -19,13 +19,15 @@ import contextlib
 import io
 import json
 import logging
+import random
 import re
 import time
 import wave
 from array import array
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 
 import discord
@@ -35,9 +37,24 @@ from pydantic import BaseModel
 
 from meeting_scribe.audio import to_flac
 
+from . import meeting_doc as md
+from .captions import CaptionState, format_captions, translate_lines
+from .coo_store import MINUTES
+from .fillers import POOL_SIZE, ClipCache, FillerWriter, RecentLines, write_line
+from .gate import GateLine, notes_from_transcript
 from .i18n import resolve_lang, t
 from .llm import generate
-from .naming import _WAKE_RE
+from .minutes import (
+    can_see,
+    can_see_and_post,
+    parse_minutes_destination,
+    resolve_channel,
+)
+from .naming import find_call
+from .pdf_report import find_fonts
+from .permissions import channel_missing, permission_message
+from .speech import pcm_duration_s, pcm_source, say, spoken_text, with_particle
+from .voice_pool import Claim, VoiceBody, VoicePool, pick_victim, room_score
 
 if TYPE_CHECKING:
     from .bot import SecretaryBot
@@ -52,43 +69,61 @@ PCM_BYTES_PER_SECOND = PCM_RATE * PCM_CHANNELS * 2
 # ---- segmentation / limits
 SILENCE_S = 1.2  # a pause this long ends a segment
 MAX_SEGMENT_S = 20.0
-MIN_SEGMENT_S = 0.6  # shorter segments are dropped (coughs, clicks)
+MIN_SEGMENT_S = 0.4  # shorter segments are dropped (coughs, clicks); 0.6 lost short greetings
 PAD_GAP_S = 0.15  # shorter gaps inside a segment are filled with silence to keep timing
-MIN_RMS = 80  # int16 RMS below this is treated as silence/noise and not sent to the model
+MIN_RMS = 120  # int16 RMS below this is treated as silence/noise and not sent to the model
 TRANSCRIPT_KEEP_S = 3 * 3600
 TRANSCRIPT_MAX_LINES = 6000
-MEETING_MAX_S = 3 * 3600
-EMPTY_GRACE_S = 20.0  # everyone else left: end after this long
+MEETING_MAX_S = 6 * 3600
+MAX_WARN_S = 600.0  # warn in the text chat this long before the cap
+RECONNECT_DELAYS = (2.0, 5.0, 10.0)
+EMPTY_GRACE_S = 30.0  # no humans left: end after this long (settings override)
 CONTEXT_WINDOW_S = 5 * 60
 CONTEXT_MAX_CHARS = 6000
 SUMMARY_MAX_CHARS = 150_000
 PENDING_WAKE_S = 15.0
 TRANSCRIBE_WORKERS = 2
 QUEUE_MAX = 60
+NOTE_MIN_GAP_S = 5.0
+MAX_NOTES = 40
 TICK_S = 0.5
+SPEAK_COOLDOWN_S = 1.5  # after Salid speaks, ignore wake words this long (room echo)
+SPEAK_TIMEOUT_PAD_S = 10.0
+# Said right after the wake question is heard, so the room knows Salid is on it (pre-synthesized).
+ACK_TEXT = {"th": "ได้เลยค่ะ แป๊บนึงนะคะ", "en": "Sure, one sec!"}
 
-END_REASONS = ("command", "empty", "timeout", "disconnected", "shutdown")
+END_REASONS = ("command", "declined", "empty", "timeout", "disconnected", "shutdown", "preempted")
+BLOCK_AFTER_FAILURE_S = 300.0  # no auto-rejoin this soon after a timeout / lost connection
 
 # ------------------------------------------------------------------ text triggers
 _JOIN_RE = re.compile(
-    r"^(เข้า\s?ประชุม|เข้ามา\s?ฟัง|มา\s?ประชุม"
-    r"|join(?:\s+(?:the\s+)?meeting)?\b|come\s+to\s+(?:the\s+)?meeting\b)",
+    r"^(?:เข้า(?:มา)?\s?(?:ประชุม|ห้อง(?:เสียง)?|มา|หน่อย|ฟัง|จด)|เข้ามา$|เข้ามา\s?(?:ฟัง|จด)"
+    r"|(?:เข้า)?มา\s?(?:ประชุม|ฟัง|จด|หน่อย|ด้วย)|มาจด(?:ประชุม)?"
+    r"|join(?:\s+(?:us|me|the\s+(?:meeting|call|voice))?)?\b|come\s+(?:in|join|to\s+the\s+meeting)\b"
+    r"|come\s+to\s+(?:the\s+)?meeting\b|hop\s+in\b|jump\s+in\b)",
     re.I,
 )
 _LEAVE_RE = re.compile(
-    r"^(ออก\s?ประชุม|เลิก\s?ประชุม|จบ\s?ประชุม"
-    r"|leave(?:\s+(?:the\s+)?meeting)?\b|(?:end|stop)\s+(?:the\s+)?meeting\b)",
+    r"^(?:ออก\s?ประชุม|เลิก\s?ประชุม|จบ\s?ประชุม|ออกไป(?:ก่อน)?|ออกจาก(?:ห้อง|ประชุม)|ไปได้แล้ว"
+    r"|leave(?:\s+(?:us|the\s+(?:meeting|call|room)))?\b|you\s+can\s+go\b"
+    r"|(?:end|stop)\s+(?:the\s+)?meeting\b)",
     re.I,
+)
+_POLITE_PREFIX = re.compile(
+    r"^(?:สลิด|salid|ช่วย|รบกวน|ขอ|กรุณา|ให้|please|pls|hey|hi|can\s+you|could\s+you)[\s,]*", re.I
 )
 
 
 def parse_meeting_command(text: str) -> str | None:
-    """ "เข้าประชุม" / "join" -> "join", "ออกประชุม" / "leave" -> "leave", anything else None.
-    Only the start of the (mention-stripped) message counts, so a long question that merely
-    contains the words is not a command."""
+    """ "เข้าประชุม" / "เข้ามาประชุมหน่อยครับ" / "join us" -> "join", "ออกประชุม" / "ไปได้แล้ว" /
+    "leave" -> "leave", anything else None. Only the start of the (mention-stripped, politeness-
+    and name-stripped) message counts, so a long question that merely contains the words is not
+    a command."""
     s = (text or "").strip().strip(" \t\n/,.:;!-–—…")
-    if not s or len(s) > 40:
+    if not s or len(s) > 60:
         return None
+    while (m := _POLITE_PREFIX.match(s)) and m.end() > 0:
+        s = s[m.end() :]
     if _JOIN_RE.match(s):
         return "join"
     if _LEAVE_RE.match(s):
@@ -110,17 +145,30 @@ def _clean_question(s: str) -> str:
     return _TRAIL_FILLER.sub("", s).strip()
 
 
+_GREETING_ONLY_RE = re.compile(
+    r"^[\s,.!?~ๆ]*(?:(?:สวัสดี|หวัดดี|ว่าไง|เฮ้|เฮ้ย|ดี|ทักทาย|hello|hi|hey|yo|good\s+(?:morning|evening|afternoon))"
+    r"[\s,.!?~ๆ]*|(?:ครับ|ค่ะ|คะ|นะ|จ้า|จ๋า|ทุกคน|สลิด|salid)[\s,.!?~ๆ]*)+$",
+    re.I,
+)
+
+
+def is_greeting(text: str) -> bool:
+    """A bare greeting / name call ("หวัดดีครับ", "สวัสดีค่ะ", "hello"): no question in it."""
+    s = (text or "").strip()
+    return 0 < len(s) <= 30 and bool(_GREETING_ONLY_RE.match(s))
+
+
 def parse_wake(text: str) -> str | None:
     """None when Salid was not called. Otherwise the question: the words after the wake word, or,
     when it ends the sentence ("ช่วยสรุปหน่อยสลิด"), the words before it. "" = called with no
     question yet (the caller may take the speaker's next segment as the question)."""
-    m = _WAKE_RE.search(text or "")
-    if m is None:
+    span = find_call(text or "")
+    if span is None:
         return None
-    after = _clean_question(text[m.end() :])
+    after = _clean_question(text[span[1] :])
     if len(after) >= 2:
         return after
-    before = _clean_question(text[: m.start()])
+    before = _clean_question(text[: span[0]])
     if before.casefold() in _GREETINGS:  # "Hey Salid": a greeting, not a question
         return ""
     return before if len(before) >= 2 else ""
@@ -264,6 +312,15 @@ def rms(pcm: bytes) -> float:
     return (sum(x * x for x in sub) / len(sub)) ** 0.5
 
 
+def voiced_fraction(pcm: bytes, min_rms: float = 250.0, frame_bytes: int = 3840) -> float:
+    """Share of 20 ms frames (48 kHz stereo s16le) whose RMS is >= `min_rms`: real speech is voiced
+    in many frames, a click or a breath in a few."""
+    frames = [pcm[i : i + frame_bytes] for i in range(0, len(pcm) - frame_bytes + 1, frame_bytes)]
+    if not frames:
+        return 0.0
+    return sum(1 for f in frames if rms(f) >= min_rms) / len(frames)
+
+
 # ------------------------------------------------------------------ transcription / summary
 class _Heard(BaseModel):
     text: str
@@ -272,8 +329,10 @@ class _Heard(BaseModel):
 TRANSCRIBE_PROMPT = (
     "ถอดเสียงพูดภาษาไทยหรือภาษาอังกฤษในคลิปนี้ (เสียงของคนคนเดียวในการประชุม) ตามที่พูดจริงทุกคำ "
     "ภาษาอังกฤษที่พูดให้คงเป็นภาษาอังกฤษ ไม่ต้องแปล ไม่ต้องใส่ชื่อผู้พูด\n"
-    "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ถ้าได้ยินคำนี้ให้เขียนว่า สลิด\n"
+    "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ถ้าได้ยินคำนี้ให้เขียนว่า สลิด "
+    "ถ้าได้ยินชื่อ สลิด ให้สะกดว่า สลิด (ไม่ใช่ สนิท สิริ สลิป) อย่าตัดคำท้ายประโยคทิ้ง\n"
     "ถ้าไม่มีเสียงพูดชัดเจน (เงียบ เสียงรบกวน เสียงหายใจ) ให้ตอบ text เป็นสตริงว่าง ห้ามแต่งข้อความขึ้นเอง "
+    "ถ้าไม่แน่ใจว่ามีคำพูดจริง ให้ตอบ text ว่าง ห้ามใส่คำทักทายหรือชื่อที่ไม่ได้ยินชัดเจน "
     'ตอบเป็น JSON {"text": "..."}'
 )
 SUMMARY_PROMPT = """คุณคือ “สลิด” เลขาประชุมของทีม จากบันทึกการประชุมด้านล่าง (รูปแบบ [เวลา] ชื่อ: ข้อความ ถอดจากเสียงอัตโนมัติ อาจมีคำผิด) \
@@ -290,7 +349,8 @@ SUMMARY_PROMPT = """คุณคือ “สลิด” เลขาประ�
 
 SUMMARY_PROMPT_EN = """You are “Salid”, the team's meeting secretary. Below is a meeting transcript (format [time] name: text, \
 auto-transcribed so it may contain errors). Write a concise summary of the meeting in English. Use only \
-what is in the transcript and do not invent anything. Use these headings:
+what is in the transcript and do not invent anything. The transcript may be in Thai: translate it, \
+and write the whole summary in English only (keep people's names as written). Use these headings:
 **Meeting summary** (2-4 lines)
 **Decisions/agreements** (list; write None if there are none)
 **Action items** (list as "who: what (deadline if any)"; use the speaker names from the transcript as owners, \
@@ -348,6 +408,22 @@ def summarize_transcript(client: Any, model: str, transcript: str, language: str
     return (getattr(resp, "text", None) or "").strip()
 
 
+def _connected(vc: Any) -> bool:
+    try:
+        return bool(vc.is_connected())
+    except Exception:
+        return False
+
+
+def _stop_playback(vc: Any) -> None:
+    """Stop Salid's own audio only. On a voice-recv client `stop()` also stops LISTENING, which
+    left Salid deaf after anyone talked over it, so call `stop_playing()` when it exists."""
+    with contextlib.suppress(Exception):
+        if vc.is_playing():
+            stop = getattr(vc, "stop_playing", None) or vc.stop
+            stop()
+
+
 # ------------------------------------------------------------------ voice receive sink
 class MeetingSink(voice_recv.AudioSink):
     """Runs in the extension's router thread. Asks for raw Opus (the extension then never decodes),
@@ -399,7 +475,10 @@ class MeetingSink(voice_recv.AudioSink):
         except Exception:
             logger.debug("opus decode failed for %s", user.id, exc_info=True)
             return
-        self.session.push_threadsafe(user.id, pcm)
+        if getattr(user, "bot", False):
+            self.session.push_threadsafe(user.id, pcm, is_bot=True)
+        else:
+            self.session.push_threadsafe(user.id, pcm)
 
 
 # ------------------------------------------------------------------ meeting session
@@ -420,22 +499,82 @@ class MeetingSession:
     answer_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     empty_since: float | None = None
     ending: bool = False
+    leaving: bool = False  # "ออกประชุม" heard: goodbye, then end
     dropped: int = 0
+    speech_pending: bool = False  # one shorten/TTS/playback pipeline at a time
+    speaking: bool = False  # Salid is playing a spoken reply
+    speech_ready: bool = (
+        False  # the answer's audio is synthesized: a late acknowledgment is pointless
+    )
+    play_lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # one clip at a time, in order
+    speaking_since: float = 0.0
+    speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
     language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
     fallback_lang: str = "th"  # th / en: what fixed messages use when `language` is auto
+    empty_grace: float = EMPTY_GRACE_S  # no humans in the channel: end after this long
+    first_grace: float | None = None  # auto-join only: shorter wait while nobody has come yet
+    had_humans: bool = False
+    max_warned: bool = False
+    reconnecting: bool = False
+    started_at: datetime | None = None  # wall clock (UTC) start, persisted for restarts
+    starter: str = ""
+    on_end: Any = None  # async callable(session), run after the summary was posted
+    meeting_id: str | None = None  # the scheduled meeting this session takes notes for
+    summary_text: str = ""
+    summary_url: str = ""  # jump link of the first summary message
+    # "live": a Gemini Live session (live_voice.LiveVoice) talks; wake words are not answered by
+    # the transcription pipeline. Falls back to "classic" when the Live session cannot connect.
+    voice_mode: str = "classic"
+    live: Any = None
+    body: Any = None  # the VoiceBody (main bot or helper) holding this session's voice connection
+    origin: str = "command"  # command (a person asked) | scheduled | auto (joined by itself)
+    released: asyncio.Event = field(default_factory=asyncio.Event)  # voice connection let go
+    # Where the end-of-meeting summary is posted (set by voice / chat instruction); None = the
+    # meeting's own text channel.
+    minutes_channel_id: int | None = None
+    attendee_ids: set[int] = field(default_factory=set)  # everyone who was in the room or spoke
+    # Recording state: "unknown" (joined by itself, not known to be a meeting), "recording" or
+    # "not_recording" (nothing is logged to memory, no summary). See MeetingManager.set_recording.
+    recording: str = "recording"
+    # Wall-clock time of the last "not recording" switch: lines before it were forgotten, so the
+    # minutes document (and its rebuild from memory) starts here.
+    transcript_from: datetime | None = None
+    consent: str | None = None  # None = not asked, "pending", "answered", "assumed"
+    consent_until: float = 0.0
+    consent_medium: str = "text"
+    first_speech_at: float = 0.0
+    introduced: bool = False  # Salid was addressed or has spoken: no need to ask who it is
+    notes_posted: list[str] = field(default_factory=list)
+    last_note_at: float = 0.0
+    last_note_pass: datetime | None = None
+    note_pass_at: float = 0.0
+    engaged: bool = False  # False = listening (speaks only when its name is called)
+    engaged_until: float = 0.0
+    called_at: float = -1e9  # monotonic time she was last called by name / engaged
+    unaddressed: int = 0  # consecutive utterances, while engaged, not addressed to Salid
+    state_msg: Any = None  # the last state line posted to the text chat (edited on a quick flip)
+    state_at: float = -1e9  # monotonic time of that post
+    captions: CaptionState = field(default_factory=CaptionState)  # live subtitles, off by default
+    captions_busy: bool = False
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return (self.guild_id, self.voice_channel.id)
 
     @property
     def lang(self) -> str:
         """Language of fixed messages (auto has no text to follow, so the starter's language)."""
         return self.language if self.language in ("th", "en") else self.fallback_lang
 
-    def push_threadsafe(self, user_id: int, pcm: bytes) -> None:
+    def push_threadsafe(self, user_id: int, pcm: bytes, *, is_bot: bool = False) -> None:
         with contextlib.suppress(RuntimeError):  # loop already closed on shutdown
-            self.loop.call_soon_threadsafe(self.on_pcm, user_id, pcm, time.monotonic())
+            self.loop.call_soon_threadsafe(self.on_pcm, user_id, pcm, time.monotonic(), is_bot)
 
-    def on_pcm(self, user_id: int, pcm: bytes, now: float) -> None:
+    def on_pcm(self, user_id: int, pcm: bytes, now: float, is_bot: bool = False) -> None:
         if not self.ending:
             self.enqueue(self.segmenter.feed(user_id, pcm, now))
+            if not is_bot and self.live is not None and self.voice_mode == "live":
+                self.live.feed(user_id, pcm)
 
     def enqueue(self, segments: list[Segment]) -> None:
         for seg in segments:
@@ -449,16 +588,51 @@ class MeetingSession:
 
 
 class MeetingManager:
-    """One meeting per guild. `bot` supplies settings, the Gemini client, permissions and Q&A."""
+    """Meetings keyed by (guild id, voice channel id), each held by one voice body: the main bot
+    or a helper account (see voice_pool). `bot` supplies settings, the Gemini client, permissions
+    and Q&A."""
 
     def __init__(self, bot: SecretaryBot):
         self.bot = bot
-        self.sessions: dict[int, MeetingSession] = {}
-        self._joining: set[int] = set()  # guilds with a join in flight
+        pool = getattr(bot, "voice_pool", None)
+        self.pool: VoicePool = pool if pool is not None else VoicePool(bot)
+        self.sessions: dict[tuple[int, int], MeetingSession] = {}
+        self._joining: set[tuple[int, int]] = set()  # channels with a join in flight
+        self._reserved: set[tuple[int, int]] = (
+            set()
+        )  # (guild, body index) in use but not yet/no more a session
+        self._cooldown: dict[
+            tuple[int, int], float
+        ] = {}  # channel -> no auto-join until (monotonic)
+        self._auto_tasks: dict[tuple[int, int], asyncio.Task] = {}
+        self._bg: set[asyncio.Task] = set()
+        self._now = time.monotonic
+        self._sleep = asyncio.sleep
+        self._stt_client: Any = None
+        self._ack_pcm: dict[str, bytes] = {}
+        self._ack_recent = RecentLines(keep=3)  # last lines said per meeting
+
+    @property
+    def stt_client(self) -> Any:
+        """Vertex client for segment transcription (regional when `transcribe_location` is set)."""
+        loc = getattr(self.bot.s, "transcribe_location", "")
+        if not loc or loc == getattr(self.bot.s, "gemini_location", loc):
+            return self.bot.llm
+        if self._stt_client is None:
+            from .llm import make_client
+
+            self._stt_client = make_client(self.bot.s.model_copy(update={"gemini_location": loc}))
+        return self._stt_client
 
     # ---- helpers
     def session_for_channel(self, channel_id: int | None) -> MeetingSession | None:
         return next((s for s in self.sessions.values() if s.text_channel.id == channel_id), None)
+
+    def session_in(self, guild_id: int, channel_id: int) -> MeetingSession | None:
+        return self.sessions.get((guild_id, channel_id))
+
+    def sessions_in_guild(self, guild_id: int) -> list[MeetingSession]:
+        return [s for s in self.sessions.values() if s.guild_id == guild_id]
 
     def context_for(self, channel_id: int | None) -> str:
         """Recent meeting transcript for a message sent in the meeting's text chat ("" if none)."""
@@ -467,56 +641,438 @@ class MeetingManager:
             return ""
         return s.transcript.history(self.bot.s.now())
 
-    async def _connect(self, channel):
-        return await channel.connect(cls=voice_recv.VoiceRecvClient)
+    @staticmethod
+    def _body_channel(body: VoiceBody, guild, channel):
+        """(guild, channel) as seen by `body`'s own client; (None, None) when it cannot see it."""
+        if body.index == 0:
+            return guild, channel
+        hguild = body.client.get_guild(guild.id)
+        hchan = hguild.get_channel(channel.id) if hguild is not None else None
+        return hguild, hchan
 
-    async def _post(self, session: MeetingSession, text: str) -> None:
+    async def _connect(self, body: VoiceBody, channel):
+        _, hchan = self._body_channel(body, channel.guild, channel)
+        if hchan is None:
+            raise RuntimeError(f"voice body {body.index} cannot see channel {channel.id}")
+        return await hchan.connect(cls=voice_recv.VoiceRecvClient)
+
+    async def _post(self, session: MeetingSession, text: str, files=None):
+        """Post to the meeting's text chat (else the fallback channel); the sent message or None."""
+        kw = {"files": files} if files else {}
         for ch in (session.text_channel, session.fallback_channel):
             if ch is None:
                 continue
             try:
-                await ch.send(text)
+                return await ch.send(text, **kw)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # HTTP errors, rate limits, a closed session: never raise
+                logger.warning(
+                    "could not post to channel %s (%s)", getattr(ch, "id", "?"), type(e).__name__
+                )
+        return None
+
+    async def _notice(self, session: MeetingSession, text: str):
+        """A status line for the meeting's text chat. Meetings stay voice: nothing is posted unless
+        `meeting_text_echo` is on."""
+        if getattr(self.bot.s, "meeting_text_echo", False):
+            return await self._post(session, text)
+        return None
+
+    def _spawn(self, session: MeetingSession, coro) -> None:
+        """Run a background coroutine for the session (cancelled when the meeting ends)."""
+        session.tasks = [x for x in session.tasks if not x.done()]
+        session.tasks.append(asyncio.create_task(coro))
+
+    def _sp(self, s: MeetingSession, key: str, **kw) -> str:
+        """A fixed spoken line with the voice's particles (ค่ะ / คะ, or ครับ)."""
+        p = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
+        text = t(key, s.lang, **kw)
+        return text if p == "ค่ะ" else text.replace("ค่ะ", p).replace("คะ", p)
+
+    _NO_RE = re.compile(
+        r"ไม่ต้อง|ไม่เป็นไร|ไม่ได้ประชุม|ไม่ใช่(?:การ)?ประชุม|คุยเล่น|ไม่บันทึก|ไม่เอา|ไม่จด"
+        r"|^\W*ไม่\W*(?:ครับ|ค่ะ|คะ)?\W*$"
+        r"|(?<![a-z])(?:no|nope|don'?t|not\s+a\s+meeting|just\s+chatting|no\s+notes)(?![a-z])",
+        re.I,
+    )
+    _PRIVATE_RE = re.compile(
+        r"ส่วนตัว|ออกไป|ไปก่อน|ไม่ต้องอยู่|ขอตัว|(?<![a-z])(?:private|privacy|leave|go\s+away)(?![a-z])",
+        re.I,
+    )
+    _START_RE = re.compile(
+        r"เริ่มประชุม|จดด้วย|บันทึกด้วย|จดให้หน่อย|ประชุมแล้ว|(?<![a-z])(?:start\s+(?:the\s+)?meeting"
+        r"|take\s+notes|we'?re\s+(?:in\s+a\s+)?meeting)(?![a-z])",
+        re.I,
+    )
+
+    _YES_RE = re.compile(
+        r"ใช่|ประชุม|จดเลย|บันทึก|ได้เลย|โอเค|(?<![a-z])(?:yes|yeah|sure|ok|okay)(?![a-z])", re.I
+    )
+
+    @classmethod
+    def is_decline(cls, text: str) -> bool:
+        """An answer to "is this a meeting / may I take notes?" that says no."""
+        return bool(cls._NO_RE.search((text or "").strip()))
+
+    @classmethod
+    def wants_privacy(cls, text: str) -> bool:
+        return bool(cls._PRIVATE_RE.search(text or ""))
+
+    @classmethod
+    def is_start(cls, text: str) -> bool:
+        return bool(cls._START_RE.search(text or ""))
+
+    # ---- recording state
+    def set_recording(self, s: MeetingSession, recording: bool) -> dict:
+        """unknown / recording <-> not_recording. Going to not_recording forgets the transcript so
+        far; nothing is logged to memory and no summary is posted while it lasts."""
+        if recording:
+            s.recording = "recording"
+            return {"status": "recording"}
+        if s.leaving:  # leaving is the system's job, not "stop taking notes"
+            return {"status": "ignored", "reason": "leaving the meeting; say only a short goodbye"}
+        s.recording = "not_recording"
+        s.transcript_from = self.bot.s.now()
+        s.transcript.lines.clear()
+        s.captions.turn_off()  # no notes means no subtitles either, unless asked for again
+        return {"status": "not_recording"}
+
+    # ---- live captions (off unless asked; see salid.captions)
+    def set_captions(self, s: MeetingSession, on: bool, language: str = "original") -> dict:
+        """Switch the room's captions. An explicit request also works while not recording (the
+        text is shown, never kept)."""
+        if s.ending or s.leaving:
+            return {"error": "meeting_ending"}
+        if on:
+            if language == "original" and s.lang == "en":
+                language = "en"  # an English guild reads captions in English by default
+            s.captions.turn_on(language, self._now())
+            return {"status": "on", "language": language}
+        s.captions.turn_off()
+        return {"status": "off"}
+
+    async def _caption_flush(self, s: MeetingSession) -> None:
+        """Post the buffered lines as "**Name:** text" (translated in one cheap call when a
+        language is set). No pings. Failures are logged; captions never break the meeting."""
+        if s.captions_busy:
+            return
+        s.captions_busy = True
+        try:
+            language = s.captions.language
+            batch = s.captions.take(self._now())
+            if not batch or not s.captions.on:
+                return
+            if language != "original":
+                texts = await asyncio.to_thread(
+                    translate_lines,
+                    self.bot.llm,
+                    self.bot.s.gate_model,
+                    [x for _, x in batch],
+                    language,
+                )
+                batch = [(sp, tx) for (sp, _), tx in zip(batch, texts, strict=True)]
+            if s.ending or not s.captions.on:
+                return
+            for msg in format_captions(batch):
+                await self._post_caption(s, msg)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("caption flush failed", exc_info=True)
+        finally:
+            s.captions_busy = False
+
+    async def _post_caption(self, s: MeetingSession, text: str) -> None:
+        """To the minutes/notes channel when one was chosen, else the room's text chat."""
+        chans = []
+        if s.minutes_channel_id is not None:
+            chans.append(s.voice_channel.guild.get_channel(s.minutes_channel_id))
+        chans += [s.text_channel, s.fallback_channel]
+        for ch in chans:
+            if ch is None:
+                continue
+            try:
+                await ch.send(text, allowed_mentions=discord.AllowedMentions.none())
                 return
             except discord.HTTPException:
-                logger.warning("could not post to channel %s", getattr(ch, "id", "?"))
+                logger.warning("could not post captions to channel %s", getattr(ch, "id", "?"))
+
+    # ---- consent: a colleague asking whether this is a meeting
+    async def _consent_line(self, s: MeetingSession) -> str:
+        p = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
+        lang = "English" if s.lang == "en" else "Thai"
+        prompt = (
+            "You are Salid, a friendly team member who just sat in on a voice channel to help "
+            "and take meeting notes. Nobody has said what this is. Write ONE short, natural line "
+            f"in {lang} asking, like a colleague would, whether this is a meeting and whether it "
+            "is okay to take notes; they can say no. Vary the wording; no lecture, no policy. "
+            + (
+                "A woman speaks it; plain natural English, no Thai words or particles. "
+                "Reply with the line only."
+                if s.lang == "en"
+                else f"A woman speaks it; use the particle {p} (questions: "
+                f"{'คะ' if p == 'ค่ะ' else p}). Reply with the line only."
+            )
+        )
+        try:
+            resp = await asyncio.to_thread(
+                generate,
+                self.bot.llm,
+                self.bot.s.gate_model,
+                prompt,
+                types.GenerateContentConfig(temperature=1.0, max_output_tokens=100),
+            )
+            line = (getattr(resp, "text", None) or "").strip().strip('"“”')
+            if 4 <= len(line) <= 220:
+                return line
+        except Exception:
+            logger.warning("consent line generation failed", exc_info=True)
+        return self._sp(s, f"meet_consent_ask_{random.randint(1, 3)}")
+
+    async def ask_consent(self, s: MeetingSession, text: str | None = None, medium: str = "text"):
+        """Ask once whether this is a meeting / notes are welcome. Text by default (does not
+        interrupt); voice when the room is quiet or someone is talking to Salid."""
+        if s.consent is not None or s.ending or s.recording == "not_recording":
+            return {"status": "already_asked"}
+        s.consent = "pending"
+        s.consent_medium = "voice" if medium == "voice" and _connected(s.vc) else "text"
+        s.consent_until = time.monotonic() + float(
+            getattr(self.bot.s, "consent_window_seconds", 90.0)
+        )
+        line = (text or "").strip()[:300] or await self._consent_line(s)
+        if s.consent_medium == "voice":
+            await self._say_text(s, line)
+        else:
+            await self._post(s, line)
+        return {"status": "asked", "medium": s.consent_medium}
+
+    async def _not_a_meeting(self, s: MeetingSession, text: str, via: str) -> None:
+        """ "Not a meeting" / "no notes": stop recording, say so briefly in the same medium. Stays
+        quietly unless they ask for privacy; then leaves politely (60 min cooldown)."""
+        s.consent = "answered"
+        self.set_recording(s, False)
+        leave = self.wants_privacy(text)
+        key = f"meet_consent_no_{random.randint(1, 3)}" if leave else "meet_not_recording"
+        line = self._sp(s, key)
+        if via == "voice":
+            await self._say_text(s, line)
+        else:
+            await self._post(s, line)
+        if leave:
+            await self.end(s.key, "declined")
+
+    async def on_chat_text(self, message) -> bool:
+        """A message typed in a meeting's text chat. True when it answered the notes question
+        (then it is not a request for the assistant)."""
+        s = self.session_for_channel(getattr(message.channel, "id", None))
+        if s is None:
+            return False
+        text = message.content or ""
+        if s.recording == "not_recording":
+            if self.is_start(text):
+                self.set_recording(s, True)
+            return False
+        if s.consent == "pending" and time.monotonic() <= s.consent_until and self.is_decline(text):
+            await self._not_a_meeting(s, text, "text")
+            return True
+        return False
+
+    # ---- notes worth writing down
+    async def post_note(self, s: MeetingSession, text: str) -> dict:
+        """One short line for the text chat: a decision, an action item or a number to remember.
+        Sparing: no duplicates, at most one every few seconds, never while not recording."""
+        text = " ".join((text or "").split())[:300]
+        now = time.monotonic()
+        if s.recording == "not_recording" or s.ending:
+            return {"error": "not_recording"}
+        if len(text) < 4:
+            return {"error": "empty"}
+        if any(text.casefold() == n.casefold() for n in s.notes_posted):
+            return {"error": "duplicate"}
+        if now - s.last_note_at < NOTE_MIN_GAP_S or len(s.notes_posted) >= MAX_NOTES:
+            return {"error": "too_many_notes"}
+        s.notes_posted.append(text)
+        s.last_note_at = now
+        await self._post(s, f"📌 {text}")
+        return {"status": "posted"}
+
+    async def _note_pass(self, s: MeetingSession) -> None:
+        """Classic mode: the cheap gate reads the transcript since the last pass and posts one
+        line per decision / action item."""
+        since = s.last_note_pass
+        s.last_note_pass = self.bot.s.now()
+        lines = [
+            GateLine(str(i), ln.speaker, ln.text)
+            for i, ln in enumerate(s.transcript.lines)
+            if since is None or ln.at > since
+        ][-40:]
+        if not lines:
+            return
+        notes = await asyncio.to_thread(
+            notes_from_transcript,
+            self.bot.llm,
+            self.bot.s.gate_model,
+            lines,
+            channel_id=s.voice_channel.id,
+        )
+        for n in notes[:3]:
+            await self.post_note(s, n)
+            s.last_note_at = 0.0  # a batch may post up to three lines at once
+
+    async def _say_text(self, s: MeetingSession, text: str) -> None:
+        """Say a short fixed line in the voice channel (TTS). Failures are logged, never raised."""
+        if not self.bot.s.voice_reply or s.ending or not _connected(s.vc):
+            return
+        try:
+            pcm = self._ack_pcm.get(f"{s.lang}:{text}")
+            if pcm is None:
+                pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, text, s.lang)
+                if len(self._ack_pcm) < 64:
+                    self._ack_pcm[f"{s.lang}:{text}"] = pcm
+            await self._play(s, pcm)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("spoken line failed", exc_info=True)
+
+    # ---- bodies and importance
+    def _busy_indexes(self, guild_id: int) -> set[int]:
+        return {i for g, i in self._reserved if g == guild_id} | {
+            getattr(s.body, "index", 0) for s in self.sessions_in_guild(guild_id)
+        }
+
+    def _free_body(self, guild_id: int) -> VoiceBody | None:
+        busy = self._busy_indexes(guild_id)
+        return next((b for b in self.pool.usable(guild_id) if b.index not in busy), None)
+
+    @staticmethod
+    def _humans(channel) -> list:
+        return [m for m in getattr(channel, "members", []) if not getattr(m, "bot", False)]
+
+    def _is_exec(self, member) -> bool:
+        try:
+            return bool(self.bot.is_exec_member(member))
+        except Exception:
+            return False
+
+    def _claim(self, key, channel, origin: str, scheduled: bool, started: float) -> Claim:
+        humans = self._humans(channel)
+        execs = sum(1 for m in humans if self._is_exec(m))
+        return Claim(
+            key, room_score(len(humans), execs, scheduled), len(humans), started, origin, scheduled
+        )
+
+    def _busy_reply(self, guild_id: int, lang: str) -> str:
+        rooms = ", ".join(f"#{s.voice_channel.name}" for s in self.sessions_in_guild(guild_id))
+        return t("meet_busy", lang, rooms=rooms or "-")
+
+    async def _claim_body(self, guild, channel, origin: str, scheduled: bool, lang: str):
+        """(body, "") with the body reserved, or (None, the reply explaining why not). When every
+        body is taken, a weaker auto-joined session gives its body up (see pick_victim)."""
+        body = self._free_body(guild.id)
+        if body is None:
+            cand = self._claim((guild.id, channel.id), channel, origin, scheduled, self._now())
+            active = [
+                self._claim(s.key, s.voice_channel, s.origin, s.meeting_id is not None, s.started)
+                for s in self.sessions_in_guild(guild.id)
+                if not s.ending
+            ]
+            victim = pick_victim(cand, active)
+            if victim is None:
+                return None, self._busy_reply(guild.id, lang)
+            await self._preempt(self.sessions[victim.key])
+            body = self._free_body(guild.id)
+            if body is None:
+                return None, self._busy_reply(guild.id, lang)
+        self._reserved.add((guild.id, body.index))
+        return body, ""
+
+    async def _preempt(self, s: MeetingSession) -> None:
+        """Tell the old room, end its session with a summary, wait until its body is free."""
+        logger.info("meeting in %s gives its voice body to a more important one", s.key)
+        await self._notice(s, t("meet_preempted", s.lang))
+        task = asyncio.create_task(self.end(s.key, "preempted"))
+        self._bg.add(task)
+        task.add_done_callback(self._bg.discard)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(s.released.wait(), timeout=20)
 
     # ---- commands (return the reply for the invoker, in `lang`)
-    async def join(self, member, fallback_channel=None, lang: str = "th") -> str:
+    async def join(
+        self,
+        member,
+        fallback_channel=None,
+        lang: str = "th",
+        *,
+        announce: str = "meet_announce",
+        empty_grace: float | None = None,
+        first_grace: float | None = None,
+        on_end=None,
+        meeting_id: str | None = None,
+        origin: str | None = None,
+    ) -> str:
         guild = member.guild
         if not self.bot.team.enabled(guild.id, "voice_meetings"):
             return t("meet_off", lang)
-        existing = self.sessions.get(guild.id)
-        if existing is not None:
-            return t("meet_already", lang, channel=existing.voice_channel.name)
-        if guild.id in self._joining:
-            return t("meet_already", lang, channel=t("meet_joining", lang))
         voice = getattr(member, "voice", None)
         channel = getattr(voice, "channel", None)
         if channel is None:
             return t("meet_not_in_voice", lang)
-        if not channel.permissions_for(guild.me).connect:
-            return t("meet_no_permission", lang)
-        # Reserve the guild slot before the first await so two commands cannot both join.
-        self._joining.add(guild.id)
+        key = (guild.id, channel.id)
+        origin = origin or ("scheduled" if meeting_id else "command")
+        if origin == "command":
+            self._cooldown.pop(key, None)  # an explicit request always overrides the cooldown
+        existing = self.sessions.get(key)
+        if existing is not None:
+            return t("meet_already", lang, channel=existing.voice_channel.name)
+        if key in self._joining:
+            return t("meet_already", lang, channel=t("meet_joining", lang))
+        # Reserve the channel before the first await so two commands cannot both join it.
+        self._joining.add(key)
+        reserved: tuple[int, int] | None = None
         try:
-            vc = await self._connect(channel)
-        except Exception:
-            logger.exception("could not join voice channel %s", channel.id)
-            return t("meet_connect_failed", lang)
+            body, why = await self._claim_body(guild, channel, origin, bool(meeting_id), lang)
+            if body is None:
+                return why
+            reserved = (guild.id, body.index)
+            hguild, hchan = self._body_channel(body, guild, channel)
+            if hchan is None:
+                return t("meet_connect_failed", lang)
+            lacking = channel_missing(hchan, hguild, ("connect",))
+            if lacking:
+                return permission_message(
+                    lacking, lang, getattr(body, "application_id", None) or
+                    getattr(self.bot, "application_id", None), helper=body.index > 0,
+                )  # fmt: skip
+            try:
+                vc = await self._connect(body, channel)
+            except Exception:
+                logger.exception("could not join voice channel %s", channel.id)
+                return t("meet_connect_failed", lang)
+            if empty_grace is None:
+                empty_grace = float(getattr(self.bot.s, "leave_empty_seconds", 30.0))
+            loop = asyncio.get_running_loop()
+            session = MeetingSession(
+                guild_id=guild.id, voice_channel=channel, text_channel=channel,
+                fallback_channel=fallback_channel, vc=vc, loop=loop, started=time.monotonic(),
+                language=self.bot.team.channel_language(guild.id, channel.id), fallback_lang=lang,
+                empty_grace=empty_grace, first_grace=first_grace, on_end=on_end,
+                meeting_id=meeting_id, started_at=self.bot.s.now().astimezone(UTC),
+                starter=str(getattr(member, "display_name", "") or ""), body=body, origin=origin,
+            )  # fmt: skip
+            session.recording = "unknown" if origin == "auto" else "recording"
+            session.introduced = origin == "command"
+            self.sessions[key] = session
         finally:
-            self._joining.discard(guild.id)
-        loop = asyncio.get_running_loop()
-        session = MeetingSession(
-            guild_id=guild.id, voice_channel=channel, text_channel=channel,
-            fallback_channel=fallback_channel, vc=vc, loop=loop, started=time.monotonic(),
-            language=self.bot.team.channel_language(guild.id, channel.id), fallback_lang=lang,
-        )  # fmt: skip
-        self.sessions[guild.id] = session
+            self._joining.discard(key)
+            if reserved is not None:
+                self._reserved.discard(reserved)
         try:
             vc.listen(MeetingSink(session))
         except Exception:
             logger.exception("could not start listening")
-            self.sessions.pop(guild.id, None)
+            self.sessions.pop(key, None)
             with contextlib.suppress(Exception):
                 await vc.disconnect()
             return t("meet_connect_failed", lang)
@@ -524,22 +1080,392 @@ class MeetingManager:
             asyncio.create_task(self._worker(session)) for _ in range(TRANSCRIBE_WORKERS)
         ]
         session.tasks.append(asyncio.create_task(self._ticker(session)))
-        await self._post(session, t("meet_announce", session.lang))
-        logger.info("meeting started in guild %s channel %s", guild.id, channel.id)
+        self._start_live(session)
+        await self._persist(session, getattr(member, "id", 0))
+        for m in self._humans(channel):
+            session.attendee_ids.add(m.id)
+        await self._notice(session, t(announce, session.lang))
+        await self._post_state(session, t("voice_state_join", session.lang))
+        logger.info(
+            "meeting started in guild %s channel %s on voice body %d (%s)",
+            guild.id, channel.id, body.index, origin,
+        )  # fmt: skip
         return t("meet_joined", lang, channel=channel.name)
 
-    async def leave(self, member, lang: str = "th") -> str:
-        session = self.sessions.get(member.guild.id)
-        if session is None:
-            return t("meet_none", lang)
-        in_channel = (
-            getattr(getattr(member, "voice", None), "channel", None) == session.voice_channel
+    async def adopt(self, s: MeetingSession, meeting_id: str, on_end) -> None:
+        """A scheduled meeting starts in a room Salid already sits in: the session now takes its
+        notes (and counts as scheduled for priority)."""
+        s.meeting_id, s.on_end, s.origin = meeting_id, on_end, "scheduled"
+        if s.recording == "unknown":
+            s.recording = "recording"  # the schedule says it is a meeting
+        await self._persist(s)
+
+    # ---- auto-join: Salid joins by itself when people are in a voice channel
+    def _auto_wanted(self, ch) -> bool:
+        guild = ch.guild
+        key = (guild.id, ch.id)
+        if key in self.sessions or key in self._joining:
+            return False
+        if self._cooldown.get(key, 0.0) > self._now():
+            return False
+        afk = getattr(guild, "afk_channel", None)
+        if afk is not None and afk.id == ch.id:
+            return False
+        team = self.bot.team
+        if not (
+            team.enabled(guild.id, "voice_meetings")
+            and team.enabled(guild.id, "auto_join_meetings")
+        ):
+            return False
+        if team.channel_mode(guild.id, ch.id, ch.name, self.bot.s.ask_channel_ids) == "off":
+            return False
+        need = max(1, int(getattr(self.bot.s, "auto_join_min_humans", 1)))
+        return len(self._humans(ch)) >= need
+
+    async def on_voice_activity(self, member, before, after) -> None:
+        """A person moved in the voice channels: consider joining the rooms they left/entered."""
+        if getattr(member, "bot", False):
+            return
+        entered = getattr(after, "channel", None)
+        if entered is not None and entered != getattr(before, "channel", None):
+            s = self.sessions.get((entered.guild.id, entered.id))
+            if s is not None:  # a new arrival may greet Salid without the name
+                s.attendee_ids.add(member.id)
+        left = getattr(before, "channel", None)
+        if left is not None and not self._humans(left):
+            self._cooldown.pop((left.guild.id, left.id), None)  # a new gathering: a new chance
+        for ch in {
+            c for c in (getattr(before, "channel", None), getattr(after, "channel", None)) if c
+        }:
+            self.kick(ch)
+
+    def kick(self, ch) -> None:
+        """Start (or keep) the auto-join attempt for one channel. Rapid duplicate events for the
+        same channel share one attempt; with the default 0 s delay nothing waits."""
+        key = (ch.guild.id, ch.id)
+        pending = self._auto_tasks.get(key)
+        if not self._auto_wanted(ch):
+            if pending is not None and not pending.done():
+                pending.cancel()  # only a delayed attempt can still be waiting
+            return
+        if pending is not None and not pending.done():
+            return
+        task = asyncio.create_task(self._auto_run(ch))
+        self._auto_tasks[key] = task
+
+        def done(t_: asyncio.Task, key=key) -> None:
+            if self._auto_tasks.get(key) is t_:
+                self._auto_tasks.pop(key, None)
+
+        task.add_done_callback(done)
+
+    async def _auto_run(self, ch) -> None:
+        try:
+            delay = float(getattr(self.bot.s, "auto_join_delay_seconds", 0.0) or 0.0)
+            if delay > 0:  # optional stability wait (off by default)
+                await self._sleep(delay)
+                if not self._auto_wanted(ch):
+                    return
+            await self._auto_join(ch)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("auto-join failed for channel %s", getattr(ch, "id", "?"))
+
+    async def _auto_join(self, ch) -> None:
+        guild = ch.guild
+        scheduler = getattr(self.bot, "scheduler", None)
+        sched = scheduler.meeting_now(guild.id, ch.id) if scheduler is not None else None
+        if sched is not None:  # a scheduled meeting: same allocator, +100, notes for the meeting
+            await scheduler.auto_join_now(sched)
+            return
+        lang = self.bot.team.channel_language(guild.id, ch.id)
+        starter = SimpleNamespace(
+            id=0, guild=guild, voice=SimpleNamespace(channel=ch), display_name="Salid"
         )
+        await self.join(
+            starter,
+            lang=lang
+            if lang in ("th", "en")
+            else resolve_lang(self.bot.team.current(guild.id).default_language),
+            announce="meet_announce_auto",
+            first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
+            origin="auto",
+        )
+
+    def _voice_channels(self, guild) -> list:
+        return [*getattr(guild, "voice_channels", ()), *getattr(guild, "stage_channels", ())]
+
+    def scan_all(self) -> None:
+        """After startup / when a body frees up: look at every voice channel with people in it."""
+        for guild in getattr(self.bot, "guilds", ()):
+            for ch in self._voice_channels(guild):
+                self.kick(ch)
+
+    def _rescan(self, guild_id: int) -> None:
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        for ch in self._voice_channels(guild):
+            self.kick(ch)
+
+    def _note_end(self, key, reason: str) -> None:
+        if reason in ("command", "declined"):
+            minutes = float(getattr(self.bot.s, "auto_join_cooldown_minutes", 60))
+            self._cooldown[key] = self._now() + minutes * 60.0
+        elif reason in ("timeout", "disconnected"):
+            self._cooldown[key] = self._now() + BLOCK_AFTER_FAILURE_S
+
+    # ---- persistence: a restart must not lose the meeting
+    @property
+    def _store(self):
+        return getattr(self.bot, "secretary_store", None)
+
+    async def _persist(self, s: MeetingSession, starter_id: int = 0) -> None:
+        """Remember the active meeting (so a restart can rejoin it). Never raises."""
+        store = self._store
+        if store is None:
+            return
+        rec = {
+            "guild_id": s.guild_id,
+            "voice_channel_id": s.voice_channel.id,
+            "body_index": getattr(s.body, "index", 0),
+            "origin": s.origin,
+            "text_channel_id": getattr(s.fallback_channel, "id", None),
+            "started_at": (s.started_at or self.bot.s.now()).isoformat(timespec="seconds"),
+            "language": s.language,
+            "fallback_lang": s.fallback_lang,
+            "meeting_id": s.meeting_id,
+            "starter": s.starter,
+            "starter_id": starter_id,
+            "empty_grace": s.empty_grace,
+            "first_grace": s.first_grace,
+            "minutes_channel_id": s.minutes_channel_id,
+            "recording": s.recording,
+            "transcript_from": s.transcript_from.isoformat(timespec="seconds")
+            if s.transcript_from
+            else None,
+        }
+        try:
+            await asyncio.to_thread(store.put_active_meeting, rec)
+        except Exception:
+            logger.warning("could not persist the active meeting", exc_info=True)
+
+    async def _unpersist(self, key: tuple[int, int]) -> None:
+        store = self._store
+        if store is None:
+            return
+        try:
+            await asyncio.to_thread(store.clear_active_meeting, key[0], key[1])
+        except Exception:
+            logger.warning("could not clear the active meeting record", exc_info=True)
+
+    def _logged_lines(self, guild, voice_channel, since: datetime) -> list[tuple]:
+        """Voice lines of this meeting already logged to memory: (at, speaker, text)."""
+        mem = getattr(self.bot, "memory_store", None)
+        if mem is None:
+            return []
+        now = self.bot.s.now()
+        start = since.astimezone(now.tzinfo).date().isoformat()
+        msgs = mem.messages(
+            guild.id, [voice_channel.id], start, now.date().isoformat(),
+            channel_id=voice_channel.id, limit=2000, newest_first=False,
+        )  # fmt: skip
+        return [
+            (m.created_at, m.author_name, m.text)
+            for m in msgs
+            if m.kind == "voice" and m.created_at >= since
+        ]
+
+    async def resume_all(self) -> None:
+        """After a restart (on_ready): rejoin persisted meetings that still have people in them;
+        end the others properly. Safe to call again on a gateway re-ready."""
+        await self.pool.wait_ready()  # helpers log in a little after the main bot
+        store = self._store
+        if store is None:
+            return
+        try:
+            records = await asyncio.to_thread(store.list_active_meetings)
+        except Exception:
+            logger.warning("could not list active meetings", exc_info=True)
+            return
+        for rec in records:
+            try:
+                await self._resume(rec)
+            except Exception:
+                logger.exception("could not resume meeting in guild %s", rec.get("guild_id"))
+
+    async def _resume(self, rec: dict) -> None:
+        gid = int(rec["guild_id"])
+        guild = self.bot.get_guild(gid)
+        channel = guild.get_channel(int(rec["voice_channel_id"])) if guild else None
+        if guild is None or channel is None:
+            await self._unpersist((gid, int(rec["voice_channel_id"])))
+            return
+        key = (gid, channel.id)
+        if key in self.sessions or key in self._joining:
+            return
+        started_at = datetime.fromisoformat(rec["started_at"])
+        text_ch = guild.get_channel(rec["text_channel_id"]) if rec.get("text_channel_id") else None
+        humans = self._humans(channel)
+        elapsed = max(0.0, (self.bot.s.now() - started_at).total_seconds())
+        lang = rec.get("fallback_lang") or resolve_lang(self.bot.team.current(gid).default_language)
+        on_end = None
+        if rec.get("meeting_id") and getattr(self.bot, "scheduler", None) is not None:
+            mid = rec["meeting_id"]
+
+            async def on_end(session) -> None:
+                await self.bot.scheduler.on_voice_end(mid, session)
+
+        # The same body as before when it is still around, else any free one.
+        busy = self._busy_indexes(gid)
+        body = self.pool.body(rec.get("body_index", 0))
+        if body is None or not body.available or not body.in_guild(gid) or body.index in busy:
+            body = self._free_body(gid)
+        vc = None
+        if humans and body is not None:
+            self._joining.add(key)
+            self._reserved.add((gid, body.index))
+            try:
+                vc = await self._connect(body, channel)
+            except Exception:
+                logger.exception("could not rejoin voice channel %s", channel.id)
+            finally:
+                self._joining.discard(key)
+                self._reserved.discard((gid, body.index))
+        if vc is None:  # no people, no body, or could not connect: end it with what the log has
+            humans = []
+        session = MeetingSession(
+            guild_id=gid, voice_channel=channel, text_channel=channel, fallback_channel=text_ch,
+            vc=vc, loop=asyncio.get_running_loop(), started=time.monotonic() - elapsed,
+            language=rec.get("language") or "th", fallback_lang=lang,
+            empty_grace=float(rec.get("empty_grace") or EMPTY_GRACE_S),
+            first_grace=rec.get("first_grace"), on_end=on_end, meeting_id=rec.get("meeting_id"),
+            started_at=started_at, starter=rec.get("starter", ""), had_humans=True,
+            body=body or self.pool.main, origin=rec.get("origin") or "command",
+            minutes_channel_id=rec.get("minutes_channel_id"),
+            recording=rec.get("recording") or "recording",
+            transcript_from=(
+                datetime.fromisoformat(rec["transcript_from"]) if rec.get("transcript_from") else None
+            ),
+        )  # fmt: skip
+        for m in humans:
+            session.attendee_ids.add(m.id)
+        try:
+            for at, speaker, text in await asyncio.to_thread(
+                self._logged_lines, guild, channel, session.transcript_from or started_at
+            ):
+                session.transcript.add(at, speaker, text)
+        except Exception:
+            logger.warning("could not reload the logged meeting lines", exc_info=True)
+        self.sessions[key] = session
+        if not humans:
+            await self.end(key, "empty")
+            return
+        try:
+            vc.listen(MeetingSink(session))
+        except Exception:
+            logger.exception("could not start listening after rejoin")
+            await self.end(key, "disconnected")
+            return
+        session.tasks = [
+            asyncio.create_task(self._worker(session)) for _ in range(TRANSCRIBE_WORKERS)
+        ]
+        session.tasks.append(asyncio.create_task(self._ticker(session)))
+        self._start_live(session)
+        await self._notice(session, t("meet_rejoined", session.lang))
+        logger.info("meeting resumed in guild %s channel %s", gid, channel.id)
+
+    async def on_disconnected(self, guild_id: int, body_index: int = 0) -> None:
+        """A voice body's connection dropped unexpectedly (not /leave, not shutdown): retry with
+        backoff, then give up and end that meeting."""
+        s = next(
+            (
+                x
+                for x in self.sessions_in_guild(guild_id)
+                if getattr(x.body, "index", 0) == body_index
+            ),
+            None,
+        )
+        if s is None or s.ending or s.reconnecting:
+            return
+        key = s.key
+        if not self._humans(s.voice_channel):
+            await self.end(key, "disconnected")
+            return
+        s.reconnecting = True
+        try:
+            for attempt, delay in enumerate(RECONNECT_DELAYS, 1):
+                await asyncio.sleep(delay)
+                if s.ending or self.sessions.get(key) is not s:
+                    return
+                try:
+                    with contextlib.suppress(Exception):
+                        await s.vc.disconnect(force=True)
+                    vc = await self._connect(s.body, s.voice_channel)
+                    vc.listen(MeetingSink(s))
+                except Exception:
+                    logger.warning("voice reconnect %d failed", attempt, exc_info=True)
+                    continue
+                s.vc = vc
+                if s.live is not None and s.voice_mode == "live":
+                    with contextlib.suppress(Exception):
+                        s.live.stop_playback()
+                await self._notice(s, t("meet_reconnected", s.lang))
+                return
+            await self._post(s, t("meet_reconnect_failed", s.lang))
+            s.reconnecting = False
+            await self.end(key, "disconnected")
+        finally:
+            s.reconnecting = False
+
+    def _start_live(self, session: MeetingSession) -> None:
+        """Live voice mode: connect a Gemini Live session now (it takes ~2 s) so the first question
+        is answered fast. If it cannot connect the meeting falls back to classic wake words."""
+        s = self.bot.s
+        if not s.voice_reply or getattr(s, "voice_mode", "classic") != "live":
+            return
+        from .live_voice import LiveVoice
+
+        session.voice_mode = "live"
+        session.live = LiveVoice(
+            self.bot,
+            session,
+            post=lambda text: self._notice(session, text),
+            echo=lambda text: self._post(session, text),
+            on_failed=lambda: self._live_failed(session),
+        )
+        session.live.start()
+
+    def _live_failed(self, session: MeetingSession) -> None:
+        logger.error("live voice unavailable in guild %s: back to wake words", session.guild_id)
+        session.voice_mode = "classic"
+        if session.live is not None:
+            session.live.stop_playback()
+
+    async def leave(self, member, lang: str = "th", text_channel_id: int | None = None) -> str:
+        """End the session of the room the person is in (else the one whose text chat they typed
+        in, else, for a manager, the only one in the guild)."""
         from .bot import can_manage_guild
 
-        if not in_channel and not can_manage_guild(member):
+        guild_id = member.guild.id
+        mine = getattr(getattr(member, "voice", None), "channel", None)
+        sessions = self.sessions_in_guild(guild_id)
+        if not sessions:
+            return t("meet_none", lang)
+        session = self.sessions.get((guild_id, mine.id)) if mine is not None else None
+        if session is None and text_channel_id is not None:
+            session = next((x for x in sessions if x.text_channel.id == text_channel_id), None)
+        if session is None:
+            if not can_manage_guild(member):
+                return t("meet_leave_denied", lang)
+            if len(sessions) > 1:
+                rooms = ", ".join(f"#{x.voice_channel.name}" for x in sessions)
+                return t("meet_leave_which", lang, rooms=rooms)
+            session = sessions[0]
+        elif mine != session.voice_channel and not can_manage_guild(member):
             return t("meet_leave_denied", lang)
-        asyncio.create_task(self.end(member.guild.id, "command"))
+        asyncio.create_task(self.end(session.key, "command"))
         return t("meet_left", lang)
 
     # ---- background work
@@ -549,21 +1475,59 @@ class MeetingManager:
                 await asyncio.sleep(TICK_S)
                 now = time.monotonic()
                 s.enqueue(s.segmenter.tick(now))
+                self._consent_tick(s, now)
+                if s.captions.due(now) and not s.captions_busy:
+                    self._spawn(s, self._caption_flush(s))
                 if now - s.started > MEETING_MAX_S:
-                    asyncio.create_task(self.end(s.guild_id, "timeout"))
+                    asyncio.create_task(self.end(s.key, "timeout"))
                     return
-                humans = [m for m in s.voice_channel.members if not m.bot]
+                if not s.max_warned and now - s.started > MEETING_MAX_S - MAX_WARN_S:
+                    s.max_warned = True
+                    await self._notice(s, t("meet_max_warning", s.lang))
+                humans = self._humans(s.voice_channel)
+                grace = s.empty_grace
                 if humans:
                     s.empty_since = None
-                elif s.empty_since is None:
+                    s.had_humans = True
+                    continue
+                if not s.had_humans and s.first_grace is not None:
+                    grace = s.first_grace  # an auto-join nobody came to
+                if s.empty_since is None:
                     s.empty_since = now
-                elif now - s.empty_since > EMPTY_GRACE_S:
-                    asyncio.create_task(self.end(s.guild_id, "empty"))
+                elif now - s.empty_since > grace:
+                    asyncio.create_task(self.end(s.key, "empty"))
                     return
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("meeting ticker crashed")
+
+    def _consent_tick(self, s: MeetingSession, now: float) -> None:
+        """Nobody addressed Salid soon after the first speech: ask once. Silence after the question
+        counts as an OK."""
+        delay = float(getattr(self.bot.s, "consent_delay_seconds", 20.0))
+        if (
+            s.recording == "unknown"
+            and s.consent is None
+            and not s.introduced
+            and s.first_speech_at
+            and now - s.first_speech_at > delay
+        ):
+            self._spawn(s, self.ask_consent(s))
+        if s.engaged and now > s.engaged_until and not s.speaking:
+            self._set_engaged(s, False)  # nobody addressed Salid for a while: back to listening
+        if s.consent == "pending" and now > s.consent_until:
+            s.consent = "assumed"
+            if s.recording == "unknown":
+                s.recording = "recording"
+        if (
+            s.voice_mode != "live"
+            and s.recording != "not_recording"
+            and len(s.transcript)
+            and now - s.note_pass_at >= float(getattr(self.bot.s, "notes_batch_seconds", 60.0))
+        ):
+            s.note_pass_at = now
+            self._spawn(s, self._note_pass(s))
 
     async def _worker(self, s: MeetingSession) -> None:
         while True:
@@ -583,43 +1547,305 @@ class MeetingManager:
             member.display_name if member else t("meet_participant", s.lang, n=seg.user_id % 1000)
         )
         text = await asyncio.to_thread(
-            transcribe_pcm, self.bot.llm, self.bot.s.gemini_model, seg.pcm
+            transcribe_pcm, self.stt_client, self.bot.s.gemini_model, seg.pcm
         )
         if not text:
             return
-        s.transcript.add(self.bot.s.now(), name, text)
-        await self.bot.record_voice(s.voice_channel, seg.user_id, name, text, self.bot.s.now())
+        now_m = time.monotonic()
+        if not s.first_speech_at:
+            s.first_speech_at = now_m
+        if s.recording == "not_recording":
+            if self.is_start(text):
+                self.set_recording(s, True)
+        elif s.consent == "pending" and now_m <= s.consent_until and not self._is_echo(s, seg):
+            if self.is_decline(text):
+                await self._not_a_meeting(s, text, "voice")
+                return
+            if self._YES_RE.search(text):  # "ใช่ จดเลย" / "yes": it is a meeting
+                s.consent = "answered"
+                s.recording = "recording"
+        if s.recording != "not_recording":
+            s.transcript.add(self.bot.s.now(), name, text)
+            s.attendee_ids.add(seg.user_id)
+            await self.bot.record_voice(s.voice_channel, seg.user_id, name, text, self.bot.s.now())
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
-        question = parse_wake(text)
+        if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
+            s.captions.add(name, text)  # human speech only: never Salid's own words or notes
+        said = parse_wake(text)
+        if said is not None and not self._real_call(seg, text, said):
+            logger.info("meeting %s: name hit rejected: no voiced audio", s.guild_id)
+            said = None  # noise the transcriber turned into a greeting: not a call
+        called = said is not None
+        if called and parse_meeting_command(said) == "leave":
+            self._spawn(s, self._leave_politely(s))  # "สลิด ออกประชุม"
+            return
+        if s.engaged and not called and parse_meeting_command(text) == "leave":
+            self._spawn(s, self._leave_politely(s))  # "ออกจากห้องได้เลย" while engaged
+            return
+        if await self._minutes_instruction(s, member, text):
+            return
         now = time.monotonic()
+        if s.engaged and not called and self.is_dismissal(text):
+            self._set_engaged(s, False)  # "ขอบคุณครับ พอแล้ว": back to listening, not leaving
+            if (  # a reply only when she was thanked directly; "ok" / "next" = silence
+                s.voice_mode != "live"
+                and not self._is_echo(s, seg)
+                and re.search(r"ขอบคุณ|thank", text, re.I)
+            ):
+                self._spawn(s, self._say_text(s, self._sp(s, "meet_dismiss_ack")))
+            return
+        if called:
+            self._set_engaged(s, True, name=name if member is not None else "")
+        elif s.engaged and not self._is_echo(s, seg):
+            self._engaged_utterance(s, text, now)
+        if s.voice_mode == "live":
+            if called and s.live is not None:
+                # Deterministic: the name was said, so Salid must answer. If the Live model has
+                # not started to speak by itself, give it a cue.
+                s.live.ensure_reply(
+                    seg.started + seg.duration_s, text, user_id=seg.user_id, question=said or text
+                )
+            return  # otherwise the Live session answers by itself; this is only the record
+        if self._is_echo(s, seg):
+            return  # probably Salid's own voice coming back through someone's mic
+        question = said
         if question is None:
             if now - s.pending_wake.pop(seg.user_id, -1e9) < PENDING_WAKE_S:
                 question = text  # "สลิด ..." then a pause, then the actual question
+            elif s.engaged and s.unaddressed == 0:
+                question = text  # a conversation is going: no name needed
             else:
                 return
+        if question and is_greeting(question) and member is not None:
+            # A bare greeting / name call: answer at once with a fixed line (no agent, no
+            # "one sec" first).
+            s.pending_wake.pop(seg.user_id, None)
+            self._spawn(s, self._say_text(s, self._sp(s, "meet_greet_spoken")))
+            return
         if not question:
             s.pending_wake[seg.user_id] = now
             if member is not None:
-                await self._post(s, f"{member.mention} {t('meet_wake_empty', s.lang)}")
+                await self._notice(s, f"{member.mention} {t('meet_wake_empty', s.lang)}")
+                # Voice meetings stay voice: the name alone gets a spoken "yes?" too (silence
+                # after "ครับ สลิด" looked like Salid was not listening).
+                self._spawn(s, self._say_text(s, self._sp(s, "meet_wake_spoken")))
             return
         s.pending_wake.pop(seg.user_id, None)
+        if self.bot.s.voice_reply and member is not None:
+            s.tasks = [t for t in s.tasks if not t.done()]
+            s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
         await self.answer(s, member, name, question)
+
+    def _real_call(self, seg: Segment, text: str, said: str) -> bool:
+        """A bare greeting / name call (the shape noise is hallucinated into) counts only when the
+        audio behind it is real speech: long enough and with enough voiced frames."""
+        if not (is_greeting(said or text) or len(text.strip()) <= 20):
+            return True  # a real sentence: the energy floor in `enqueue` was enough
+        sets = self.bot.s
+        if float(getattr(sets, "name_min_voiced_seconds", 0.4)) <= 0:
+            return True  # energy gate off
+        return (
+            seg.duration_s >= 0.8
+            and voiced_fraction(seg.pcm, float(getattr(sets, "name_min_rms", 250.0))) >= 0.3
+        )
+
+    # ---- listening / engaged
+    _DISMISS_RE = re.compile(
+        r"^\W*(?:(?:โอเค|ok|okay|เออ|ได้|งั้น)\s*)?(?:(?:ครับ|ค่ะ|คะ|นะ)\s*)?"
+        r"(?:(?:ขอบคุณ(?:มาก)?|พอแล้ว|พอ|ยุติได้|ยุติ|จบแค่นี้|จบแล้ว|ออกได้|ไม่มีอะไรแล้ว|เท่านี้)"
+        r"(?:\s*(?:ครับ|ค่ะ|คะ|นะ|แล้ว|ได้|เลย|ก่อน|มาก))*\W*)+$"
+        r"|^\W*(?:ok(?:ay)?[,. ]*)?(?:thanks?(?:\s+you)?|thank\s+you)(?:[,. ]+(?:that'?s\s+all|that'?s\s+it|"
+        r"we'?re\s+good|bye))?\W*$"
+        r"|^\W*(?:that'?s\s+(?:all|it)|we'?re\s+good|all\s+good|no\s+more\s+questions)\W*$"
+        # "ok" / "next person" / "moving on": the meeting goes on without her (whole utterance only)
+        r"|^\W*(?:(?:โอเค|ok(?:ay)?|เอาล่ะ|เอาละ|งั้น)[\s,.]*)*(?:(?:ครับ|ค่ะ|คะ|นะ)\s*)?"
+        r"(?:(?:โอเค|ok(?:ay)?|เอาล่ะ|เอาละ|คนต่อไป|ต่อไป|เชิญ\s*(?:คนต่อไป|ต่อ)|ไปต่อ|next(?:\s+(?:person|one|please))?"
+        r"|moving\s+on|let'?s\s+(?:continue|move\s+on|go\s+on))"
+        r"(?:[\s,.]*(?:ครับ|ค่ะ|คะ|นะ|เลย|ครับผม|please))*[\s,.!]*)+$",
+        re.I,
+    )
+
+    @classmethod
+    def is_dismissal(cls, text: str) -> bool:
+        """ "พอแล้วครับ" / "ขอบคุณครับ" / "thanks, that's all" said on its own: back to listening
+        (NOT leaving the room: "ออกประชุม" / "ออกจากห้อง" / "leave" do that)."""
+        text = (text or "").strip()
+        if len(text) > 50 or parse_meeting_command(text) == "leave":
+            return False
+        return bool(cls._DISMISS_RE.search(text))
+
+    def _engage_s(self) -> float:
+        return float(getattr(self.bot.s, "engaged_timeout_seconds", 30.0))
+
+    # Not addressed to Salid: the heuristics are deliberately simple and live here in code.
+    # While engaged, an utterance counts as addressed to her when it (a) says her name (handled
+    # by the caller), (b) comes within REPLY_WINDOW_S of her own voice (an answer to her), or
+    # (c) looks like a question or a request (`_ASK_RE`) within QUESTION_WINDOW_S of her last
+    # words. Two utterances in a row that are none of these end the conversation silently.
+    _ASK_RE = re.compile(
+        r"\?|ไหม|มั้ย|หรือเปล่า|หรือไม่|เหรอ|หรอ|อะไร|ทำไม|ยังไง|อย่างไร|เท่าไร|เท่าไหร่|เมื่อไร"
+        r"|เมื่อไหร่|ใคร|ที่ไหน|ช่วย|ขอ|หน่อย|(?<![a-z])(?:what|who|when|where|why|how|which|can\s+you"
+        r"|could\s+you|would\s+you|please|tell\s+me)(?![a-z])",
+        re.I,
+    )
+    REPLY_WINDOW_S = 6.0
+    QUESTION_WINDOW_S = 20.0
+    UNADDRESSED_LIMIT = 2
+
+    def _addressed(self, s: MeetingSession, text: str, now: float) -> bool:
+        """Is this utterance (heard while engaged, no name in it) meant for Salid?"""
+        if s.speaking:
+            return True
+        gap = now - max(s.called_at, s.speaking_until - SPEAK_COOLDOWN_S)  # since called / spoke
+        if gap <= self.REPLY_WINDOW_S:
+            return True
+        return gap <= self.QUESTION_WINDOW_S and bool(self._ASK_RE.search(text or ""))
+
+    def _engaged_utterance(self, s: MeetingSession, text: str, now: float) -> None:
+        if self._addressed(s, text, now):
+            s.unaddressed = 0
+            s.engaged_until = now + self._engage_s()  # talking with Salid keeps it engaged
+            return
+        s.unaddressed += 1
+        if s.unaddressed >= self.UNADDRESSED_LIMIT:
+            self._set_engaged(s, False)  # people talk among themselves: back to listening
+
+    def _set_engaged(self, s: MeetingSession, on: bool, name: str = "") -> None:
+        """listening <-> engaged. The Live model is told the state so it stays silent when
+        listening, and the change is shown in the meeting's text chat. `name`: who called her."""
+        s.engaged_until = time.monotonic() + self._engage_s() if on else 0.0
+        s.unaddressed = 0
+        if on:
+            s.called_at = time.monotonic()
+        if s.engaged == on:
+            return
+        s.engaged = on
+        s.introduced = True if on else s.introduced
+        if s.live is not None:
+            s.live.notify_state(on)
+        if on:
+            text = (
+                t("voice_state_engaged_name", s.lang, name=name)
+                if name
+                else t("voice_state_engaged", s.lang)
+            )
+        else:
+            text = t("voice_state_listening", s.lang)
+        with contextlib.suppress(RuntimeError):  # no running loop (sync caller): best effort
+            self._spawn(s, self._post_state(s, text))
+
+    STATE_FLIP_S = 15.0
+
+    async def _post_state(self, s: MeetingSession, text: str) -> None:
+        """One short state line in the meeting's text chat (`voice_state_posts`). Within
+        STATE_FLIP_S of the previous line it edits that one instead of posting another."""
+        if not getattr(self.bot.s, "voice_state_posts", True) or s.ending:
+            return
+        now = time.monotonic()
+        prev = s.state_msg
+        if prev is not None and now - s.state_at < self.STATE_FLIP_S:
+            try:
+                await prev.edit(content=text)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.debug("could not edit the state line", exc_info=True)
+                return  # never more than one state line per STATE_FLIP_S
+        msg = await self._post(s, text)
+        s.state_msg, s.state_at = msg, now
+
+    # ---- minutes destination
+    def _minutes_allowed(self, s: MeetingSession, member=None):
+        """Channels the minutes may go to: Salid can post there and the speaker (voice instruction
+        by a known person) or everyone in the room (instruction without a speaker) can see them."""
+        guild = s.voice_channel.guild
+        me = getattr(guild, "me", None)
+        people = [member] if member is not None else self._humans(s.voice_channel)
+
+        def allowed(ch) -> bool:
+            if me is not None and not can_see_and_post(ch, me):
+                return False
+            if member is not None:
+                return can_see_and_post(ch, member)
+            return all(can_see(ch, p) for p in people)
+
+        return allowed
+
+    async def set_minutes_destination(self, s: MeetingSession, name: str, member=None) -> dict:
+        """Point the end-of-meeting summary at a channel. Returns a small dict (status / error) for
+        the Live tool and the spoken confirmation."""
+        guild = s.voice_channel.guild
+        res = await asyncio.to_thread(
+            lambda: resolve_channel(guild.text_channels, name, self._minutes_allowed(s, member))
+        )
+        if res.status != "ok":
+            out: dict = {"error": res.status}
+            if res.candidates:
+                out["candidates"] = [c.name for c in res.candidates[:5]]
+            return out
+        s.minutes_channel_id = res.channel.id
+        await self._persist(s)
+        return {"status": "set", "channel": res.channel.name}
+
+    async def _minutes_instruction(self, s: MeetingSession, member, text: str) -> bool:
+        """ "ส่งมติการประชุมไปห้อง X" heard in the room: remember X, confirm by voice (classic mode;
+        in live mode the model confirms through its own tool call). True when it was one."""
+        req = parse_minutes_destination(text)
+        if req is None or s.ending:
+            return False
+        res = await self.set_minutes_destination(s, req.name, member)
+        live = s.voice_mode == "live"
+        if res.get("status") == "set":
+            if not live:
+                line = self._sp(s, "minutes_set_spoken", channel=res["channel"])
+                self._spawn(s, self._say_text(s, line))
+            return True
+        if not req.explicit:
+            return False  # "ส่งสรุปให้ทุกคน": not a channel after all
+        if not live:
+            key = {
+                "not_allowed": "minutes_not_allowed_spoken",
+                "ambiguous": "minutes_ambiguous_spoken",
+            }.get(res.get("error", ""), "minutes_not_found_spoken")
+            self._spawn(s, self._say_text(s, self._sp(s, key)))
+        return True
+
+    @staticmethod
+    def _is_echo(s: MeetingSession, seg: Segment) -> bool:
+        """True when the segment was (partly) spoken while Salid was talking, or just after.
+        Transcription lags the audio, so the audio's own timestamps are compared as well."""
+        if s.speaking or time.monotonic() < s.speaking_until:
+            return True
+        return bool(s.speaking_until) and (
+            seg.started + seg.duration_s >= s.speaking_since and seg.started <= s.speaking_until
+        )
 
     async def answer(self, s: MeetingSession, member, name: str, question: str) -> None:
         from .bot import chunks
         from .qa import ask
 
         bot = self.bot
+        s.introduced = True  # somebody is talking to Salid
         if member is None or not bot.team.enabled(s.guild_id, "qa"):
             return
         async with s.answer_lock:
             t0 = time.monotonic()
             history = s.transcript.history(bot.s.now())
-            # the answer goes to the voice channel's chat, or to the fallback channel when that
-            # fails (see _post): the readers of both bound the memory scope
+            # the spoken answer is heard by everyone in the room; typed to the voice channel's chat,
+            # or to the fallback channel when that fails (see _post), it is read there too: the
+            # readers of all of them bound the memory scope
             fallback = s.fallback_channel
             also = (bot._answering_id(fallback),) if fallback is not None else ()
-            memory = await bot._memory_tools_for(member.guild, member, s.voice_channel.id, *also)
+            memory = None
+            guild = getattr(member, "guild", None)
+            if guild is not None:
+                humans = [m for m in s.voice_channel.members if not getattr(m, "bot", False)]
+                if all(m.id != member.id for m in humans):
+                    humans.append(member)
+                memory = await bot._room_memory_tools(
+                    guild, s.voice_channel, humans, *also, asker=member
+                )
             t_ctx = time.monotonic()
             ans = await asyncio.to_thread(
                 ask,
@@ -632,39 +1858,353 @@ class MeetingManager:
                 history=history,
                 language=s.language,
                 memory=memory,
+                spoken=True,
+                **bot._web_kw(s.guild_id),
             )
             is_exec = bot.is_exec_member(member)
             bot._log_answer(
                 s.guild_id, s.voice_channel.id, is_exec, ans, t0, t_ctx, time.monotonic()
             )
-            for i, part in enumerate(chunks(ans.text, 1800)):
-                await self._post(s, f"{member.mention} {part}" if i == 0 else part)
+            if getattr(bot.s, "meeting_text_echo", False):  # meetings stay voice by default
+                for i, part in enumerate(chunks(ans.text, 1800)):
+                    await self._post(s, f"{member.mention} {part}" if i == 0 else part)
+        if bot.s.voice_reply and not s.ending and _connected(s.vc):
+            # In the background: playback takes seconds and must not hold a transcription worker.
+            s.tasks = [t for t in s.tasks if not t.done()]
+            s.tasks.append(asyncio.create_task(self.speak(s, ans.text, question)))
+
+    async def _leave_politely(self, s: MeetingSession) -> None:
+        """ "ออกประชุม": the system handles leaving. The Live model is muted (it must not talk
+        about notes), a short goodbye is spoken, then the meeting ends."""
+        if s.leaving or s.ending:
+            return
+        s.leaving = True
+        if s.live is not None:
+            s.live.stop_playback()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._say_text(s, self._sp(s, "meet_bye_spoken")), timeout=12)
+        await self.end(s.key, "command")
+
+    async def live_fallback(self, s: MeetingSession, user_id: int, question: str) -> None:
+        """The Live model produced no audio for an utterance with Salid's name: answer through
+        the classic path (agent, spoken rewrite, TTS) so the person always gets an answer."""
+        if s.ending or s.leaving:
+            return
+        member = s.voice_channel.guild.get_member(user_id)
+        if member is None:
+            return
+        if is_greeting(question):
+            await self._say_text(s, self._sp(s, "meet_greet_spoken"))
+            return
+        s.tasks = [x for x in s.tasks if not x.done()]
+        s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
+        await self.answer(s, member, member.display_name, question)
+
+    async def acknowledge(self, s: MeetingSession, question: str = "") -> None:
+        """Play a short "one sec" right away, while the answer is being worked out. The line is
+        written for the question (cheap model + TTS, raced against `voice_ack_timeout_s`); when it is
+        not ready in time a cached hand-written line plays instead (never one of the last 3 said in
+        this meeting) and the generated one is dropped: one acknowledgement only."""
+        if not self.bot.s.voice_reply or s.ending or s.speaking:
+            return
+        lang = s.lang if s.lang in ACK_TEXT else "th"
+        particle = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
+        key = getattr(s, "key", id(s))
+        recent = self._ack_recent.get(key)
+        task = None
+        try:
+            writer = getattr(self.bot, "fillers", None) or FillerWriter(
+                getattr(self.bot, "llm", None), self.bot.s
+            )
+            if writer.enabled():
+
+                async def generate_clip():
+                    got = await write_line(
+                        writer,
+                        kind="voice",
+                        question=question,
+                        lang=lang,
+                        particle=particle,
+                        avoid=recent,
+                    )
+                    if got is None or got.text in recent:
+                        return None
+                    return got.text, await self._ack_clip(got.text, lang, got.generic)
+
+                task = asyncio.create_task(generate_clip())
+            made = None
+            if task is not None:
+                timeout = float(getattr(self.bot.s, "voice_ack_timeout_s", 3.0))
+                done, _ = await asyncio.wait({task}, timeout=timeout)
+                if task in done and not task.cancelled() and task.exception() is None:
+                    made = task.result()
+                if made is None:
+                    task.cancel()
+            if made is not None:
+                text, pcm = made
+            else:
+                text = self._ack_fallback(lang, particle, recent)
+                pcm = self._ack_pcm.get(f"{lang}:{text}")
+                if pcm is None:
+                    pcm = await self._ack_clip(text, lang, True)
+                    if len(self._ack_pcm) < 64:
+                        self._ack_pcm[f"{lang}:{text}"] = pcm
+            self._ack_recent.add(key, text)
+            if not s.speech_ready:
+                await self._play(s, pcm)
+        except asyncio.CancelledError:
+            if task is not None:
+                task.cancel()
+            raise
+        except Exception:
+            logger.warning("acknowledgment failed", exc_info=True)
+
+    async def _ack_clip(self, text: str, lang: str, reusable: bool) -> bytes:
+        """TTS of an acknowledgement; a reusable line is loaded from / saved to the disk cache."""
+        clips = ClipCache.for_settings(self.bot.s, pitch=0.0) if reusable else None  # raw clips
+        if clips is not None:
+            pcm = await asyncio.to_thread(clips.get, lang, text)
+            if pcm:
+                return pcm
+        pcm = await asyncio.to_thread(say, self.bot.s, self.bot.llm, text, lang)
+        if clips is not None:
+            await asyncio.to_thread(clips.put, lang, text, pcm)
+        return pcm
+
+    def _ack_fallback(self, lang: str, particle: str, recent) -> str:
+        """A hand-written line not said in the last 3, preferring ones whose clip is cached."""
+        lines = [t(f"ack_voice_{n}", lang) for n in range(1, POOL_SIZE + 1)]
+        if lang == "th":
+            lines = [with_particle(x, particle) for x in lines]
+        fresh = [x for x in lines if x not in recent] or lines
+        ready = [x for x in fresh if f"{lang}:{x}" in self._ack_pcm]
+        return random.choice(ready or fresh)
+
+    async def speak(self, s: MeetingSession, text: str, question: str = "") -> None:
+        """Say a short spoken version of `text` in the voice channel. The written answer is
+        already posted, so any failure here is logged and swallowed."""
+        bot = self.bot
+        if not bot.s.voice_reply or s.ending or s.speech_pending or not _connected(s.vc):
+            return
+        # Claim the pipeline before its first await. Two transcription workers can answer at once;
+        # only one should pay for shortening and TTS when Discord can play only one source.
+        s.speech_pending = True
+        try:
+            # The cheap model: ~1-2 s versus ~8 s for the thinking model, and it is plenty here.
+            spoken = await asyncio.to_thread(
+                spoken_text, bot.llm, bot.s.gate_model, question, text, s.lang
+            )
+            if not spoken:
+                return
+            spoken = with_particle(spoken, str(getattr(bot.s, "voice_particle", "ค่ะ") or "ค่ะ"))
+            pcm = await asyncio.to_thread(say, bot.s, bot.llm, spoken, s.lang)
+            s.speech_ready = True
+            if not bot.s.voice_reply or s.ending:
+                return
+            await self._log_salid_line(s, spoken)
+            await self._play(s, pcm)  # waits for a playing acknowledgment instead of cutting it off
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("spoken reply failed", exc_info=True)
+        finally:
+            s.speech_pending = False
+            s.speech_ready = False
+
+    async def _log_salid_line(self, s: MeetingSession, spoken: str) -> None:
+        """Salid's own spoken answer joins the transcript (as "สลิด") and the voice log, so the
+        minutes document shows both sides. Not while not recording. Never raises."""
+        if s.recording == "not_recording" or not spoken.strip():
+            return
+        try:
+            now = self.bot.s.now()
+            s.transcript.add(now, md.SALID_SPEAKER, spoken)
+            uid = getattr(getattr(self.bot, "user", None), "id", 0) or 0
+            await self.bot.record_voice(s.voice_channel, uid, md.SALID_SPEAKER, spoken, now)
+        except Exception:
+            logger.warning("could not log Salid's spoken line", exc_info=True)
+
+    async def _play(self, s: MeetingSession, pcm: bytes) -> None:
+        """Play PCM (24 kHz mono) and wait until it ends; clips queue on `play_lock` so they never
+        overlap or reorder. Sets the echo-guard flags."""
+        async with s.play_lock:
+            vc = s.vc
+            if s.ending or not self.bot.s.voice_reply or not _connected(vc) or vc.is_playing():
+                return
+            loop = asyncio.get_running_loop()
+            done: asyncio.Future = loop.create_future()
+
+            def finished(err: Exception | None) -> None:  # runs on the player thread
+                def resolve() -> None:
+                    if not done.done():
+                        done.set_result(err)
+
+                with contextlib.suppress(RuntimeError):  # loop already closed
+                    loop.call_soon_threadsafe(resolve)
+
+            source: discord.AudioSource = pcm_source(pcm, getattr(self.bot.s, "tts_pitch", 1.0))
+            owned = False
+            s.speaking, s.speaking_since = True, time.monotonic()
+            try:
+                vc.play(source, after=finished)
+                owned = True
+                err = await asyncio.wait_for(done, pcm_duration_s(pcm) + SPEAK_TIMEOUT_PAD_S)
+                if err:
+                    logger.warning("spoken reply playback error: %s", err)
+            except TimeoutError:
+                logger.warning("spoken reply playback timed out")
+            finally:
+                s.speaking = False
+                s.speaking_until = time.monotonic() + SPEAK_COOLDOWN_S
+                _stop_playback(vc)
+                if not owned:
+                    with contextlib.suppress(Exception):
+                        source.cleanup()
 
     # ---- ending
-    async def end(self, guild_id: int, reason: str = "command") -> None:
-        s = self.sessions.get(guild_id)
+    async def end(self, key: tuple[int, int], reason: str = "command") -> None:
+        s = self.sessions.get(key)
         if s is None or s.ending:
             return
         s.ending = True
-        self.sessions.pop(guild_id, None)
-        logger.info("meeting ending in guild %s (%s)", guild_id, reason)
+        s.captions.turn_off()  # captions stop with the meeting
+        self.sessions.pop(key, None)
+        held = (s.guild_id, getattr(s.body, "index", 0))
+        self._reserved.add(held)  # the body stays taken until its voice connection is let go
+        self._note_end(key, reason)
+        logger.info("meeting ending in guild %s channel %s (%s)", key[0], key[1], reason)
+        if reason != "shutdown":  # a restart keeps the record so the meeting is rejoined
+            await self._unpersist(key)
+        if s.live is not None:
+            with contextlib.suppress(Exception):
+                await s.live.close()
+        _stop_playback(s.vc)
         with contextlib.suppress(Exception):
             s.vc.stop_listening()
         with contextlib.suppress(Exception):
             await s.vc.disconnect()
+        self._reserved.discard(held)
+        s.released.set()
+        if reason not in ("shutdown", "preempted"):
+            self._rescan(key[0])  # a body is free: a waiting room may take it
         s.enqueue(s.segmenter.flush_all())
         with contextlib.suppress(asyncio.TimeoutError):  # let pending segments finish
             await asyncio.wait_for(s.queue.join(), timeout=90)
         for task in s.tasks:
             if task is not asyncio.current_task():
                 task.cancel()
-        await self._post_summary(s, reason)
+        try:
+            await self._post_summary(s, reason)
+        finally:
+            if s.on_end is not None:
+                try:
+                    await s.on_end(s)
+                except Exception:
+                    logger.exception("meeting end callback failed")
+
+    async def _post_minutes(self, s: MeetingSession, text: str, files=None):
+        """The summary goes to the channel chosen for the minutes, else (or if that fails) to the
+        meeting's own text channel."""
+        kw = {"files": files} if files else {}
+        if s.minutes_channel_id is not None:
+            ch = s.voice_channel.guild.get_channel(s.minutes_channel_id)
+            if ch is not None:
+                try:
+                    return await ch.send(text, **kw)
+                except discord.HTTPException:
+                    logger.warning("could not post the minutes to channel %s", ch.id)
+        if files:
+            return await self._post(s, text, files=files)
+        return await self._post(s, text)
+
+    def _attendee_names(self, s: MeetingSession) -> list[str]:
+        """Display names of everyone who was in the room or spoke (humans only)."""
+        guild = s.voice_channel.guild
+        names: list[str] = []
+        for uid in sorted(s.attendee_ids):
+            m = guild.get_member(uid)
+            if m is None or getattr(m, "bot", False):
+                continue
+            n = getattr(m, "display_name", "")
+            if n and n not in names:
+                names.append(n)
+        return names
+
+    async def _minutes_doc_file(self, s: MeetingSession, ended: datetime):
+        """The minutes document (summary + who said what) as a PDF `discord.File`, attached to the
+        first summary message. Flag `meeting_transcript_doc`; never for a not-recording / declined
+        meeting. None when off or on failure; never raises."""
+        try:
+            bot = self.bot
+            if s.recording == "not_recording" or not bot.team.enabled(
+                s.guild_id, "meeting_transcript_doc"
+            ):
+                return None
+            lines = [(ln.at, ln.speaker, ln.text) for ln in s.transcript.lines]
+            info = md.MeetingInfo(
+                room=getattr(s.voice_channel, "name", ""),
+                started_at=s.started_at,
+                ended_at=ended,
+                attendees=self._attendee_names(s),
+                summary=s.summary_text,
+            )
+            lang = s.lang
+            markdown = md.render_markdown(info, md.group_turns(lines), lang)
+
+            def fonts():
+                return find_fonts(bot.s.pdf_font)
+
+            try:
+                fmt = "pdf"
+                data = await asyncio.to_thread(
+                    md.build_file, fmt, markdown, org=getattr(s.voice_channel.guild, "name", ""),
+                    lang=lang, generated_at=ended, fonts=fonts,
+                )  # fmt: skip
+            except Exception:
+                logger.warning("minutes PDF failed; attaching Markdown", exc_info=True)
+                fmt, data = "md", markdown.encode("utf-8")
+            name = f"{md.file_stem(s.started_at)}.{fmt}"
+            return discord.File(io.BytesIO(data), filename=name)
+        except Exception:
+            logger.warning("could not build the minutes document", exc_info=True)
+            return None
+
+    def _store_minutes(self, s: MeetingSession, reason: str) -> None:
+        """Keep the summary text so it can be sent elsewhere later (deliver_minutes). Never raises."""
+        docs = getattr(self.bot, "docs", None)
+        if docs is None or not s.summary_text:
+            return
+        ended = self.bot.s.now().astimezone(UTC).isoformat(timespec="seconds")
+        try:
+            docs.put(
+                MINUTES,
+                s.guild_id,
+                f"{ended}-{s.voice_channel.id}",
+                {
+                    "voice_channel_id": s.voice_channel.id,
+                    "voice_channel_name": getattr(s.voice_channel, "name", ""),
+                    "attendee_ids": sorted(s.attendee_ids),
+                    "started_at": (s.started_at or self.bot.s.now()).isoformat(timespec="seconds"),
+                    "ended_at": ended,
+                    "reason": reason,
+                    "language": s.language,
+                    "attendee_names": self._attendee_names(s),
+                    "transcript_from": s.transcript_from.isoformat(timespec="seconds")
+                    if s.transcript_from
+                    else None,
+                    "summary": s.summary_text[:SUMMARY_MAX_CHARS],
+                },
+            )
+        except Exception:
+            logger.warning("could not store the meeting minutes", exc_info=True)
 
     async def _post_summary(self, s: MeetingSession, reason: str) -> None:
         from .bot import chunks
 
+        if reason == "declined" or s.recording == "not_recording":
+            return
         if not len(s.transcript):
-            await self._post(s, t("meet_no_transcript", s.lang))
+            await self._post_minutes(s, t("meet_no_transcript", s.lang))
             return
         try:
             body = await asyncio.to_thread(
@@ -672,20 +2212,42 @@ class MeetingManager:
                 self.bot.llm,
                 self.bot.s.gemini_model,
                 s.transcript.full_text(),
-                s.language,
+                "en" if s.lang == "en" else s.language,
             )
         except Exception:
             logger.exception("meeting summary failed")
             body = ""
         if not body:
-            await self._post(s, t("meet_summary_failed", s.lang))
+            await self._post_minutes(s, t("meet_summary_failed", s.lang))
             return
         why = t(f"end_{reason}", s.lang) if reason in END_REASONS else reason
         header = t("meet_summary_header", s.lang, reason=why)
-        for part in chunks(header + body, 1900):
-            await self._post(s, part)
+        s.summary_text = body
+        doc = await self._minutes_doc_file(s, self.bot.s.now())
+        for i, part in enumerate(chunks(header + body, 1900)):
+            sent = await self._post_minutes(s, part, files=[doc] if i == 0 and doc else None)
+            if i == 0 and sent is not None:
+                s.summary_url = getattr(sent, "jump_url", "") or ""
+        await asyncio.to_thread(self._store_minutes, s, reason)
         s.transcript.lines.clear()  # transcript is never persisted
 
     async def shutdown(self) -> None:
-        for gid in list(self.sessions):
-            await self.end(gid, "shutdown")
+        """The bot is stopping (deploy/restart): leave quietly. The meeting is NOT ended: its record
+        stays so on_ready rejoins it, and its transcript is in the memory log."""
+        for task in self._auto_tasks.values():
+            task.cancel()
+        for key in list(self.sessions):
+            s = self.sessions.pop(key, None)
+            if s is None:
+                continue
+            s.ending = True
+            if s.live is not None:
+                with contextlib.suppress(Exception):
+                    await s.live.close()
+            for task in s.tasks:
+                task.cancel()
+            _stop_playback(s.vc)
+            with contextlib.suppress(Exception):
+                s.vc.stop_listening()
+            with contextlib.suppress(Exception):
+                await s.vc.disconnect()

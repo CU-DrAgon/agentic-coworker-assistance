@@ -104,6 +104,13 @@ class FirestoreMemoryStore:
         ref.update({"text": text, **({"edited_at": iso(edited_at)} if edited_at else {})})
         return True
 
+    def set_visibility(self, guild_id, message_id, visibility) -> bool:
+        ref = self._msg_ref(guild_id, message_id)
+        if not ref.get().exists:
+            return False
+        ref.update({"visibility": visibility})
+        return True
+
     def delete_messages(self, guild_id, message_ids) -> list[tuple[int, str]]:
         affected: set[tuple[int, str]] = set()
         for mid in message_ids:
@@ -228,7 +235,7 @@ class FirestoreMemoryStore:
             out += [
                 _sum_from(s.to_dict())
                 for s in snaps.stream()
-                if s.to_dict()["channel_id"] in allowed
+                if s.to_dict()["channel_id"] in allowed and not s.to_dict().get("dirty")
             ]
         return sorted(out, key=lambda s: (s.local_date, s.channel_id))
 

@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -12,7 +13,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from google.adk.agents import LlmAgent
 from google.adk.agents.run_config import RunConfig
@@ -21,18 +22,33 @@ from google.adk.runners import InMemoryRunner
 from google.adk.tools import FunctionTool
 from google.genai import types
 
+from .bizfin_tools import BIZFIN_PROMPT
+from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
 from .deck import MAX_DECK_BYTES, DeckSpec, Slide, chart_data, deck_filename, render_deck
 from .embed import NullEmbedder, cosine
+from .flights import FLIGHT_PROMPT
+from .freetime import FREETIME_PROMPT
 from .gate import extract_keywords
+from .gmaps import MAPS_PROMPT
 from .i18n import resolve_lang, t
+from .ideas import IDEAS_PROMPT
+from .markets import MARKETS_PROMPT
+from .media import parse_message_ref
+from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
 from .memory_index import entries_for
 from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
-from .memory_summary import render_summary
+from .memory_summary import render_summary, summary_items
+from .places import PLACES_PROMPT
+from .search import SEARCH_PROMPT
+from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
+from .web_read import make_read_web
+from .wiki import WIKI_PROMPT
 
 logger = logging.getLogger(__name__)
-MAX_ROUNDS = 4
+MAX_ROUNDS = 6
+SPOKEN_MAX_ROUNDS = 3  # a spoken answer: 3 tool rounds at most, then it must answer
 APP_NAME = "salid"
 # Vertex 429s (shared quota) and 5xx are retried with backoff by the genai HTTP client
 # (same policy as meeting_scribe.agents).
@@ -415,11 +431,47 @@ class MemoryTools:
         allowed: dict[int, str],
         settings,
         retention_days: int | None = None,
+        opener: Callable[[int | None, int, int], dict] | None = None,
+        visibility: Visibility | None = None,
         embedder=None,
+        retention_of: Callable[[], int] | None = None,
     ):
+        self.opener = opener  # (channel id | None, message id, file index) -> {"text": ...}
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
-        self.retention_days = retention_days or settings.memory_retention_days
+        self._retention_days = retention_days or settings.memory_retention_days
+        self._retention_of = retention_of  # read at call time: a shortened setting applies at once
+        # With `visibility` the role hierarchy and disclosure grants apply (salid.memory_access);
+        # `hidden` collects matching records the asker may not see (never shown, only counted, so
+        # Salid can offer a disclosure request).
+        self.vis = visibility
+        self.hidden: list[MemoryMessage] = []
+        self.hidden_in_dm = 0  # of those: would be visible if asked in a DM
         self.embedder = embedder or NullEmbedder()
+
+    def open_file(self, message_link_or_id: str, file_index: int = 0) -> dict:
+        """Re-read an attachment (document, audio, video, image) of a remembered message. The
+        channel check happens in the bot against `allowed`; nothing outside it is returned."""
+        ref = parse_message_ref(message_link_or_id)
+        if ref is None:
+            return {"error": "give the message link (jump url) or message id"}
+        if self.opener is None:
+            return {"error": "opening files is not available here"}
+        cid, mid = ref
+        return self.opener(cid, mid, int(file_index))
+
+    @property
+    def retention_days(self) -> int:
+        """The guild's CURRENT retention (not the value at construction)."""
+        if self._retention_of is not None:
+            try:
+                return max(int(self._retention_of()), 1)
+            except Exception:  # fail closed on the construction value
+                pass
+        return max(self._retention_days, 1)
+
+    def floor(self) -> date:
+        """Oldest day any tool may read: what the daily purge keeps (see `cutoff_date`)."""
+        return self.s.now().date() - timedelta(days=self.retention_days)
 
     def _range(self, start_date: str, end_date: str) -> tuple[str, str]:
         a, b = date.fromisoformat(start_date), date.fromisoformat(end_date)
@@ -427,10 +479,75 @@ class MemoryTools:
             raise ValueError("end_date is before start_date")
         if (b - a).days + 1 > MAX_CHAT_DAYS:
             raise ValueError(f"range too long: at most {MAX_CHAT_DAYS} days per call")
-        return a.isoformat(), b.isoformat()
+        return max(a, self.floor()).isoformat(), b.isoformat()  # past retention: never read
+
+    def _shown(self) -> dict[int, str]:
+        """Channels whose day summaries may be read: the allowed ones plus, with a hierarchy,
+        the DM briefings of people the asker outranks (single-author, never private notes)."""
+        return {**self.allowed, **(self.vis.dm_names if self.vis else {})}
 
     def _name(self, channel_id: int) -> str:
-        return self.allowed.get(channel_id, str(channel_id))
+        shown = {**(self.vis.read_channels if self.vis else {}), **self._shown()}
+        if is_dm_scope(channel_id) and channel_id not in shown:
+            return "DM"
+        return shown.get(channel_id, str(channel_id))
+
+    def _read_ids(self) -> set[int]:
+        """Channels to read from the store: with a hierarchy, every channel (hidden records are
+        counted, then filtered by `_visible`)."""
+        return set(self.allowed) | (set(self.vis.read_channels) if self.vis else set())  # + hidden
+
+    def _visible(self, m: MemoryMessage) -> bool:
+        return self.vis is None or message_visible(m, self.vis.scope)
+
+    def _person_ids(self, person: str | None) -> tuple[set[int], str]:
+        """Member ids matching a name or mention, and the lower-cased text for author names."""
+        text = (person or "").strip().lstrip("@").casefold()
+        if not text:
+            return set(), ""
+        ids = {int(x) for x in re.findall(r"<@!?(\d{1,25})>", person or "")}
+        if text.isdigit():
+            ids.add(int(text))
+        if self.vis:
+            ids |= {i for i, n in self.vis.people.items() if text in n.casefold()}
+        return ids, text
+
+    def _by_person(self, m: MemoryMessage, ids: set[int], text: str) -> bool:
+        return not text or m.author_id in ids or text in m.author_name.casefold()
+
+    def _local_time(self, text: str | None) -> datetime | None:
+        """A local (guild time zone) ISO date-time from the model -> aware datetime."""
+        if not text or not str(text).strip():
+            return None
+        d = datetime.fromisoformat(str(text).strip())
+        return d.replace(tzinfo=self.s.zone) if d.tzinfo is None else d
+
+    def _hide(self, m: MemoryMessage) -> None:
+        if self.vis is None or not hidden_but_askable(m, self.vis.scope):
+            return
+        if all(h.message_id != m.message_id for h in self.hidden):
+            self.hidden.append(m)
+            if m.author_id in self.vis.scope.dm_authors:
+                self.hidden_in_dm += 1
+
+    def _hidden_note(self) -> str | None:
+        if not self.hidden:
+            return None
+        n = len(self.hidden)
+        hint = (
+            " Part of it may be shareable if the person asks in a DM with Salid."
+            if self.hidden_in_dm
+            else ""
+        )
+        return (
+            f"{n} other matching record(s) (private notes or private channels) are left out of "
+            "these results. This is only a footnote: everything returned here IS shareable, so "
+            "answer the question fully from it first (never refuse or say you cannot summarise "
+            "because of this). Then add at most one short sentence that some private notes exist "
+            "and offer to ask the owner with request_disclosure; never guess, describe or call them "
+            "meeting records."
+            f"{hint}"
+        )
 
     def _msg(self, m: MemoryMessage) -> dict:
         return {
@@ -456,12 +573,18 @@ class MemoryTools:
             out.append(it)
         return out, False
 
-    def chat_days(self, start_date: str, end_date: str) -> dict:
+    _summary_lines = staticmethod(summary_items)  # searchable lines of a summary (also: wiki)
+
+    def chat_days(self, start_date: str, end_date: str, channel_name: str | None = None) -> dict:
         start, end = self._range(start_date, end_date)
+        shown = self._shown()
+        if channel_name:
+            want = channel_name.strip().lstrip("#").casefold()
+            shown = {i: n for i, n in shown.items() if n.casefold() == want}
+            if not shown:
+                return {"count": 0, "days": [], "note": f"no channel named {channel_name!r}"}
         sums = [
-            x
-            for x in self.store.summaries(self.guild_id, self.allowed, start, end)
-            if x.message_count > 0
+            x for x in self.store.summaries(self.guild_id, shown, start, end) if x.message_count > 0
         ]
         # Messages newer than the (living) summary, so nothing between updates is missed. One
         # read per day, split by channel here.
@@ -474,7 +597,7 @@ class MemoryTools:
                 continue
             by_channel: dict[int, list[MemoryMessage]] = {}
             for m in self.store.messages(
-                self.guild_id, self.allowed, d, d, limit=MAX_ROWS, newest_first=False
+                self.guild_id, set(shown), d, d, limit=MAX_ROWS, newest_first=False
             ):
                 by_channel.setdefault(m.channel_id, []).append(m)
             for cid in sorted(by_channel):
@@ -482,7 +605,9 @@ class MemoryTools:
                 if x is not None and x.final:
                     continue
                 rows = [
-                    m for m in by_channel[cid] if x is None or x.cursor is None or m.key > x.cursor
+                    m
+                    for m in by_channel[cid]
+                    if (x is None or x.cursor is None or m.key > x.cursor) and self._visible(m)
                 ]
                 tail += [self._msg(m) for m in rows[:TAIL_PER_CHANNEL]]
         tail = tail[-TAIL_TOTAL:]
@@ -517,6 +642,7 @@ class MemoryTools:
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
+        person: str | None = None,
         query: str | None = None,
         semantic: bool = True,
     ) -> dict:
@@ -542,15 +668,16 @@ class MemoryTools:
         )
         if end < start:
             raise ValueError("end_date is before start_date")
-        start = max(start, end - timedelta(days=MAX_SEARCH_DAYS - 1))
+        start = max(start, end - timedelta(days=MAX_SEARCH_DAYS - 1), self.floor())
         a, b = start.isoformat(), end.isoformat()
+        pids, ptext = self._person_ids(person)
         raw_from = (today - timedelta(days=RAW_RECENT_DAYS - 1)).isoformat()
 
         pending = None
         if use_meaning:  # embed the query while the summaries load
             pending = _embed_pool.submit(_query_vector, self.embedder, query or " ".join(kws))
         t_index = time.monotonic()
-        entries = entries_for(self.store, self.guild_id, self.allowed, a, b, self.embedder)
+        entries = entries_for(self.store, self.guild_id, self._shown(), a, b, self.embedder)
         ms_index = (time.monotonic() - t_index) * 1000
         qv, ms_embed = None, 0.0
         if pending is not None:
@@ -575,7 +702,7 @@ class MemoryTools:
         for e in entries:
             for line in e.items:
                 h = hits(line)
-                if h:
+                if h and (not ptext or ptext in line.casefold()):
                     g = group(e.local_date, e.channel_id)
                     g["score"] += h * SUMMARY_WEIGHT
                     g["summary"].append(line[:300])
@@ -584,28 +711,38 @@ class MemoryTools:
                     (cosine(qv, v), line)
                     for v, line in zip(e.vectors, e.items, strict=False)
                     if len(v) == len(qv)  # vectors of another model/dim are ignored
+                    and (not ptext or ptext in line.casefold())
                 ]
                 best = max(sims, default=(0.0, ""))
                 if best[0] >= MIN_SIMILARITY:
                     g = group(e.local_date, e.channel_id)
                     g["sim"] = best[0]
                     g["near"] = [line[:300] for _, line in sorted(sims, reverse=True)[:2]]
+
+        def scan(m: MemoryMessage) -> None:
+            """Count a keyword-matching raw message (role hierarchy and person filter apply)."""
+            h = hits(f"{m.text} {m.author_name}")
+            if not h or not self._by_person(m, pids, ptext):
+                return
+            if not self._visible(m):
+                self._hide(m)
+                return
+            g = group(m.local_date, m.channel_id)
+            g["score"] += h
+            g["n_msgs"] += 1
+            if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
+                g["messages"].append(self._msg(m))
+
         raw_queries = 0
         raw_to = min(b, today.isoformat())  # no reads for days that have not happened yet
         if kws and max(a, raw_from) <= raw_to:  # recent raw messages (not summarised yet)
             raw_queries += 1
             rows = self.store.messages(
-                self.guild_id, self.allowed, max(a, raw_from), raw_to, limit=MAX_ROWS_SEARCH,
-                newest_first=True,
+                self.guild_id, self._read_ids(), max(a, raw_from), raw_to,
+                limit=MAX_ROWS_SEARCH, newest_first=True,
             )  # fmt: skip
             for m in rows:  # newest first
-                h = hits(f"{m.text} {m.author_name}")
-                if h:
-                    g = group(m.local_date, m.channel_id)
-                    g["score"] += h
-                    g["n_msgs"] += 1
-                    if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
-                        g["messages"].append(self._msg(m))
+                scan(m)
 
         rankings = (
             sorted((k for k, g in groups.items() if g["score"] > 0),
@@ -621,16 +758,22 @@ class MemoryTools:
         order = order[: max(1, min(int(limit), 50))]
 
         if kws:  # quotes and links for the top older hits
-            for day, cid in [k for k in order if k[0] < raw_from][:RAW_GROUPS]:
+            readable = self._read_ids()
+            for day, cid in [k for k in order if k[0] < raw_from and k[1] in readable][:RAW_GROUPS]:
                 raw_queries += 1
                 g = groups[(day, cid)]
                 for m in reversed(
                     self.store.messages_after(self.guild_id, cid, day, None, RAW_GROUP_FETCH)
                 ):
-                    if hits(f"{m.text} {m.author_name}"):
-                        g["n_msgs"] += 1
-                        if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
-                            g["messages"].append(self._msg(m))
+                    h = hits(f"{m.text} {m.author_name}")
+                    if not h or not self._by_person(m, pids, ptext):
+                        continue
+                    if not self._visible(m):
+                        self._hide(m)
+                        continue
+                    g["n_msgs"] += 1
+                    if len(g["messages"]) < SEARCH_MSGS_PER_GROUP:
+                        g["messages"].append(self._msg(m))
 
         def match(g: dict) -> str:
             kw, mean = g["score"] > 0, g["sim"] >= MIN_SIMILARITY
@@ -660,6 +803,8 @@ class MemoryTools:
             notes.append(RAW_NOTE)
         if notes:
             out["note"] = " | ".join(notes)
+        if self._hidden_note():
+            out["withheld"] = self._hidden_note()
         kinds = [h["match"] for h in fit]
         logger.info(
             "memory search guild=%s ms=%d ms_embed=%d ms_index=%d raw_queries=%d hits=%d "
@@ -676,8 +821,13 @@ class MemoryTools:
         channel_name: str | None = None,
         keyword: str | None = None,
         limit: int = 50,
+        person: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> dict:
         start, end = self._range(start_date, end_date)
+        pids, ptext = self._person_ids(person)
+        t0, t1 = self._local_time(since), self._local_time(until)
         channel_id = None
         if channel_name:
             want = channel_name.strip().lstrip("#").casefold()
@@ -688,17 +838,48 @@ class MemoryTools:
                     "messages": [],
                     "note": f"no channel named {channel_name!r} available",
                 }
+        limit = max(1, min(int(limit), MAX_MESSAGE_LIMIT))
+        if self.vis is None and not ptext and not (t0 or t1):
+            rows = self.store.messages(
+                self.guild_id,
+                self.allowed,
+                start,
+                end,
+                channel_id=channel_id,
+                keyword=keyword,
+                limit=limit,
+                newest_first=True,
+            )
+            return {"count": len(rows), "messages": [self._msg(m) for m in rows]}
         rows = self.store.messages(
             self.guild_id,
-            self.allowed,
+            self._read_ids() if channel_id is None else {channel_id},
             start,
             end,
             channel_id=channel_id,
             keyword=keyword,
-            limit=max(1, min(int(limit), MAX_MESSAGE_LIMIT)),
+            limit=MAX_ROWS_SEARCH,
             newest_first=True,
         )
-        return {"count": len(rows), "messages": [self._msg(m) for m in rows]}
+        shown = []
+        for m in rows:
+            if not self._by_person(m, pids, ptext):
+                continue
+            if (t0 and m.created_at < t0) or (t1 and m.created_at >= t1):
+                continue
+            if self._visible(m):
+                shown.append(m)
+            elif keyword or ptext:
+                self._hide(m)
+        out: dict = {"count": len(shown[:limit]), "messages": [self._msg(m) for m in shown[:limit]]}
+        if len(shown) > limit:
+            out["note"] = (
+                f"{len(shown) - limit} older message(s) in this range were not returned: narrow "
+                "with since/until (local date-time) or channel_name to read the whole period"
+            )
+        if self._hidden_note():
+            out["withheld"] = self._hidden_note()
+        return out
 
     def call(self, name: str, args: dict) -> dict:
         if name not in {"chat_days", "chat_messages", "chat_search"}:
@@ -744,6 +925,7 @@ class FileInput:
     data: bytes = b""
     size: int = 0
     skip: str = ""
+    label: str = ""  # replaces the default "[ไฟล์ #N: name]" label (transcripts of audio/video)
 
     def __post_init__(self):
         self.size = self.size or len(self.data)
@@ -811,7 +993,7 @@ def file_parts(files: list[FileInput]) -> tuple[list[types.Part], list[FileInput
     parts: list[types.Part] = []
     bad: list[FileInput] = []
     for f in files:
-        label = f"[ไฟล์ #{f.index}: {f.filename}]"
+        label = f.label or f"[ไฟล์ #{f.index}: {f.filename}]"
         try:
             if f.mime == "text/plain":
                 body = f.data.decode("utf-8", errors="replace")
@@ -844,63 +1026,184 @@ class FileActions:
 
 PERSONA = {
     "th": (
-        "คุณชื่อ “สลิด” เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
-        "นิสัยเป็นกันเอง สุภาพ อารมณ์ดี พูดภาษาไทยเป็นธรรมชาติ ลงท้ายด้วยคำว่าครับ "
-        "ตอบตามภาษาที่ผู้ใช้พิมพ์มา และปรับความยาวตามคำถาม (คุยเล่นตอบสั้น งานที่ขอรายละเอียดตอบละเอียดได้)\n"
+        "คุณคือ “สลิด” เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามว่าใครทำอะไร ตามงาน รายงาน และรักษาความลับตามลำดับชั้น role โดยเสนอขออนุญาตเจ้าของข้อมูลเมื่อผู้ถามยังไม่มีสิทธิ์เห็น) พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: "
+        "สั้นและเป็นธรรมชาติเป็นค่าเริ่มต้น เป็นผู้หญิง เรียกตัวเองว่า “สลิด” (ห้ามใช้ ผม/ฉัน/ครับ) ใช้คำลงท้ายอย่าง ค่ะ นะคะ ได้ค่ะ ตามจังหวะที่คนไทยพูดกัน (ประโยคคำถามใช้ “คะ”) "
+        "ปรับน้ำเสียงตามอีกฝ่าย (เขาเล่นมาก็เล่นด้วย เขาจริงจังก็จริงจัง) เรียกชื่อคนที่คุยด้วยบ้างเป็นครั้งคราว และจำเรื่องที่คุยกันมาก่อนหน้า\n"
     ),
     "en": (
-        "Your name is “Salid” (สลิด). You are the shop's secretary and teammate in the team's "
-        "Discord chat. You are friendly, polite and upbeat. ALWAYS reply in English, even if the "
-        "user writes in Thai (keep Thai names, vendors and category names as they are). "
-        "Adjust the length to the question (short for small talk, detailed when the user asks "
-        "for detail)\n"
+        "You are “Salid”, a capable, warm teammate and secretary in the team's Discord chat, and the team's executive assistant and coordinator: you track who is doing what, follow up on work, report, and keep confidential information according to the role hierarchy, offering to ask the owner when the asker may not see something. "
+        "Talk like a real person, not a robot: short and natural by default, relaxed, polite, with a "
+        "bit of warmth. Match the other person's energy (playful with playful, serious with serious), "
+        "use their name now and then, and remember what was said earlier. You are a friendly woman "
+        "and call yourself “Salid”; write natural English only, with no Thai words, Thai particles "
+        "(like ka / na ka) or Thai-style honorific endings. ALWAYS reply in English, even if the user "
+        "writes in Thai or the memory, documents and tool results are in Thai: translate or "
+        "paraphrase anything you quote (keep only proper names such as people, vendors and "
+        "product names as they are).\n"
     ),
     "auto": (
-        "คุณชื่อ “สลิด” (Salid) เป็นเลขาและเพื่อนร่วมทีมของร้าน อยู่ในแชต Discord ของทีม "
-        "นิสัยเป็นกันเอง สุภาพ อารมณ์ดี ตอบด้วยภาษาเดียวกับข้อความล่าสุดของผู้ใช้ "
-        "(reply in the same language as the user's latest message): ถ้าผู้ใช้พิมพ์ไทยให้ตอบไทยเป็นธรรมชาติ "
-        "ลงท้ายด้วยคำว่าครับ ถ้าพิมพ์อังกฤษให้ตอบเป็นอังกฤษ "
-        "และปรับความยาวตามคำถาม (คุยเล่นตอบสั้น งานที่ขอรายละเอียดตอบละเอียดได้)\n"
+        "คุณคือ “สลิด” (Salid) เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามงานและรายงาน รักษาความลับตามลำดับชั้น / executive assistant and coordinator) พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: "
+        "สั้นและเป็นธรรมชาติเป็นค่าเริ่มต้น ปรับน้ำเสียงตามอีกฝ่าย เรียกชื่อคนที่คุยด้วยบ้าง และจำเรื่องที่คุยกันมา "
+        "ตอบด้วยภาษาเดียวกับข้อความล่าสุดของผู้ใช้ (reply in the same language as the user's latest "
+        "message): ถ้าพิมพ์ไทยตอบไทยธรรมชาติ เป็นผู้หญิง เรียกตัวเองว่า “สลิด” (ห้ามใช้ ผม/ฉัน/ครับ) ลงท้ายด้วยคำว่าค่ะ (ประโยคคำถามใช้ “คะ”) ถ้าพิมพ์อังกฤษตอบอังกฤษแบบเป็นกันเอง\n"
     ),
 }
 
+HUMAN_STYLE_PROMPT = (
+    "สไตล์การตอบ: เหมือนเพื่อนร่วมงานที่เก่ง ไม่ใช่ระบบ. คุยเล่นหรือถามสั้นๆ ตอบ 1-2 ประโยค ไม่ใช้หัวข้อหรือบูลเล็ตในการคุยทั่วไป "
+    "(ใช้รายการหรือโครงสร้างเฉพาะตอนเป็นรายการจริงๆ หรือรายงาน/สรุปที่ผู้ใช้ขอ). "
+    "ห้ามใช้ประโยคแบบหุ่นยนต์ เช่น “ระบบได้รับคำสั่งแล้ว” “ในฐานะ AI” “ฉันสามารถช่วยคุณได้ในเรื่องต่อไปนี้” "
+    "ห้ามแนะนำตัวซ้ำหรือไล่รายการสิ่งที่ทำได้ เว้นแต่ถูกถามตรงๆ. "
+    "ถ้าไม่แน่ใจว่าอีกฝ่ายต้องการอะไร ให้ถามกลับสั้นๆ ข้อเดียว แทนที่จะโยนตัวเลือกยาวๆ. "
+    "ทำเลยเมื่อสั่งชัดแล้ว แล้วบอกผลสั้นๆ. ถ้าเป็นรายงานหรือสรุป จะจัดโครงสร้างให้อ่านง่ายก็ได้. "
+    "อีโมจิ 0-1 ตัวต่อข้อความ ไม่ต้องใส่ทุกข้อความ และห้ามใส่เป็นพรวน. "
+    "ใช้ประวัติแชตเพื่อเข้าใจข้อความล่าสุดเท่านั้น ห้ามหยิบเรื่องเก่าที่ไม่เกี่ยวมาพูดหรือเสนอต่อยอด. "
+    "ข้อเสนอต่อยอดมีได้อย่างมาก 1 ประโยคสั้นๆ และต้องเกี่ยวข้องกับสิ่งที่เพิ่งคุยโดยตรงเท่านั้น ห้ามปิดท้ายด้วยการเชียร์หรือเสนอบริการทุกครั้ง. "
+    "ห้ามอ้างข้อจำกัดของ Discord หรือของระบบที่คุณไม่ได้ตรวจสอบจริง (เช่น “บอตส่ง DM ไม่ได้”: จริงๆ ส่งได้ด้วยเครื่องมือ send_dm). "
+    "ถ้าไม่มีเครื่องมือสำหรับเรื่องที่ขอ ให้บอกตรงๆ ว่า “เรื่องนี้สลิดยังทำไม่ได้ค่ะ” แล้วเสนอทางที่ทำได้แทน ห้ามแต่งเหตุผลทางเทคนิคขึ้นมาเอง.\n"
+)
+
+# Settings by talking: the tools are bound in code to the guild, channel and author.
+CHAT_TOOLS_PROMPT = (
+    "\nตั้งค่าด้วยการพูดคุย (เครื่องมือ set_channel_mode, set_channel_language, set_memory_days, show_settings, "
+    "hidden_channels, cancel_deep_task, send_dm, send_dm_many, post_message, deliver_file, set_my_notifications, show_my_notifications ถ้ามีให้ใช้): ทุกอย่างที่คำสั่ง / (slash) ทำได้ ผู้ใช้แค่บอกเป็นคำพูดก็พอ "
+    "เช่น “ห้องนี้ไม่ต้องตอบนะ” (set_channel_mode off), “ช่วยพูดอังกฤษในห้องนี้” (set_channel_language en), “ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์” / “speak English everywhere” (set_server_language en; กลับเป็นไทยด้วย th; ยืนยันด้วยภาษาใหม่), "
+    "“จำแค่ 30 วันพอ” (set_memory_days 30), “ตั้งค่าตอนนี้เป็นไง” (show_settings), “ทำไมสลิดไม่เห็นห้องบัญชี” (hidden_channels), "
+    "“ยกเลิกงานที่ทำอยู่” (cancel_deep_task). เรียกเครื่องมือแล้วยืนยันสั้นๆ ประโยคเดียว (เช่น “ได้เลยค่ะ ห้องนี้สลิดเงียบไว้ให้นะคะ”). "
+    "ถ้าเครื่องมือตอบ not_allowed ให้บอกเป็นกันเองว่าต้องให้แอดมินหรือผู้บริหารเป็นคนสั่ง. "
+    "ห้ามบอกให้ผู้ใช้พิมพ์คำสั่ง / ถ้าทำให้เองได้ (คำสั่ง / เป็นแค่ทางลัดเสริม).\n"
+    "ส่ง DM (เครื่องมือ send_dm ถ้ามี): สลิดส่งข้อความส่วนตัวหาสมาชิกในเซิร์ฟเวอร์ได้ เช่น “ส่งสรุปเข้า DM ผม” (to=me), "
+    "“ส่ง PDF ให้ผมทาง DM” (to=me, attach=ชื่อไฟล์จาก make_report_pdf), “DM รายงานให้หัวหน้า”, “ฝากบอกพี่มิวทาง DM ว่า...”. "
+    "ส่งให้คนอื่นจะมีบรรทัดบอกว่าใครฝาก จึงใส่เฉพาะสิ่งที่ผู้ถามบอกให้ฝากหรือข้อมูลที่ผู้รับเห็นได้อยู่แล้ว "
+    "ห้ามใส่ตัวเลขบัญชี ความจำของทีม หรือรายงานที่เป็นสิทธิ์เฉพาะผู้ถามให้คนอื่น. "
+    "ส่งสำเร็จให้ยืนยันในห้องสั้นๆ เช่น “ส่งเข้า DM ให้แล้วค่ะ”. ถ้าได้ dms_closed ให้บอกว่าอีกฝ่ายปิดรับ DM และบอกวิธีเปิดตาม guidance. "
+    "ถ้า ambiguous ให้ถามกลับว่าหมายถึงคนไหนจากชื่อที่ได้.\n"
+    "ประกาศไปห้องอื่น (เครื่องมือ post_message ถ้ามี): สลิดโพสต์ข้อความในห้องอื่นแทนผู้ถามได้ เช่น “ส่งข้อความไปห้องกลางว่าผมมีประชุมด่วน 9 โมง”, "
+    "“ประกาศในห้องรวมว่า...”, “แจ้งทุกคนในห้องการตลาดว่า...”, “บอกใน #general ว่า...” (ห้องกลาง / ห้องรวม / general = ห้องทั่วไปของเซิร์ฟเวอร์). "
+    "ห้ามบอกว่าส่งข้อความไปห้องอื่นไม่ได้ ห้ามเสนอแค่สร้างอีเวนต์หรือร่างอีเมลแทน. ใส่ text ตามถ้อยคำของผู้ถาม (สลิดเติม “📢 แจ้งจากคุณ…” ให้เอง) "
+    "mention: none (ค่าเริ่มต้น) / everyone / here / role:ชื่อ role / ชื่อคนที่ให้แท็ก ใช้ everyone หรือ here เฉพาะเมื่อผู้ถามบอกให้แจ้งทุกคน. "
+    "ถ้าให้ “แท็กคนที่เกี่ยวข้อง” ให้หาชื่อจากความจำทีม/งาน/ผู้เข้าประชุม ใส่ใน mention แล้วตั้ง tag_inferred=true (ต้องให้ผู้ถามยืนยันรายชื่อก่อนเสมอ; แก้ได้ เช่น “เพิ่ม A ด้วย” “เอา B ออก”; "
+    "คนที่มองไม่เห็นห้องนั้นจะไม่ถูกแท็ก เสนอส่ง DM แทน). ถ้าได้ needs_confirmation ให้แสดงบรรทัด preview ให้ผู้ถามยืนยันในข้อความถัดไปก่อน แล้วเรียกซ้ำด้วยอาร์กิวเมนต์เดิมทุกตัว; "
+    "ถ้า ambiguous ให้ถามว่าหมายถึงห้องไหน; ส่งสำเร็จตอบสั้นๆ พร้อมลิงก์ (link).\n"
+    "DM หลายคน (เครื่องมือ send_dm_many ถ้ามี): “DM บอกทุกคนในทีมการตลาดว่า...”, “ส่งข้อความหาทุกคนในห้อง #sales ทีละคน” = send_dm_many (people / role / channel / everyone). "
+    "ตั้งแต่ 4 คนขึ้นไปต้องให้ผู้ถามยืนยันรายชื่อก่อน (แสดง preview) เกิน 10 คนเฉพาะผู้บริหาร/ผู้จัดการ (ถ้าไม่ใช่ให้เสนอ post_message ในห้องแทน) สูงสุด 50 คน; "
+    "ส่งเป็นเบื้องหลัง ให้บอกว่า “เริ่มส่งแล้ว” แล้วสลิดจะรายงานผลในแชตเอง (ห้ามบอกว่าส่งเสร็จแล้ว); ห้ามส่งเรื่องโอนเงิน/รหัสผ่านให้คนอื่น. "
+    "send_dm ใช้กับ 1-3 คนเท่านั้น.\n"
+    "เข้า/ออกห้องเสียง (join_voice, leave_voice ถ้ามี): “เข้ามาประชุมหน่อย”, “มาฟังด้วย”, “join us” = เรียก join_voice ทันที (ห้ามใช้ schedule_meeting; "
+    "schedule_meeting ใช้เฉพาะเมื่อผู้ใช้ระบุเวลาในอนาคตชัดเจน); “ออกไปก่อน”, “ไปได้แล้ว” = leave_voice. "
+    "ส่งสรุป/มติประชุมที่จบแล้วไปห้องอื่น (deliver_minutes ถ้ามี): “ส่งสรุปประชุมเมื่อกี้ไปห้อง X”.\n"
+    "ส่งไฟล์/เอกสารให้คน (เครื่องมือ deliver_file ถ้ามี): สลิดส่งไฟล์หรือเอกสารต่อให้ได้ — โพสต์ในห้องอื่น ส่ง DM ให้คน หรือร่างอีเมลแนบไฟล์ "
+    "ใช้เมื่อได้ยิน “ส่ง / เอาไปลง / ฝากให้ / forward / send this to …” เช่น ตอบกลับ (reply) ไฟล์ PDF แล้วพิมพ์ “นำเอกสารนี้ไปส่งที่ห้องเปเปอร์แล้วแท็ก jemm ด้วย”. "
+    "ห้ามบอกว่าส่งไปห้องอื่นไม่ได้. เขียน note เองเป็นข้อความสั้นสุภาพ (ใช้ @[ชื่อ] เพื่อแท็ก ไม่ต้องแปะเนื้อหาเอกสาร) แล้วใส่ source=this "
+    "(ไฟล์ในข้อความนี้หรือข้อความที่ตอบกลับ) หรือลิงก์ข้อความจาก chat_search หรือชื่อ PDF ที่สลิดเพิ่งทำ. "
+    "destination ใส่ชื่อห้อง (ไทยหรืออังกฤษ ถ้าไม่เจอจะได้รายชื่อห้องให้เลือกชื่อที่ตรงแล้วเรียกใหม่) ชื่อคน หรือ email:ที่อยู่. "
+    "ถ้าได้ needs_confirmation (เช่นคนในห้องปลายทางยังมองไม่เห็นห้องต้นทาง) ให้บอกคำเตือน ขอให้ผู้ใช้ยืนยัน แล้วเรียกซ้ำด้วยอาร์กิวเมนต์เดิมหลังผู้ใช้ตอบในข้อความถัดไปเท่านั้น. "
+    "ถ้า ambiguous ให้ถามว่าหมายถึงห้อง/คนไหน; สำเร็จแล้วยืนยันสั้นๆ ว่าส่งไปที่ไหน.\n"
+    "การแจ้งเตือนส่วนตัว (เครื่องมือ set_my_notifications / show_my_notifications ถ้ามี): ทุกคนปรับของตัวเองได้ด้วยการพูด เช่น “ไม่ต้องส่งสรุปเย็น”, "
+    "“ส่งสรุปเช้า 7 โมง”, “ส่งเสาร์อาทิตย์ด้วย”, “แจ้งเอกสารสำคัญทุกฉบับ / เฉพาะที่สำคัญ / ปิด”, “เลิกเตือนเรื่องที่ค้างตอบ”. ส่งเฉพาะค่าที่เขาขอเปลี่ยน.\n"
+    "ความชอบส่วนตัว (เครื่องมือ remember_my_preference / show_my_preferences / forget_my_preferences ถ้ามี): เมื่อผู้ใช้บอกความชอบแบบถาวรว่าอยากให้สลิดปฏิบัติกับเขาอย่างไร "
+    "เช่น “เรียกผมว่าพี่ปัส” (nickname), “ตอบสั้นๆ นะ” (reply_length), “สรุปเป็นภาษาอังกฤษ” (language), “สนใจเรื่องการตลาด” (focus_add), “ผมดูแลบัญชี” (role_note), “ไม่ต้องใส่อีโมจิ” (style_add) "
+    "ให้เรียกเครื่องมือแล้วยืนยันประโยคเดียว; อย่าบันทึกคำขอครั้งเดียว (“ตอบสั้นๆ ข้อนี้”) ถ้าไม่ชัดว่าถาวรหรือไม่ให้ถามสั้นๆ. แก้ได้เฉพาะของผู้พูดเอง."
+)
+
+MENTION_PROMPT = (
+    "\nการแท็กคน: ถ้าต้องการเรียก ฝากข้อความ หรือบอกว่าใครรับผิดชอบอะไร ให้เขียนชื่อในรูป @[ชื่อที่แสดง] "
+    "(เช่น @[มิว]) ระบบจะแปลงเป็นการแท็กจริงเอง ใช้ได้เฉพาะชื่อในรายชื่อ “คนที่แท็กได้” ด้านล่าง "
+    "ห้ามเดาหรือแต่งชื่อ และห้ามเขียนรหัสผู้ใช้ ถ้าไม่มีชื่อที่ตรงให้ถามกลับสั้นๆ. "
+    "ฝากบอกใคร (“ฝากบอกพี่มิวว่า...”, “tell Mew that...”): ตอบในห้องนี้โดยแท็กคนนั้นพร้อมข้อความ และบอกว่าใครฝาก "
+    "(เช่น “@[มิว] ลูกค้าโทรมาค่ะ (คุณเอฝากบอก)”). ถ้าผู้ใช้บอกว่า “ส่วนตัว” / “DM” ให้เรียก send_dm แทน (to = ชื่อคนนั้น). "
+    "“เรียกทุกคน” / “ทุกคนในทีม”: แท็กทุกคนที่อยู่ในรายชื่อ (ไม่เกินที่มี) ส่วน @everyone / @here ให้ใช้เฉพาะเมื่อผู้ถามเป็นแอดมินหรือผู้บริหาร "
+    "และขอให้แจ้งทุกคนชัดเจน ไม่เช่นนั้นห้ามใช้."
+)
+
+
+LATENCY_PROMPT = (
+    "\nความเร็ว: ตอบตรงๆ ทันทีเมื่อไฟล์แนบหรือข้อความมีคำตอบอยู่แล้ว (เช่น สรุปไฟล์ ขั้นตอนถัดไปจากเนื้อหาไฟล์ "
+    "แปล เขียนร่าง คุยเล่น) ไม่ต้องเรียกเครื่องมือ. เรียกเครื่องมือเฉพาะเมื่อคำถามต้องใช้ข้อมูลนั้นจริงๆ "
+    "และเรียกที่ต้องใช้พร้อมกันในรอบเดียว ไม่ทยอยเรียกทีละตัว."
+)
+
 
 MEMORY_PROMPT = (
-    "\nความจำของทีม: เมื่อถูกถามว่าเกิดอะไรขึ้น ใครพูดอะไร หรืองาน/เรื่องใดถึงไหนแล้ว "
-    "ถ้าคำถามไม่มีวันที่ชัดเจน ให้เรียก chat_search ก่อน โดยใส่ query เป็นคำถามของผู้ใช้ และ keywords 2-5 คำ "
-    "(ชื่อคน ตัวเลข รหัส คำสำคัญ) เพราะ chat_search ค้นตามความหมายได้ทั้งไทยและอังกฤษ "
+    "\nความจำของทีม (ค้นรอบเดียวแล้วตอบ ไม่เจอก็บอกว่าไม่พบ ไม่ต้องวนค้นซ้ำ; ไม่ต้องค้นถ้าข้อความหรือไฟล์ที่แนบมีคำตอบอยู่แล้ว): "
+    "เมื่อถูกถามว่าเกิดอะไรขึ้น ใครพูดอะไร หรืองาน/เรื่องใดถึงไหนแล้ว "
+    "ถ้าคำถามไม่มีวันที่ชัดเจน ให้เรียก chat_search ก่อน โดยใส่ query เป็นคำถามของผู้ใช้ และ keywords 3-8 คำ "
+    "(ชื่อคน ตัวเลข รหัส คำสำคัญ ทั้งไทย อังกฤษ คำพ้อง และตัวย่อ เช่น งบโฆษณา, ค่าโฆษณา, ads, marketing budget) "
+    "เพราะ chat_search ค้นตามความหมายได้ทั้งไทยและอังกฤษ "
     "แล้วค่อยเปิดวันที่เจอด้วย chat_days หรือ chat_messages. "
     "ถ้าหารหัส ตัวเลข หรือคำพูดเป๊ะๆ ที่เก่ากว่า 3 วัน ให้ใช้ chat_messages พร้อม keyword และช่วงวันที่. "
     "ถ้าคำถามมีวันที่ ให้เรียก chat_days (สรุปรายวันต่อห้อง) ได้เลย "
     "แล้วใช้ chat_messages (ข้อความจริง ค้นด้วย keyword) เมื่อต้องการรายละเอียดหรือคำพูดจริง. "
+    "เมื่อผู้ใช้ถามถึงเอกสารหรือเสียงที่เคยแชร์ในห้อง (ข้อความขึ้นต้นด้วย [PDF: ...], [DOCX: ...], [เสียง: ...] ฯลฯ) ให้หาด้วย chat_search แล้วเรียก open_file ด้วยลิงก์ของข้อความนั้นเพื่ออ่านเนื้อหาจริง อย่าตอบจากโน้ตสั้นๆ อย่างเดียว. "
     "ข้อความที่ขึ้นต้นด้วย [รูป: ...] คือสิ่งที่อ่านได้จากรูปที่มีคนส่ง (รวมตัวหนังสือในรูป). "
     "ตอบโดยระบุห้องและวันที่ที่มา และถ้าอ้างข้อความจริงให้แนบลิงก์ (link). "
     "ถ้าไม่พบข้อมูลให้บอกตรงๆ ว่าไม่พบ ห้ามเดา และห้ามพูดถึงห้องที่เครื่องมือไม่ได้คืนมา. "
     "แปลงคำอย่าง 'เมื่อวาน' หรือ 'สัปดาห์ที่แล้ว' เป็นช่วงวันที่ YYYY-MM-DD จากวันนี้ในเขตเวลาที่ระบุ "
+    "('เมื่อคืน' / 'last night' = ช่วงเย็นของเมื่อวานถึงเช้านี้ ให้ค้นทั้งวันที่เมื่อวานและวันนี้ เพราะประชุมหลังเที่ยงคืนถูกเก็บเป็นวันนี้ "
+    "และใช้ chat_days(channel_name=ห้องเสียง) และ chat_messages ใส่ since=เมื่อวานT18:00 until=วันนี้T06:00 เพื่อได้ช่วงกลางคืนจริง ไม่ใช่แค่ข้อความล่าสุด; "
+    "ประชุม/คุยในห้องเสียงอยู่ในแชตของห้องเสียงนั้น เช่น General แต่ละข้อความมี kind=voice) "
     "(chat_days/chat_messages รับช่วงละไม่เกิน 31 วัน ผลลัพธ์ถูกตัดความยาว ถ้ามี note ให้ย่อช่วงหรือใช้ chat_search). ผลลัพธ์ newer_than_summary คือข้อความของวันนี้ที่ใหม่กว่าสรุป."
+)
+
+
+# The coordinator role: hierarchy, tasks, disclosure, DMs, reports. Added when the coordinator tools
+# are registered (see `build_agent(coo=True)`).
+COO_PROMPT = (
+    "\nบทบาทผู้ประสานงานของทีม (COO/PM): สลิดดูความเคลื่อนไหวของทุกคนเอง ไม่ต้องรอให้ใครมารายงาน "
+    "อย่าเรียก list_tasks ถ้าคำถามไม่ได้เกี่ยวกับงานค้าง/ผู้รับผิดชอบ (เช่น ขั้นตอนถัดไปในไฟล์ที่แนบมา ให้ตอบจากไฟล์). "
+    "จดงานที่ใครรับปากหรือถูกมอบหมายเป็นรายการงาน ติดตามทุกเช้าด้วยสรุปเช้าส่วนตัวทาง DM (มีงานที่ครบกำหนดรวมอยู่ด้วย) และส่งรายงานเย็นให้ผู้บริหาร "
+    "(ห้อง “รายงานจากสลิด”, /รายงาน หรือ /report). ใช้ list_tasks ดูงาน, update_task ปิดงานหรือเปิดใหม่ "
+    "(สมาชิกแก้ได้เฉพาะงานของตัวเอง ผู้บริหารแก้ได้ทุกงาน) เมื่อมีคนบอกว่าทำงานไหนเสร็จหรือติดอะไร "
+    "ให้ list_tasks ของเขาแล้ว update_task พร้อมโน้ตสั้นๆ และถามถึงงานที่ค้างหรือเลยกำหนด. "
+    "ถามว่า “วันนี้ผมทำอะไรไปบ้าง” ให้เรียก my_day. ถามว่า “ช่วงที่ไม่อยู่มีอะไรบ้าง” “what did I miss” “เมื่อวานเกิดอะไรขึ้น” ให้เรียก catch_up (ใส่ since ถ้าระบุช่วงเวลา) แล้วตอบสั้นๆ เฉพาะรายการสำคัญพร้อมลิงก์ (ไม่ใส่อีโมจิหน้ารายการ ทั้งข้อความไม่เกิน 1 ตัว) และชวนว่า “อยากดูละเอียดห้องไหนบอกได้นะคะ”. ถามถึงงานของคนใดคนหนึ่งให้ใส่ person ใน chat_messages / chat_search.\n"
+    "ความลับตามลำดับชั้น: เห็นข้อมูลเฉพาะที่เครื่องมือคืนมา ผู้ที่ตำแหน่ง (role) สูงกว่าเห็นงานของผู้ที่ต่ำกว่าได้ "
+    "แต่ผู้ที่ต่ำกว่าหรือเท่ากันไม่เห็นงานของผู้ที่สูงกว่า และห้องส่วนตัวไม่เปิดให้คนนอกห้อง ข้อมูลที่พูดในห้องสาธารณะบอกใครก็ได้. "
+    "ถ้าผลลัพธ์มี withheld แปลว่ามีบันทึกส่วนตัว/ห้องส่วนตัวอีกบางส่วนที่ไม่ได้อยู่ในผลลัพธ์ แต่ผลลัพธ์ที่ได้มาแสดงให้ผู้ถามได้ทั้งหมด: "
+    "ให้ตอบ/สรุปจากผลลัพธ์ให้ครบก่อนเสมอ ห้ามปฏิเสธทั้งคำตอบหรือบอกว่าสรุปไม่ได้เพราะเรื่องนี้ (ห้องสาธารณะและห้องเสียงที่ทุกคนอ่านได้ สรุปให้ใครก็ได้ ไม่ว่าใครเป็นคนพูด) "
+    "แล้วค่อยต่อท้ายสั้นๆ ประโยคเดียวว่ายังมีบันทึกส่วนตัวบางส่วนที่แชร์ไม่ได้ (ห้ามบอกเนื้อหา ห้ามเดา ห้ามบอกว่าใครเป็นเจ้าของ) "
+    "และเสนอว่า “ให้สลิดไปขออนุญาตเจ้าของข้อมูลไหมคะ” "
+    "เมื่อผู้ถามตอบตกลงแล้วเท่านั้น ให้เรียก request_disclosure(topic) แล้วแจ้งว่าส่งคำขอแล้ว "
+    "ถ้าเจ้าของอนุญาต สลิดจะส่งคำตอบให้ทาง DM เอง ถ้าถูกปฏิเสธจะแจ้งให้ทราบ. "
+    "ข้อมูลที่เจ้าของอนุญาตแล้วจะปรากฏในผลลัพธ์ของเครื่องมือตามปกติ คุยต่อกับคนนั้นได้ แต่ห้ามเล่าต่อให้คนอื่น.\n"
+    "DM กับสลิด: เมื่อสมาชิกทัก DM มาบอกเรื่องงาน (เช่น พรุ่งนี้ลา ลูกค้าขอเลื่อนส่งของ งานที่ทำอยู่) "
+    "ระบบจดไว้ให้อัตโนมัติ (ผู้ที่ตำแหน่งสูงกว่าเห็นได้ เว้นแต่เจ้าตัวบอกว่า “เรื่องนี้เก็บเป็นความลับ” / private) "
+    "ให้ตอบยืนยันสั้นๆ ว่าจดอะไรไว้ และถ้าเห็นว่ากระทบงานหรือคนอื่น ให้ถามหรือเสนอขั้นตอนต่อไป. "
+    "ถ้าในข้อความมีหมายเหตุว่าเป็นความลับ ให้ยืนยันว่าเก็บไว้เป็นความลับ."
 )
 
 
 # What Salid can do, so it can answer "what can you do?" / "how do I ..." accurately. Keep in
 # sync with the features (commands are listed in both languages).
 CAPABILITIES_PROMPT = (
-    "\nสิ่งที่สลิดทำได้ (ใช้ตอบเมื่อมีคนถามว่าทำอะไรได้บ้าง หรือถามวิธีใช้ ตอบให้กระชับ เลือกเฉพาะที่เกี่ยวข้อง "
-    "อย่าอ้างว่าทำได้มากกว่านี้):\n"
-    "1) ใบเสร็จและบัญชี: ส่งรูปใบเสร็จในห้องที่ชื่อมีคำว่า ใบเสร็จ/receipt/invoice/ใบกำกับ/สลิป/slip/บิล/bill/expense/ค่าใช้จ่าย/เบิก หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
+    "\nสิ่งที่สลิดทำได้ (เป็นข้อมูลให้คุณรู้เอง ไม่ใช่สคริปต์). ถ้ามีคนถามว่า “ทำอะไรได้บ้าง” ให้ตอบเป็นภาษาคนปกติ "
+    "ยกตัวอย่างในชีวิตประจำวัน 4-6 อย่างที่เกี่ยวกับเขา เช่น ส่งรูปใบเสร็จมาให้จดลงบัญชี, ถามว่าเดือนนี้จ่ายอะไรไปเท่าไร, "
+    "โยน PDF/ไฟล์เสียง/ลิงก์มาให้อ่านและสรุป, ถามว่าเมื่อวานในห้องคุยอะไรกัน, นัดประชุมหรือร่างอีเมล, ฝากบอกคนอื่นในทีม "
+    "โหวตด้วยโพลของ Discord (create_poll / poll_results) และสำรวจความเห็นรายคนทาง DM (start_form / form_results) ได้ โดยสลิดยืนยันกับผู้ขอก่อนส่ง DM. "
+    "จำสถานที่สำคัญของบริษัท (สำนักงานใหญ่ สาขา โกดัง) และสถานที่ส่วนตัวเมื่อเจ้าตัวขอให้จำ แล้วบอกที่อยู่/ลิงก์แผนที่ตอนมีคนถามว่าที่ไหน (find_place) โดยเห็นได้เฉพาะคนที่มีสิทธิ์. "
+    "ตอบสั้นๆ ไม่เกิน 3-4 ประโยค (ไม่ใช้ bullet หัวข้อ หรือตัวหนา; ถ้าถามเป็นอังกฤษก็ตอบอังกฤษสั้นๆ แบบเดียวกัน) ไม่ต้องไล่เป็นคู่มือหรือรายการยาว และบอกด้วยว่าอยากเปลี่ยนการตั้งค่าอะไร (ห้องไหนไม่ต้องตอบ ภาษา ความจำกี่วัน) แค่บอกสลิดเป็นคำพูดก็ได้ "
+    "ไม่ต้องจำคำสั่ง. อย่าอ้างว่าทำได้มากกว่านี้. รายละเอียด:\n"
+    "1) ใบเสร็จและบัญชี: ส่งรูปหรือ PDF ใบเสร็จในห้องไหนก็ได้ สลิดดูจากเนื้อหาเองว่าเป็นใบเสร็จไหม (ไม่ดูชื่อห้อง) หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
     "แล้วบันทึกลงบัญชี เตือนถ้าน่าจะซ้ำ แก้ข้อมูลได้โดยตอบกลับ (reply) ข้อความใบเสร็จของสลิด. "
+    "ถ้าส่งใบเสร็จผิดห้อง (หรือส่งทาง DM) สลิดบันทึกแล้วคัดลอกไปห้องรับใบเสร็จหลักให้ (ตั้งห้องได้ในหน้าตั้งค่า; ข้อความเดิมไม่ถูกลบ ลบเองได้; แอดมินปิดได้) "
     "ถามยอดใช้จ่ายได้ เช่น เดือนนี้จ่ายค่าอะไรไปเท่าไร แยกหมวด ใครส่ง รายการที่ต้องตรวจ "
     "(ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นเฉพาะของตัวเอง). "
     "ตรวจหาบิลที่ส่งซ้ำ (เช่น PDF กับภาพหน้าจอของใบเดียวกัน) ได้ และหักออกจากยอดได้ (void ไม่ลบทิ้ง กู้คืนได้ ผู้บริหารสั่งหัก); "
     "มีสรุปรายวันส่งเข้าห้องตามเวลาที่ตั้งไว้\n"
-    "2) ความจำของทีม: สลิดจดข้อความและอ่านรูปทุกรูป (รวมตัวหนังสือในรูป) ในห้องที่ไม่ได้ตั้งเป็น 🔇 ปิด "
+    "2) ความจำของทีม: สลิดจดข้อความ อ่านรูปทุกรูป (รวมตัวหนังสือในรูป) และถอดเสียงพูดจากไฟล์เสียง วิดีโอ และข้อความเสียง (voice message) ในห้องที่ไม่ได้ตั้งเป็น 🔇 ปิด "
     "เก็บตามจำนวนวันที่แอดมินตั้ง (ค่าเริ่มต้น 90 วัน ดูหรือปรับด้วย /ความจำ หรือ /memory) "
     "และสรุปแต่ละห้องเป็นรายวัน จึงตอบได้ว่าเมื่อวานคุยอะไร ใครรับงานอะไร เรื่องไหนถึงไหน พร้อมลิงก์ไปที่ข้อความจริง. "
     "ตอบได้เฉพาะข้อมูลจากห้องที่ผู้ถามและทุกคนในห้องที่ตอบมีสิทธิ์เห็น ถามทาง DM ได้ข้อมูลตามสิทธิ์ของผู้ถามคนเดียว. "
-    "ไม่เห็นห้องที่สลิดไม่มีสิทธิ์เข้า และไม่เห็น DM ระหว่างคนกับคน\n"
-    "3) ประชุมเสียง: /เข้าประชุม หรือ /join (หรือแท็กแล้วพิมพ์ เข้าประชุม / join meeting) สลิดเข้าห้องเสียงที่ผู้สั่งอยู่ "
+    "ไม่เห็นห้องที่สลิดไม่มีสิทธิ์เข้า และไม่เห็น DM ระหว่างคนกับคน. "
+    "ไฟล์เสียง/วิดีโอ (mp3 m4a wav ogg mp4 mov ฯลฯ ไม่เกิน 100 MB ถอดเสียงสูงสุด 90 นาทีแรก) ที่ส่งหาสลิดหรือแท็ก สลิดถอดเสียงพูดพร้อมเวลาและผู้พูด (ไม่ส่งทั้งวิดีโอ ไม่เก็บไฟล์) "
+    "แล้วสรุปประเด็น มติ งานที่ต้องทำ ตอบคำถามเกี่ยวกับไฟล์นั้น; ข้อความเสียงสั้นๆ (ไม่เกิน 2 นาที) ที่ส่งหาสลิดถือเป็นคำถามที่พูดมา; "
+    "เสียงในห้องที่จดจำอยู่ถอดเสียงเบื้องหลังตามโควตาต่อวัน เปิดปิดได้ในตั้งค่า (จำเนื้อหาเสียงและวิดีโอ)\n"
+    "3) ประชุมเสียง: /เข้าประชุม หรือ /join-meeting (หรือแท็กแล้วพิมพ์ เข้าประชุม / join meeting) สลิดเข้าห้องเสียงที่ผู้สั่งอยู่ "
     "ถอดเสียงว่าใครพูดอะไร (ไทยและอังกฤษ ไม่เก็บไฟล์เสียง) เรียกชื่อ “สลิด” ระหว่างประชุมเพื่อถามได้ "
-    "และ /ออกประชุม หรือ /leave แล้วสลิดส่งสรุปประชุม (หัวข้อ สิ่งที่ตกลง งานที่ต้องทำ) เข้าห้องแชต\n"
-    "4) โหมดของแต่ละห้อง (/โหมด หรือ /mode, แอดมินหรือผู้บริหารเปลี่ยนได้): "
+    "และ /ออกประชุม หรือ /leave-meeting แล้วสลิดส่งสรุปประชุม (หัวข้อ สิ่งที่ตกลง งานที่ต้องทำ) เข้าห้องแชต\n"
+    "   สลิดเข้าห้องเสียงเองเมื่อมีคนเข้าห้อง (ห้องที่ไม่ได้ปิดโหมด; ปิดได้ใน Hub ที่ “เข้าฟังประชุมเอง”; ถ้ามีคนสั่งให้ออกจะไม่กลับเข้าห้องนั้นอีก 60 นาที) "
+    "ถ้ามีหลายห้องประชุมพร้อมกัน สลิดแบ่งร่างไปได้ตามจำนวนผู้ช่วยเสียง (สลิด · 2, · 3 ที่เซิร์ฟเวอร์เชิญไว้) "
+    "ถ้าร่างไม่พอ ห้องนัดประชุมไว้ได้ก่อน ตามด้วยห้องที่มีผู้บริหาร/คนมากกว่า ส่วนห้องที่มีคนเดียวถูกสลับก่อน (ห้องที่มีคนสั่งให้เข้า หรือประชุมที่นัดไว้ ไม่ถูกสลับ); ดูร่างและลิงก์เชิญผู้ช่วยด้วย show_settings\n"
+    "4) โหมดของแต่ละห้อง (บอกสลิดเป็นคำพูดได้เลย หรือ /โหมด /mode เป็นทางลัด แอดมินหรือผู้บริหารเปลี่ยนได้): "
     "🔇 ปิด = ไม่ยุ่งและไม่จด, 👂 ฟังเงียบ = จดจำแต่ไม่พูดเอง ตอบเมื่อถูกแท็ก, "
     "🙋 เรียกแล้วคุย (ค่าเริ่มต้น) = ตอบเมื่อแท็กหรือเรียกชื่อ แล้วคุยต่อได้ 3 นาทีโดยไม่ต้องแท็ก, "
     "🎧 ร่วมวง = เหมือนเรียกแล้วคุย และช่วยตอบเองเมื่อมีคำถามที่ช่วยได้ (ไม่เกิน 3 ครั้งต่อชั่วโมง), "
@@ -945,7 +1248,7 @@ FILES_PROMPT = (
     "(ข) แล้วตัดสินใจเองว่าควรทำอะไรต่อ และลงมือทำเลย: "
     "ใบเสร็จ / ใบกำกับภาษี / บิล / สลิปโอนเงิน -> เรียก record_receipt (ไม่ต้องถามก่อน) แล้วรายงานผล "
     "(สำเร็จ ซ้ำ หรืออ่านไม่ชัด ให้บอกตามจริง); "
-    "เอกสาร ภาพหน้าจอ แคปแชต ตาราง หรือกราฟ -> สรุปประเด็นสำคัญ เชื่อมกับความจำของทีมถ้าเกี่ยวข้อง (chat_search) "
+    "เอกสาร ภาพหน้าจอ แคปแชต ตาราง หรือกราฟ -> สรุปประเด็นสำคัญจากตัวไฟล์เอง (ค้นความจำของทีมด้วย chat_search เฉพาะเมื่อผู้ใช้ถามถึงเรื่องในแชตจริงๆ) "
     "แล้วเสนอสิ่งที่ทำต่อได้ 1-3 ข้อที่เป็นรูปธรรม หรือถามคำถามเดียวที่ช่วยให้ไปต่อได้; "
     "ถ้าในรูปเป็นคำถาม -> ตอบคำถามนั้น; "
     "ถ้าเป็นรูปถ่ายหรือมีม -> ตอบเป็นธรรมชาติและสั้นๆ; "
@@ -955,6 +1258,49 @@ FILES_PROMPT = (
     "และไม่ต้องทักทายหรือแนะนำตัว เริ่มที่เนื้อหาเลย. "
     "ห้ามแต่งเนื้อหาที่อ่านไม่ได้ ถ้าส่วนไหนอ่านไม่ออกให้บอกว่าอ่านไม่ออกตรงไหน. "
     "ไฟล์ที่ถูกข้ามจะมีหมายเหตุ [file skipped: ...] ให้แจ้งผู้ใช้สั้นๆ. ตอบให้กระชับ."
+)
+
+
+MEDIA_PROMPT = (
+    "\nไฟล์เสียง/วิดีโอ: ส่วนที่ติดป้าย [ถอดเสียงจากไฟล์ #N: ชื่อ, ยาว M:SS] คือคำถอดเสียงพูดอัตโนมัติ (เวลา [M:SS] ผู้พูด: ข้อความ; "
+    "ผู้พูดแยกตามเสียง อาจมีคำผิดหรือ [inaudible]) ไม่ได้แนบตัววิดีโอ ให้ตอบตามนี้: บอกสั้นๆ ว่าไฟล์นี้คือการบันทึกอะไร "
+    "สรุปประเด็นสำคัญ มติ และงานที่ต้องทำ พร้อมเวลาอ้างอิง (เช่น 3:42) ตอบคำถามของผู้ใช้เกี่ยวกับไฟล์ แล้วเสนอขั้นตอนต่อไป "
+    "ใช้เฉพาะสิ่งที่อยู่ในคำถอดเสียง ห้ามแต่งหรือเดาภาพ (ไม่เห็นภาพวิดีโอ) ถ้ามีหมายเหตุตัดทอนหรือถอดเฉพาะส่วนแรกให้บอกผู้ใช้. "
+    "ถ้าคำถามของผู้ใช้ขึ้นต้นด้วย [ข้อความเสียงจากผู้ใช้] แปลว่าผู้ใช้พูดมา (voice message) ให้ตอบเหมือนเป็นคำถามที่พิมพ์ "
+    "และถ้าไม่ชัดให้บอกสั้นๆ ว่าได้ยินว่าอะไร."
+)
+
+WEB_PROMPT = (
+    "\nอ่านลิงก์และค้นอินเทอร์เน็ต: เมื่อข้อความมีลิงก์ (เว็บ, YouTube) หรือถามข้อมูลล่าสุด/ข่าว/ราคา/เรื่องนอกทีมที่ต้องค้นออนไลน์ "
+    "ให้เรียก read_web (ลิงก์ในข้อความถูกแนบให้อัตโนมัติ ใส่ใน request แค่สิ่งที่ต้องการรู้ ห้ามใส่ข้อมูลบัญชี ความจำ หรือแชตของทีม). "
+    "ในคำตอบ: บอกว่าแต่ละลิงก์คืออะไร สรุปประเด็นสำคัญ เสนอขั้นตอนต่อไปถ้ามีประโยชน์ และอ้างแหล่งที่มาเป็นลิงก์. "
+    "ถ้าลิงก์อ่านไม่ได้ (ต้องล็อกอิน เพย์วอล์ล ไม่พบหน้า) ให้บอกตรงๆ ห้ามเดาเนื้อหา. "
+    "คำถามเรื่องภายในทีม (บัญชี ใบเสร็จ ใครพูดอะไร) ให้ใช้ ledger/ความจำก่อน ไม่ต้องค้นเว็บ. "
+    "ถ้ามีหลายลิงก์ ให้เรียก read_web ครั้งเดียวโดยใส่ทุกลิงก์ (ไม่เกิน 5) ใน request ห้ามเรียกแยกทีละลิงก์. "
+    "ลิงก์ที่เจอจากความจำหรือแชตของทีม (เช่น ผู้ใช้ขอสรุปวิดีโอที่เคยแชร์ในห้อง) ให้ใส่ URL นั้นใน request ได้."
+)
+
+# Sent on the last allowed call, when the tools are taken away.
+ROUNDS_EXHAUSTED = (
+    "ตอนนี้ใช้เครื่องมือครบจำนวนครั้งแล้ว ห้ามเรียกเครื่องมือเพิ่ม ให้ตอบจากข้อมูลที่ได้มาแล้ว "
+    "และบอกสั้นๆ ว่าส่วนไหนยังทำไม่ได้ ผู้ใช้ถามต่อเพื่อให้ทำส่วนที่เหลือได้"
+)
+
+SECRETARY_PROMPT = (
+    "\nงานเลขา (เครื่องมือ schedule_meeting, list_meetings, cancel_meeting, reschedule_meeting, "
+    "make_report_pdf, draft_email, send_email ถ้ามีให้ใช้): "
+    "การกระทำที่มีผลกับคนอื่นต้องได้รับการยืนยันเสมอ. "
+    "นัดประชุม: แปลงเวลาที่ผู้ใช้พูด (เช่น พรุ่งนี้บ่ายสอง) เป็น ISO 8601 ตามวันที่และเขตเวลาข้างต้น แล้วเรียก schedule_meeting; "
+    "ครั้งแรกจะได้ needs_confirmation ให้แสดงชื่อนัด วัน-เวลาพร้อมวันในสัปดาห์ ผู้เข้าร่วม (แท็กด้วย mention ที่เครื่องมือให้) และห้อง/ลิงก์ แล้วถามยืนยัน "
+    "ห้ามบอกว่านัดแล้วจนกว่าสถานะเป็น created; เรียกซ้ำด้วยอาร์กิวเมนต์เดียวกันทุกตัวหลังผู้ใช้ยืนยันในข้อความถัดมาเท่านั้น. "
+    "ถ้าผู้ใช้ยังไม่ระบุเวลา แต่มี find_free_time ให้เรียกหาเวลาว่างของทุกคนก่อน แล้วเสนอตัวเลือก (ไม่ต้องถามเวลา); "
+    "ถ้าไม่รู้เวลาหรือผู้เข้าร่วมให้ถามสั้นๆ ก่อน ห้ามเดาชื่อคน (unresolved_attendees = ถามว่าหมายถึงใคร). "
+    "ถ้าผู้ใช้ให้ลิงก์ Google Meet/Zoom/Teams ใส่ใน link. ถ้าได้ error missing_permission ให้ส่งข้อความใน how_to_grant ต่อให้ผู้ใช้ตามนั้น (สั้นๆ ไม่ต้องอธิบายขั้นตอนเพิ่ม ไม่ต้องใส่อีโมจิ). "
+    "ยกเลิก/เลื่อนนัด: เรียก list_meetings หา event_id ก่อน แล้วขอยืนยันแบบเดียวกัน. "
+    "เอกสาร PDF: เรียก make_report_pdf ด้วยช่วงวันที่ที่ถูกต้อง ไฟล์จะแนบกับคำตอบเอง ให้บอกสั้นๆ ว่ามีอะไรในไฟล์และยอดตามสกุลเงิน (อย่าบวกต่างสกุล). "
+    "อีเมล: draft_email แล้วแสดงร่างฉบับเต็ม (ถึง สำเนา หัวเรื่อง เนื้อหา ไฟล์แนบ) ให้ผู้ใช้ตรวจ ห้ามบอกว่าส่งแล้ว; "
+    "เรียก send_email ได้เฉพาะหลังผู้ใช้ยืนยันร่างนั้นในข้อความถัดมา. ถ้าได้ not_configured ให้บอกว่ายังไม่ได้ตั้งค่าการส่งอีเมล (บันทึกร่างไว้แล้ว); "
+    "rate_limited = ส่งครบโควตาต่อวันแล้ว. คนที่ไม่ใช่ผู้บริหาร/ผู้จัดการส่งอีเมลไม่ได้ (not_allowed)."
 )
 
 
@@ -988,15 +1334,17 @@ def stable_prompt(language: str, memory: bool, deck: bool = False) -> str:
     prefix cache can reuse it across requests and tool rounds."""
     p = (
         PERSONA[language if language in PERSONA else "th"]
-        + "คุยได้ทุกเรื่องเหมือนผู้ช่วย AI ทั่วไป: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
+        + HUMAN_STYLE_PROMPT
+        + "คุยได้ทุกเรื่อง: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
         "ช่วยคิดไอเดีย ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
         "ถ้าเป็นข่าวหรือข้อมูลล่าสุดที่อาจไม่รู้ ให้บอกตรงๆ ว่าอาจไม่อัปเดต\n"
         "กฎเหล็กเรื่องบัญชีของร้าน: ห้ามคำนวณตัวเลขของร้านเอง (บวก ลบ เปอร์เซ็นต์) ให้เรียกเครื่องมือและใช้ตัวเลขที่เครื่องมือคืนมาเท่านั้น "
         "(ใช้ฟิลด์ *_fmt ได้เลย) ตัวเลขใส่ , คั่นหลักพัน และนำหน้าด้วยสัญลักษณ์สกุลเงินของใบเสร็จนั้น (฿ = บาท, $ = USD). "
-        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยน: ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
+        "ห้ามบวกหรือรวมเงินต่างสกุลเข้าด้วยกันเด็ดขาด และห้ามแปลงอัตราแลกเปลี่ยนเอง (ห้ามประมาณหรือเดาอัตราแลกเปลี่ยนเองเด็ดขาด: ถ้าผู้ใช้ขอให้แปลง ให้เรียก convert_currency เท่านั้น แล้วบอกอัตรา วันที่ และแหล่งที่มา; ถ้าไม่มีเครื่องมือนี้ให้บอกว่าแปลงให้ไม่ได้): ถ้ามีหลายสกุล (totals_by_currency) ให้รายงานแยกทีละสกุล เช่น ฿184,885.54 และ $131.99. ใบเสร็จที่ไม่ระบุสกุลเงินนับเป็นบาท. ถ้าไม่มีข้อมูลให้บอกตรงๆ ห้ามเดาหรือแต่งข้อมูลของร้าน. "
         "เรียกเครื่องมือหลายตัวพร้อมกันได้เพื่อความเร็ว. ถ้ามีบทสนทนาก่อนหน้าแนบมา ให้อ่านเหมือนคนที่นั่งอยู่ในห้องแชต: เข้าใจว่าใครพูดกับใคร เรื่องที่กำลังคุยค้างอยู่ คำอย่าง “อันนั้น” “เมื่อกี้” “แล้วล่ะ” หมายถึงอะไร และสิ่งที่สลิดเคยตอบไปแล้ว (ไม่ต้องทักทายซ้ำหรือแนะนำตัวใหม่ทุกครั้ง) แล้วตอบเฉพาะข้อความล่าสุด"
     )
     p += CAPABILITIES_PROMPT
+    p += LATENCY_PROMPT
     p += DUPLICATES_PROMPT
     if memory:
         p += MEMORY_PROMPT
@@ -1013,9 +1361,13 @@ def volatile_prompt(
     interjection: bool,
     language: str,
     files: bool = False,
+    profile: str = "",
+    company: str = "",  # salid.company_brain.company_block
+    people: list[str] | None = None,
 ) -> str:
     """The per-request tail of the system prompt: date and time, the asker's scope, the
-    interjection rule, the file-input rules and the language line."""
+    interjection rule, the file-input rules, the asker's own preferences, the taggable people
+    and the language line."""
     p = (
         f"\nวันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
         f"สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง 'เดือนนี้', 'สัปดาห์ก่อน' ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD"
@@ -1025,14 +1377,22 @@ def volatile_prompt(
     if interjection:
         p += INTERJECTION_PROMPT
     if files:
-        p += FILES_PROMPT
+        p += FILES_PROMPT + MEDIA_PROMPT
+    p += company  # company playbook data block (salid.company_brain), "" when none
+    p += profile  # the asker's own preferences (salid.profiles.profile_block), "" when none
+    if people is not None:
+        p += MENTION_PROMPT
+        p += "\nคนที่แท็กได้ (ชื่อที่แสดง): " + (", ".join(people) if people else "(ยังไม่มีรายชื่อ)")
     if language == "en":
-        p += "\nLanguage: write your whole reply in English."
+        p += (
+            "\nLanguage: write your whole reply in English, including quoted memory, documents and "
+            "titles; translate Thai content instead of copying it."
+        )
     elif language == "auto":
         p += (
             "\nLanguage: reply in the same language as the user's latest message (Thai or English)."
         )
-    return p
+    return apply_particle(p, particle_of(settings))
 
 
 def system_prompt(
@@ -1046,7 +1406,8 @@ def system_prompt(
     deck: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
-    Stable part first, per-request part last (see `stable_prompt`)."""
+    `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
+    tagging, e.g. a DM). Stable part first, per-request part last (see `stable_prompt`)."""
     now = now or settings.now()
     return stable_prompt(language, memory, deck) + volatile_prompt(
         settings, now, scoped=scoped, interjection=interjection, language=language, files=files
@@ -1283,7 +1644,7 @@ def build_tools(
     if memory is None:
         return tools
 
-    def chat_days(start_date: str, end_date: str) -> dict:
+    def chat_days(start_date: str, end_date: str, channel_name: str | None = None) -> dict:
         """What was discussed: per-channel day summaries (overview, topics, decisions, action items,
         numbers, open questions) for a date range, in the channels the asker may see. For today it
         also returns the raw messages newer than the summary (newer_than_summary).
@@ -1291,8 +1652,9 @@ def build_tools(
         Args:
             start_date: ISO date YYYY-MM-DD, inclusive.
             end_date: ISO date YYYY-MM-DD, inclusive (at most 31 days from start_date).
+            channel_name: only this channel, e.g. a voice room such as General (no #), optional.
         """
-        a = dict(start_date=start_date, end_date=end_date)
+        a = dict(start_date=start_date, end_date=end_date, channel_name=channel_name)
         return safe("chat_days", a, lambda: memory.chat_days(**a))
 
     def chat_messages(
@@ -1301,6 +1663,9 @@ def build_tools(
         channel_name: str | None = None,
         keyword: str | None = None,
         limit: int = 50,
+        person: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> dict:
         """Raw chat messages (newest first) with author, local time, channel, text and link.
 
@@ -1310,6 +1675,12 @@ def build_tools(
             channel_name: only this channel (name without #), optional.
             keyword: case-insensitive text to look for in the message or author name, optional.
             limit: max messages, default 50.
+            person: only messages written by this person (name or @mention), optional. Also
+                finds what a person told Salid in a DM when the asker may see it.
+            since: local date-time YYYY-MM-DDTHH:MM, optional: only messages at/after it (e.g.
+                "last night" = yesterday T18:00 .. today T06:00; a voice meeting is in the voice
+                channel's chat, kind=voice).
+            until: local date-time YYYY-MM-DDTHH:MM, optional: only messages before it.
         """
         a = dict(
             start_date=start_date,
@@ -1317,6 +1688,9 @@ def build_tools(
             channel_name=channel_name,
             keyword=keyword,
             limit=limit,
+            person=person,
+            since=since,
+            until=until,
         )
         return safe("chat_messages", a, lambda: memory.chat_messages(**a))
 
@@ -1325,6 +1699,7 @@ def build_tools(
         start_date: str | None = None,
         end_date: str | None = None,
         limit: int = 20,
+        person: str | None = None,
         query: str | None = None,
     ) -> dict:
         """Search the team's memory by keywords AND by meaning (Thai and English), in the
@@ -1338,15 +1713,33 @@ def build_tools(
             start_date: ISO date YYYY-MM-DD, optional (default: the whole retention window).
             end_date: ISO date YYYY-MM-DD, optional (default: today).
             limit: max date/channel groups, default 20.
+            person: only what this person (name or @mention) wrote or is named in, optional.
             query: the user's question in plain words, any language; improves meaning-based
                 matching.
         """
         a = dict(
-            keywords=keywords, start_date=start_date, end_date=end_date, limit=limit, query=query
+            keywords=keywords,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            person=person,
+            query=query,
         )
         return safe("chat_search", a, lambda: memory.chat_search(**a))
 
-    return [*tools, chat_days, chat_messages, chat_search]
+    def open_file(message_link_or_id: str, file_index: int = 0) -> dict:
+        """Read a document, recording or image that was shared earlier in a channel (PDF, Word,
+        Excel, PowerPoint, text, audio/video transcript). Returns its full text (about 30k chars
+        max). Use it after chat_search found the message, instead of answering from the short note.
+
+        Args:
+            message_link_or_id: the message's link (the `link` field of a memory result) or id.
+            file_index: which attachment of that message, 0 for the first.
+        """
+        a = dict(message_link_or_id=message_link_or_id, file_index=file_index)
+        return safe("open_file", a, lambda: memory.open_file(**a))
+
+    return [*tools, chat_days, chat_messages, chat_search, *([open_file] if memory.opener else [])]
 
 
 def build_file_tools(
@@ -1459,14 +1852,22 @@ def build_agent(
     model_calls = 0
 
     def before_model(callback_context, llm_request):
-        # Hard cap: after MAX_ROUNDS tool rounds the next call has no tools, so it must answer.
+        # Hard cap: after `max_rounds` tool rounds the next call has no tools, so it must answer.
         nonlocal model_calls
         model_calls += 1
         if on_model_call:
             on_model_call(model_calls)
-        if model_calls > MAX_ROUNDS:
+        if model_calls > max_rounds:
+            # No tool declarations, but tools_dict stays: a model that still emits a call (its
+            # history is full of them) would otherwise crash ADK with "Tool 'x' not found.
+            # Available tools: " (empty). before_tool answers such a call without running it.
             llm_request.config.tools = None
-            llm_request.tools_dict.clear()
+            llm_request.append_instructions([ROUNDS_EXHAUSTED])
+        return None
+
+    def before_tool(tool, args, tool_context):
+        if model_calls > max_rounds:
+            return {"error": ROUNDS_EXHAUSTED}  # skip the call; the model must now just answer
         return None
 
     return LlmAgent(
@@ -1482,10 +1883,53 @@ def build_agent(
         instruction=lambda _ctx: prompt,
         tools=tools,
         generate_content_config=types.GenerateContentConfig(
-            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level="LOW")
+            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
         ),
         before_model_callback=before_model,
+        before_tool_callback=before_tool,
     )
+
+
+SPOKEN_THINKING = "MINIMAL"  # ThinkingLevel for answers that are read aloud in a voice room
+
+
+def spoken_hint(particle: str = "") -> str:
+    """Hint appended to a question whose answer will be spoken. `particle`: the voice's
+    politeness particle (ค่ะ for the female voice; questions use คะ)."""
+    hint = SPOKEN_HINT
+    if particle:
+        q = "คะ" if particle == "ค่ะ" else particle
+        hint += (
+            f"\n(เสียงพูดเป็นผู้หญิง ลงท้ายประโยคด้วย “{particle}” เสมอ ประโยคคำถามใช้ “{q}” "
+            "ห้ามใช้ ครับ/นะครับ ปนกัน / end spoken sentences with the voice particle)"
+        )
+    return hint
+
+
+SPOKEN_HINT = (
+    "(คำตอบนี้จะถูกพูดออกเสียงในห้องเสียง: ตอบ 1-3 ประโยคสั้น ๆ พูดได้ลื่น ไม่ใช้รายการหรือ markdown / "
+    "answer in 1-3 short sentences suitable for speaking, no lists or markdown)"
+)
+
+
+_FILE_REF_RE = re.compile(
+    r"ไฟล์|เอกสาร|รูป|ภาพ|แนบ|pdf|docx?|\bfile\b|\bimage\b|\bphoto\b|\bdocument\b|ใบเสร็จ|สลิป",
+    re.I,
+)
+_MEMORY_REF_RE = re.compile(
+    r"เมื่อวาน|เมื่อกี้|ก่อนหน้า|ที่ผ่านมา|ในห้อง|ในแชต|ใครพูด|ใครบอก|คุยกัน|ประชุม|เคย|ค้น|หา(?:ใน)?"
+    r"|chat|yesterday|earlier|previous|last\s+(?:week|time)|who\s+(?:said|told)|search|find|meeting",
+    re.I,
+)
+
+
+def is_file_only_question(question: str) -> bool:
+    """The message is just attachments, or a request about them that does not mention the chat's
+    history ("สรุปไฟล์นี้ให้หน่อย"): the chat-memory tools would only cost a model round."""
+    q = (question or "").strip()
+    if not q or q == NO_TEXT_TURN:
+        return True
+    return bool(_FILE_REF_RE.search(q)) and not _MEMORY_REF_RE.search(q)
 
 
 async def ask_async(
@@ -1516,6 +1960,7 @@ async def ask_async(
     calls: list[tuple[str, dict]] = []
     tool_ms: dict[str, float] = {}
     model_calls = 0
+    max_rounds = SPOKEN_MAX_ROUNDS if spoken else MAX_ROUNDS
 
     def count_call(n: int) -> None:
         nonlocal model_calls
@@ -1540,6 +1985,21 @@ async def ask_async(
     tools = build_tools(ledger, calls, memory, tool_ms, sink)
     if usable and actions is not None:
         tools += build_file_tools(usable, actions, calls, created)
+    if web_client is not None:
+        tools.append(make_read_web(web_client, settings.gemini_model, question, calls))
+    if secretary is not None:
+        secretary.ledger = ledger  # receipt scoping for the PDFs comes from the asker's ledger
+    secretary_tools = (
+        build_secretary_tools(SecretaryTools(secretary), calls) if secretary is not None else []
+    )
+    tools += secretary_tools
+    chat_tools = build_chat_tools(chat_actions, calls) if chat_actions is not None else []
+    tools += chat_tools
+    tools += extra_tools or []
+    if tool_overrides:  # same-named tools bound to someone else (voice: the speaker's actions)
+        swap = {getattr(f, "__name__", ""): f for f in tool_overrides}
+        tools = [swap.get(getattr(f, "__name__", ""), f) for f in tools]
+    tool_names = {getattr(f, "__name__", "") for f in tools}  # prompt sections follow the tools
     agent = build_agent(
         settings,
         tools,
@@ -1568,22 +2028,39 @@ async def ask_async(
     )
     if skipped:
         text_in += "\n" + skipped_note(skipped)
+    if spoken:
+        text_in += "\n" + spoken_hint(str(getattr(settings, "voice_particle", "") or ""))
     message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
+    first_call_s = last_call_s = 0.0
     tokens = dict.fromkeys(USAGE_FIELDS, 0)
     async for event in runner.run_async(
         user_id=adk_user,
         session_id=session_id,
         new_message=message,
-        run_config=RunConfig(max_llm_calls=MAX_ROUNDS + 2),
+        run_config=RunConfig(max_llm_calls=max_rounds + 2),
     ):
         if event.usage_metadata is not None:
             for name, attr in USAGE_FIELDS.items():
                 tokens[name] += getattr(event.usage_metadata, attr, None) or 0
         if event.get_function_calls():
+            if model_calls > max_rounds:
+                continue  # a call after the cap is answered with an error, never run: not a round
             rounds += 1
+            last_call_s = time.monotonic() - started
+            first_call_s = first_call_s or last_call_s
         elif event.is_final_response() and event.content and event.content.parts:
             text = "".join(p.text or "" for p in event.content.parts if not p.thought).strip()
+    total_s = time.monotonic() - started
+    if spoken:  # timing only, no content
+        logger.info(
+            "qa spoken timing: first tool call %.1fs, last tool call %.1fs, total %.1fs, "
+            "%d tool rounds",
+            first_call_s,
+            last_call_s,
+            total_s,
+            rounds,
+        )
     if not text and interjection:
         text = NO_REPLY  # an unprompted answer that failed is never worth posting
     return Answer(

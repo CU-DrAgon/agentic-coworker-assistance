@@ -64,7 +64,7 @@ New messages since then (format HH:MM name: text), oldest first:
 
 Return the UPDATED summary of the whole day as JSON with keys: overview (2-4 sentences), \
 topics (list of {{title, details, people}}), decisions (list of strings), \
-action_items (list of {{who, what, due}}; due only if stated), \
+action_items (list of {{who, what, due}}; who = the person's name as written; due only if stated, as YYYY-MM-DD when the date is given or can be worked out from the day above, else as written), \
 numbers (amounts, dates, IDs mentioned that matter, each with its context), open_questions (list of strings). \
 Merge the new messages into the previous summary: keep what is still true, add what is new, \
 update items that changed. Be concise."""

@@ -9,8 +9,15 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     default_mode         mode of channels with no entry above (default "call")
     channel_languages    {channel id str: th|en|auto}, reply language override, see salid.i18n
     default_language     reply language of channels with no entry above (default "th")
+    receipt_home_channel_id  str main receipt channel ("" = auto-pick), see salid.receipt_forward
+    receipt_forward      bool copy receipts posted in other channels to the home channel (default true)
     digest_channel_id    str ("" = no daily digest)
     digest_time          "HH:MM"
+    followup_time        "HH:MM" daily task follow-up DMs (default 10:00)
+    report_time          "HH:MM" evening report (default 18:30)
+    morning_brief_time   "HH:MM" personal morning brief DM (default 08:30; replaces followup DMs)
+    evening_brief_time   "HH:MM" personal evening brief DM (default 18:00)
+    report_channel_id    str ("" = Salid creates/uses the private channel รายงานจากสลิด)
     exec_role_names      list[str] roles that count as executives (default ผู้บริหาร, Executive)
     admin_emails         list[str] lowercase Google accounts allowed to manage this guild in the hub
     guild_name, icon_url, installed_at, active   written by the bot (join / leave / resync)
@@ -40,6 +47,7 @@ import re
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -101,6 +109,7 @@ class Features(BaseModel):
     digest: bool = True
     deep_tasks: bool = True
     voice_meetings: bool = True
+    auto_join_meetings: bool = True  # Salid joins voice channels by itself (needs voice_meetings)
     memory: bool = True
     image_memory: bool = True  # describe images into the memory log (needs `memory`)
     decks: bool = True  # the chat agent may build .pptx slide decks (salid.deck)
@@ -127,7 +136,14 @@ class GuildSettingsUpdate(BaseModel):
     receipt_channel_ids: list[str] = Field(default_factory=list, max_length=50)
     ask_channel_ids: list[str] = Field(default_factory=list, max_length=50)
     digest_channel_id: str = ""
+    receipt_home_channel_id: str = ""
+    receipt_forward: bool = True
     digest_time: str = "18:00"
+    followup_time: str = "10:00"
+    report_time: str = "18:30"
+    morning_brief_time: str = "08:30"
+    evening_brief_time: str = "18:00"
+    report_channel_id: str = ""
     exec_role_names: list[str] = Field(default_factory=lambda: list(DEFAULT_EXEC_ROLES))
     channel_modes: dict[str, str] = Field(default_factory=dict)
     default_mode: str = DEFAULT_MODE
@@ -175,15 +191,19 @@ class GuildSettingsUpdate(BaseModel):
     def _ids(cls, v):
         return _clean_ids(v)
 
-    @field_validator("digest_channel_id", mode="before")
+    @field_validator(
+        "digest_channel_id", "receipt_home_channel_id", "report_channel_id", mode="before"
+    )
     @classmethod
     def _digest_id(cls, v):
         v = "" if v is None else str(v).strip()
         if v and not _ID.match(v):
-            raise ValueError("digest_channel_id must be numeric")
+            raise ValueError("channel id must be numeric")
         return v
 
-    @field_validator("digest_time")
+    @field_validator(
+        "digest_time", "followup_time", "report_time", "morning_brief_time", "evening_brief_time"
+    )
     @classmethod
     def _time(cls, v):
         if not _TIME.match(v):
@@ -203,13 +223,25 @@ class GuildSettings(GuildSettingsUpdate):
     """A full guild document (what the hub reads). Missing document = these defaults."""
 
     admin_emails: list[str] = Field(default_factory=list)
+    # Role names (besides executives and Manage Server) allowed to send email; edited in Firestore.
+    email_senders: list[str] = Field(default_factory=list)
     guild_name: str = ""
     icon_url: str = ""
     channels: list[Channel] = Field(default_factory=list)
     installed_at: str = ""
+    # Channel ids (text, voice, forum) everyone in the server can see; synced by the bot. Only
+    # items from these channels are shareable between workspaces / visible to plain members.
+    public_channel_ids: list[str] = Field(default_factory=list)
     active: bool = True
     updated_by: str = ""
     updated_at: str = ""
+    # Per-channel languages saved when the whole server was switched, so switching back restores.
+    previous_channel_languages: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("previous_channel_languages", mode="before")
+    @classmethod
+    def _previous_languages(cls, v):
+        return GuildSettingsUpdate._languages(v)
 
 
 class LinkError(Exception):
@@ -277,6 +309,7 @@ class GuildStore:
         channels: list[dict],
         active: bool = True,
         installed: bool = False,
+        public_channel_ids: list[str] | None = None,
     ) -> None:
         """Merge what the bot knows about the guild; never touches hub-managed fields."""
         data: dict[str, Any] = {
@@ -285,6 +318,8 @@ class GuildStore:
             "channels": channels,
             "active": active,
         }
+        if public_channel_ids is not None:
+            data["public_channel_ids"] = public_channel_ids
         if installed:
             data["installed_at"] = _now().isoformat(timespec="seconds")
         self._ref(guild_id).set(data, merge=True)
@@ -357,6 +392,36 @@ class GuildStore:
 
         self._in_transaction(run)
 
+    def set_server_language(
+        self, guild_id: int, language: str, apply_to_all_channels: bool = True
+    ) -> None:
+        """Set the guild default language. With `apply_to_all_channels` the per-channel overrides
+        are cleared (a copy is kept in `previous_channel_languages`); switching back to Thai
+        restores that copy."""
+        if language not in ("th", "en"):
+            raise ValueError(f"unknown language {language!r}")
+        ref = self._ref(guild_id)
+
+        def run(txn) -> None:
+            snap = ref.get(transaction=txn)
+            doc = snap.to_dict() if snap.exists else None
+            data: dict = {"default_language": language}
+            if apply_to_all_channels:
+                current = dict((doc or {}).get("channel_languages") or {})
+                previous = dict((doc or {}).get("previous_channel_languages") or {})
+                if language == "th":
+                    data["channel_languages"] = previous
+                    data["previous_channel_languages"] = {}
+                else:
+                    data["channel_languages"] = {}
+                    data["previous_channel_languages"] = current or previous
+            if doc is None:
+                txn.set(ref, data)
+            else:
+                txn.update(ref, data)
+
+        self._in_transaction(run)
+
     # ------------------------------------------------------------ link codes
     def create_link_code(self, guild_id: int, user_id: int, user_name: str) -> str:
         code = secrets.token_urlsafe(32)
@@ -372,6 +437,16 @@ class GuildStore:
             }
         )
         return code
+
+    def peek_link_code(self, code: str) -> int:
+        """The guild a code belongs to, without consuming it. LinkError when unusable."""
+        snap = self.client.collection(self.link_collection).document(code).get()
+        info = snap.to_dict() if snap.exists else None
+        if not info or info.get("used"):
+            raise LinkError("code unknown or already used")
+        if datetime.fromisoformat(info["expires_at"]) <= _now():
+            raise LinkError("code expired")
+        return int(info["guild_id"])
 
     def redeem_link_code(self, code: str, email: str) -> tuple[int, GuildSettings]:
         """Atomically consume `code` and make `email` an admin of its guild.
@@ -482,6 +557,8 @@ class BotGuildSettings:
 
     def __init__(self, store: GuildStore, ttl: float = TTL_S, clock=time.monotonic):
         self.store, self._ttl, self._clock = store, ttl, clock
+        # (guild id) -> licensed? Set by the bot; an unlicensed guild has every feature off.
+        self.license_gate: Callable[[int], bool] | None = None
         self._cache: dict[int, tuple[float, GuildSettings]] = {}
 
     def current(self, guild_id: int) -> GuildSettings:
@@ -503,6 +580,19 @@ class BotGuildSettings:
     def memory_retention_days(self, guild_id: int) -> int:
         return self.current(guild_id).memory_retention_days
 
+    def fresh_memory_retention_days(self, guild_id: int, *, fail_closed: bool = False) -> int:
+        """Retention read from the store NOW, bypassing the cache. Read paths that hide expired
+        memory use ``fail_closed=True``: the hub writes the store directly, so a failed read must
+        not expose data under a stale longer cached value. Purge scheduling keeps the last known
+        value instead, because deleting data on an unknown setting would be irreversible."""
+        try:
+            value = self.store.get(guild_id)
+        except Exception:
+            logger.warning("could not read retention of guild %s", guild_id, exc_info=True)
+            return MIN_RETENTION_DAYS if fail_closed else self.memory_retention_days(guild_id)
+        self._cache[guild_id] = (self._clock(), value)
+        return value.memory_retention_days
+
     def set_memory_retention_days(self, guild_id: int, days: int) -> None:
         """Write one guild's retention (validated) and drop the cache so it applies at once."""
         ok = valid_retention_days(days)
@@ -514,6 +604,8 @@ class BotGuildSettings:
             self._cache.pop(guild_id, None)
 
     def enabled(self, guild_id: int, feature: str) -> bool:
+        if self.license_gate is not None and not self.license_gate(guild_id):
+            return False
         return bool(getattr(self.current(guild_id).features, feature))
 
     def receipt_channel_ids(self, guild_id: int, env_ids: set[int]) -> set[int]:
@@ -557,6 +649,15 @@ class BotGuildSettings:
         finally:
             self._cache.pop(guild_id, None)
 
+    def set_server_language(
+        self, guild_id: int, language: str, apply_to_all_channels: bool = True
+    ) -> None:
+        """Switch the whole server's language and drop the cache so it applies at once."""
+        try:
+            self.store.set_server_language(guild_id, language, apply_to_all_channels)
+        finally:
+            self._cache.pop(guild_id, None)
+
     def digest_channel_id(self, guild_id: int, env_id: int | None) -> int | None:
         v = self.current(guild_id).digest_channel_id
         return int(v) if v else env_id
@@ -565,6 +666,21 @@ class BotGuildSettings:
         g = self.current(guild_id)
         # Defaults apply until the hub has saved the document (every save sets updated_at).
         return g.digest_time if g.updated_at else env_time
+
+    def followup_time(self, guild_id: int) -> str:
+        return self.current(guild_id).followup_time
+
+    def report_time(self, guild_id: int) -> str:
+        return self.current(guild_id).report_time
+
+    def brief_times(self, guild_id: int) -> tuple[str, str]:
+        """(morning, evening) default brief times of the guild (HH:MM)."""
+        g = self.current(guild_id)
+        return g.morning_brief_time, g.evening_brief_time
+
+    def report_channel_id(self, guild_id: int) -> int | None:
+        v = self.current(guild_id).report_channel_id
+        return int(v) if v else None
 
     def exec_role_names(self, guild_id: int, env_names: set[str]) -> set[str]:
         g = self.current(guild_id)

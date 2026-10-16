@@ -24,7 +24,10 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_OUTPUT_TOKENS = 450
 NOTE_CHARS = 1200
 BACKFILL_IMAGES_PER_CHANNEL = 50
-KINDS = "receipt/invoice, document, screenshot, chart/table, photo, meme, other"
+KINDS = (
+    "receipt/invoice, contract, official letter, document, screenshot, chart/table, photo, meme, "
+    "other"
+)
 _EXT_MIME = {
     "png": "image/png",
     "jpg": "image/jpeg",
@@ -40,7 +43,10 @@ PROMPT = (
     "Reply as JSON with: description (1-2 sentences), text (ALL legible text transcribed "
     "verbatim, Thai or English, keeping numbers, amounts and dates exactly; at most about 600 "
     "characters, empty if none), type (one of: " + KINDS + "; a bank transfer slip, payment "
-    "slip, tax invoice or bill is receipt/invoice). Do not guess unreadable text."
+    "slip, tax invoice or bill is receipt/invoice), amount_value (the main total as a plain "
+    "number, no currency; null if none) and addressed_to (people - not companies - the image is "
+    "addressed to or names as recipient, comma separated, empty if none). Do not guess "
+    "unreadable text."
 )
 
 
@@ -48,6 +54,8 @@ class ImageNote(BaseModel):
     description: str = ""
     text: str = ""
     type: str = "other"
+    amount_value: float | None = None
+    addressed_to: str = ""
 
     @property
     def is_receipt_like(self) -> bool:

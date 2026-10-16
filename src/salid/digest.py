@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from .extract import category_label
 from .i18n import t
 from .qa import fmt_totals, money
 from .store import Store, cur_of, duplicate_extras
@@ -43,7 +44,10 @@ def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str =
         "",
         t("digest_by_category", lang),
     ]
-    lines += [f"• {g['key']}: {fmt_totals(g['totals_by_currency'])} ({g['count']})" for g in cats]
+    lines += [
+        f"• {category_label(g['key'], lang)}: {fmt_totals(g['totals_by_currency'])} ({g['count']})"
+        for g in cats
+    ]
     lines += ["", t("digest_top_vendors", lang)]
     lines += [
         f"{i}. {g['key']}: {fmt_totals(g['totals_by_currency'])}" for i, g in enumerate(vendors, 1)

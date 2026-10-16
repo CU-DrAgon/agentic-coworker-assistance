@@ -224,9 +224,9 @@ def test_system_prompt_language_instruction(settings):
 
     th = system_prompt(settings, scoped=False)
     assert th == system_prompt(settings, scoped=False, language="th")
-    assert "พูดภาษาไทยเป็นธรรมชาติ" in th and "\nLanguage:" not in th
+    assert "พูดเหมือนคนจริงๆ" in th and "\nLanguage:" not in th
     en = system_prompt(settings, scoped=False, language="en")
-    assert "ALWAYS reply in English" in en and "พูดภาษาไทยเป็นธรรมชาติ" not in en
+    assert "ALWAYS reply in English" in en and "พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: สั้น" not in en
     auto = system_prompt(settings, scoped=True, language="auto")
     assert "same language as the user's latest message" in auto and "ไม่ใช่ผู้บริหาร" in auto
 
@@ -236,9 +236,18 @@ def test_system_prompt_lists_capabilities(settings):
 
     for lang in ("th", "en", "auto"):
         p = system_prompt(settings, scoped=True, language=lang)
-        for cmd in ("/โหมด", "/mode", "/ภาษา", "/language", "/ความจำ", "/memory", "/join"):
+        for cmd in (
+            "/โหมด",
+            "/mode",
+            "/ภาษา",
+            "/language",
+            "/ความจำ",
+            "/memory",
+            "/join-meeting",
+            "/leave-meeting",
+        ):
             assert cmd in p
-        assert "งานใหญ่:" in p and "ค้นอินเทอร์เน็ตไม่ได้" in p
+        assert "งานใหญ่:" in p and "ค้นอินเทอร์เน็ตไม่ได้" not in p and "Google Search" in p
 
 
 def test_ask_passes_the_language_to_the_model(seeded, settings):
@@ -269,6 +278,31 @@ def test_digest_in_english(seeded):
     assert "Daily expense summary" in d and "Needs review" in d and "unclear data" in d
     assert "สรุปค่าใช้จ่าย" not in d
     assert "No receipts" in build_daily_digest(seeded, GUILD, "2026-01-01", "en")
+
+
+def test_spoken_hint_asks_for_a_short_answer_without_markdown(seeded, settings):
+    store = seeded
+    for spoken in (True, False):
+        llm = scripted(text_resp("ok"))
+        ask(settings, store, "สรุปให้หน่อย", guild_id=GUILD, is_exec=True, user_id=EXEC_ID,
+            model=llm, spoken=spoken)  # fmt: skip
+        text = "".join(p.text or "" for c in llm.requests[0].contents for p in c.parts or [])
+        assert ("1-3 short sentences" in text) is spoken and (
+            "no lists or markdown" in text
+        ) is spoken
+
+
+def test_a_model_that_keeps_calling_tools_after_the_cap_gets_an_answer_not_a_crash(
+    seeded, settings
+):
+    """Real incident: after MAX_ROUNDS the tools are withdrawn but the model still emitted
+    chat_search; ADK raised "Tool 'chat_search' not found. Available tools: " (empty)."""
+    llm = scripted(*[fc_resp(("flagged_receipts", {}))] * (MAX_ROUNDS + 1), text_resp("สรุป"))
+    a = ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
+    assert a.text == "สรุป"
+    assert not llm.requests[MAX_ROUNDS].config.tools  # tools withdrawn on the call after the cap
+    assert "ใช้เครื่องมือครบ" in _tool_results(llm)  # the stray call was answered, not run
+    assert len([c for c in a.tool_calls if c[0] == "flagged_receipts"]) == MAX_ROUNDS
 
 
 # ------------------------------------------------------------------ metrics

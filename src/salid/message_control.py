@@ -43,6 +43,33 @@ def parse_delete_message(text: str) -> str | None:
     return None
 
 
+_ACK_WORD = (
+    r"ขอบคุณ(?:มาก|มากๆ|ค่ะ|ครับ|คับ|นะ|จ้า|ล่วงหน้า)*|ขอบใจ|ขอบคุน|ขอบพระคุณ|ขอบคุนครับ|แต๊งกิ้ว"
+    r"|555+|ฮ่า+|หุหุ|โอเค|โอเคร|โอเคค?|ตกลง|รับทราบ|เข้าใจแล้ว|เรียบร้อย|ดีมาก|เยี่ยม|เก่งมาก"
+    r"|ได้เลย|ครับผม|ค่ะ|ครับ|คับ|จ้า|นะ|เลย|ๆ|สลิด|salid"
+    r"|ok(?:ay|ie)?|k|kk|thanks?|thank\s*you|thx|ty|tysm|cool|great|nice|got\s+it|noted|lol"
+    r"|haha+|sure|perfect|awesome"
+)
+_ACK_RE = re.compile(rf"^(?:(?:{_ACK_WORD})[\s,.!~\-]*)+$", re.I)
+_EMOJI_RE = re.compile(
+    "[\U0001f300-\U0001faff\u2600-\u27bf\u2b50\ufe0f\u200d]|<a?:\\w+:\\d+>", re.U
+)
+
+
+def is_thanks(text: str) -> bool:
+    """A short gratitude / acknowledgement ("ขอบคุณ", "555", "โอเค", "ok", "thanks", "👍") with no
+    question or request in it: worth a reaction, not a reply. Cheap regex, no LLM."""
+    s = (text or "").strip()
+    if not s or len(s) > 40 or "?" in s or "？" in s:
+        return False
+    s = re.sub(r"<@[!&]?\d+>", " ", s)
+    had_emoji = bool(_EMOJI_RE.search(s))
+    s = _EMOJI_RE.sub(" ", s).strip()
+    if not s:
+        return had_emoji
+    return bool(_ACK_RE.match(s))
+
+
 def parse_cancel_task(text: str) -> bool:
     s = re.sub(r"\s+", " ", (text or "").strip().strip(_TRIM))
     return bool(_CANCEL_TASK.match(s))

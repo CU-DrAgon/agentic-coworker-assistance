@@ -101,6 +101,18 @@ You can also use **Upload a recording** to process an existing audio file instea
 
 ## สลิด / Salid — receipts & expense Q&A bot
 
+### How to use Salid
+
+Talk to Salid like a colleague: no commands to learn. Type, or send a file, a photo, a voice
+message or a link, and say what you need.
+
+- "ฝากบอกพี่มิวด้วยว่าลูกค้าโทรมา" or "tell Mew the customer called": Salid tags them (or sends a DM if you say so).
+- "เดือนนี้จ่ายค่าวัตถุดิบไปเท่าไร": answers from the ledger. Send a receipt photo or PDF and it is recorded.
+- Drop a PDF, a clip or a link: Salid says it needs a moment, reads it, and answers in the same message.
+- "เมื่อวานในห้องบัญชีคุยอะไรกัน", "นัดประชุมกับคุณเอพรุ่งนี้บ่ายสอง", "ส่งรายงานเดือนนี้เป็น PDF เข้า DM ผม".
+- Settings are just sentences: "ห้องนี้ไม่ต้องตอบนะ", "ช่วยพูดอังกฤษในห้องนี้", "จำแค่ 30 วันพอ"
+  (admins and executives). The slash commands (`/โหมด`, `/ภาษา`, `/ความจำ`, ...) stay as optional shortcuts.
+
 A second package, `src/salid/`, is a Discord bot. Staff post receipt photos or PDFs in a receipt
 channel; Gemini (Vertex AI) extracts vendor, date, totals and a category into a ledger, flags
 low-confidence or duplicate receipts, and replies in Thai. Executives ask questions in Thai
@@ -120,8 +132,10 @@ isolated ledger and settings with no technical setup. The tenant key is the guil
 dedupe check, Q&A tool, digest, deep-task export and hub view is scoped to one guild.
 
 Customer flow: (1) open the invite link (the hub's "เพิ่ม Salid เข้า Discord" button) and add Salid to the
-server; Salid posts a short Thai welcome. (2) Post receipt photos in a channel whose name contains
-`ใบเสร็จ` or `receipt`, or @mention Salid with an image/PDF in any channel: it works immediately.
+server; Salid posts a short Thai welcome. (2) Post receipt photos or PDFs in any channel: Salid recognises receipts by their content (never by the
+channel name), or @mention Salid with an image/PDF: it works immediately. A channel that took 3 or more
+receipts in the last 30 days (or one set in the hub) is read directly, and receipts posted elsewhere are
+copied to the busiest receipt channel.
 (3) Optional: a server owner / Administrator / Manage Server member types `/ตั้งค่า` (or `/setup`) and
 opens the private one-time link (valid 15 minutes) to manage the server in the hub after signing in with
 Google. Executives are the owner, members with Administrator or Manage Server, members with a role in the
@@ -136,6 +150,10 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   next steps, questions written in an image are answered, and heavy analysis can start a deep task
   (`start_deep_task`, executives only, `deep_tasks` switch). Receipt channels (and unaddressed images
   elsewhere) keep the direct receipt pipeline.
+  A receipt recorded outside a receipt channel (or by DM, when the sender shares one server with Salid) is
+  also copied to the server's main receipt channel (hub setting, else the first receipt channel Salid can
+  post in), re-uploading the files with a link to the original; replies there correct or void it. The
+  original is never deleted. Switch: `receipt_forward` (default on). Nothing is posted for history import.
 - **Channel modes** (`/โหมด` or `/mode`, or the hub's "โหมดของแต่ละห้อง"): per channel, `🔇 off` (ignore the
   channel), `👂 listen` (receipts get an emoji reaction only; an @mention gets 👂), `🙋 call` (default:
   answers when @mentioned or called by name, `สลิด` and misspellings but not `สลิป`; for 3 minutes
@@ -150,7 +168,7 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   meeting`; `ออกประชุม` / `leave`, `leave the meeting`, `end meeting`, `stop meeting`; `เงียบก่อน` / `be quiet`,
   `quiet`, `shh`, `shush`, `mute`, `hush`, `snooze`; `คุยได้แล้ว` / `you can talk`, `talk again`, `unmute`,
   `unsnooze`, `wake up`, `come back`. Slash commands have Thai names with English aliases (`/โหมด` `/mode`,
-  `/ภาษา` `/language`, `/เข้าประชุม` `/join`, `/ออกประชุม` `/leave`, `/ตั้งค่า` `/setup`). The name is recognised in
+  `/ภาษา` `/language`, `/เข้าประชุม` `/join-meeting`, `/ออกประชุม` `/leave-meeting`, `/ตั้งค่า` `/setup`). The name is recognised in
   Latin letters too ("hey salid, what did we spend?").
 - **Deleting and cancelling.** Reply to one of Salid's messages with just `ลบ` / `ลบข้อความ` / `ยกเลิกข้อความ` /
   `เอาออก` / `delete` / `remove` / `unsend` and Salid deletes it (all chunks of a long answer, tracked for about
@@ -171,6 +189,20 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   it was when the meeting started.
 - **Q&A runs on Google ADK**: an `LlmAgent` (Gemini on Vertex) with four ledger `FunctionTool`s that
   are built per request around the asker's scope, so the model cannot widen it. At most 4 tool rounds.
+- **Read links and search the web (`web` feature, default on)**: the `read_web(request)` tool makes a
+  separate Gemini call (`salid/web_read.py`) with Google's built-in `url_context` and `google_search`
+  tools (they cannot be mixed with function tools in one agent). Web pages are fetched by Google, never
+  by our servers (no SSRF). YouTube links (watch, youtu.be, shorts) go in as video parts. At most 5 links
+  per call; the answer comes back as text plus sources. Isolation: the outbound request is built only from
+  the current user message (text and links) and the model's `request` capped at 500 characters, so ledger,
+  memory and chat history are never forwarded. Logs carry domains only. Admins can switch it off per
+  server in the hub ("อ่านลิงก์และค้นอินเทอร์เน็ต"); then the tool is not registered.
+- **Summaries**: `/สรุป` (`/summary`, open to everyone) summarises a period (today, yesterday, 7 or 30
+  days) of one channel or all channels the member can see, with an optional focus topic and a private
+  (ephemeral) option; the memory scope is computed for the member and for where the reply is posted.
+  Replying to any message with just "สรุป" / "summarize" / "tl;dr" while addressing Salid, or the message
+  context menu "Summarize with Salid" (Thai: "สรุปด้วยสลิด"), summarises that one message including its
+  attachments and links.
 - **Storage**: `SALID_STORE=sqlite` (default, local dev) or `firestore` (collection
   `SALID_FIRESTORE_COLLECTION`, default `salid_receipts`, doc id `{guild_id}_{sha256}`). Each query filters
   `guild_id ==` server-side (automatic single-field index only, no composite index); the date range and
@@ -194,15 +226,104 @@ server's executive role names (default `ผู้บริหาร`, `Executive
 
 The bot is prepared for a Cloud Run worker pool (see below) but not deployed.
 
-**Voice meetings (`/เข้าประชุม`, alias `/join`).** A member in a voice channel types `/เข้าประชุม` (or
+**Voice meetings (`/เข้าประชุม`, alias `/join-meeting`).** A member in a voice channel types `/เข้าประชุม` (or
 `@Salid เข้าประชุม`); Salid joins, announces itself in the channel's text chat, and transcribes every speaker by
 Discord name (per-user audio, so no diarization). Calling "สลิด ..." out loud gets a text answer in that chat, using
 the last ~5 minutes of transcript as context; the same transcript is context for text messages to Salid in that
-chat ("เมื่อกี้ตกลงอะไรกัน"). `/ออกประชุม` (`/leave`), everyone leaving, or 3 hours ends it with a Thai summary
+chat ("เมื่อกี้ตกลงอะไรกัน"). `/ออกประชุม` (`/leave-meeting`), everyone leaving, or 3 hours ends it with a Thai summary
 (decisions, action items with owners, open questions). Audio and transcript are kept in memory only, never stored.
 Needs the **Connect** permission, the voice-states intent (non-privileged), `libopus` + `ffmpeg` (in
 `Dockerfile.salid`) and `discord-ext-voice-recv` + `davey` (Discord's DAVE end-to-end encryption; see
 `src/salid/meeting.py`). Toggle: hub feature `voice_meetings`.
+
+**Secretary: meetings, PDFs, email.** Salid acts on its own judgement but asks before anything outward-facing:
+the first call of `schedule_meeting`, `cancel_meeting`, `reschedule_meeting` or `send_email` only shows a proposal /
+draft, and the action runs only when the same call arrives again in a *later* message (enforced in code in
+`src/salid/secretary.py`, not only in the prompt). Hub features: `scheduling`, `documents`, `email`.
+
+- *Scheduling* (`src/salid/scheduling.py`): "นัดประชุมกับคุณเอ วันจันทร์บ่ายสอง" creates a Discord Scheduled Event
+  (voice-channel event, or an external event with a Google Meet / Zoom / Teams / any URL as its location). Needs the
+  **Create Events** and **Manage Events** permissions (invite permissions integer 17600777145424); without them Salid
+  explains how to grant them. Attendees get a DM invite. Meetings live in `salid_meetings` (SQLite or Firestore).
+  Reminders (`SALID_MEETING_REMIND_MINUTES`, default 10) go out before the start and at the start, in the meeting's
+  text channel and by DM, with a one-click link (voice channel URL or the meeting link). For voice meetings, attendees
+  missing `SALID_MEETING_NOSHOW_MINUTES` (default 5) after the start get a friendly DM nudge; when `voice_meetings` is
+  on Salid joins to take notes and leaves after `SALID_MEETING_EMPTY_MINUTES` (default 2) of an empty channel; the
+  summary is linked to the meeting. An attendee who replies to a reminder/nudge DM ("ติดลูกค้า", "ไปช้า 10 นาที") has
+  the reason recorded and relayed to the meeting's channel, and it appears in the attendance line after the meeting.
+  Events people create directly in Discord are tracked too (interested members are reminded). Calendar access is
+  behind `CalendarBackend`; only the Discord implementation exists (Google Calendar could be added).
+- *PDF documents* (`src/salid/pdf_report.py`): `make_report_pdf` builds expense summaries, receipt lists, meeting
+  minutes and custom documents with fpdf2 + uharfbuzz text shaping (Thai tone marks render correctly). Totals are per
+  currency, void receipts are excluded, executives see everyone and others only their own receipts. The font is the
+  first Thai-capable file found among `SALID_PDF_FONT`, `src/salid/fonts/` (drop Sarabun-Regular/Bold.ttf there to
+  bundle it) and the system TLWG fonts (`fonts-thai-tlwg`, installed in `Dockerfile.salid`); with no Thai font a Latin
+  fallback is used and a warning is logged.
+- *Email* (`src/salid/email_out.py`): executives, managers (Manage Server) and roles listed in the guild document's
+  `email_senders` may have Salid draft and send email (max 20 per guild per day, addresses validated, a PDF made in
+  the conversation can be attached). Every draft and send is stored in `salid_emails` with who confirmed it. Without
+  Gmail configured the default `LogOnlySender` only records the email and Salid says sending is not set up.
+
+  Configure Gmail sending (instructions only, nothing is sent until you do this): create a dedicated Google account
+  for Salid; in Google Cloud Console enable the Gmail API, configure the OAuth consent screen and create an OAuth
+  client (type *Desktop app*); authorise that account once with the scope
+  `https://www.googleapis.com/auth/gmail.send` (for example with the OAuth Playground using your own client) to get a
+  refresh token; store it in Secret Manager and expose it to the worker as `SALID_GMAIL_REFRESH_TOKEN`, together with
+  `SALID_GMAIL_CLIENT_ID`, `SALID_GMAIL_CLIENT_SECRET` and `SALID_GMAIL_SENDER` (the account's address). All four must
+  be set, otherwise sending stays in log-only mode.
+
+**Staying in the meeting.** Salid leaves only on /ออกประชุม, /leave-meeting, a typed or spoken "ออกประชุม"/"leave",
+after `SALID_MEETING_LEAVE_EMPTY_SECONDS` (default 30; the old `SALID_MEETING_LEAVE_EMPTY_MINUTES` still overrides it) without humans in the channel (the summary is posted as usual) (an auto-joined meeting nobody
+came to: `SALID_MEETING_EMPTY_MINUTES`, default 2), or at the 6 h cap (warned 10 min before). The active meeting is
+stored (`salid_active_meetings`); after a restart `on_ready` rejoins it (transcript reloaded from the memory log)
+or, if the channel is empty, posts the summary. An unexpected voice drop is retried 3 times before ending.
+
+**Voice helpers (Salid · 2, · 3).** Discord allows one voice connection per bot account per guild, so Salid
+"splits" across extra voice-only bot accounts driven by the main bot process (same event loop; text, memory, answers
+and TTS stay in the main bot, a helper only listens and plays audio). The main bot is body #0.
+
+- *Create a helper*: Discord Developer Portal -> New Application (name it "Salid · 2") -> Bot -> Reset Token -> copy
+  the token. Add it to `.env` with an editor, never paste it in chat: `SALID_VOICE_TOKENS=tokenA,tokenB`
+  (comma-separated, may be empty; tokens are never logged). No privileged intents are needed (the helper uses only
+  guilds + voice states). Restart the bot; a helper that cannot log in is logged as "voice helper N unavailable".
+- *Invite it* to each server with the voice-only link (View Channel, Connect, Speak, Use Voice Activity):
+  `https://discord.com/oauth2/authorize?client_id=<helper application id>&scope=bot&permissions=36701184`
+  (`permissions.helper_invite_url`; `show_settings` lists the bodies, whether each is in this server, and the
+  invite links of helpers that are not). A helper that is not in a guild is skipped for that guild.
+- *Auto-join*: when a person is in a voice channel (not mode `off`, hub feature `auto_join_meetings` on, default on)
+  Salid joins at once and announces it in the channel's text chat (`SALID_AUTO_JOIN_MIN_HUMANS=1`;
+  `SALID_AUTO_JOIN_DELAY_SECONDS=0` is an optional stability wait, 0 = no timer; rapid duplicate events for a
+  channel share one attempt). A channel where someone told Salid to leave (`/ออกประชุม`, "สลิด ออกประชุม") is not
+  auto-joined for 60 minutes (`SALID_AUTO_JOIN_COOLDOWN_MINUTES`). Sessions are keyed by (server, voice channel), so
+  two meetings run on two bodies; leaving in one room ends only that room.
+- *Importance* (when every body is busy): scheduled meeting now +100 > executive/manager +30 each (max 2) > people
+  +5 each, earlier start breaks ties; one person alone scores below any multi-person room. A newcomer takes the body of the
+  weakest *auto-joined* session if it outranks it by 20 (a scheduled meeting always does; a person alone yields to
+  any room of 2+). The old room gets "ขอไปช่วยประชุมที่นัดไว้ก่อนนะครับ ส่วนที่คุยมาสรุปไว้ให้แล้ว" and its summary.
+  Sessions started by a person's command or by a schedule are never preempted. `/เข้าประชุม` with no free body
+  follows the same rules or says which rooms occupy the bodies.
+- Restart: each record in `salid_active_meetings` is per (server, channel) with its body index; resume reuses that body
+  when it is still available.
+
+**Spoken replies.** When called by name in a voice meeting, Salid also says a 1-2 sentence version of
+the answer out loud (Gemini TTS `SALID_TTS_MODEL`, default `gemini-2.5-flash-tts`, voice `SALID_TTS_VOICE`,
+default `Puck`); the full answer still goes to the chat. While Salid is speaking and for 1.5 s after,
+wake words are ignored so its own voice coming back through someone's speakers cannot re-trigger it.
+Turn it off with `SALID_VOICE_REPLY=false`.
+
+**Live voice mode (`SALID_VOICE_MODE=live`, the default).** Instead of the wake-word pipeline, a Gemini Live
+native-audio session (`SALID_LIVE_MODEL`, `SALID_LIVE_LOCATION=us-central1`, voice `SALID_LIVE_VOICE`) hears the
+whole voice channel and answers about 1.5 s after someone stops talking, like a voice assistant. Everyone's audio is
+mixed into one 16 kHz stream (`src/salid/live_voice.py`); with proactive audio on, Salid stays silent unless it is
+addressed by name or clearly asked something, and anyone can talk over it (barge-in stops it at once). The session is
+opened when Salid joins, resumes after the server's periodic disconnects, and what Salid says is also posted to the
+channel's text chat as `🔊 ...`. Money questions use the same ledger tools as the text Q&A, but because the mixed
+stream does not say who is speaking they only work when **everyone in the voice channel is an executive**; otherwise
+Salid says to ask in the text chat. The per-speaker transcription keeps running for the transcript and summary but no
+longer answers wake words in this mode. If the Live session cannot connect (4 tries), that meeting falls back to the
+classic wake-word mode. `SALID_VOICE_MODE=classic` restores the old behaviour; `SALID_VOICE_REPLY=false` turns off
+speech in both modes. Audio is streamed to Vertex AI for the duration of the meeting (never stored by Salid), and a Live
+session is billed by audio time while people are talking.
 
 **Team memory (องค์ความรู้).** Salid remembers what is said in the channels whose mode is not `off`, so it can
 answer "what did we discuss yesterday?", "where is customer X's job?" or "who owns the ad budget?" without
@@ -258,6 +379,40 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   twice (the stored text is built from the extracted receipt). Historical images are described through a queue
   capped at `SALID_MEMORY_IMPORT_IMAGES_PER_DAY` (300) per guild per day, newest first; the rest keep
   `[image: name]` until reached (`[image-unread: name]` when the message is gone or the image unreadable).
+- **Audio, video and voice messages** (`src/salid/media.py`, feature flag `media_memory`): attachments with
+  audio/video types or extensions (mp3 m4a wav ogg opus aac flac webm mp4 mov mkv) and Discord voice messages are
+  never sent as video: ffmpeg extracts mono 16 kHz FLAC (max 100 MB file, first 90 minutes), long audio is split
+  into ~10 minute chunks with a 2 s overlap, and one Gemini call per chunk returns timestamped, speaker-labelled
+  verbatim segments (Thai/English, `[inaudible]`, no invention); chunk offsets are added in code and overlap
+  duplicates dropped. Sent to Salid (tag, reply, chat mode, DM) the transcript goes to the agent as a text part
+  (`[ถอดเสียงจากไฟล์ #N: name, ยาว M:SS]`, about 30k chars) and it summarises, lists decisions and action items with
+  timestamps and answers the question; a voice message of at most 2 minutes with no text is the question itself.
+  In every non-off channel the transcript is also stored in the message's memory record
+  (`[เสียง: 3:42] summary | Speaker A: ...`, capped) by a background task that never delays replies, limited to
+  `SALID_MEDIA_MINUTES_PER_DAY` (120) minutes per guild per day; the history backlog counts against the same cap,
+  newest first. Live voice meetings are unchanged.
+- **Documents** (`src/salid/docs.py`, feature flag `doc_memory`): PDF, docx, xlsx (first 500 rows per sheet), pptx
+  (slides, tables, notes), txt/csv/md/json are read in code (`extract_document`); old `.doc` needs `antiword`, `.xls`
+  is not read (the user is told to save as .docx/.xlsx/PDF). Sent to Salid the text (about 30k chars, truncation
+  noted) goes to the agent. In remembered channels a note `[PDF: name, N หน้า, ประเภท] summary | ข้อความสำคัญ: ...`
+  is stored; scanned PDFs (no text layer) are sent (first 30 pages, 20 MB) to the cheap model for OCR + summary.
+  Receipts already read by the receipt pipeline reuse `receipt_note` plus the text and are never ingested twice.
+  Limit `SALID_DOC_PAGES_PER_DAY` (500) pages per guild per day, backlog newest first. The agent's `open_file`
+  tool re-reads a remembered attachment (document text, OCR, transcript) from its message link, only for channels
+  the asker may read.
+- **Promo post kit** (`src/salid/promo.py`, `cards.py`, `promo_bot.py`, feature flag `promo`): send Salid a product
+  photo with the offer ("ทำโพสต์โปร ลาเต้เย็น 59 บาท ลด 20%") and the `make_promo_kit` tool returns three JPEGs,
+  `promo-1x1.jpg` (feed, LINE), `promo-4x5.jpg` (Facebook / Instagram feed) and `promo-9x16.jpg` (Stories, Reels,
+  TikTok; text kept out of the platforms' button zones), plus a caption with hashtags in the reply. One image-model
+  call per kit (`SALID_PROMO_IMAGE_MODEL`, default `gemini-nano-banana-2.1`, location `global`) restyles only the
+  scene around the unchanged product; the model never draws text. Headline, price, call to action and shop name are
+  typeset by Salid with the bundled Kanit font (Pillow RAQM shaping, which needs the system `libfribidi`:
+  `libfribidi0` in `Dockerfile.salid`, `brew install fribidi` locally). `SALID_PROMO_KITS_PER_DAY` (20 per guild,
+  counted before each call; 0 = AI scenes off). Blocked, failed or over-the-cap requests still get a kit built from
+  the original photo, and the reply says why. Changes within 30 minutes ("ขอโทนอุ่นกว่านี้", "เปลี่ยนราคาเป็น 49")
+  reuse the remembered photo (process memory only, never stored). Check the look with
+  `uv run python scripts/salid_sample_promo.py <photo>` (offline; `--live` makes one billed call) and the live test
+  `pytest tests/salid/test_salid_live.py -m live -k promo -s`.
 - **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
   retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
   same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.
@@ -287,7 +442,7 @@ Discord setup (once, by the operator):
 
 1. Create an application and bot at the Discord Developer Portal (name it **Salid**); copy the bot token.
 2. Enable the **Message Content** and **Server Members** privileged intents. The public invite link
-   (`salid_invite_url`: scopes `bot` + `applications.commands`, permissions 1166416) is built from
+   (`salid_invite_url`: scopes `bot` + `applications.commands`, permissions 17600777145424, which adds Create Events and Manage Events for scheduling) is built from
    `SALID_DISCORD_CLIENT_ID` and shown on the home page and in the hub.
 3. Put `SALID_DISCORD_TOKEN` in `.env`. The slash commands are registered globally at startup (Discord can
    take up to an hour to show new global commands).
@@ -309,6 +464,14 @@ SALID_GEMINI_CLI_PATH=/path/to/gemini SALID_DB_PATH=./data/demo.db \
   uv run python -m salid.cli deep "วิเคราะห์ค่าใช้จ่ายเดือนนี้ แล้วเขียนรายงาน" --as-exec
 uv run pytest -m live -q                                 # one real Vertex call (skipped by default)
 ```
+
+### Travel time and weather (Google Maps Platform)
+
+Off by default. Enable `routes.googleapis.com`, `places.googleapis.com` and `weather.googleapis.com`
+on the project, give the Cloud Run service account access (it authenticates with ADC, no key), then
+set `SALID_MAPS_ENABLED=true`. Per guild the `maps` flag (hub) turns it off. If the Weather API
+rejects OAuth, put an API key in Secret Manager and expose it as `SALID_MAPS_API_KEY` (fallback
+only, never logged). Optional WeatherNext 2 ensemble: `SALID_WEATHERNEXT_BQ_DATASET=<project>.<dataset>`.
 
 ## Deploying Salid
 
@@ -345,7 +508,7 @@ the Cloud Run pricing page for asia-southeast1).
 A bilingual (Thai / English) web page in the same app and Cloud Run service, multi-guild. A TH | EN toggle in the header switches every string without a reload (choice kept in `localStorage`, default from the browser language: `th*` = Thai, else English); the dictionary is an inline JSON block in `static/hub.html` and a test checks both languages have the same keys. Anyone signs in with Google (any
 verified account); a guild switcher at the top lists the servers that account administers. Per server:
 the latest receipts, Salid expense Q&A as an executive, feature switches (receipts, Q&A, daily digest,
-deep tasks), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and
+deep tasks, links and web search), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and
 the executive role names, and per-channel modes plus reply languages (with a server default for each). A user with no server sees a big "เพิ่ม Salid เข้า Discord" button and the two
 steps: 1. add Salid to the server, 2. type `/ตั้งค่า` in Discord and open the link.
 
@@ -393,3 +556,19 @@ Deep tasks are Discord-only.
 Copyright (c) 2026 The Frontier Company Limited.
 
 This project is source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE.md). You may read, run and modify it for noncommercial purposes. Any commercial use requires a separate license from The Frontier Company Limited.
+
+**Voice meeting behaviour (Live mode).** Turn-taking: `SALID_LIVE_SILENCE_MS` (1200), `SALID_LIVE_PREFIX_PADDING_MS` (300),
+`SALID_LIVE_START_SENSITIVITY=high`, `SALID_LIVE_END_SENSITIVITY=low`, `SALID_LIVE_PROACTIVE_AUDIO=true`. Meetings stay voice:
+`SALID_MEETING_TEXT_ECHO=false` posts no echoes, answers or join text (only the end summary, notes, and replies to typed
+messages). Salid joins silently; when joined by itself and nobody addresses it within `SALID_CONSENT_DELAY_SECONDS` (20) of the
+first speech it asks once (text by default) whether this is a meeting; "no" -> not_recording (nothing logged, no summary).
+Notes: Live tools `post_note` / `ask_consent` / `set_recording` / `set_minutes_destination`; classic mode batches a gate every
+`SALID_NOTES_BATCH_SECONDS` (60). `SALID_PERSONA_PARTICLE` (ค่ะ; old name `SALID_VOICE_PARTICLE` still works) sets the particle of typed AND spoken lines. Minutes go to the channel
+named by voice/text ("ส่งมติการประชุมไปห้อง X"); later "ส่งสรุปประชุมเมื่อกี้ไปห้อง X" uses `deliver_minutes`.
+`SALID_AUTO_JOIN_COOLDOWN_MINUTES` now defaults to 10 and is cleared when the channel empties.
+
+**Listening / engaged.** A voice session is *listening* (notes only, silent) until someone says Salid's name (also misheard:
+สะหลิด, สลิต, ซาลิด, ซะลิด, salid, saleed; สนิท / สิริ / Siri only as an address: greeting, particle, "น้อง", start/end of the utterance).
+Then it is *engaged* and answers every utterance without the name; "ขอบคุณครับ", "พอแล้ว", "ยุติได้", "thanks, that's all" or
+`SALID_ENGAGED_TIMEOUT_SECONDS` (90) of nobody addressing it return to listening. "ออกประชุม / ออกจากห้อง / ไปได้แล้ว / leave" leave the room.
+In Live mode the model is told the state; if it has not started answering after the name, a cue forces a turn: `SALID_LIVE_NAME_REPLY_SECONDS` (1.5) after the speaker went quiet when the name was seen in the Live input transcript, `SALID_LIVE_FORCE_REPLY_SECONDS` for the classic transcription. A spoken "one moment" clip plays while ask_salid runs (`SALID_LIVE_FILLER`).

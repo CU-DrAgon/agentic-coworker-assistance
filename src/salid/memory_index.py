@@ -50,6 +50,8 @@ class IndexEntry:
 
 
 def make_entry(s: DaySummary, embedder) -> IndexEntry:
+    if s.dirty:  # a covered message was deleted: nothing of the old text is searchable
+        return IndexEntry(s, [], [])
     items = summary_items(s.summary)
     usable = items and vectors_usable(s, embedder.model_id)
     return IndexEntry(s, items, unpack(s.vecs, embedder.dim) if usable else [])
@@ -137,7 +139,9 @@ class IndexedMemoryStore:
             rows = [
                 e
                 for e in self._entries(guild_id).values()
-                if e.channel_id in allowed and start_date <= e.local_date <= end_date
+                if e.channel_id in allowed
+                and start_date <= e.local_date <= end_date
+                and not e.summary.dirty
             ]
         return sorted(rows, key=lambda e: (e.local_date, e.channel_id))
 
@@ -148,6 +152,7 @@ class IndexedMemoryStore:
         ]
 
     def all_summaries(self, guild_id: int) -> list[DaySummary]:
+        """Every summary including dirty ones: for the scheduler only, never shown to users."""
         with self._lock:
             rows = [e.summary for e in self._entries(guild_id).values()]
         return sorted(rows, key=lambda s: (s.local_date, s.channel_id))
@@ -178,8 +183,15 @@ class IndexedMemoryStore:
             for key in affected:
                 if (e := entries.get(key)) is not None:  # a new entry: readers keep their copy
                     dirty = e.summary.model_copy(update={"dirty": True})
-                    entries[key] = IndexEntry(dirty, e.items, e.vectors)
+                    new = entries[key] = make_entry(dirty, self.embedder)  # no items, no vectors
+                    self._sizes[guild_id] += _entry_bytes(new) - _entry_bytes(e)
         return affected
+
+    def invalidate_guild(self, guild_id: int) -> None:
+        """Drop the guild's cached entries (reloaded from the store on the next read)."""
+        with self._lock:
+            self._guilds.pop(guild_id, None)
+            self._sizes.pop(guild_id, None)
 
     def purge(self, cutoffs, default_cutoff) -> tuple[int, int]:
         result = self.base.purge(cutoffs, default_cutoff)

@@ -228,6 +228,8 @@
         <div id="features"></div>
         <div class="fields">
           <label><span data-i18n="receipt_ids_l"></span> <div class="checks" id="receipt-ids"></div><small data-i18n="receipt_ids_s"></small></label>
+          <label><span data-i18n="home_id_l"></span> <select class="field" id="receipt-home"></select><small data-i18n="home_id_s"></small></label>
+          <div class="checks"><label><input type="checkbox" id="receipt-forward"> <span data-i18n="fwd_l"></span></label></div><small data-i18n="fwd_s"></small>
           <label><span data-i18n="ask_ids_l"></span> <div class="checks" id="ask-ids"></div><small data-i18n="ask_ids_s"></small></label>
           <label><span data-i18n="digest_id_l"></span> <select class="field" id="digest-id"></select></label>
           <label><span data-i18n="mem_days_l"></span>
@@ -236,6 +238,11 @@
             <small data-i18n="mem_days_s"></small>
             <small id="mem-progress"></small></label>
           <label><span data-i18n="digest_time_l"></span> <input type="time" id="digest-time" value="18:00"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="followup_time_l"></span> <input type="time" id="followup-time" value="10:00"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="morning_time_l"></span> <input type="time" id="morning-time" value="08:30"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="evening_time_l"></span> <input type="time" id="evening-time" value="18:00"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="report_time_l"></span> <input type="time" id="report-time" value="18:30"><small data-i18n="digest_time_s"></small></label>
+          <label><span data-i18n="report_id_l"></span> <select class="field" id="report-id"></select><small data-i18n="report_id_s"></small></label>
           <label><span data-i18n="exec_roles_l"></span> <input type="text" id="exec-roles" data-i18n-attr="placeholder:exec_roles_ph"><small data-i18n="exec_roles_s"></small></label>
         </div>
         <h3 id="modes-h" style="margin:18px 0 6px;font-size:1rem" data-i18n="modes_h"></h3>
@@ -384,7 +391,7 @@
   "en": "Who sees what"
  },
  "hello": {
-  "th": "สวัสดีครับ วันนี้ให้สลิดช่วยอะไรดี",
+  "th": "สวัสดีค่ะ วันนี้ให้สลิดช่วยอะไรดีคะ",
   "en": "Hello! What can Salid help you with today?"
  },
  "ng_h": {
@@ -488,7 +495,7 @@
   "en": "This list updates by itself within 1 minute after you change permissions in Discord (reload the page to see the latest)"
  },
  "hc_none": {
-  "th": "สลิดเห็นทุกห้องแล้วครับ 👍",
+  "th": "สลิดเห็นทุกห้องแล้วค่ะ 👍",
   "en": "Salid can see every channel 👍"
  },
  "hc_nolist": {
@@ -514,6 +521,26 @@
  "receipt_ids_s": {
   "th": "ห้องที่ชื่อมีคำว่า “ใบเสร็จ” หรือ “receipt” รับใบเสร็จได้อยู่แล้วโดยไม่ต้องเลือก",
   "en": "Channels with “ใบเสร็จ” or “receipt” in the name already accept receipts without being selected"
+ },
+ "home_id_l": {
+  "th": "ห้องรับใบเสร็จหลัก",
+  "en": "Main receipt channel"
+ },
+ "home_id_auto": {
+  "th": "เลือกให้อัตโนมัติ",
+  "en": "Pick automatically"
+ },
+ "home_id_s": {
+  "th": "ใบเสร็จที่ส่งผิดห้องจะถูกคัดลอกมาที่นี่ ถ้าไม่เลือก สลิดใช้ห้องรับใบเสร็จห้องแรกที่ส่งข้อความได้",
+  "en": "Receipts posted in other channels are copied here. If not set, Salid uses the first receipt channel it can post in"
+ },
+ "fwd_l": {
+  "th": "ส่งต่อใบเสร็จที่ส่งผิดห้อง",
+  "en": "Forward receipts sent to the wrong channel"
+ },
+ "fwd_s": {
+  "th": "ข้อความเดิมไม่ถูกลบ (สลิดไม่มีสิทธิ์ลบข้อความ)",
+  "en": "The original message is kept (Salid cannot delete messages)"
  },
  "ask_ids_l": {
   "th": "ห้องตอบทุกข้อความ",
@@ -696,7 +723,7 @@
   "en": "Salid is thinking..."
  },
  "ask_failed": {
-  "th": "ตอบไม่ได้ในตอนนี้ ลองใหม่อีกครั้งครับ",
+  "th": "ตอบไม่ได้ในตอนนี้ ลองใหม่อีกครั้งค่ะ",
   "en": "Cannot answer right now. Please try again."
  },
  "ac_h": {
@@ -825,11 +852,59 @@
  },
  "f_voice_meetings_d": {
   "th": "พิมพ์ /เข้าประชุม ให้สลิดเข้าห้องเสียง ถอดว่าใครพูดอะไร ตอบเมื่อถูกเรียก และสรุปตอนจบ",
-  "en": "Type /join and Salid enters the voice channel, transcribes who said what, answers when called and summarizes at the end"
+  "en": "Type /join-meeting and Salid enters the voice channel, transcribes who said what, answers when called and summarizes at the end"
  },
  "f_voice_meetings_w": {
   "th": "/เข้าประชุม",
-  "en": "/join"
+  "en": "/join-meeting"
+ },
+ "f_auto_join_meetings_n": {
+  "th": "เข้าฟังประชุมเอง",
+  "en": "Join voice meetings by itself"
+ },
+ "f_auto_join_meetings_d": {
+  "th": "เมื่อมีคนเข้าห้องเสียง สลิดเข้ามาจดประชุมเอง ถ้ามีหลายห้องพร้อมกันจะแบ่งร่างไปให้ ห้องที่สำคัญกว่าได้ก่อน (ต้องเปิด “ฟังประชุมในห้องเสียง” ด้วย)",
+  "en": "When someone is in a voice channel, Salid joins to take notes by itself. With several rooms at once it splits across its voice helpers, the most important room first (needs “Listen to meetings in voice channels”)"
+ },
+ "f_auto_join_meetings_w": {
+  "th": "ห้องเสียง",
+  "en": "voice channels"
+ },
+ "f_documents_n": {
+  "th": "ทำเอกสารบัญชีเป็น PDF",
+  "en": "Accounting documents as PDF"
+ },
+ "f_documents_d": {
+  "th": "สลิดสร้างรายงานค่าใช้จ่าย รายการใบเสร็จ และรายงานการประชุมเป็นไฟล์ PDF แนบในแชต (ผู้บริหารเห็นของทั้งทีม คนอื่นเห็นของตัวเอง)",
+  "en": "Salid builds expense summaries, receipt lists and meeting minutes as PDF attachments (executives see the whole team, others only their own)"
+ },
+ "f_documents_w": {
+  "th": "ขอในแชต",
+  "en": "ask in chat"
+ },
+ "f_scheduling_n": {
+  "th": "นัดประชุมและเตือนล่วงหน้า",
+  "en": "Schedule meetings and reminders"
+ },
+ "f_scheduling_d": {
+  "th": "สลิดสร้างกิจกรรมนัดประชุมใน Discord (ถามยืนยันก่อน) เตือนผู้เข้าร่วมทางแชตและ DM ทักคนที่ยังไม่เข้า และเข้ามาจดประชุมให้ตามนัด",
+  "en": "Salid creates Discord scheduled events (after confirming), reminds attendees in chat and DM, nudges no-shows and joins to take notes at the start time"
+ },
+ "f_scheduling_w": {
+  "th": "ขอในแชต",
+  "en": "ask in chat"
+ },
+ "f_email_n": {
+  "th": "ร่างและส่งอีเมล",
+  "en": "Draft and send email"
+ },
+ "f_email_d": {
+  "th": "สลิดร่างอีเมลให้ดูก่อน และส่งเมื่อผู้บริหารหรือผู้จัดการยืนยันเท่านั้น (ต้องตั้งค่า Gmail ก่อนจึงส่งจริง)",
+  "en": "Salid drafts an email for review and sends it only after an executive or manager confirms (real sending needs Gmail to be configured)"
+ },
+ "f_email_w": {
+  "th": "ขอในแชต",
+  "en": "ask in chat"
  },
  "f_digest_n": {
   "th": "สรุปรายวันให้ผู้บริหาร",
@@ -891,17 +966,333 @@
   "th": "ห้องที่ไม่ใช่โหมดปิด",
   "en": "Channels not set to Off"
  },
- "f_followup_n": {
-  "th": "ติดตามงานที่รับปาก",
-  "en": "Follow up on promises"
+ "f_media_memory_n": {
+  "th": "จำเนื้อหาเสียงและวิดีโอ",
+  "en": "Remember audio and video content"
  },
- "f_followup_d": {
-  "th": "จดว่าใครรับปากอะไร แล้วเตือนก่อนถึงกำหนด",
-  "en": "Notes who promised what and reminds before the deadline"
+ "f_media_memory_d": {
+  "th": "สลิดถอดเสียงพูดจากไฟล์เสียง วิดีโอ และข้อความเสียงที่โพสต์ในห้องที่เปิดความจำ (เฉพาะเสียง ไม่ส่งทั้งวิดีโอ) เพื่อให้ค้นหาและสรุปได้ จำกัดเวลาเสียงต่อวัน ไม่เก็บไฟล์ ต้องเปิดองค์ความรู้ของทีมไว้ด้วย",
+  "en": "Salid transcribes the speech in audio files, videos and voice messages posted in channels with memory on (audio only, the video itself is never sent) so they can be searched and summarized. Daily audio limit applies. Files are not stored. Team knowledge must be on too."
  },
- "f_followup_w": {
-  "th": "เร็วๆ นี้",
-  "en": "Coming soon"
+ "f_media_memory_w": {
+  "th": "ห้องที่ไม่ใช่โหมดปิด",
+  "en": "Channels not set to Off"
+ },
+ "f_read_receipts_n": {
+  "th": "ติด 👀 เมื่ออ่านไฟล์แล้ว",
+  "en": "React 👀 once a file is read"
+ },
+ "f_read_receipts_d": {
+  "th": "เมื่อสลิดอ่านรูป เอกสาร หรือเสียงที่ไม่ได้ส่งถึงสลิดเสร็จเรียบร้อยแล้ว (เก็บลงความจำเงียบๆ) จะกดอีโมจิ 👀 ที่ข้อความนั้นหนึ่งครั้ง เพื่อให้ทุกคนรู้ว่าสลิดอ่านแล้ว โดยไม่พิมพ์ข้อความ ไม่ทำกับข้อความเก่าที่อ่านย้อนหลัง",
+  "en": "When Salid has quietly read an image, document or audio that was not addressed to it, it adds one 👀 reaction to that message so people know it was read, without posting text. Not done for old messages read from history."
+ },
+ "f_read_receipts_w": {
+  "th": "ห้องที่ไม่ใช่โหมดปิด",
+  "en": "Channels not set to Off"
+ },
+ "f_doc_memory_n": {
+  "th": "จำเนื้อหาเอกสาร (PDF ฯลฯ)",
+  "en": "Remember document content (PDF etc.)"
+ },
+ "f_doc_memory_d": {
+  "th": "สลิดอ่านไฟล์ PDF, Word, Excel, PowerPoint และไฟล์ข้อความที่โพสต์ในห้องที่เปิดความจำ แล้วจดสรุปและข้อความสำคัญ เพื่อให้ค้นหาและสรุปได้ จำกัดจำนวนหน้าต่อวัน ไม่เก็บไฟล์ ต้องเปิดองค์ความรู้ของทีมไว้ด้วย",
+  "en": "Salid reads PDF, Word, Excel, PowerPoint and text files posted in channels with memory on and keeps a summary and key text so they can be searched and summarized. A daily page limit applies. Files are not stored. Team knowledge must be on too."
+ },
+ "f_doc_memory_w": {
+  "th": "ห้องที่ไม่ใช่โหมดปิด",
+  "en": "Channels not set to Off"
+ },
+ "f_web_n": {
+  "th": "อ่านลิงก์และค้นอินเทอร์เน็ต",
+  "en": "Read links and search the web"
+ },
+ "f_web_d": {
+  "th": "สลิดอ่านลิงก์เว็บและวิดีโอ YouTube ที่ส่งมา และค้นข้อมูลล่าสุดด้วย Google Search พร้อมแนบแหล่งที่มา ข้อมูลของทีมไม่ถูกส่งออกไปค้น",
+  "en": "Salid reads web links and YouTube videos you send and looks up current information with Google Search, citing sources. Team data is never sent out in searches."
+ },
+ "f_web_w": {
+  "th": "แปะลิงก์หรือถามข่าวล่าสุด",
+  "en": "Paste a link or ask about the news"
+ },
+ "f_followups_n": {
+  "th": "ติดตามงานทุกเช้า",
+  "en": "Daily task follow-ups"
+ },
+ "f_followups_d": {
+  "th": "สลิดจดว่าใครรับงานอะไรจากแชตและการประชุมเอง แล้ว DM ถามความคืบหน้าสมาชิกที่มีงานครบกำหนดหรือเลยกำหนดทุกเช้า",
+  "en": "Salid notes who took on what from chats and meetings by itself, then DMs each member with tasks due or overdue every morning to ask for a status update."
+ },
+ "f_followups_w": {
+  "th": "ส่ง DM ตามเวลาที่ตั้ง",
+  "en": "DMs at the time set below"
+ },
+ "f_reports_n": {
+  "th": "รายงานเย็นถึงผู้บริหาร",
+  "en": "Evening report for leadership"
+ },
+ "f_reports_d": {
+  "th": "ทุกเย็นสลิดโพสต์รายงานเข้าห้องส่วนตัว “รายงานจากสลิด” (เจ้าของ แอดมิน และ role ผู้บริหารเท่านั้น): สรุปการเงิน งานของแต่ละคน การประชุม ความเสี่ยงและสิ่งที่ควรทำต่อ",
+  "en": "Every evening Salid posts a report in the private channel “รายงานจากสลิด” (owner, admins and executive roles only): finances, each person's work, meetings, risks and suggested next actions."
+ },
+ "f_reports_w": {
+  "th": "ห้องส่วนตัวของผู้บริหาร",
+  "en": "Leadership-only channel"
+ },
+ "f_briefings_n": {
+  "th": "สรุปเช้า-เย็นและแจ้งเตือนส่วนตัว",
+  "en": "Personal morning/evening briefs and alerts"
+ },
+ "f_briefings_d": {
+  "th": "สลิด DM สรุปเช้า (นัดประชุม งานที่ครบกำหนด เอกสารสำคัญ เรื่องที่รอคุณตอบ) และสรุปเย็นให้สมาชิกแต่ละคน แจ้งเตือนทันทีเมื่อมีเอกสารสำคัญที่เกี่ยวกับเขา และเตือนเบาๆ เมื่อมีคนฝากเรื่องไว้แล้วยังไม่ได้ตอบ สมาชิกปรับเองได้โดยคุยกับสลิด (ใช้แทน DM ติดตามงานเดิม)",
+  "en": "Salid DMs each member a morning brief (meetings, tasks due, important documents, asks waiting for them) and an evening brief, alerts them at once about important documents that concern them, and gently reminds them of unanswered requests. Members tune it by talking to Salid. Replaces the old task follow-up DM."
+ },
+ "f_briefings_w": {
+  "th": "DM ส่วนตัว ปรับได้รายคน",
+  "en": "Private DMs, adjustable per person"
+ },
+ "f_catchup_n": {
+  "th": "สรุปสิ่งที่พลาดไป (“ช่วงที่ไม่อยู่มีอะไรบ้าง”)",
+  "en": "Catch-up on what you missed"
+ },
+ "f_catchup_d": {
+  "th": "สมาชิกถามสลิดว่า “มีอะไรที่ผมพลาดไปบ้าง” หรือใช้ /ตามทัน /catchup สลิดสรุปเฉพาะห้องที่เขาอ่านได้: คนแท็กเขา งานของเขา ประชุมที่พลาด ไฮไลต์รายห้อง และใส่ส่วนสั้นๆ ในสรุปเช้าเมื่อเขาหายไปเกิน 1 วันทำการ",
+  "en": "Members ask Salid “what did I miss” or use /catchup. Salid summarises only channels that person can read: mentions, their tasks, missed meetings, channel highlights, plus a short section in the morning brief after a working day away."
+ },
+ "f_catchup_w": {
+  "th": "ส่วนตัว เห็นเฉพาะห้องที่อ่านได้",
+  "en": "Private, only channels they can read"
+ },
+ "f_meeting_transcript_doc_n": {
+  "th": "รายงานการประชุมเป็นเอกสาร พร้อมบทพูดของแต่ละคน",
+  "en": "Meeting minutes document with who-said-what"
+ },
+ "f_meeting_transcript_doc_d": {
+  "th": "เมื่อประชุมเสียงจบ สลิดแนบ PDF รายงานการประชุม (สรุป มติ งานที่ต้องทำ และบทพูดของแต่ละคน) และสมาชิกที่เข้าประชุมขอเป็น PDF / Word ภายหลังได้ ไม่รวมช่วงที่ปิดการบันทึก บทพูดสร้างจากความจำของห้องตามอายุที่ตั้งไว้",
+  "en": "When a voice meeting ends Salid attaches a minutes PDF (summary, decisions, action items and each person's transcript); attendees can ask for it later as PDF / Word. Nothing from a not-recording pause is included; the transcript is rebuilt from the room's memory under its retention."
+ },
+ "f_meeting_transcript_doc_w": {
+  "th": "เฉพาะคนที่เข้าประชุมหรือเห็นห้องเสียง",
+  "en": "Only people who attended or can see the room"
+ },
+ "f_private_channels_n": {
+  "th": "ห้องส่วนตัวกับสลิดของทุกคน",
+  "en": "A private Salid channel for every member"
+ },
+ "f_private_channels_d": {
+  "th": "สลิดสร้างห้องส่วนตัวให้สมาชิกทุกคนในหมวด “คุยกับสลิด (ส่วนตัว)” (สมาชิกใหม่ได้ห้องทันที คนเดิมค่อยๆ สร้างให้) แล้วส่งสรุปเช้า-เย็น เตือนงาน และคำขออนุมัติไปที่ห้องนั้นพร้อมแท็กเจ้าของ ห้องเห็นแค่เจ้าของ สลิด และแอดมินที่มีสิทธิ์ Administrator คนที่ออกจากเซิร์ฟเวอร์จะถูกลบห้องหลัง 24 ชั่วโมง ปิดสวิตช์นี้จะหยุดสร้างห้องใหม่ แต่ไม่ลบห้องที่มีอยู่",
+  "en": "Salid creates a private channel for every member under “Salid private chats” (new members at once, existing ones gradually) and sends briefings, reminders and approval requests there, tagging the owner. Only the owner, Salid and admins with the Administrator permission can see it. A channel is deleted 24 hours after its member leaves. Turning this off stops new channels but does NOT delete existing ones."
+ },
+ "f_private_channels_w": {
+  "th": "สมาชิกเลือกรับทาง DM แทนได้",
+  "en": "Members can opt back into DMs"
+ },
+ "f_approvals_n": {
+  "th": "คำขออนุมัติ (เบิก ซื้อ ลา)",
+  "en": "Approval requests (expense, purchase, leave)"
+ },
+ "f_approvals_d": {
+  "th": "สมาชิกขอให้สลิดส่งคำขออนุมัติ เช่น ขอเบิกค่าแท็กซี่ ขอซื้อของ ขอลา ไปให้หัวหน้า (ตามลำดับ role ของเซิร์ฟเวอร์ หรือคนที่ระบุ) สลิดถามยืนยันก่อนส่ง หัวหน้ากดอนุมัติหรือไม่อนุมัติใน DM และผู้ขอได้รับแจ้งผล มีสรุปในรายงานเย็นและเตือนหัวหน้าในสรุปเช้าถ้าค้างเกิน 1 วัน",
+  "en": "Members ask Salid to send an approval request (expense claim, purchase, leave) to their manager (by the server's role hierarchy, or a named person). Salid confirms before sending, the approver taps Approve or Decline in a DM and the requester is told the outcome. Counts appear in the evening report and approvers are reminded in the morning brief when something has waited over a day."
+ },
+ "f_approvals_w": {
+  "th": "ต้องยืนยันก่อนส่งทุกครั้ง",
+  "en": "Always confirmed before sending"
+ },
+ "f_freetime_n": {
+  "th": "หาเวลาว่างตรงกัน",
+  "en": "Find a time everyone is free"
+ },
+ "f_freetime_d": {
+  "th": "สมาชิกขอให้สลิดหาเวลาประชุมที่ทุกคนว่าง โดยดูจากเวลาทำงานที่แต่ละคนตั้งไว้ ปฏิทิน และวันลาที่อนุมัติแล้ว",
+  "en": "Members ask Salid to find a meeting time when everyone is free, using each person's work hours, calendar events and approved leave."
+ },
+ "f_freetime_w": {
+  "th": "ใช้เฉพาะข้อมูลว่าง/ไม่ว่าง ไม่เปิดเผยรายละเอียดนัด",
+  "en": "Only free/busy, never event details"
+ },
+ "f_polls_n": {
+  "th": "โพลและแบบสอบถาม",
+  "en": "Polls and forms"
+ },
+ "f_polls_d": {
+  "th": "สมาชิกขอให้สลิดสร้างโพลในห้อง หรือส่งแบบสอบถามทาง DM แล้วสลิดสรุปผลให้",
+  "en": "Members ask Salid to run a poll in a channel or collect answers by DM form, then summarise the results."
+ },
+ "f_polls_w": {
+  "th": "ผู้ตอบแบบสอบถามปฏิเสธได้ทุกเมื่อ",
+  "en": "Respondents can opt out any time"
+ },
+ "f_wiki_n": {
+  "th": "วิกิบริษัท",
+  "en": "Company wiki"
+ },
+ "f_wiki_d": {
+  "th": "สลิดเขียนและค้นหาหน้าความรู้ของบริษัท (เช่น ขั้นตอนเบิกเงิน) จากความจำที่อ่านได้ และตอบจากวิกิก่อน",
+  "en": "Salid writes and searches company knowledge pages (e.g. how to claim expenses) from memory it can read, and consults the wiki first."
+ },
+ "f_wiki_w": {
+  "th": "ต้องเปิดความจำ (memory) ด้วย",
+  "en": "Needs memory turned on"
+ },
+ "f_places_n": {
+  "th": "จำสถานที่สำคัญ",
+  "en": "Remembered places"
+ },
+ "f_places_d": {
+  "th": "สลิดจำที่ตั้งสำนักงานใหญ่ สาขา โกดัง และสถานที่ส่วนตัวที่เจ้าตัวขอให้จำ แล้วบอกที่อยู่และลิงก์แผนที่เมื่อมีคนถาม",
+  "en": "Salid remembers the head office, branches, warehouses and personal places their owner asked it to keep, and gives the address and map link when asked."
+ },
+ "f_places_w": {
+  "th": "สถานที่ส่วนตัวเห็นได้เฉพาะผู้ที่เจ้าตัวอนุญาต",
+  "en": "Personal places are visible only to who the owner allows"
+ },
+ "f_maps_n": {
+  "th": "เวลาเดินทางและสภาพอากาศ",
+  "en": "Travel time and weather"
+ },
+ "f_maps_d": {
+  "th": "สลิดประเมินเวลาเดินทางและเส้นทางด้วย Google Maps (รถติดแค่ไหน ควรออกกี่โมง) และดูพยากรณ์อากาศ (ฝนตกไหม) ให้เมื่อมีคนถาม",
+  "en": "Salid estimates travel time and routes with Google Maps (traffic, when to leave) and checks the weather forecast (will it rain) when asked."
+ },
+ "f_maps_w": {
+  "th": "ต้องเปิดใช้ Google Maps API ฝั่งเซิร์ฟเวอร์ (SALID_MAPS_ENABLED) ด้วย; ที่อยู่ส่วนตัวไม่ถูกเปิดเผยในห้องรวม",
+  "en": "Also needs the Google Maps APIs enabled server-side (SALID_MAPS_ENABLED); private addresses are never shown in shared rooms"
+ },
+ "f_search_n": {
+  "th": "ค้นหาข้อมูล",
+  "en": "Information search"
+ },
+ "f_search_d": {
+  "th": "สลิดค้นข้อมูลภายในทีมในครั้งเดียว (แชต ไฟล์ วิกิ ใบเสร็จ งาน ประชุม สถานที่) ค้นเว็บพร้อมอ้างอิงแหล่งที่มา และทำรีเสิร์ชเชิงลึกเป็นรายงาน PDF (จำกัดต่อวัน)",
+  "en": "Salid searches all internal sources in one go (chat, files, wiki, receipts, tasks, meetings, places), searches the web with cited sources, and runs deep research into a PDF report (daily limit)."
+ },
+ "f_search_w": {
+  "th": "ค้นเว็บและรีเสิร์ชเชิงลึกต้องเปิดการค้นเว็บ (web) ด้วย",
+  "en": "Web search and deep research also need web turned on"
+ },
+ "f_travel_n": {
+  "th": "แปลงสกุลเงินและเที่ยวบิน",
+  "en": "Currency and flights"
+ },
+ "f_travel_d": {
+  "th": "สลิดแปลงสกุลเงินด้วยอัตราอ้างอิงจริง (ECB) เช็กสถานะเที่ยวบิน หาราคาตั๋วโดยประมาณ และเตือนเที่ยวบินเมื่อมีคีย์ข้อมูลเที่ยวบิน",
+  "en": "Salid converts currencies with real reference (ECB) rates, checks flight status, finds indicative fares, and tracks flights when a flight-data key is configured."
+ },
+ "f_travel_w": {
+  "th": "ราคาตั๋วและสถานะจากการค้นเว็บเป็นค่าโดยประมาณ",
+  "en": "Fares and status from web search are indicative"
+ },
+ "f_markets_n": {
+  "th": "หุ้น ทอง และข่าว",
+  "en": "Stocks, gold and news"
+ },
+ "f_markets_d": {
+  "th": "สลิดตอบราคาหุ้นไทย/ต่างประเทศ ราคาทอง และข่าวล่าสุด ตั้งแจ้งเตือนราคาให้แต่ละคน ใส่บรรทัด “ตลาดเช้านี้” ในสรุปเช้าเมื่อขอ และผู้บริหารให้ติดตามข่าวลูกค้า/คู่แข่งในรายงานเย็นได้",
+  "en": "Salid answers Thai and global stock prices, gold prices and latest news, sets per-person price alerts, adds a market line to the morning brief on request, and executives can follow customer/competitor news in the evening report."
+ },
+ "f_markets_w": {
+  "th": "ใช้แหล่งข้อมูลสาธารณะ ราคาอาจล่าช้า และไม่ใช่คำแนะนำการลงทุน",
+  "en": "Uses free public sources; prices may be delayed; not investment advice"
+ },
+ "f_ideas_n": {
+  "th": "ไอเดียและโปรเจกต์",
+  "en": "Ideas and projects"
+ },
+ "f_ideas_d": {
+  "th": "สลิดเก็บไอเดียที่สมาชิกกำลังพัฒนาเป็นเอกสารโปรเจกต์ (ปัญหา ลูกค้า BMC SWOT คู่แข่ง วิธีขาย ราคา) เขียนเฟรมเวิร์กธุรกิจให้ครบทุกหัวข้อเป็น PDF และส่งออกเป็น PDF/DOCX/Markdown ค่าเริ่มต้นเห็นเฉพาะเจ้าของและผู้ที่ตำแหน่งสูงกว่า",
+  "en": "Salid keeps ideas members develop as project documents (problem, customers, BMC, SWOT, competitors, go-to-market, pricing), writes complete business frameworks as PDF and exports to PDF/DOCX/Markdown. By default only the owner and people with a higher role can read an idea."
+ },
+ "f_ideas_w": {
+  "th": "ไอเดียที่เจ้าของแชร์ให้ทีมจะแสดงในคลังเอกสารของ Command Center",
+  "en": "Ideas shared with the team appear in the Command Center documents library"
+ },
+ "f_company_learning_n": {
+  "th": "เรียนรู้บริษัทและสายงาน",
+  "en": "Learn the company and domain"
+ },
+ "f_company_learning_d": {
+  "th": "สลิดจำสิ่งที่บริษัทสอน (กฎ ศัพท์ ขั้นตอน FAQ น้ำเสียง) และความรู้พื้นฐานตามสายงาน เช่น ร้านอาหาร นิติบุคคล คลินิก ผู้ดูแลสอนได้ทันที ส่วนคนอื่นเสนอได้และต้องรอผู้ดูแลอนุมัติ",
+  "en": "Salid remembers what the company teaches her (rules, glossary, procedures, FAQ, tone) and built-in domain knowledge such as restaurant, condo juristic or clinic. Admins teach directly; everyone else can only suggest and an admin must approve."
+ },
+ "f_company_learning_w": {
+  "th": "ข้อมูลที่สอนเป็นเพียงข้อมูลประกอบ ไม่เปลี่ยนสิทธิ์ ขอบเขตข้อมูล หรือความลับ",
+  "en": "Taught items are guidance only: they never change permissions, scoping or confidentiality"
+ },
+ "f_contests_n": {
+  "th": "การแข่งขันและแฮกกาธอน",
+  "en": "Contests and hackathons"
+ },
+ "f_contests_d": {
+  "th": "สลิดอ่านกติกาการแข่งขัน/แฮกกาธอน/ทุน/ประมูลที่วางมา เก็บเดดไลน์ เกณฑ์ตัดสิน เทคโนโลยีที่แนะนำ และเช็กลิสต์ส่งงาน วางแผนย้อนจากเดดไลน์ เป็นกรรมการจำลอง ร่างสคริปต์พิตช์ และเตือนทีมก่อนเดดไลน์ 7 วัน 3 วัน 1 วัน และ 3 ชั่วโมง",
+  "en": "Salid reads pasted contest / hackathon / grant / tender rules, keeps deadlines, judging criteria, suggested technologies and a submission checklist, plans backwards from the deadlines, acts as a mock judge, drafts pitch scripts and reminds the team 7 days, 3 days, 1 day and 3 hours before each deadline."
+ },
+ "f_contests_w": {
+  "th": "เตือนเฉพาะคนในทีมที่เจ้าของแชร์การแข่งขันให้ดูแล้ว คะแนนจากกรรมการจำลองเป็นเพียงการประเมินของสลิด",
+  "en": "Reminders go only to team members the owner shared the contest with; mock-judge scores are Salid's estimate"
+ },
+ "f_bizfin_n": {
+  "th": "การเงินธุรกิจและเทียบตลาด",
+  "en": "Business finance and benchmarking"
+ },
+ "f_bizfin_d": {
+  "th": "สลิดคำนวณจุดคุ้มทุน ตั้งราคาจากต้นทุน (แยก VAT 7%) ROI/Payback/NPV/IRR และประมาณการ 12-36 เดือนด้วยโค้ดที่แม่นยำ แนบ Excel เทียบตลาดและคู่แข่งพร้อมแหล่งอ้างอิง ตรวจลิงก์/ข้อความหลอกลวง และเช็กลิสต์สลิดโอนเงิน",
+  "en": "Salid calculates break-even, cost-based pricing (VAT 7% shown separately), ROI / payback / NPV / IRR and 12-36 month projections exactly in code with an Excel file, benchmarks markets and competitors with citations, checks links and messages for scams, and runs a payment-slip checklist."
+ },
+ "f_bizfin_w": {
+  "th": "ตัวเลขเป็นผลจากสมมติฐานที่ผู้ใช้ให้ ตรวจสลิดไม่สามารถยืนยันกับธนาคารได้",
+  "en": "Figures follow the user's assumptions; slip checks cannot confirm with the bank"
+ },
+ "f_promo_n": {
+  "th": "โพสต์โปรโมทจากรูปสินค้า",
+  "en": "Promo posts from product photos"
+ },
+ "f_promo_d": {
+  "th": "ส่งรูปสินค้าพร้อมบอกโปร สลิดทำภาพโพสต์ 3 ขนาด (1:1, 4:5, 9:16) ตัวสินค้าคงเดิม พื้นหลังสร้างด้วย AI ข้อความภาษาไทยจัดวางโดยสลิด พร้อมแคปชัน แก้ต่อได้ภายใน 30 นาที",
+  "en": "Send a product photo with your offer: Salid makes post images in 3 sizes (1:1, 4:5, 9:16); the product stays as photographed, the background is made with AI, Salid typesets the text and writes a caption; changes work for 30 minutes"
+ },
+ "f_promo_w": {
+  "th": "ไม่เกิน 20 ชุดต่อวันต่อเซิร์ฟเวอร์ เกินแล้วใช้รูปเดิมแทนพื้นหลัง AI",
+  "en": "Up to 20 kits per server per day; beyond that the original photo is used instead of an AI background"
+ },
+ "f_link_guard_n": {
+  "th": "เตือนลิงก์อันตราย",
+  "en": "Dangerous link guard"
+ },
+ "f_link_guard_d": {
+  "th": "เมื่อมีข้อความในช่องที่มีลิงก์ที่เห็นชัดว่าหลอกลวง (โดเมนปลอมเลียนแบบธนาคาร ไฟล์ .apk ลิงก์ซ่อนปลายทาง) สลิดตอบเตือนสั้นๆ หนึ่งครั้ง ไม่เตือนเว็บที่รู้จัก และไม่เตือนถี่",
+  "en": "When a channel message holds a clearly scammy link (bank lookalike domain, .apk file, masked destination) Salid replies once with a short warning. Known sites are never flagged and warnings are rate-limited."
+ },
+ "f_link_guard_w": {
+  "th": "ไม่ทำงานในช่องโหมดเงียบ/ปิด และการตรวจเป็นการประเมิน ไม่ใช่การรับรอง",
+  "en": "Not active in off / listen channels; the check is an estimate, not a guarantee"
+ },
+ "morning_time_l": {
+  "th": "เวลาสรุปเช้า (DM)",
+  "en": "Morning brief time (DM)"
+ },
+ "evening_time_l": {
+  "th": "เวลาสรุปเย็น (DM)",
+  "en": "Evening brief time (DM)"
+ },
+ "followup_time_l": {
+  "th": "เวลาติดตามงาน (DM)",
+  "en": "Task follow-up time (DM)"
+ },
+ "report_time_l": {
+  "th": "เวลาส่งรายงานเย็น",
+  "en": "Evening report time"
+ },
+ "report_id_l": {
+  "th": "ห้องรายงานเย็น",
+  "en": "Evening report channel"
+ },
+ "report_auto": {
+  "th": "สร้างห้อง “รายงานจากสลิด” ให้เอง (ต้องมีสิทธิ์จัดการช่อง)",
+  "en": "Create “รายงานจากสลิด” automatically (needs Manage Channels)"
+ },
+ "report_id_s": {
+  "th": "ถ้าเลือกห้องเอง ให้เป็นห้องที่เห็นเฉพาะผู้บริหาร สลิดจะรายงานเรื่องงานของทุกคนในห้องนั้น",
+  "en": "If you pick a channel, make it visible to leadership only: Salid reports everyone's work there."
  },
  "sw_off": {
   "th": "ปิด {name}",
@@ -1014,12 +1405,40 @@ const FEATURES = [
   { id: "qa" },
   { id: "meetings", info: true },
   { id: "voice_meetings" },
+  { id: "auto_join_meetings" },
   { id: "digest" },
   { id: "deep_tasks" },
   { id: "decks" },
   { id: "memory" },
   { id: "image_memory" },
-  { id: "followup", soon: true },
+  { id: "media_memory" },
+  { id: "doc_memory" },
+  { id: "read_receipts" },
+  { id: "web" },
+  { id: "documents" },
+  { id: "scheduling" },
+  { id: "email" },
+  { id: "followups" },
+  { id: "reports" },
+  { id: "briefings" },
+  { id: "catchup" },
+  { id: "meeting_transcript_doc" },
+  { id: "private_channels" },
+  { id: "approvals" },
+  { id: "freetime" },
+  { id: "polls" },
+  { id: "wiki" },
+  { id: "places" },
+  { id: "maps" },
+  { id: "search" },
+  { id: "travel" },
+  { id: "markets" },
+  { id: "ideas" },
+  { id: "company_learning" },
+  { id: "contests" },
+  { id: "bizfin" },
+  { id: "promo" },
+  { id: "link_guard" },
 ];
 let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, decks: true };
 let guilds = [];
@@ -1145,9 +1564,17 @@ function renderChecks(box, channels, selected) {
 }
 const checked = (box) => [...box.querySelectorAll("input:checked")].map((i) => i.value);
 
-function renderDigestSelect(channels, selected) {
-  const sel = $("digest-id"); sel.textContent = "";
-  sel.append(Object.assign(tx(document.createElement("option"), "digest_none"), { value: "" }));
+function renderHomeSelect(channels, selected) {
+  const sel = $("receipt-home"); sel.textContent = "";
+  sel.append(Object.assign(tx(document.createElement("option"), "home_id_auto"), { value: "" }));
+  const known = new Set(channels.map((c) => c.id));
+  for (const c of channels) { const o = document.createElement("option"); o.value = c.id; o.textContent = "#" + c.name; sel.append(o); }
+  if (selected && !known.has(selected)) sel.append(Object.assign(tx(document.createElement("option"), "channel_gone", { id: selected }), { value: selected }));
+  sel.value = selected || "";
+}
+function renderDigestSelect(channels, selected, id = "digest-id", noneKey = "digest_none") {
+  const sel = $(id); sel.textContent = "";
+  sel.append(Object.assign(tx(document.createElement("option"), noneKey), { value: "" }));
   const known = new Set(channels.map((c) => c.id));
   for (const c of channels) { const o = document.createElement("option"); o.value = c.id; o.textContent = "#" + c.name; sel.append(o); }
   if (selected && !known.has(selected)) sel.append(Object.assign(tx(document.createElement("option"), "channel_gone", { id: selected }), { value: selected }));
@@ -1246,14 +1673,21 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, memory: true, image_memory: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, ...s.features, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
   renderChecks($("ask-ids"), channels, s.ask_channel_ids);
   renderDigestSelect(channels, s.digest_channel_id);
+  renderHomeSelect(channels, s.receipt_home_channel_id);
+  $("receipt-forward").checked = s.receipt_forward !== false;
+  renderDigestSelect(channels, s.report_channel_id, "report-id", "report_auto");
   renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language);
   $("digest-time").value = s.digest_time || "18:00";
+  $("followup-time").value = s.followup_time || "10:00";
+  $("report-time").value = s.report_time || "18:30";
+  $("morning-time").value = s.morning_brief_time || "08:30";
+  $("evening-time").value = s.evening_brief_time || "18:00";
   fillRetention(s.memory_retention_days || 90);
   loadMemoryStatus();
   $("exec-roles").value = (s.exec_role_names || []).join(", ");
@@ -1323,15 +1757,22 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, memory: features.memory, image_memory: features.image_memory },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, promo: features.promo },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
+    receipt_home_channel_id: $("receipt-home").value,
+    receipt_forward: $("receipt-forward").checked,
     channel_modes: collectModes(),
     default_mode: $("default-mode").value || "call",
     channel_languages: collectLanguages(),
     default_language: $("default-language").value || "th",
     digest_time: $("digest-time").value || "18:00",
+    followup_time: $("followup-time").value || "10:00",
+    report_time: $("report-time").value || "18:30",
+    morning_brief_time: $("morning-time").value || "08:30",
+    evening_brief_time: $("evening-time").value || "18:00",
+    report_channel_id: $("report-id").value,
     memory_retention_days: collectRetention(),
     exec_role_names: $("exec-roles").value.split(",").map((x) => x.trim()).filter(Boolean),
   };

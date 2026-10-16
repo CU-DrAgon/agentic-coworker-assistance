@@ -180,6 +180,42 @@ def addressed_to_salid(
     return result
 
 
+class _Notes(BaseModel):
+    notes: list[str] = []
+
+
+def notes_from_transcript(
+    client, model: str, lines: list[GateLine], *, channel_id: int
+) -> list[str]:
+    """Batch gate over a meeting transcript: one short line per real decision, action item (owner
+    and date when said) or number someone asked Salid to remember; [] for chit-chat. Fails quiet."""
+    prompt = (
+        f"{_ABOUT}\nMeeting transcript, oldest first:\n{_format(lines)}\n\n"
+        "List ONLY things worth writing down: decisions, action items (who does what, by when if "
+        "said), numbers or facts someone asked Salid to remember. Casual chat, greetings and "
+        "discussion without an outcome are NOT notes. One short line each in the language spoken, "
+        'at most 3, never quote speech. Reply JSON: {"notes": ["..."]} ({"notes": []} if none).'
+    )
+    try:
+        resp = generate(
+            client,
+            model,
+            prompt,
+            types.GenerateContentConfig(
+                temperature=0,
+                max_output_tokens=300,
+                response_mime_type="application/json",
+                response_schema=_Notes,
+            ),
+        )
+        notes = [n.strip() for n in _Notes.model_validate(json.loads(resp.text)).notes if n.strip()]
+    except Exception:
+        logger.warning("gate (notes) failed; no notes", exc_info=True)
+        notes = []
+    logger.info("gate notes channel=%s count=%d", channel_id, len(notes))
+    return notes
+
+
 def pick_interjection(
     client,
     model: str,

@@ -176,10 +176,13 @@ class MemoryScheduler:
         channel_name_of: Callable[[int, int], str] = lambda gid, cid: str(cid),
         enabled: Callable[[int], bool] = lambda gid: True,
         max_updates: int = MAX_UPDATES_PER_TICK,
+        on_summary: Callable[[int, int, str, dict, list[MemoryMessage]], None] | None = None,
         embedder=None,
         timer: Callable[[], float] = time.monotonic,
     ) -> None:
         self.store, self.s, self.llm = store, settings, llm
+        # called after a summary was stored: (guild, channel, day, summary dict, new messages)
+        self.on_summary = on_summary
         self.now = now or settings.now
         self.lang_of, self.channel_name_of, self.enabled = lang_of, channel_name_of, enabled
         self.max_updates = max_updates
@@ -247,7 +250,8 @@ class MemoryScheduler:
             (
                 x
                 for x in self.store.all_summaries(gid)
-                if not vectors_usable(x, model_id)
+                if not x.dirty
+                and not vectors_usable(x, model_id)
                 and now - self._vector_failed.get(_summary_key(x), now - VECTORS_RECHECK)
                 >= VECTORS_RECHECK
             ),
@@ -342,6 +346,8 @@ class MemoryScheduler:
         try:
             after = None if dirty or summary is None else summary.cursor
             msgs = self.store.messages_after(gid, cid, day, after, MAX_FETCH)
+            # a DM note its author marked private is never summarised
+            shown = [m for m in msgs if m.visibility != "private"]
             if msgs or dirty:
                 prev = None if dirty or summary is None else summary.summary
                 new = (
@@ -349,16 +355,16 @@ class MemoryScheduler:
                         self.llm,
                         self.s.gate_model,
                         prev,
-                        msgs,
+                        shown,
                         channel=self.channel_name_of(gid, cid),
                         day=day,
                         lang=self.lang_of(gid),
                         zone=self.s.zone,
                     )
-                    if msgs
-                    else memory_summary.SummaryDoc().model_dump()
+                    if shown
+                    else (prev or memory_summary.SummaryDoc().model_dump())
                 )
-                calls = True
+                calls = bool(shown)
             else:
                 new, calls = (summary.summary if summary else {}), False
         except Exception:
@@ -403,6 +409,11 @@ class MemoryScheduler:
         )
         self.store.put_summary(out)
         self._vectors_done.pop(gid, None)
+        if self.on_summary is not None and msgs:
+            try:
+                self.on_summary(gid, cid, day, new, [m for m in msgs if m.visibility != "private"])
+            except Exception:
+                logger.warning("summary hook failed for %s/%s %s", gid, cid, day, exc_info=True)
         logger.info(
             "memory update guild=%s channel=%s day=%s new=%d llm=%s final=%s embedded=%d reused=%d",
             gid, cid, day, len(msgs), calls, out.final, vec.embedded, vec.reused,
@@ -418,6 +429,17 @@ class MemoryScheduler:
     def _drop(self, key) -> None:
         with self._lock:
             self._entries.pop(key, None)
+
+    def purge_guild(self, guild_id: int, now: datetime | None = None) -> tuple[int, int]:
+        """Delete now what is past ONE guild's current retention (it was just shortened) and
+        drop its cached index. Other guilds are untouched (the default cutoff is the epoch)."""
+        utc = (now or self.now()).astimezone(UTC)
+        cutoffs = {guild_id: utc - timedelta(days=self.retention_of(guild_id))}
+        result = self.store.purge(cutoffs, datetime(1970, 1, 1, tzinfo=UTC))
+        invalidate = getattr(self.store, "invalidate_guild", None)
+        if invalidate is not None:
+            invalidate(guild_id)
+        return result
 
     def maybe_purge(self, now: datetime) -> tuple[int, int] | None:
         """Once per local day: delete what is past each guild's CURRENT retention (so a changed

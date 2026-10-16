@@ -1,0 +1,68 @@
+{
+ "chart": {
+  "result": [
+   {
+    "meta": {
+     "currency": "THB",
+     "symbol": "THB=X",
+     "fullExchangeName": "CCY",
+     "shortName": "USD/THB",
+     "gmtoffset": 0,
+     "regularMarketPrice": 32.45,
+     "regularMarketTime": 1792121400,
+     "chartPreviousClose": 32.25,
+     "range": "5d"
+    },
+    "timestamp": [
+     1791774000,
+     1791860400,
+     1791946800,
+     1792033200,
+     1792119600
+    ],
+    "indicators": {
+     "quote": [
+      {
+       "close": [
+        32.5,
+        32.6,
+        32.55,
+        32.4,
+        32.45
+       ],
+       "high": [
+        33.0,
+        33.1,
+        33.05,
+        32.9,
+        32.95
+       ],
+       "low": [
+        32.0,
+        32.1,
+        32.05,
+        31.9,
+        31.950000000000003
+       ],
+       "open": [
+        32.5,
+        32.6,
+        32.55,
+        32.4,
+        32.45
+       ],
+       "volume": [
+        1,
+        1,
+        1,
+        1,
+        1
+       ]
+      }
+     ]
+    }
+   }
+  ],
+  "error": null
+ }
+}

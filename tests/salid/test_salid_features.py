@@ -521,7 +521,7 @@ async def test_name_prefixed_meeting_commands_work_without_a_tag(bot, world, mon
         seen.append("join")
         return "เข้าแล้ว"
 
-    async def leave(who, lang="th"):
+    async def leave(who, lang="th", **_):
         seen.append("leave")
         return "ออกแล้ว"
 

@@ -300,6 +300,10 @@ class Store(Protocol):
     def recent(
         self, guild_id: int, limit: int = 20, include_void: bool = False
     ) -> list[Receipt]: ...
+    def receipt_channel_counts(self, guild_id: int, since: str) -> dict[int, int]:
+        """Active receipts per Discord channel id (effective_date >= `since`, YYYY-MM-DD);
+        receipts without a channel are left out. Lets the bot learn which channels take receipts."""
+        ...
 
 
 SCHEMA = """
@@ -566,6 +570,15 @@ class SQLiteStore:
                 (guild_id, max(1, min(int(limit), 100))),
             ).fetchall()
         return [self._row(r) for r in rows]
+
+    def receipt_channel_counts(self, guild_id, since):
+        with self._conn() as c:
+            rows = c.execute(
+                f"SELECT channel_id, COUNT(*) FROM receipts WHERE guild_id=? AND effective_date>=? "
+                f"AND channel_id IS NOT NULL AND channel_id<>0 AND {ACTIVE_SQL} GROUP BY channel_id",
+                (guild_id, since),
+            ).fetchall()
+        return {int(cid): int(n) for cid, n in rows}
 
 
 def make_store(settings) -> Store:

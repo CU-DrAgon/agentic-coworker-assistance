@@ -375,7 +375,7 @@ async def test_at_most_four_images_per_message_and_big_or_non_images_skipped(bot
     atts = [att(f"{i}.png") for i in range(6)] + [att("doc.pdf", "application/pdf")]
     await send_images(bot, world, iw.a, "", atts)
     await settle(bot)
-    assert len(image_calls(llm)) == 4 and FakeAtt.reads == 4
+    assert len(image_calls(llm)) == 4 and FakeAtt.reads == 5  # + the PDF read for memory
     (rec,) = logged(bot)
     assert (
         rec.text.count("[รูป:") == 4
@@ -417,14 +417,19 @@ async def test_images_in_off_channels_and_with_the_flag_off_are_not_described(bo
     bot.team._cache.clear()
     await send_images(bot, world, iw.a, "y", [att()])
     await settle(bot)
-    assert image_calls(llm) == [] and FakeAtt.reads == 0
+    # image memory is off: no note is stored, but receipts are still recognised by content, so
+    # the describer runs once (only in the channel that is not off)
+    assert len(image_calls(llm)) == 1 and FakeAtt.reads == 1
     assert logged(bot)[0].text == "y [image: a.png]" and logged(bot, 12) == []
 
 
 async def test_receipt_posts_are_not_described_again(bot, iw, world, monkeypatch):
     llm = FakeClient([note_resp()])
     set_llm(bot, llm)
-    iw.a.name = "ใบเสร็จ-ร้าน"  # a receipt channel: the receipt pipeline reads the image
+    bot.guilds_store.save_settings(  # a configured receipt channel: the pipeline reads the image
+        GUILD, GuildSettingsUpdate(receipt_channel_ids=[str(iw.a.id)]), "x"
+    )
+    bot.team._cache.clear()
     await send_images(bot, world, iw.a, "ใบเสร็จ", [att("r.jpg", "image/jpeg")])
     await settle(bot)
     assert image_calls(llm) == []

@@ -9,16 +9,22 @@ dependencies = [
     "discord-ext-voice-recv==0.5.2a179",
     "discord-py[voice]>=2.7.1",
     "fastapi>=0.141.1",
+    "fpdf2>=2.8.9",
     "google-adk==2.11.0",
     "google-cloud-firestore==2.34.1",
     "google-cloud-pubsub==2.42.0",
     "google-cloud-storage>=3.17.0",
     "google-genai>=2.29.0",
     "httpx>=0.28.1",
+    "openpyxl>=3.1.5",
+    "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",
+    "pypdf>=6.20.1",
+    "python-docx>=1.2.0",
     "python-multipart>=0.0.32",
     "python-pptx>=1.0.2",
     "tzdata>=2026.5",
+    "uharfbuzz>=0.56.3",
     "uvicorn>=0.54.0",
 ]
 
@@ -31,7 +37,6 @@ module-name = ["meeting_scribe", "salid"]
 
 [dependency-groups]
 dev = [
-    "pillow>=12.3.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
 ]

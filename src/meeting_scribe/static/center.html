@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salid Command Center</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@500&amp;display=swap">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root {
+  --bg:#F3F4F7; --card:#fff; --ink:#171A21; --muted:#545B6E; --faint:#6A7183;
+  --line:#DCDFE8; --line-soft:#ECEEF3; --navy:#1D2140; --accent:#4752C4; --link:#3F49B8;
+  --on-accent:#fff; --nav-active:#E3E5F6;
+  --ok-bg:#DDF3E8; --ok-ink:#0B6B45; --warn-bg:#FFF1D6; --warn-ink:#8A5A00;
+  --err-bg:#FDE7E4; --err-ink:#A12315; --soon-bg:#ECEEF3; --chip:#EEF0FB;
+  --bubble-me:#4752C4; --bubble-bot:#EEF0FB; --shadow:0 8px 30px rgba(20,24,50,.18);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#10121A; --card:#181B27; --ink:#E9EBF5; --muted:#A5ACC4; --faint:#8E96B0;
+    --line:#2C3045; --line-soft:#232739; --navy:#0B0D16; --accent:#7C87F0; --link:#9CA6FF;
+    --on-accent:#10121A; --nav-active:#252A47;
+    --ok-bg:#12382A; --ok-ink:#7AE0B0; --warn-bg:#40300D; --warn-ink:#F3C969;
+    --err-bg:#46201B; --err-ink:#FFA99B; --soon-bg:#232739; --chip:#232A4A;
+    --bubble-me:#5F6BE0; --bubble-bot:#232739; --shadow:0 8px 30px rgba(0,0,0,.5);
+  }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--ink); line-height:1.55; overflow-x:hidden;
+  font-family:"IBM Plex Sans Thai","Noto Sans Thai",Tahoma,sans-serif; }
+a { color:var(--link); }
+[hidden] { display:none !important; }
+h1,h2,h3,p { margin:0; }
+button,input,select,textarea { font:inherit; color:inherit; }
+button { cursor:pointer; }
+:focus-visible { outline:3px solid var(--accent); outline-offset:2px; border-radius:6px; }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.mono { font-family:"IBM Plex Mono",monospace; }
+.mark { width:36px; height:36px; border-radius:10px; background:#5865F2; color:#fff; display:grid; place-items:center; font-weight:700; font-size:18px; flex:none; }
+
+/* buttons & fields */
+.btn { background:var(--accent); color:var(--on-accent); border:1px solid var(--accent); border-radius:9px; padding:8px 16px; font-weight:600; min-height:40px; }
+.btn.ghost { background:transparent; color:var(--ink); border-color:var(--line); }
+.btn.danger { background:transparent; color:var(--err-ink); border-color:var(--err-ink); }
+.btn.sm { min-height:32px; padding:4px 12px; font-size:14px; }
+.btn[disabled] { opacity:.55; cursor:not-allowed; }
+label.f { display:flex; flex-direction:column; gap:4px; font-size:14px; color:var(--muted); min-width:0; }
+input[type=text],input[type=email],input[type=search],input[type=date],input[type=number],input[type=url],select,textarea {
+  background:var(--card); border:1px solid var(--line); border-radius:9px; padding:8px 12px; min-height:40px; width:100%; color:var(--ink); }
+textarea { resize:vertical; min-height:80px; }
+.row { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+.row > * { flex:1 1 160px; min-width:0; }
+.row > .btn { flex:0 0 auto; }
+.notice { padding:10px 14px; border-radius:10px; font-size:14px; background:var(--warn-bg); color:var(--warn-ink); }
+.notice.error { background:var(--err-bg); color:var(--err-ink); }
+.notice.ok { background:var(--ok-bg); color:var(--ok-ink); }
+.badge { display:inline-block; padding:2px 10px; border-radius:99px; font-size:13px; font-weight:600; background:var(--soon-bg); color:var(--muted); }
+.badge.ok { background:var(--ok-bg); color:var(--ok-ink); } .badge.warn { background:var(--warn-bg); color:var(--warn-ink); } .badge.err { background:var(--err-bg); color:var(--err-ink); }
+.chip { display:inline-block; padding:2px 10px; border-radius:8px; background:var(--chip); font-size:13px; }
+.muted { color:var(--muted); } .small { font-size:14px; }
+
+/* login */
+#login { min-height:100vh; display:flex; flex-wrap:wrap; }
+#login .pitch { flex:1 1 420px; background:var(--navy); color:#EEF0FA; padding:48px 20px; display:flex; flex-direction:column; gap:22px; }
+#login .pitch h1 { font-size:32px; line-height:1.3; max-width:520px; }
+#login .pitch p { font-size:17px; color:#C5CAE8; max-width:500px; }
+#login .pitch ul { margin:0; padding:0; display:flex; flex-direction:column; gap:10px; list-style:none; }
+#login .pitch li { color:#DDE0F5; }
+#login .panel { flex:1 1 360px; display:grid; place-items:center; padding:40px 16px; }
+#login .box { width:100%; max-width:400px; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:28px 22px; display:flex; flex-direction:column; gap:14px; }
+#gsi-button { min-height:44px; display:flex; justify-content:center; }
+
+/* shell */
+#app { min-height:100vh; display:flex; }
+#side { width:250px; flex:none; background:var(--card); border-right:1px solid var(--line); display:flex; flex-direction:column; gap:10px; padding:14px 12px; position:sticky; top:0; height:100vh; overflow-y:auto; }
+.brand { display:flex; align-items:center; gap:10px; padding:2px 4px; } .brand strong { font-size:18px; }
+#side nav { display:flex; flex-direction:column; gap:2px; }
+#side nav a { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:8px; color:var(--ink); text-decoration:none; }
+#side nav a:hover { background:var(--line-soft); }
+#side nav a[aria-current=page] { background:var(--nav-active); font-weight:600; }
+#side .foot { margin-top:auto; display:flex; flex-direction:column; gap:8px; font-size:14px; }
+#side .who { overflow-wrap:anywhere; color:var(--muted); }
+#topbar { display:none; }
+#content { flex:1 1 auto; min-width:0; padding:22px 24px 40px; max-width:1200px; margin:0 auto; width:100%; }
+#content > h1 { font-size:26px; margin-bottom:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; display:flex; flex-direction:column; gap:12px; min-width:0; margin-bottom:16px; }
+.card h2 { font-size:18px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; }
+.grid > .card { margin-bottom:0; }
+.stat { font-size:30px; font-weight:700; line-height:1.2; }
+.kv { display:flex; justify-content:space-between; gap:10px; font-size:15px; border-bottom:1px solid var(--line-soft); padding:4px 0; }
+.empty { text-align:center; color:var(--muted); padding:28px 12px; border:1px dashed var(--line); border-radius:12px; }
+.skeleton { height:18px; border-radius:6px; background:linear-gradient(90deg,var(--line-soft),var(--line),var(--line-soft)); background-size:200% 100%; animation:sk 1.2s linear infinite; }
+@keyframes sk { to { background-position:-200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation:none; } }
+ol.steps { margin:0; padding-left:0; list-style:none; display:flex; flex-direction:column; gap:10px; counter-reset:s; }
+ol.steps li { display:flex; gap:12px; align-items:flex-start; counter-increment:s; }
+ol.steps li::before { content:counter(s); width:28px; height:28px; border-radius:50%; background:var(--chip); color:var(--accent); display:grid; place-items:center; font-weight:700; flex:none; }
+ol.steps li.done::before { content:"✓"; background:var(--ok-bg); color:var(--ok-ink); }
+
+/* tabs & tables */
+.tabs { display:flex; gap:6px; overflow-x:auto; padding-bottom:4px; }
+.tabs button { background:transparent; border:1px solid var(--line); border-radius:99px; padding:6px 14px; white-space:nowrap; min-height:36px; }
+.tabs button[aria-selected=true] { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
+.tbl { width:100%; border-collapse:collapse; font-size:15px; }
+.tbl th { text-align:left; color:var(--muted); font-weight:500; font-size:13px; padding:6px 8px; border-bottom:1px solid var(--line); }
+.tbl td { padding:8px; border-bottom:1px solid var(--line-soft); vertical-align:middle; overflow-wrap:anywhere; }
+.tbl tr.click { cursor:pointer; } .tbl tr.click:hover td { background:var(--line-soft); }
+.tblwrap { overflow-x:auto; }
+.drop { border:2px dashed var(--line); border-radius:12px; padding:22px; text-align:center; color:var(--muted); }
+.drop.over { border-color:var(--accent); background:var(--chip); }
+progress { width:100%; height:10px; accent-color:var(--accent); }
+
+/* drawer & dialog */
+.scrim { position:fixed; inset:0; background:rgba(10,12,25,.5); z-index:40; }
+.drawer { position:fixed; top:0; right:0; bottom:0; width:min(480px,100%); background:var(--card); z-index:41; padding:20px 16px; overflow-y:auto; box-shadow:var(--shadow); display:flex; flex-direction:column; gap:12px; }
+dialog { border:1px solid var(--line); border-radius:14px; background:var(--card); color:var(--ink); padding:20px; width:min(440px,calc(100% - 32px)); }
+dialog::backdrop { background:rgba(10,12,25,.5); }
+dialog form { display:flex; flex-direction:column; gap:12px; }
+pre.preview { white-space:pre-wrap; overflow-wrap:anywhere; background:var(--bg); border-radius:10px; padding:12px; font-size:14px; margin:0; }
+
+/* chat */
+.chat { display:flex; flex-direction:column; height:calc(100vh - 150px); min-height:380px; }
+#msgs { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:10px; padding:4px 2px 12px; }
+.msg { max-width:min(640px,88%); padding:9px 14px; border-radius:14px; overflow-wrap:anywhere; background:var(--bubble-bot); }
+.msg.me { align-self:flex-end; background:var(--bubble-me); color:#fff; } .msg.me a { color:#fff; }
+.msg ul { margin:4px 0; padding-left:20px; } .msg p+p { margin-top:6px; }
+.typing span { display:inline-block; width:7px; height:7px; margin:0 2px; border-radius:50%; background:var(--faint); animation:b 1s infinite; }
+.typing span:nth-child(2){animation-delay:.15s} .typing span:nth-child(3){animation-delay:.3s}
+@keyframes b { 50% { transform:translateY(-4px); opacity:.5; } }
+@media (prefers-reduced-motion: reduce) { .typing span { animation:none; } }
+.compose { display:flex; gap:8px; align-items:flex-end; } .compose textarea { min-height:44px; max-height:140px; }
+
+/* cards: workspaces/integrations */
+.wsgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }
+.wsgrid > .card { margin:0; }
+.plat { width:40px; height:40px; border-radius:10px; display:grid; place-items:center; color:#fff; font-weight:700; flex:none; }
+.plat.discord { background:#5865F2; } .plat.slack { background:#4A154B; } .plat.clickup { background:#7B68EE; } .plat.web { background:#2B7A78; } .plat.soon { background:#8A90A6; }
+.hd { display:flex; gap:12px; align-items:center; min-width:0; } .hd > div { min-width:0; overflow-wrap:anywhere; }
+.matrix td,.matrix th { text-align:center; } .matrix td:first-child,.matrix th:first-child { text-align:left; }
+.check { display:inline-flex; align-items:center; gap:6px; min-height:32px; }
+.check input { width:20px; height:20px; accent-color:var(--accent); }
+#mockbar { background:var(--warn-bg); color:var(--warn-ink); text-align:center; font-size:13px; padding:3px; position:sticky; top:0; z-index:60; }
+#toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:70; max-width:calc(100% - 32px); }
+
+@media (max-width:720px) {
+  #app { flex-direction:column; }
+  #side { position:fixed; z-index:50; top:0; bottom:0; left:0; height:auto; width:min(290px,86%); transform:translateX(-102%); transition:transform .2s; box-shadow:var(--shadow); }
+  body.nav-open #side { transform:none; }
+  body.nav-open::after { content:""; position:fixed; inset:0; background:rgba(10,12,25,.45); z-index:45; }
+  #topbar { display:flex; align-items:center; gap:10px; padding:10px 16px; background:var(--navy); color:#EEF0FA; position:sticky; top:0; z-index:30; }
+  #topbar button { background:none; border:1px solid #4a5080; color:#fff; border-radius:8px; min-height:40px; min-width:40px; }
+  #topbar .t { flex:1; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #content { padding:16px 16px 32px; }
+  #content > h1 { font-size:22px; }
+  #login .pitch { padding:32px 16px; } #login .pitch h1 { font-size:26px; }
+  .chat { height:calc(100vh - 190px); }
+  .tbl.stack thead { display:none; }
+  .tbl.stack tr { display:block; border-bottom:1px solid var(--line); padding:6px 0; }
+  .tbl.stack td { display:block; border:0; padding:2px 4px; }
+}
+</style>
+</head>
+<body>
+<div id="mockbar" hidden>MOCK MODE: sample data only</div>
+
+<section id="login" hidden>
+  <div class="pitch">
+    <div class="brand"><div class="mark" aria-hidden="true">S</div><strong>Salid Command Center</strong></div>
+    <h1 data-i="login_h"></h1>
+    <p data-i="login_p"></p>
+    <ul><li data-i="vp1"></li><li data-i="vp2"></li><li data-i="vp3"></li></ul>
+  </div>
+  <div class="panel"><div class="box">
+    <h2 data-i="login_title"></h2>
+    <div id="login-msg" class="notice" role="alert" hidden></div>
+    <div id="not-configured" class="notice error" hidden data-i="not_configured"></div>
+    <div id="gsi-button"></div>
+    <button class="btn ghost" disabled aria-disabled="true"><span data-i="discord_login"></span> <span class="badge" data-i="soon"></span></button>
+    <p class="muted small" data-i="login_note"></p>
+    <button class="btn ghost sm" id="login-lang" type="button"></button>
+  </div></div>
+</section>
+
+<div id="app" hidden>
+  <div id="topbar">
+    <button id="burger" type="button" aria-label="Menu" aria-controls="side" aria-expanded="false">&#9776;</button>
+    <span class="t" id="topbar-title">Salid</span>
+  </div>
+  <aside id="side" aria-label="Main">
+    <div class="brand"><div class="mark" aria-hidden="true">S</div><strong>Salid</strong></div>
+    <label class="f"><span class="sr" data-i="org"></span>
+      <select id="org-switch" aria-label="Organization"></select></label>
+    <button class="btn ghost sm" id="new-org" type="button" data-i="new_org"></button>
+    <nav id="nav"></nav>
+    <div class="foot">
+      <button class="btn ghost sm" id="lang" type="button"></button>
+      <div class="who" id="who"></div>
+      <button class="btn ghost sm" id="signout" type="button" data-i="signout"></button>
+    </div>
+  </aside>
+  <main id="content" tabindex="-1"></main>
+</div>
+
+<dialog id="org-dlg" aria-labelledby="org-dlg-t">
+  <form method="dialog" id="org-form">
+    <h2 id="org-dlg-t" data-i="new_org"></h2>
+    <label class="f"><span data-i="org_name"></span><input type="text" id="org-name" required maxlength="80"></label>
+    <div id="org-err" class="notice error" role="alert" hidden></div>
+    <div class="row"><button class="btn ghost" value="cancel" type="button" id="org-cancel" data-i="cancel"></button><button class="btn" type="submit" data-i="create"></button></div>
+  </form>
+</dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
+const INVITE_URL = "__INVITE_URL__";
+// DEV preview only: active solely when the page URL explicitly carries ?mock=1.
+const MOCK = (() => { try { return new URLSearchParams(location.search).get("mock") === "1"; } catch { return false; } })();
+
+const $ = (id) => document.getElementById(id);
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (k === "text") n.textContent = v;
+    else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return n;
+}
+// replaceChildren that tolerates arrays / null / false (so conditional children never render as text)
+{ const rc = Element.prototype.replaceChildren; Element.prototype.replaceChildren = function (...k) { rc.apply(this, k.flat(Infinity).filter((x) => x != null && x !== false)); }; }
+const items = (x, k = "items") => Array.isArray(x) ? x : (x && Array.isArray(x[k]) ? x[k] : []);
+
+/* ---------- i18n ---------- */
+const I = {
+th: {
+  login_h:"ศูนย์บัญชาการของบริษัทคุณ", login_p:"จัดการเอกสาร พื้นที่ทำงาน และสมาชิกในที่เดียว แล้วคุยกับสลิดได้ตรงจากเว็บ",
+  vp1:"เอกสารแยกหมวด ค้นหาได้ทันที", vp2:"หลายเซิร์ฟเวอร์ หลายแพลตฟอร์ม เลือกได้ว่าจะแชร์ข้อมูลอะไร", vp3:"แพ็กเกจรายเดือน/รายปี สำหรับกลุ่มบริษัท",
+  login_title:"เข้าสู่ระบบ", discord_login:"เข้าสู่ระบบด้วย Discord", soon:"เร็วๆ นี้", login_note:"เฉพาะบัญชี Google ที่ได้รับสิทธิ์ในองค์กรเท่านั้น",
+  not_configured:"ระบบยังไม่ได้ตั้งค่าการเข้าสู่ระบบ กรุณาติดต่อผู้ดูแลระบบ", err_expired:"เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง", err_forbidden:"บัญชีนี้ไม่มีสิทธิ์เข้าใช้งาน",
+  org:"องค์กร", new_org:"สร้างองค์กรใหม่", org_name:"ชื่อองค์กร", cancel:"ยกเลิก", create:"สร้าง", signout:"ออกจากระบบ", save:"บันทึก", remove:"ลบ", close:"ปิด", retry:"ลองอีกครั้ง", loading:"กำลังโหลด…",
+  err_generic:"เกิดข้อผิดพลาด ({status})", err_net:"เชื่อมต่อไม่ได้ ลองอีกครั้ง", saved:"บันทึกแล้ว", copied:"คัดลอกแล้ว", copy:"คัดลอก",
+  n_overview:"ภาพรวม", n_docs:"เอกสาร", n_chat:"คุยกับสลิด", n_ws:"พื้นที่ทำงาน", n_apps:"เชื่อมต่อแอป", n_members:"สมาชิก", n_license:"แพ็กเกจ", n_settings:"ตั้งค่าเซิร์ฟเวอร์",
+  no_org_h:"ยังไม่มีองค์กร", no_org_p:"สร้างองค์กรแรกของคุณเพื่อเริ่มต้นใช้งาน", role_owner:"เจ้าของ", role_admin:"ผู้ดูแล", role_member:"สมาชิก", role_super:"ผู้ดูแลระบบ",
+  plan_trial:"ทดลองใช้", plan_monthly:"รายเดือน", plan_yearly:"รายปี", plan_enterprise:"องค์กร",
+  st_active:"ใช้งานอยู่", st_past_due:"ค้างชำระ", st_expired:"หมดอายุ", st_suspended:"ถูกระงับ",
+  tasks:"งาน", no_tasks:"ยังไม่มีงาน", assignee:"ผู้รับผิดชอบ", due:"กำหนด", status:"สถานะ", download:"ดาวน์โหลดไฟล์", reindex:"จัดทำดัชนีค้นหาใหม่", reindexed:"จัดทำดัชนีแล้ว {n} รายการ", shared_from:"แชร์จาก {n}", total_n:"ทั้งหมด {n} รายการ", conn_ok:"เชื่อมต่อ {p} สำเร็จ", conn_err:"เชื่อมต่อไม่สำเร็จ ({e})", approve:"อนุมัติ", reject:"ปฏิเสธ", pending_req:"คำขอแพ็กเกจที่รออยู่", all_orgs:"ทุกองค์กร", no_req:"ไม่มีคำขอ", days_left:"เหลือ {n} วัน", days_over:"หมดอายุแล้ว {n} วัน", license:"แพ็กเกจ", workspaces:"พื้นที่ทำงาน", docs:"เอกสาร", members:"สมาชิก", recent:"กิจกรรมล่าสุด", no_activity:"ยังไม่มีกิจกรรม",
+  onboard:"เริ่มต้นใช้งาน", ob1:"สร้างองค์กร", ob2:"เพิ่มสลิดเข้าเซิร์ฟเวอร์ Discord ของคุณ", ob3:"พิมพ์ /ตั้งค่า ใน Discord แล้ววางรหัสที่ได้ในหน้า พื้นที่ทำงาน", ob4:"เลือกว่าจะแชร์ข้อมูลระหว่างเซิร์ฟเวอร์หรือไม่", ob_go:"ไปที่ พื้นที่ทำงาน", invite:"ลิงก์เชิญสลิด",
+  cat_all:"ทั้งหมด", cat_receipts:"ใบเสร็จ/ใบแจ้งหนี้", cat_contracts_docs:"สัญญาและเอกสาร", cat_minutes:"บันทึกประชุม", cat_reports:"รายงาน", cat_wiki:"ฐานความรู้", cat_ideas:"ไอเดียและโปรเจกต์", cat_contests:"การแข่งขัน/แฮกกาธอน", cat_uploads:"อัปโหลด",
+  cat_places:"สถานที่", cat_ledger:"บัญชีรายรับรายจ่าย", cat_tasks:"งาน", cat_documents:"เอกสาร",
+  f_ws:"พื้นที่ทำงาน", f_all_ws:"ทั้งหมด", f_from:"ตั้งแต่", f_to:"ถึง", f_search:"ค้นหา", f_search_ph:"ค้นหาชื่อหรือเนื้อหา",
+  c_title:"ชื่อ", c_ws:"พื้นที่", c_date:"วันที่", c_who:"โดย", c_size:"ขนาด", no_docs:"ยังไม่มีเอกสารในหมวดนี้", no_docs_hint:"เอกสารที่สลิดอ่านใน Discord หรือที่คุณอัปโหลดจะแสดงที่นี่",
+  upload:"อัปโหลดเอกสาร", drop_here:"ลากไฟล์มาวางที่นี่ หรือกดเลือกไฟล์", uploading:"กำลังอัปโหลด {name}", upload_done:"อัปโหลดแล้ว", open_source:"เปิดใน Discord", more:"โหลดเพิ่ม", preview:"ตัวอย่าง", no_preview:"ไม่มีตัวอย่าง",
+  chat_ph:"พิมพ์ข้อความถึงสลิด…", send:"ส่ง", scope:"ขอบเขต", scope_all:"เว็บ (เอกสารที่อัปโหลด)", chat_empty:"ถามสลิดได้เลย เช่น “สรุปค่าใช้จ่ายเดือนนี้”", typing:"สลิดกำลังพิมพ์",
+  ws_h:"พื้นที่ทำงาน", ws_empty:"ยังไม่มีพื้นที่ทำงานที่เชื่อมต่อ", st_connected:"เชื่อมต่อแล้ว", st_pending:"รอยืนยัน", st_disconnected:"ตัดการเชื่อมต่อ", disconnect:"ตัดการเชื่อมต่อ", confirm_disc:"ตัดการเชื่อมต่อ “{n}” ใช่ไหม?",
+  add_discord:"เพิ่มเซิร์ฟเวอร์ Discord", add_d1:"1. เชิญสลิดเข้าเซิร์ฟเวอร์", add_d2:"2. พิมพ์ /ตั้งค่า ใน Discord แล้วคัดลอกรหัสที่ได้", add_d3:"3. วางรหัสที่นี่", code:"รหัสเชื่อมต่อ", link:"เชื่อมต่อ", invite_btn:"เปิดลิงก์เชิญ", linked:"เชื่อมต่อเซิร์ฟเวอร์แล้ว",
+  share_h:"การแชร์ข้อมูลระหว่างพื้นที่", share_warn:"แชร์ได้เฉพาะรายการที่มาจากช่องสาธารณะเท่านั้น ข้อมูลในช่องส่วนตัวจะไม่ถูกแชร์ และประวัติแชทจะไม่ถูกแชร์ข้ามพื้นที่เด็ดขาด", share_need2:"ต้องมีอย่างน้อย 2 พื้นที่ทำงานจึงจะตั้งค่าการแชร์ได้", share_sentence:"ให้ {b} เห็น {c} ของ {a}", share_only_admin:"เฉพาะเจ้าของและผู้ดูแลที่แก้ไขการแชร์ได้",
+  apps_h:"เชื่อมต่อแอป", connect:"เชื่อมต่อ", not_enabled:"ยังไม่เปิดใช้", connected_n:"เชื่อมต่อแล้ว {n} เซิร์ฟเวอร์", app_discord:"แชทและเอกสารในเซิร์ฟเวอร์", app_slack:"ข้อความจาก Slack workspace", app_clickup:"งานและรายการจาก ClickUp (อ่านอย่างเดียว)", app_drive:"ไฟล์ใน Drive", app_gmail:"อีเมล", app_calendar:"ปฏิทิน",
+  mem_h:"สมาชิก", mem_email:"อีเมล", mem_role:"บทบาท", mem_invite:"เชิญสมาชิก", mem_none:"ยังไม่มีสมาชิก", mem_ro:"เฉพาะเจ้าของและผู้ดูแลที่จัดการสมาชิกได้", confirm_rm:"ลบ {e} ออกจากองค์กร?", invited:"เชิญแล้ว",
+  lic_h:"แพ็กเกจ", plan:"แพ็กเกจ", status:"สถานะ", seats:"จำนวนที่นั่ง", valid_until:"ใช้ได้ถึง", req_h:"ขอเปลี่ยนแพ็กเกจ", req_note:"หมายเหตุ", req_send:"ส่งคำขอ", req_sent:"ส่งคำขอแล้ว ทีมงานจะติดต่อกลับ", req_p:"ยังไม่มีการชำระเงินออนไลน์ ส่งคำขอแล้วทีมงานจะอนุมัติให้",
+  super_h:"ผู้ดูแลระบบ: กำหนดแพ็กเกจ", notes:"บันทึก",
+  set_h:"ตั้งค่าเซิร์ฟเวอร์", set_p:"การตั้งค่าเฉพาะเซิร์ฟเวอร์ เช่น เปิด/ปิดฟีเจอร์ อยู่ที่หน้า Hub", set_go:"เปิดหน้า Hub",
+  org_settings:"ตั้งค่าองค์กร",
+},
+en: {
+  login_h:"Your company's command center", login_p:"Manage documents, workspaces and members in one place, and chat with Salid right from the web.",
+  vp1:"Documents sorted by category, instantly searchable", vp2:"Many servers, many platforms, you choose what is shared", vp3:"Monthly or yearly plans for company groups",
+  login_title:"Sign in", discord_login:"Sign in with Discord", soon:"Coming soon", login_note:"Only Google accounts authorized in an organization can enter.",
+  not_configured:"Sign-in is not configured yet. Please contact the administrator.", err_expired:"Session expired, please sign in again.", err_forbidden:"This account has no access.",
+  org:"Organization", new_org:"Create organization", org_name:"Organization name", cancel:"Cancel", create:"Create", signout:"Sign out", save:"Save", remove:"Remove", close:"Close", retry:"Try again", loading:"Loading…",
+  err_generic:"Something went wrong ({status})", err_net:"Could not connect. Try again.", saved:"Saved", copied:"Copied", copy:"Copy",
+  n_overview:"Overview", n_docs:"Documents", n_chat:"Chat with Salid", n_ws:"Workspaces", n_apps:"Integrations", n_members:"Members", n_license:"License", n_settings:"Server settings",
+  no_org_h:"No organization yet", no_org_p:"Create your first organization to get started.", role_owner:"Owner", role_admin:"Admin", role_member:"Member", role_super:"Super admin",
+  plan_trial:"Trial", plan_monthly:"Monthly", plan_yearly:"Yearly", plan_enterprise:"Enterprise",
+  st_active:"Active", st_past_due:"Past due", st_expired:"Expired", st_suspended:"Suspended",
+  tasks:"Tasks", no_tasks:"No tasks yet", assignee:"Assignee", due:"Due", status:"Status", download:"Download file", reindex:"Rebuild search index", reindexed:"Indexed {n} items", shared_from:"Shared from {n}", total_n:"{n} items", conn_ok:"Connected {p}", conn_err:"Connection failed ({e})", approve:"Approve", reject:"Reject", pending_req:"Pending plan requests", all_orgs:"All organizations", no_req:"No requests", days_left:"{n} days left", days_over:"Expired {n} days ago", license:"License", workspaces:"Workspaces", docs:"Documents", members:"Members", recent:"Recent activity", no_activity:"No activity yet",
+  onboard:"Get started", ob1:"Create an organization", ob2:"Add Salid to your Discord server", ob3:"Type /ตั้งค่า in Discord and paste the code on the Workspaces page", ob4:"Choose whether to share data between servers", ob_go:"Go to Workspaces", invite:"Salid invite link",
+  cat_all:"All", cat_receipts:"Receipts/Invoices", cat_contracts_docs:"Contracts & docs", cat_minutes:"Meeting minutes", cat_reports:"Reports", cat_wiki:"Knowledge base", cat_ideas:"Ideas & projects", cat_contests:"Contests & hackathons", cat_uploads:"Uploads",
+  cat_places:"Places", cat_ledger:"Ledger", cat_tasks:"Tasks", cat_documents:"Documents",
+  f_ws:"Workspace", f_all_ws:"All", f_from:"From", f_to:"To", f_search:"Search", f_search_ph:"Search title or content",
+  c_title:"Title", c_ws:"Workspace", c_date:"Date", c_who:"By", c_size:"Size", no_docs:"No documents in this category", no_docs_hint:"Documents Salid reads in Discord, or that you upload, appear here.",
+  upload:"Upload a document", drop_here:"Drag a file here, or click to choose", uploading:"Uploading {name}", upload_done:"Uploaded", open_source:"Open in Discord", more:"Load more", preview:"Preview", no_preview:"No preview",
+  chat_ph:"Message Salid…", send:"Send", scope:"Scope", scope_all:"Web (uploaded documents)", chat_empty:"Just ask, e.g. “Summarize this month's expenses”", typing:"Salid is typing",
+  ws_h:"Workspaces", ws_empty:"No connected workspaces yet", st_connected:"Connected", st_pending:"Pending", st_disconnected:"Disconnected", disconnect:"Disconnect", confirm_disc:"Disconnect “{n}”?",
+  add_discord:"Add a Discord server", add_d1:"1. Invite Salid to your server", add_d2:"2. Type /ตั้งค่า in Discord and copy the code", add_d3:"3. Paste the code here", code:"Link code", link:"Link", invite_btn:"Open invite link", linked:"Server linked",
+  share_h:"Sharing between workspaces", share_warn:"Only items that came from public channels can be shared. Private-channel items are never shared, and chat history is never shared across workspaces.", share_need2:"You need at least 2 workspaces to set up sharing.", share_sentence:"Let {b} see {c} of {a}", share_only_admin:"Only owners and admins can change sharing.",
+  apps_h:"Integrations", connect:"Connect", not_enabled:"Not enabled yet", connected_n:"{n} servers connected", app_discord:"Server chat and documents", app_slack:"Messages from a Slack workspace", app_clickup:"Tasks and lists from ClickUp (read-only)", app_drive:"Files in Drive", app_gmail:"Email", app_calendar:"Calendar",
+  mem_h:"Members", mem_email:"Email", mem_role:"Role", mem_invite:"Invite a member", mem_none:"No members yet", mem_ro:"Only owners and admins can manage members.", confirm_rm:"Remove {e} from the organization?", invited:"Invited",
+  lic_h:"License", plan:"Plan", status:"Status", seats:"Seats", valid_until:"Valid until", req_h:"Request a plan", req_note:"Note", req_send:"Send request", req_sent:"Request sent. We will get back to you.", req_p:"No online payment yet. Send a request and our team will approve it.",
+  super_h:"Admin: set license", notes:"Notes",
+  set_h:"Server settings", set_p:"Per-server settings such as feature toggles live on the Hub page.", set_go:"Open Hub",
+  org_settings:"Organization settings",
+}};
+let lang = "th";
+try { const s = localStorage.getItem("center_lang"); if (s === "en" || s === "th") lang = s; } catch { /* ignore */ }
+const t = (k, vars) => { let s = (I[lang] && I[lang][k]) ?? I.th[k] ?? k; for (const [a, b] of Object.entries(vars || {})) s = s.replaceAll("{" + a + "}", b); return s; };
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i]").forEach((n) => { n.textContent = t(n.dataset.i); });
+  $("lang").textContent = lang === "th" ? "EN" : "ไทย";
+  $("login-lang").textContent = lang === "th" ? "English" : "ภาษาไทย";
+  $("lang").setAttribute("aria-label", lang === "th" ? "Switch to English" : "เปลี่ยนเป็นภาษาไทย");
+}
+function setLang(l) { lang = l; try { localStorage.setItem("center_lang", l); } catch { /* ignore */ } applyStatic(); if (!$("login").hidden) renderGoogleButton(); else { renderNav(); route(); } }
+const fmtDate = (s) => { if (!s) return ""; const d = new Date(s); return isNaN(d) ? String(s) : d.toLocaleDateString(lang === "th" ? "th-TH" : "en-GB", { year: "numeric", month: "short", day: "numeric" }); };
+const fmtTime = (s) => { const d = new Date(s); return isNaN(d) ? "" : d.toLocaleString(lang === "th" ? "th-TH" : "en-GB", { dateStyle: "medium", timeStyle: "short" }); };
+const fmtSize = (n) => !n ? "" : n < 1024 ? n + " B" : n < 1048576 ? (n / 1024).toFixed(0) + " KB" : (n / 1048576).toFixed(1) + " MB";
+function toast(msg, kind = "ok") { const n = $("toast"); n.replaceChildren(el("div", { class: "notice " + kind, text: msg })); clearTimeout(toast.t); toast.t = setTimeout(() => n.replaceChildren(), 3500); }
+
+/* ---------- API ---------- */
+let token = null; // ID token: memory only, never persisted
+class AuthError extends Error {}
+class ApiError extends Error { constructor(d, s) { super(d); this.status = s; } }
+const errText = (e) => e instanceof ApiError ? t("err_generic", { status: e.status }) + (e.message ? " [" + e.message + "]" : "") : (e instanceof AuthError ? e.message : t("err_net"));
+async function api(path, opts = {}) {
+  if (MOCK) return mockApi(opts.method || "GET", path, opts.body && typeof opts.body === "string" ? JSON.parse(opts.body) : opts.body);
+  let res;
+  try {
+    res = await fetch(path, { ...opts, headers: { ...(opts.body && !(opts.body instanceof FormData) ? { "Content-Type": "application/json" } : {}), Authorization: "Bearer " + token } });
+  } catch { throw new Error(t("err_net")); }
+  if (res.status === 401) throw new AuthError("expired");
+  if (res.status === 503) throw new AuthError("not_configured");
+  if (!res.ok) {
+    let detail = ""; try { const j = await res.json(); detail = typeof j.detail === "string" ? j.detail : ""; } catch { /* ignore */ }
+    if (res.status === 403 && !detail) detail = "forbidden";
+    throw new ApiError(detail, res.status);
+  }
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("json") ? res.json() : null;
+}
+const J = (method, body) => ({ method, body: JSON.stringify(body) });
+const q = (o) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries(o)) if (v !== "" && v != null) p.set(k, v); const s = p.toString(); return s ? "?" + s : ""; };
+
+/* ---------- auth ---------- */
+function show(v) { $("login").hidden = v !== "login"; $("app").hidden = v !== "app"; }
+function note(n, msg) { n.hidden = !msg; n.textContent = msg || ""; }
+function toLogin(msgKey) { token = null; me = null; show("login"); note($("login-msg"), msgKey ? t(msgKey) : ""); renderGoogleButton(); }
+let gsiReady = false;
+function renderGoogleButton() {
+  if (!CLIENT_ID || CLIENT_ID.startsWith("__")) { $("not-configured").hidden = false; $("gsi-button").hidden = true; return; }
+  if (!window.google || !google.accounts) { setTimeout(renderGoogleButton, 200); return; }
+  if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: (r) => { token = r.credential; start(); } }); gsiReady = true; }
+  $("gsi-button").textContent = "";
+  google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signin_with", locale: lang, width: 300 });
+}
+function handleAuth(e) {
+  if (!(e instanceof AuthError)) return false;
+  if (e.message === "not_configured") { show("login"); $("not-configured").hidden = false; $("gsi-button").hidden = true; }
+  else toLogin("err_expired");
+  return true;
+}
+
+/* ---------- state & routing ---------- */
+let me = null, orgId = null, cur = null;
+const NAV = [["overview", "n_overview", "▦"], ["docs", "n_docs", "▤"], ["chat", "n_chat", "✉"], ["ws", "n_ws", "◫"], ["apps", "n_apps", "⚙"], ["members", "n_members", "☺"], ["license", "n_license", "★"], ["settings", "n_settings", "↗"]];
+const curOrg = () => me && me.orgs.find((o) => o.id === orgId);
+const role = () => { const o = curOrg(); return (o && o.role) || "member"; };
+const isAdmin = () => ["owner", "admin", "super"].includes(role());
+const isOwner = () => role() === "owner" || role() === "super";
+const O = (suffix = "") => "/api/center/orgs/" + encodeURIComponent(orgId) + suffix;
+
+function renderNav() {
+  const nav = $("nav"); nav.replaceChildren();
+  for (const [id, key, ic] of NAV) {
+    nav.append(el("a", { href: "#/" + id, "aria-current": cur === id ? "page" : false, onclick: () => closeNav() }, el("span", { "aria-hidden": "true" }, ic), t(key)));
+  }
+  const sel = $("org-switch"); sel.replaceChildren();
+  for (const o of me.orgs) sel.append(el("option", { value: o.id, selected: o.id === orgId }, o.name));
+  if (!me.orgs.length) sel.append(el("option", { value: "" }, t("no_org_h")));
+  $("who").textContent = me.email + (me.is_super ? " ★" : "");
+}
+function closeNav() { document.body.classList.remove("nav-open"); $("burger").setAttribute("aria-expanded", "false"); }
+let navSeq = 0;
+function route() {
+  if (!me) return;
+  let id = (location.hash.match(/^#\/(\w+)/) || [])[1];
+  if (!NAV.some((n) => n[0] === id)) id = "overview";
+  cur = id; renderNav();
+  const nm = NAV.find((n) => n[0] === id);
+  $("topbar-title").textContent = t(nm[1]);
+  const c = $("content"); c.replaceChildren(el("h1", { text: t(nm[1]) }));
+  const body = el("div", { "aria-busy": "true" }, loading()); c.append(body);
+  const my = ++navSeq;
+  if (!orgId && id !== "settings") { body.replaceWith(noOrg()); return; }
+  Promise.resolve().then(() => VIEWS[id](body, my)).catch((e) => {
+    if (my !== navSeq || handleAuth(e)) return;
+    body.replaceChildren(errBox(e, route));
+  });
+}
+const stale = (my) => my !== navSeq;
+const loading = () => el("div", { class: "card", role: "status", "aria-label": t("loading") }, el("div", { class: "skeleton", style: "width:60%" }), el("div", { class: "skeleton" }), el("div", { class: "skeleton", style: "width:80%" }));
+const errBox = (e, again) => el("div", { class: "card" }, el("div", { class: "notice error", role: "alert", text: errText(e) }), el("div", {}, el("button", { class: "btn ghost sm", type: "button", onclick: again }, t("retry"))));
+function noOrg() { return el("div", { class: "card" }, el("div", { class: "empty" }, el("h2", { text: t("no_org_h") }), el("p", { text: t("no_org_p") }), el("p", {}, el("button", { class: "btn", type: "button", onclick: openOrgDlg }, t("new_org")))));}
+function done(body) { body.removeAttribute("aria-busy"); }
+
+async function start() {
+  try {
+    me = await api("/api/center/me");
+    me.orgs = items(me, "orgs");
+    show("app"); applyStatic();
+    if (!me.orgs.find((o) => o.id === orgId)) orgId = me.orgs.length ? me.orgs[0].id : null;
+    route();
+  } catch (e) {
+    if (handleAuth(e)) return;
+    if (e instanceof ApiError && e.status === 403) { toLogin("err_forbidden"); return; }
+    show("login"); note($("login-msg"), errText(e)); renderGoogleButton();
+  }
+}
+
+/* ---------- helpers ---------- */
+const PLAT = { discord: "D", slack: "S", clickup: "C", web: "W" };
+const platBadge = (p) => el("div", { class: "plat " + (p in PLAT ? p : "soon"), "aria-hidden": "true" }, PLAT[p] || "?");
+const CATS = ["receipts", "contracts_docs", "minutes", "reports", "wiki", "ideas", "contests", "uploads"];
+function licBadge(l) {
+  if (!l) return el("span", { class: "badge", text: "-" });
+  const cls = l.status === "active" ? "ok" : l.status === "past_due" ? "warn" : "err";
+  return el("span", { class: "badge " + cls, text: t("st_" + l.status) });
+}
+function daysLeft(l) {
+  if (!l) return null;
+  if (typeof l.days_left === "number") return l.days_left;
+  if (!l.valid_until) return null;
+  return Math.ceil((new Date(l.valid_until) - Date.now()) / 86400000);
+}
+function daysText(d) { return d == null ? "" : d >= 0 ? t("days_left", { n: d }) : t("days_over", { n: -d }); }
+// markdown-lite: escape first, then **bold**, `code`, [text](http...), "- " lists
+function md(src) {
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const inline = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+  let out = "", inList = false;
+  for (const line of String(src).split("\n")) {
+    const m = line.match(/^\s*(?:[-*•]|\d+\.)\s+(.*)$/);
+    if (m) { if (!inList) { out += "<ul>"; inList = true; } out += "<li>" + inline(m[1]) + "</li>"; }
+    else { if (inList) { out += "</ul>"; inList = false; } if (line.trim()) out += "<p>" + inline(line) + "</p>"; }
+  }
+  return out + (inList ? "</ul>" : "");
+}
+const field = (label, input) => el("label", { class: "f" }, el("span", {}, label), input);
+const safeUrl = (u) => /^https?:\/\//i.test(u || "") ? u : "";
+async function downloadDoc(r) {
+  try {
+    if (MOCK) { toast("mock: no file", "error"); return; }
+    const res = await fetch(O("/documents/" + encodeURIComponent(r.id) + "/file"), { headers: { Authorization: "Bearer " + token } });
+    if (res.status === 401) { toLogin("err_expired"); return; }
+    if (!res.ok) throw new ApiError("", res.status);
+    const u = URL.createObjectURL(await res.blob()); const a = el("a", { href: u, download: r.title || "file" }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000);
+  } catch (e) { toast(errText(e), "error"); }
+}
+async function startConnector(p) {
+  try { const r = await api("/api/center/connectors/" + p + "/start" + q({ org: orgId })); if (MOCK) { toast("mock: " + r.url); return; } if (r.kind === "invite") window.open(r.url, "_blank", "noopener"); else location.href = r.url; }
+  catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
+}
+async function workspaces() { return await api(O("/workspaces")); }
+
+/* ---------- views ---------- */
+const VIEWS = {};
+
+VIEWS.overview = async (body, my) => {
+  const [ov, tk] = await Promise.all([api(O("/overview")), api(O("/tasks")).catch(() => null)]);
+  if (stale(my)) return; done(body);
+  const lic = ov.license || curOrg().license, d = lic ? lic.days_left ?? ov.license_days_left : null;
+  const wsc = ov.workspaces || {}, byP = wsc.by_platform || {};
+  const docs = ov.documents || {}, byC = docs.by_category || {};
+  const out = [];
+  const nDisc = byP.discord || 0;
+  if (!nDisc) {
+    out.push(el("div", { class: "card" }, el("h2", { text: t("onboard") }),
+      el("ol", { class: "steps" },
+        el("li", { class: "done", text: t("ob1") }),
+        el("li", {}, el("div", {}, t("ob2"), isAdmin() ? [" ", el("button", { class: "btn ghost sm", type: "button", onclick: () => startConnector("discord") }, t("invite"))] : "")),
+        el("li", { text: t("ob3") }), el("li", { text: t("ob4") })),
+      el("div", {}, el("a", { class: "btn", href: "#/ws", style: "display:inline-block;text-decoration:none" }, t("ob_go")))));
+  }
+  out.push(el("div", { class: "grid" },
+    el("div", { class: "card" }, el("h2", { text: t("license") }), el("div", {}, el("span", { class: "chip", text: t("plan_" + (lic && lic.plan)) }), " ", licBadge(lic)), el("div", { class: "muted", text: daysText(d) }),
+      d != null && d <= 7 ? el("div", { class: "notice " + (d < 0 ? "error" : ""), text: daysText(d) }) : null,
+      el("a", { href: "#/license", text: t("n_license") })),
+    el("div", { class: "card" }, el("h2", { text: t("workspaces") }), el("div", { class: "stat", text: wsc.total ?? 0 }),
+      Object.entries(byP).map(([p, n]) => el("div", { class: "kv" }, el("span", { text: p }), el("b", { text: n })))),
+    el("div", { class: "card" }, el("h2", { text: t("members") }), el("div", { class: "stat", text: ov.members ?? 0 }), el("a", { href: "#/members", text: t("n_members") }))));
+  out.push(el("div", { class: "card" }, el("h2", {}, t("docs"), " ", el("span", { class: "muted", text: "(" + (docs.total ?? 0) + ")" })),
+    docs.total ? CATS.map((c) => el("div", { class: "kv" }, el("a", { href: "#/docs", onclick: () => { try { sessionStorage.setItem("center_cat", c); } catch { /* ignore */ } } }, t("cat_" + c)), el("b", { text: byC[c] || 0 }))) : el("div", { class: "empty", text: t("no_docs") })));
+  const tasks = tk ? items(tk, "tasks") : null;
+  if (tasks) out.push(el("div", { class: "card" }, el("h2", { text: t("tasks") }),
+    tasks.length ? el("div", { class: "tblwrap" }, el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, ["c_title", "assignee", "due", "status"].map((k) => el("th", { scope: "col", text: t(k) })))),
+      el("tbody", {}, tasks.slice(0, 10).map((k) => el("tr", {}, el("td", {}, safeUrl(k.url) ? el("a", { href: k.url, target: "_blank", rel: "noopener noreferrer", text: k.title }) : k.title, " ", el("span", { class: "chip", text: k.platform || "" })),
+        el("td", { text: k.assignee || (k.assignees || []).join(", ") }), el("td", { text: fmtDate(k.due) }), el("td", { text: k.status || "" })))))) : el("div", { class: "empty", text: t("no_tasks") })));
+  const act = items(ov, "recent_activity");
+  out.push(el("div", { class: "card" }, el("h2", { text: t("recent") }),
+    act.length ? act.map((a) => el("div", { class: "kv" }, el("span", { text: [a.title, a.workspace_name, a.who].filter(Boolean).join(" · ") }), el("span", { class: "muted small", text: fmtTime(a.at) }))) : el("div", { class: "empty", text: t("no_activity") })));
+  body.replaceChildren(...out);
+};
+
+VIEWS.docs = async (body, my) => {
+  const wsx = await workspaces(); if (stale(my)) return; done(body);
+  let cat = "all"; try { const c = sessionStorage.getItem("center_cat"); if (c) cat = c; sessionStorage.removeItem("center_cat"); } catch { /* ignore */ }
+  let rows = [], cursor = null, seq = 0, total = 0;
+  const tabs = el("div", { class: "tabs", role: "tablist", "aria-label": t("n_docs") });
+  const wsSel = el("select", { id: "d-ws" }, el("option", { value: "" }, t("f_all_ws")), wsx.map((w) => el("option", { value: w.id }, w.name)));
+  const from = el("input", { type: "date", id: "d-from" }), to = el("input", { type: "date", id: "d-to" });
+  const search = el("input", { type: "search", id: "d-q", placeholder: t("f_search_ph") });
+  const list = el("div", { "aria-live": "polite" });
+  const upBox = el("div");
+  const draw = () => {
+    tabs.replaceChildren(...["all", ...CATS].map((c) => el("button", { type: "button", role: "tab", "aria-selected": String(c === cat), onclick: () => { cat = c; draw(); load(true); } }, t("cat_" + c))));
+    upBox.hidden = cat !== "uploads" && cat !== "all" ? true : false;
+  };
+  const drawList = (err) => {
+    if (err) { list.replaceChildren(errBox(err, () => load(true))); return; }
+    if (!rows.length) { list.replaceChildren(el("div", { class: "empty" }, el("p", { text: t("no_docs") }), el("p", { class: "small", text: t("no_docs_hint") }))); return; }
+    const f0 = from.value, t0 = to.value;
+    const vis = rows.filter((r) => { const dd = (r.date || "").slice(0, 10); return (!f0 || dd >= f0) && (!t0 || dd <= t0); });
+    if (!vis.length) { list.replaceChildren(el("div", { class: "empty", text: t("no_docs") }), cursor ? el("p", {}, el("button", { class: "btn ghost", type: "button", onclick: () => load(false) }, t("more"))) : null); return; }
+    const tb = el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, ["c_title", "c_ws", "c_date", "c_who", "c_size"].map((k) => el("th", { scope: "col", text: t(k) })))),
+      el("tbody", {}, vis.map((r) => el("tr", { class: "click" },
+        el("td", {}, el("button", { class: "btn ghost sm", type: "button", style: "text-align:left;border:0;padding:0;font-weight:600;color:var(--link)", onclick: () => openDoc(r) }, r.title || "(untitled)"), " ", el("span", { class: "chip", text: t("cat_" + r.category) })),
+        el("td", { text: r.workspace_name || "" }, r.shared_from ? el("div", { class: "muted small", text: t("shared_from", { n: r.shared_from }) }) : null), el("td", { text: fmtDate(r.date || r.created_at) }), el("td", { text: r.who || "" }), el("td", { text: fmtSize(r.size) })))));
+    list.replaceChildren(el("div", { class: "muted small", text: t("total_n", { n: total }) }), el("div", { class: "tblwrap" }, tb), cursor ? el("p", {}, el("button", { class: "btn ghost", type: "button", onclick: () => load(false) }, t("more"))) : null);
+  };
+  const load = async (reset) => {
+    if (reset) { rows = []; cursor = null; list.replaceChildren(loading()); }
+    const me2 = ++seq;
+    try {
+      const r = await api(O("/documents") + q({ category: cat === "all" ? "" : cat, workspace: wsSel.value, q: search.value.trim(), cursor }));
+      if (me2 !== seq || stale(my)) return;
+      rows = rows.concat(items(r)); cursor = r.next_cursor || null; total = r.total ?? rows.length; drawList();
+    } catch (e) { if (!handleAuth(e) && me2 === seq) drawList(e); }
+  };
+  const openDoc = async (r) => {
+    const pre = el("pre", { class: "preview", text: r.preview || t("no_preview") });
+    const src = safeUrl(r.source_url);
+    const close = () => { sc.remove(); dr.remove(); prev && prev.focus(); };
+    const prev = document.activeElement;
+    const sc = el("div", { class: "scrim", onclick: close });
+    const dr = el("div", { class: "drawer", role: "dialog", "aria-modal": "true", "aria-label": r.title, tabindex: "-1" },
+      el("h2", { text: r.title }), el("div", {}, el("span", { class: "chip", text: t("cat_" + r.category) }), " ", el("span", { class: "muted small", text: [r.workspace_name, fmtDate(r.date), r.who, fmtSize(r.size)].filter(Boolean).join(" · ") })),
+      src ? el("a", { class: "btn ghost sm", href: src, target: "_blank", rel: "noopener noreferrer", style: "text-decoration:none;align-self:flex-start" }, t("open_source")) : null,
+      r.category === "uploads" && r.workspace === "web" ? el("button", { class: "btn ghost sm", type: "button", style: "align-self:flex-start", onclick: () => downloadDoc(r) }, t("download")) : null,
+      el("h3", { text: t("preview") }), pre, el("button", { class: "btn ghost", type: "button", onclick: close }, t("close")));
+    dr.addEventListener("keydown", (ev) => { if (ev.key === "Escape") close(); });
+    document.body.append(sc, dr); dr.focus();
+    if (r.id) { try { const full = await api(O("/documents/" + encodeURIComponent(r.id))); pre.textContent = full.text || full.preview || t("no_preview"); } catch { /* keep */ } }
+  };
+  // upload
+  const fileIn = el("input", { type: "file", class: "sr", id: "d-file", "aria-label": t("upload") });
+  const prog = el("progress", { max: "100", value: "0", hidden: true }), upMsg = el("div", { role: "status" });
+  const drop = el("div", { class: "drop", tabindex: "0", role: "button", "aria-label": t("upload") }, t("drop_here"));
+  const doUpload = (file) => {
+    if (!file) return;
+    const fd = new FormData(); fd.append("file", file);
+    prog.hidden = false; prog.value = 0; note0(t("uploading", { name: file.name }));
+    const fin = (ok, msg) => { prog.hidden = true; upMsg.replaceChildren(el("div", { class: "notice " + (ok ? "ok" : "error"), text: msg })); if (ok) { cat = "uploads"; draw(); load(true); } };
+    if (MOCK) { let p = 0; const iv = setInterval(() => { p += 20; prog.value = p; if (p >= 100) { clearInterval(iv); mockDocs.unshift({ id: "web:upload:" + Date.now(), title: file.name, category: "uploads", workspace: "web", workspace_name: "Salid Web", date: new Date().toISOString(), who: me.email, size: file.size, preview: "(mock upload)" }); fin(true, t("upload_done")); } }, 150); return; }
+    const x = new XMLHttpRequest(); x.open("POST", O("/documents")); x.setRequestHeader("Authorization", "Bearer " + token);
+    x.upload.onprogress = (ev) => { if (ev.lengthComputable) prog.value = (ev.loaded / ev.total) * 100; };
+    x.onload = () => { if (x.status === 401) { toLogin("err_expired"); return; } let d = ""; try { d = JSON.parse(x.responseText).detail || ""; } catch { /* ignore */ } x.status < 300 ? fin(true, t("upload_done")) : fin(false, t("err_generic", { status: x.status }) + (typeof d === "string" && d ? " [" + d + "]" : "")); };
+    x.onerror = () => fin(false, t("err_net")); x.send(fd);
+  };
+  const note0 = (m) => upMsg.replaceChildren(el("div", { class: "muted small", text: m }));
+  drop.addEventListener("click", () => fileIn.click());
+  drop.addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); fileIn.click(); } });
+  ["dragenter", "dragover"].forEach((n) => drop.addEventListener(n, (ev) => { ev.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((n) => drop.addEventListener(n, (ev) => { ev.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (ev) => doUpload(ev.dataTransfer.files[0]));
+  fileIn.addEventListener("change", () => { doUpload(fileIn.files[0]); fileIn.value = ""; });
+  upBox.append(el("div", { class: "card" }, el("h2", { text: t("upload") }), drop, fileIn, prog, upMsg));
+  let tm; search.addEventListener("input", () => { clearTimeout(tm); tm = setTimeout(() => load(true), 300); });
+  wsSel.addEventListener("change", () => load(true)); [from, to].forEach((n) => n.addEventListener("change", () => drawList()));
+  const reidx = isAdmin() ? el("button", { class: "btn ghost sm", type: "button", style: "align-self:flex-start", onclick: async (ev) => {
+    ev.target.disabled = true;
+    try { const r = await api(O("/documents/reindex"), { method: "POST" }); toast(t("reindexed", { n: r.indexed })); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
+    ev.target.disabled = false; } }, t("reindex")) : null;
+  body.replaceChildren(el("div", { class: "card" }, tabs,
+    el("div", { class: "row" }, field(t("f_ws"), wsSel), field(t("f_from"), from), field(t("f_to"), to), field(t("f_search"), search)), reidx, list), upBox);
+  draw(); load(true);
+};
+
+VIEWS.chat = async (body, my) => {
+  const [wsx, hist] = await Promise.all([workspaces(), api(O("/chat/history")).catch(() => ({ turns: [] }))]);
+  if (stale(my)) return; done(body);
+  const sel = el("select", { id: "c-scope" }, el("option", { value: "" }, t("scope_all")), wsx.filter((w) => w.status === "connected").map((w) => el("option", { value: w.id }, w.name)));
+  const msgs = el("div", { id: "msgs", role: "log", "aria-live": "polite", "aria-label": t("n_chat") });
+  const add = (who, text) => { const n = el("div", { class: "msg " + (who === "user" || who === "me" ? "me" : "bot") }); n.innerHTML = md(text); msgs.append(n); msgs.scrollTop = msgs.scrollHeight; return n; };
+  const h = items(hist, "turns");
+  if (!h.length) msgs.append(el("div", { class: "empty", text: t("chat_empty") }));
+  else h.forEach((m) => add(m.role, m.text || ""));
+  const ta = el("textarea", { id: "c-in", rows: "1", placeholder: t("chat_ph"), "aria-label": t("chat_ph") });
+  const btn = el("button", { class: "btn", type: "submit" }, t("send"));
+  const form = el("form", { class: "compose" }, ta, btn);
+  const send = async () => {
+    const text = ta.value.trim(); if (!text || btn.disabled) return;
+    const emp = msgs.querySelector(".empty"); if (emp) emp.remove();
+    add("user", text); ta.value = ""; btn.disabled = true;
+    const ty = el("div", { class: "msg typing", role: "status", "aria-label": t("typing") }, el("span"), el("span"), el("span")); msgs.append(ty); msgs.scrollTop = msgs.scrollHeight;
+    try {
+      const r = await api(O("/chat"), J("POST", { message: text, workspace_id: sel.value || undefined }));
+      ty.remove(); add("bot", r.answer || "");
+    } catch (e) { ty.remove(); if (handleAuth(e)) return; msgs.append(el("div", { class: "notice error", role: "alert", text: errText(e) })); }
+    btn.disabled = false; ta.focus();
+  };
+  form.addEventListener("submit", (ev) => { ev.preventDefault(); send(); });
+  ta.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) { ev.preventDefault(); send(); } });
+  body.replaceChildren(el("div", { class: "card chat" }, field(t("scope"), sel), msgs, form));
+  msgs.scrollTop = msgs.scrollHeight;
+};
+
+VIEWS.ws = async (body, my) => {
+  const [wsx, sh] = await Promise.all([workspaces(), api(O("/sharing"))]);
+  if (stale(my)) return; done(body);
+  const admin = isAdmin(); let links = items(sh);
+  const out = [];
+  // cards
+  const cards = wsx.length ? el("div", { class: "wsgrid" }, wsx.map((w) => el("div", { class: "card" },
+    el("div", { class: "hd" }, platBadge(w.platform), el("div", {}, el("strong", { text: w.name }), el("div", { class: "muted small", text: w.platform }))),
+    el("div", {}, w.settings_url ? [el("a", { class: "small", href: w.settings_url, text: t("n_settings") }), " "] : null, el("span", { class: "badge " + (w.status === "connected" ? "ok" : w.status === "pending" ? "warn" : "err"), text: t("st_" + w.status) })),
+    admin && w.platform !== "web" ? el("button", { class: "btn danger sm", type: "button", onclick: async () => {
+      if (!confirm(t("confirm_disc", { n: w.name }))) return;
+      try { await api(O("/workspaces/" + encodeURIComponent(w.id)), { method: "DELETE" }); toast(t("saved")); route(); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
+    } }, t("disconnect")) : null))) : el("div", { class: "empty", text: t("ws_empty") });
+  out.push(el("div", { class: "card" }, el("h2", { text: t("ws_h") }), cards));
+  // add discord
+  if (admin) {
+    const code = el("input", { type: "text", id: "w-code", autocomplete: "off", inputmode: "text" }), msg = el("div", { role: "status" });
+    const f = el("form", { class: "row" }, field(t("code"), code), el("button", { class: "btn", type: "submit" }, t("link")));
+    f.addEventListener("submit", async (ev) => {
+      ev.preventDefault(); if (!code.value.trim()) return;
+      try { await api(O("/workspaces/discord/link"), J("POST", { code: code.value.trim() })); toast(t("linked")); route(); }
+      catch (e) { if (!handleAuth(e)) msg.replaceChildren(el("div", { class: "notice error", role: "alert", text: errText(e) })); }
+    });
+    out.push(el("div", { class: "card" }, el("h2", { text: t("add_discord") }), el("p", { text: t("add_d1") }),
+      el("p", {}, el("button", { class: "btn ghost sm", type: "button", onclick: () => startConnector("discord") }, t("invite_btn"))),
+      el("p", { text: t("add_d2") }), el("p", { text: t("add_d3") }), f, msg));
+  }
+  // sharing matrix
+  const shareCats = ["documents", "wiki", "places", "minutes", "ledger", "tasks"];
+  const card = el("div", { class: "card" }, el("h2", { text: t("share_h") }), el("div", { class: "notice", role: "note", text: t("share_warn") }));
+  if (wsx.length < 2) card.append(el("div", { class: "empty", text: t("share_need2") }));
+  else {
+    if (!admin) card.append(el("div", { class: "muted small", text: t("share_only_admin") }));
+    const has = (a, b, c) => links.some((l) => l.from_workspace === a && l.to_workspace === b && (l.categories || []).includes(c));
+    for (const a of wsx) for (const b of wsx) {
+      if (a.id === b.id) continue;
+      const grp = el("fieldset", { style: "border:1px solid var(--line-soft);border-radius:10px;padding:8px 12px;min-width:0" },
+        el("legend", { class: "small", text: t("share_sentence", { b: b.name, c: "…", a: a.name }) }),
+        el("div", { class: "row", style: "gap:4px 16px" }, shareCats.map((c) => {
+          const cb = el("input", { type: "checkbox", checked: has(a.id, b.id, c), disabled: !admin });
+          cb.addEventListener("change", async () => {
+            cb.disabled = true;
+            try {
+              const cats = shareCats.filter((x) => x === c ? cb.checked : has(a.id, b.id, x));
+              if (cats.length) await api(O("/sharing"), J("POST", { from_workspace: a.id, to_workspace: b.id, categories: cats }));
+              else await api(O("/sharing") + q({ from_workspace: a.id, to_workspace: b.id }), { method: "DELETE" });
+              links = items(await api(O("/sharing"))); toast(t("saved"));
+            } catch (e) { cb.checked = !cb.checked; if (!handleAuth(e)) toast(errText(e), "error"); }
+            cb.disabled = !admin;
+          });
+          return el("label", { class: "check", style: "flex:0 0 auto" }, cb, t("cat_" + c));
+        })));
+      card.append(grp);
+    }
+  }
+  out.push(card);
+  body.replaceChildren(...out);
+};
+
+VIEWS.apps = async (body, my) => {
+  const cx = await api("/api/center/connectors" + q({ org: orgId }));
+  if (stale(my)) return; done(body);
+  const names = { discord: "app_discord", slack: "app_slack", clickup: "app_clickup", google_drive: "app_drive", gmail: "app_gmail", google_calendar: "app_calendar" };
+  const card = (c) => {
+    let action;
+    if (c.status === "coming_soon") action = el("span", { class: "badge", text: t("soon") });
+    else if (c.status === "not_configured" || !c.enabled) action = el("span", { class: "badge", text: t("not_enabled") });
+    else action = el("div", { class: "row" }, c.connected ? el("span", { class: "badge ok", text: t("connected_n", { n: c.connected }) }) : null,
+      isAdmin() ? el("button", { class: "btn" + (c.connected ? " ghost" : ""), type: "button", onclick: () => startConnector(c.platform) }, c.platform === "discord" ? t("add_discord") : t("connect")) : null);
+    return el("div", { class: "card" }, el("div", { class: "hd" }, platBadge(c.platform.startsWith("google") || c.platform === "gmail" ? "soon" : c.platform), el("div", {}, el("strong", { text: c.name }), el("div", { class: "muted small", text: t(names[c.platform] || "") }))), action);
+  };
+  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).map(card)));
+};
+
+VIEWS.members = async (body, my) => {
+  const r = await api(O("/members")); if (stale(my)) return; done(body);
+  const admin = isAdmin(); let list = items(r);
+  const holder = el("div"), out = el("div");
+  const act = async (fn) => { try { await fn(); list = items(await api(O("/members"))); draw(); toast(t("saved")); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); } };
+  const roleSel = (cur, onchg, dis) => { const s = el("select", { "aria-label": t("mem_role"), disabled: dis }, ["owner", "admin", "member"].map((x) => el("option", { value: x, selected: x === cur }, t("role_" + x)))); s.addEventListener("change", () => onchg(s.value)); return s; };
+  const draw = () => {
+    holder.replaceChildren(list.length ? el("div", { class: "tblwrap" }, el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, el("th", { scope: "col", text: t("mem_email") }), el("th", { scope: "col", text: t("mem_role") }), el("th", { scope: "col" }, el("span", { class: "sr", text: t("remove") })))),
+      el("tbody", {}, list.map((m) => el("tr", {}, el("td", { text: m.email }),
+        el("td", {}, admin && (isOwner() || m.role === "member") ? roleSel(m.role, (v) => act(() => api(O("/members"), J("POST", { email: m.email, role: v })))) : el("span", { class: "chip", text: t("role_" + m.role) })),
+        el("td", {}, admin && m.role !== "owner" && (isOwner() || m.role === "member") ? el("button", { class: "btn danger sm", type: "button", onclick: () => { if (confirm(t("confirm_rm", { e: m.email }))) act(() => api(O("/members") + q({ email: m.email }), { method: "DELETE" })); } }, t("remove")) : null)))))) : el("div", { class: "empty", text: t("mem_none") }));
+  };
+  draw();
+  const parts = [el("div", { class: "card" }, el("h2", { text: t("mem_h") }), holder)];
+  if (admin) {
+    const email = el("input", { type: "email", id: "m-email", required: true, autocomplete: "off" }), rs = el("select", { id: "m-role" }, (isOwner() ? ["member", "admin", "owner"] : ["member"]).map((x) => el("option", { value: x }, t("role_" + x))));
+    const f = el("form", { class: "row" }, field(t("mem_email"), email), field(t("mem_role"), rs), el("button", { class: "btn", type: "submit" }, t("mem_invite")));
+    f.addEventListener("submit", (ev) => { ev.preventDefault(); act(async () => { await api(O("/members"), J("POST", { email: email.value.trim(), role: rs.value })); email.value = ""; }); });
+    parts.push(el("div", { class: "card" }, el("h2", { text: t("mem_invite") }), f));
+  } else parts.push(el("div", { class: "notice", text: t("mem_ro") }));
+  body.replaceChildren(...parts);
+};
+
+VIEWS.license = async (body, my) => {
+  const l = await api(O("/license")); if (stale(my)) return; done(body);
+  const lic = l.license, d = lic.days_left;
+  const parts = [el("div", { class: "card" }, el("h2", { text: t("lic_h") }),
+    el("div", { class: "kv" }, el("span", { text: t("plan") }), el("b", { text: t("plan_" + lic.plan) })),
+    el("div", { class: "kv" }, el("span", { text: t("status") }), licBadge(lic)),
+    el("div", { class: "kv" }, el("span", { text: t("seats") }), el("b", { text: lic.seats ?? "-" })),
+    el("div", { class: "kv" }, el("span", { text: t("valid_until") }), el("b", { text: fmtDate(lic.valid_until) + (d != null ? " (" + daysText(d) + ")" : "") })),
+    d != null && d <= 7 ? el("div", { class: "notice error", role: "alert", text: daysText(d) }) : null)];
+  if (isAdmin()) {
+    const plan = el("select", { id: "l-plan" }, ["monthly", "yearly", "enterprise"].map((p) => el("option", { value: p }, t("plan_" + p))));
+    const seats = el("input", { type: "number", id: "l-seats", min: "1", value: String(lic.seats || 5) }), notes = el("textarea", { id: "l-note", maxlength: "500" }), msg = el("div", { role: "status" });
+    const f = el("form", { class: "card" }, el("h2", { text: t("req_h") }), el("p", { class: "muted small", text: t("req_p") }),
+      el("div", { class: "row" }, field(t("plan"), plan), field(t("seats"), seats)), field(t("req_note"), notes), msg, el("div", {}, el("button", { class: "btn", type: "submit" }, t("req_send"))));
+    f.addEventListener("submit", async (ev) => { ev.preventDefault();
+      try { await api(O("/license/request"), J("POST", { plan: plan.value, seats: Number(seats.value) || 1, note: notes.value })); msg.replaceChildren(el("div", { class: "notice ok", text: t("req_sent") })); }
+      catch (e) { if (!handleAuth(e)) msg.replaceChildren(el("div", { class: "notice error", role: "alert", text: errText(e) })); } });
+    parts.push(f);
+  }
+  if (me.is_super) {
+    const sp = el("select", { id: "s-plan" }, ["trial", "monthly", "yearly", "enterprise"].map((p) => el("option", { value: p, selected: p === lic.plan }, t("plan_" + p))));
+    const ss = el("select", { id: "s-status" }, ["active", "past_due", "expired", "suspended"].map((p) => el("option", { value: p, selected: p === lic.status }, t("st_" + p))));
+    const se = el("input", { type: "number", id: "s-seats", min: "1", value: String(lic.seats || 5) });
+    const sv = el("input", { type: "date", id: "s-valid", value: (lic.valid_until || "").slice(0, 10) }), sn = el("input", { type: "text", id: "s-notes", value: lic.notes || "" }), m2 = el("div", { role: "status" });
+    const sf = el("form", { class: "card" }, el("h2", { text: t("super_h") }), el("div", { class: "row" }, field(t("plan"), sp), field(t("status"), ss), field(t("seats"), se), field(t("valid_until"), sv)), field(t("notes"), sn), m2, el("div", {}, el("button", { class: "btn", type: "submit" }, t("save"))));
+    sf.addEventListener("submit", async (ev) => { ev.preventDefault();
+      try { await api(O("/license"), J("PUT", { plan: sp.value, status: ss.value, seats: Number(se.value) || 1, valid_until: sv.value || null, notes: sn.value, billing_provider: lic.billing_provider || "" })); toast(t("saved")); route(); }
+      catch (e) { if (!handleAuth(e)) m2.replaceChildren(el("div", { class: "notice error", role: "alert", text: errText(e) })); } });
+    parts.push(sf);
+    const reqBox = el("div", { class: "card" }, el("h2", { text: t("pending_req") }), loading()), orgBox = el("div", { class: "card" }, el("h2", { text: t("all_orgs") }), loading());
+    parts.push(reqBox, orgBox);
+    const loadAdmin = async () => {
+      try {
+        const [rq, og] = await Promise.all([api("/api/center/admin/license-requests?status=pending"), api("/api/center/admin/orgs")]);
+        const decide = async (r, approve) => { try { await api("/api/center/admin/license-requests/" + encodeURIComponent(r.id), J("POST", { approve })); toast(t("saved")); loadAdmin(); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); } };
+        reqBox.replaceChildren(el("h2", { text: t("pending_req") }), ...[items(rq).length ? items(rq).map((r) => el("div", { class: "kv", style: "align-items:center;flex-wrap:wrap" },
+          el("span", { text: r.org_name + " · " + t("plan_" + r.plan) + " · " + r.seats + " " + t("seats") + (r.note ? " · " + r.note : "") + " (" + r.requested_by + ")" }),
+          el("span", {}, el("button", { class: "btn sm", type: "button", onclick: () => decide(r, true) }, t("approve")), " ", el("button", { class: "btn ghost sm", type: "button", onclick: () => decide(r, false) }, t("reject"))))) : el("div", { class: "empty", text: t("no_req") })].flat());
+        orgBox.replaceChildren(el("h2", { text: t("all_orgs") }), el("div", { class: "tblwrap" }, el("table", { class: "tbl" }, el("tbody", {}, items(og).map((o) => el("tr", {}, el("td", { text: o.name }), el("td", { text: o.owner_email }), el("td", { text: t("plan_" + o.license.plan) }), el("td", {}, licBadge(o.license))))))));
+      } catch (e) { if (!handleAuth(e)) { reqBox.replaceChildren(errBox(e, loadAdmin)); orgBox.replaceChildren(); } }
+    };
+    loadAdmin();
+  }
+  body.replaceChildren(...parts);
+};
+
+VIEWS.settings = async (body) => {
+  done(body);
+  body.replaceChildren(el("div", { class: "card" }, el("h2", { text: t("set_h") }), el("p", { text: t("set_p") }),
+    el("div", {}, el("a", { class: "btn", href: "/hub", style: "text-decoration:none;display:inline-block" }, t("set_go")))));
+};
+
+/* ---------- org dialog ---------- */
+function openOrgDlg() { $("org-name").value = ""; note($("org-err"), ""); const d = $("org-dlg"); if (d.showModal) d.showModal(); else d.setAttribute("open", ""); $("org-name").focus(); }
+$("org-cancel").addEventListener("click", () => $("org-dlg").close());
+$("org-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault(); const name = $("org-name").value.trim(); if (!name) return;
+  try { const o = await api("/api/center/orgs", J("POST", { name })); $("org-dlg").close(); await start(); if (o && o.id) { orgId = o.id; renderNav(); route(); } }
+  catch (e) { if (!handleAuth(e)) note($("org-err"), errText(e)); }
+});
+$("new-org").addEventListener("click", openOrgDlg);
+$("org-switch").addEventListener("change", (ev) => { orgId = ev.target.value || null; route(); closeNav(); });
+$("burger").addEventListener("click", () => { const o = document.body.classList.toggle("nav-open"); $("burger").setAttribute("aria-expanded", String(o)); });
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeNav(); });
+$("lang").addEventListener("click", () => setLang(lang === "th" ? "en" : "th"));
+$("login-lang").addEventListener("click", () => setLang(lang === "th" ? "en" : "th"));
+$("signout").addEventListener("click", () => { try { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); } catch { /* ignore */ } toLogin(""); });
+window.addEventListener("hashchange", () => { closeNav(); route(); });
+
+/* ---------- MOCK API (only when ?mock=1; shapes follow the backend contract) ---------- */
+let mockDocs = [];
+function mockApi(method, path, body) {
+  const d = (n) => new Date(Date.now() - n * 86400000).toISOString();
+  const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+  const mkLic = (plan, status, n) => ({ plan, status, seats: 10, valid_until: day(n), notes: "", billing_provider: "", active: status === "active", days_left: n, grace_until: day(n + 3) });
+  if (!mockApi.s) {
+    mockDocs = [
+      { id: "discord-1:receipt:1", title: "ใบเสร็จ ร้านกาแฟ บางรัก", category: "receipts", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(1), who: "สมชาย", size: null, tags: ["receipt"], preview: "ร้านกาแฟบางรัก รวม 420.00 บาท ชำระด้วยบัตร", source_url: "https://discord.com/channels/1/2/3" },
+      { id: "discord-1:receipt:2", title: "ใบแจ้งหนี้ INV-2026-088", category: "receipts", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(3), who: "มาลี", size: null, tags: [], preview: "บริษัท ไทยซัพพลาย จำกัด ยอดรวม 48,150 บาท" },
+      { id: "discord-1:note:3", title: "สัญญาเช่าสำนักงาน.pdf", category: "contracts_docs", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(20), who: "สมชาย", size: 2400000, tags: ["pdf"], preview: "สัญญาเช่า 12 เดือน ค่าเช่า 35,000 บาท/เดือน", source_url: "https://discord.com/channels/1/2/4" },
+      { id: "discord-2:minutes:4", title: "ประชุมทีมขาย 12 ต.ค.", category: "minutes", workspace: "discord-2", workspace_name: "ทีมเชียงใหม่", platform: "discord", date: d(4), who: "สลิด", size: null, tags: [], preview: "เป้าไตรมาส 4: 2.4 ล้านบาท", shared_from: null },
+      { id: "discord-1:report:5", title: "รายงานยอดขายเดือนกันยายน", category: "reports", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(9), who: "สลิด", size: 310000, tags: [], preview: "ยอดขายรวม 1.92 ล้านบาท เพิ่มขึ้น 8%" },
+      { id: "discord-1:idea:9", title: "แจ้งเตือน CCTV ขึ้น Apple Watch สำหรับ รปภ.", category: "ideas", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(1), who: "มาลี", size: 5200, tags: ["ปัญหาและไอเดีย", "Business Model Canvas", "SWOT", "แพ็กเกจและราคา"], preview: "แจ้งเตือนภาพจากกล้องวงจรปิดไปที่นาฬิกาของ รปภ. และนิติบุคคลคอนโด" },
+      { id: "discord-1:wiki:6", title: "คู่มือพนักงานใหม่", category: "wiki", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(40), who: "มาลี", size: null, tags: [], preview: "ขั้นตอนวันแรก, ระบบ VPN, สวัสดิการ", shared_from: "ออฟฟิศกรุงเทพ" },
+      { id: "web:upload:7", title: "แผนการตลาด Q4.xlsx", category: "uploads", workspace: "web", workspace_name: "Salid Web", platform: "web", date: d(2), who: "owner@example.co.th", size: 88000, tags: ["plan"], preview: "(สรุปโดย AI) แผนแคมเปญ 3 ช่วง", source_url: "" },
+    ];
+    mockApi.s = { orgs: [{ id: "org_a1", name: "บริษัท ตัวอย่าง จำกัด", role: "owner", license: mkLic("trial", "active", 9) }, { id: "org_b2", name: "กลุ่มร้านอาหารใหม่", role: "member", license: mkLic("monthly", "past_due", -2) }],
+      ws: [{ id: "web", platform: "web", external_id: "web", name: "Salid Web", status: "connected", settings_url: null }, { id: "discord-1", platform: "discord", external_id: "1", name: "ออฟฟิศกรุงเทพ", status: "connected", settings_url: "/hub" }, { id: "discord-2", platform: "discord", external_id: "2", name: "ทีมเชียงใหม่", status: "connected", settings_url: "/hub" }],
+      share: [{ from_workspace: "discord-1", to_workspace: "discord-2", categories: ["wiki", "minutes"] }],
+      members: [{ email: "owner@example.co.th", role: "owner" }, { email: "mali@example.co.th", role: "admin" }, { email: "somchai@example.co.th", role: "member" }],
+      reqs: [{ id: "r1", org_id: "org_b2", org_name: "กลุ่มร้านอาหารใหม่", plan: "yearly", seats: 8, note: "อยากได้รายปี", requested_by: "boss@example.co.th", status: "pending" }] };
+  }
+  const s = mockApi.s; const [p, qs] = path.split("?"); const qp = new URLSearchParams(qs || "");
+  const ok = (v) => new Promise((r) => setTimeout(() => r(v), 120));
+  const fail = (m, c) => Promise.reject(new ApiError(m, c));
+  let m;
+  if (p === "/api/center/me") return ok({ email: "owner@example.co.th", is_super: true, orgs: s.orgs });
+  if (p === "/api/center/orgs" && method === "POST") { const o = { id: "org_" + Date.now(), name: body.name, role: "owner", license: mkLic("trial", "active", 14) }; s.orgs.push(o); return ok(o); }
+  if (p === "/api/center/connectors") return ok([
+    { platform: "discord", name: "Discord", enabled: true, configured: true, status: "available", connected: 2 },
+    { platform: "slack", name: "Slack", enabled: true, configured: true, status: "available", connected: 0 },
+    { platform: "clickup", name: "ClickUp", enabled: false, configured: false, status: "not_configured", connected: 0 },
+    { platform: "google_drive", name: "Google Drive", enabled: false, configured: false, status: "coming_soon", connected: 0 },
+    { platform: "gmail", name: "Gmail", enabled: false, configured: false, status: "coming_soon", connected: 0 },
+    { platform: "google_calendar", name: "Google Calendar", enabled: false, configured: false, status: "coming_soon", connected: 0 }]);
+  if ((m = p.match(/^\/api\/center\/connectors\/(\w+)\/start$/))) return ok({ url: "https://example.com/" + m[1], kind: m[1] === "discord" ? "invite" : "oauth" });
+  if (p === "/api/center/admin/license-requests") return ok(s.reqs.filter((r) => r.status === "pending"));
+  if ((m = p.match(/^\/api\/center\/admin\/license-requests\/(.+)$/))) { const r = s.reqs.find((x) => x.id === m[1]); r.status = body.approve ? "approved" : "rejected"; return ok(r); }
+  if (p === "/api/center/admin/orgs") return ok(s.orgs.map((o) => ({ id: o.id, name: o.name, owner_email: "owner@example.co.th", members: 3, workspaces: 3, license: o.license })));
+  if (!(m = p.match(/^\/api\/center\/orgs\/([^/]+)(\/.*)?$/))) return fail("mock: not found", 404);
+  const sub = m[2] || "", org = s.orgs.find((o) => o.id === decodeURIComponent(m[1]));
+  if (sub === "/overview") { const c = {}; mockDocs.forEach((x) => { c[x.category] = (c[x.category] || 0) + 1; }); const bp = {}; s.ws.forEach((w) => { bp[w.platform] = (bp[w.platform] || 0) + 1; });
+    return ok({ org: { id: org.id, name: org.name }, documents: { total: mockDocs.length, by_category: c }, workspaces: { total: s.ws.length, connected: s.ws.length, by_platform: bp }, members: s.members.length, license: org.license, license_days_left: org.license.days_left,
+      recent_activity: [{ id: "a1", category: "minutes", title: "ประชุมทีมขาย 12 ต.ค.", at: d(0.1), workspace: "discord-2", workspace_name: "ทีมเชียงใหม่", who: "สลิด" }, { id: "a2", category: "receipts", title: "ใบเสร็จ ร้านกาแฟ บางรัก", at: d(1), workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", who: "สมชาย" }] }); }
+  if (sub === "/tasks") return ok({ tasks: [{ id: "t1", title: "ส่งใบเสนอราคาลูกค้า A", assignee: "มาลี", due: day(2), status: "open", url: "", workspace: "discord-1", platform: "discord" }, { id: "t2", title: "ตามบิลค่าเช่า", assignee: "สมชาย", due: day(-1), status: "overdue", url: "", workspace: "discord-1", platform: "discord" }] });
+  if (sub === "/workspaces") return ok(s.ws);
+  if (sub === "/workspaces/discord/link") { if (!body.code || body.code.length < 4) return fail("invalid or expired code", 400); const w = { id: "discord-" + Date.now(), platform: "discord", external_id: "9", name: "เซิร์ฟเวอร์ใหม่", status: "connected", settings_url: "/hub" }; s.ws.push(w); return ok(w); }
+  if ((m = sub.match(/^\/workspaces\/([^/]+)$/)) && method === "DELETE") { s.ws = s.ws.filter((w) => w.id !== decodeURIComponent(m[1])); return ok(s.ws); }
+  if (sub === "/sharing") {
+    if (method === "POST") { s.share = s.share.filter((l) => !(l.from_workspace === body.from_workspace && l.to_workspace === body.to_workspace)); s.share.push(body); }
+    if (method === "DELETE") s.share = s.share.filter((l) => !(l.from_workspace === qp.get("from_workspace") && l.to_workspace === qp.get("to_workspace")));
+    return ok(s.share);
+  }
+  if (sub === "/members") {
+    if (method === "POST") { const x = s.members.find((y) => y.email === body.email); if (x) x.role = body.role; else s.members.push({ email: body.email, role: body.role }); }
+    if (method === "DELETE") s.members = s.members.filter((y) => y.email !== qp.get("email"));
+    return ok(s.members);
+  }
+  if (sub === "/license") { if (method === "PUT") Object.assign(org.license, body); return ok({ license: org.license, requests: [] }); }
+  if (sub === "/license/request") return ok({ id: "r" + Date.now(), status: "pending", ...body });
+  if (sub === "/documents/reindex") return ok({ indexed: mockDocs.length });
+  if (sub === "/documents") { const cat = qp.get("category"), qq = (qp.get("q") || "").toLowerCase(), wsf = qp.get("workspace");
+    const r = mockDocs.filter((x) => (!cat || x.category === cat) && (!wsf || x.workspace === wsf) && (!qq || (x.title + x.preview).toLowerCase().includes(qq))); return ok({ items: r, next_cursor: null, total: r.length }); }
+  if ((m = sub.match(/^\/documents\/(.+)$/))) { const x = mockDocs.find((y) => y.id === decodeURIComponent(m[1])) || {}; return ok({ ...x, text: (x.preview || "") + "\n\n(ข้อความเต็ม ตัวอย่าง)", extra: {} }); }
+  if (sub === "/chat/history") return ok({ turns: mockApi.chat || [{ role: "salid", text: "สวัสดีค่ะ ถามสลิดได้เลยนะคะ", at: d(0), workspace_id: "web" }] });
+  if (sub === "/chat") return new Promise((r) => setTimeout(() => r({ answer: "ยอดใบเสร็จเดือนนี้รวม **48,570 บาท** ค่ะ\n- ร้านกาแฟบางรัก 420 บาท\n- ไทยซัพพลาย 48,150 บาท\nดูรายละเอียดที่ [เอกสาร](https://example.com)", workspace_id: body.workspace_id || "web", at: d(0) }), 1200));
+  return fail("mock: not found", 404);
+}
+
+/* ---------- boot ---------- */
+function oauthReturn() {
+  try {
+    const u = new URLSearchParams(location.search), c = u.get("connected"), er = u.get("error");
+    if (!c && !er) return;
+    history.replaceState(null, "", location.pathname + (MOCK ? "?mock=1" : "") + location.hash);
+    setTimeout(() => toast(c ? t("conn_ok", { p: c }) : t("conn_err", { e: er }), c ? "ok" : "error"), 400);
+  } catch { /* ignore */ }
+}
+applyStatic();
+oauthReturn();
+if (MOCK) { $("mockbar").hidden = false; token = "mock"; start(); }
+else { show("login"); renderGoogleButton(); }
+</script>
+</body>
+</html>
