@@ -1,0 +1,29 @@
+name: Feature / task card
+description: Claim a piece of work before starting, so two people (or two agents) do not build the same thing.
+title: "[feature] "
+labels: ["feature"]
+body:
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What the user gets, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Files / modules this will touch (e.g. src/salid/live_voice.py). Others check this before starting.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: How we know it works (tests, eval, manual check).
+  - type: input
+    id: branch
+    attributes:
+      label: Branch
+      placeholder: feature/short-name
