@@ -78,30 +78,53 @@ def test_valid_outline_parses():
     assert spec.slides[0].kind == "bullets" and spec.subtitle == ""
 
 
-@pytest.mark.parametrize("bad, field", [
-    ({"title": "x" * 81, "slides": [bullets()]}, "title"),
-    ({"title": "t", "slides": []}, "slides"),
-    ({"title": "t", "slides": [bullets()] * 13}, "slides"),
-    ({"title": "t", "slides": [bullets(7)]}, "bullets"),
-    ({"title": "t", "slides": [{"kind": "bullets", "title": "t", "bullets": ["x" * 141]}]}, "bullets"),
-    ({"title": "t", "slides": [{"kind": "bullets", "title": "t", "bullets": []}]}, "bullets"),
-    ({"title": "t", "slides": [{"kind": "chart", "title": "t"}]}, "chart"),
-    ({"title": "t", "slides": [{"kind": "video", "title": "t"}]}, "kind"),
-])
+@pytest.mark.parametrize(
+    "bad, field",
+    [
+        ({"title": "x" * 81, "slides": [bullets()]}, "title"),
+        ({"title": "t", "slides": []}, "slides"),
+        ({"title": "t", "slides": [bullets()] * 13}, "slides"),
+        ({"title": "t", "slides": [bullets(7)]}, "bullets"),
+        (
+            {"title": "t", "slides": [{"kind": "bullets", "title": "t", "bullets": ["x" * 141]}]},
+            "bullets",
+        ),
+        ({"title": "t", "slides": [{"kind": "bullets", "title": "t", "bullets": []}]}, "bullets"),
+        ({"title": "t", "slides": [{"kind": "chart", "title": "t"}]}, "chart"),
+        ({"title": "t", "slides": [{"kind": "video", "title": "t"}]}, "kind"),
+    ],
+)
 def test_invalid_outlines_name_the_field(bad, field):
     with pytest.raises(ValidationError) as e:
         DeckSpec.model_validate(bad)
     assert field in str(e.value)
 
 
-@pytest.mark.parametrize("q, ok", [
-    ({"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31"}, True),
-    ({"group_by": "day", "start_date": "2026-09-01", "end_date": "2026-10-31"}, True),   # 61 days
-    ({"group_by": "day", "start_date": "2026-08-01", "end_date": "2026-10-31"}, False),  # 92 days
-    ({"group_by": "category", "start_date": "2026-10-31", "end_date": "2026-10-01"}, False),
-    ({"group_by": "category", "start_date": "31/10/2026", "end_date": "2026-10-31"}, False),
-    ({"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31", "top": 11}, False),
-])
+@pytest.mark.parametrize(
+    "q, ok",
+    [
+        ({"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31"}, True),
+        (
+            {"group_by": "day", "start_date": "2026-09-01", "end_date": "2026-10-31"},
+            True,
+        ),  # 61 days
+        (
+            {"group_by": "day", "start_date": "2026-08-01", "end_date": "2026-10-31"},
+            False,
+        ),  # 92 days
+        ({"group_by": "category", "start_date": "2026-10-31", "end_date": "2026-10-01"}, False),
+        ({"group_by": "category", "start_date": "31/10/2026", "end_date": "2026-10-31"}, False),
+        (
+            {
+                "group_by": "category",
+                "start_date": "2026-10-01",
+                "end_date": "2026-10-31",
+                "top": 11,
+            },
+            False,
+        ),
+    ],
+)
 def test_chart_query_dates_and_limits(q, ok):
     if ok:
         ChartQuery.model_validate(q)
@@ -112,7 +135,9 @@ def test_chart_query_dates_and_limits(q, ok):
 
 def test_deck_filename_slug_and_fallback():
     d = date(2026, 10, 16)
-    assert deck_filename("Spending report: Oct 2026!", d) == "spending-report-oct-2026-20261016.pptx"
+    assert (
+        deck_filename("Spending report: Oct 2026!", d) == "spending-report-oct-2026-20261016.pptx"
+    )
     assert deck_filename("สรุปค่าใช้จ่าย", d) == "salid-deck-20261016.pptx"
     assert deck_filename("🎉 Q4 / ../plan", d) == "q4-plan-20261016.pptx"
     assert len(deck_filename("word " * 40, d)) <= 64
@@ -155,8 +180,16 @@ git commit -m "Salid: deck outline models, validation and filenames (adds python
 
 ```python
 def render(spec_dict, lang="th", charts=None):
-    return Presentation(io.BytesIO(render_deck(DeckSpec.model_validate(spec_dict), charts or {},
-                                               lang=lang, today=date(2026, 10, 16))))
+    return Presentation(
+        io.BytesIO(
+            render_deck(
+                DeckSpec.model_validate(spec_dict),
+                charts or {},
+                lang=lang,
+                today=date(2026, 10, 16),
+            )
+        )
+    )
 
 
 def texts(slide):
@@ -164,11 +197,22 @@ def texts(slide):
 
 
 def test_title_slide_then_one_slide_per_outline_slide():
-    prs = render({"title": "สรุปประชุม", "subtitle": "ทีมขาย", "slides": [
-        {"kind": "section", "title": "ภาพรวม"},
-        {"kind": "bullets", "title": "สิ่งที่ตกลง", "bullets": ["เลื่อนเปิดร้านเป็นวันศุกร์"], "notes": "รายละเอียด"},
-        {"kind": "two_column", "title": "ก่อน / หลัง", "bullets": ["เดิม"], "right": ["ใหม่"]},
-    ]})
+    prs = render(
+        {
+            "title": "สรุปประชุม",
+            "subtitle": "ทีมขาย",
+            "slides": [
+                {"kind": "section", "title": "ภาพรวม"},
+                {
+                    "kind": "bullets",
+                    "title": "สิ่งที่ตกลง",
+                    "bullets": ["เลื่อนเปิดร้านเป็นวันศุกร์"],
+                    "notes": "รายละเอียด",
+                },
+                {"kind": "two_column", "title": "ก่อน / หลัง", "bullets": ["เดิม"], "right": ["ใหม่"]},
+            ],
+        }
+    )
     assert len(prs.slides) == 4 and prs.slide_width == Inches(13.333)
     cover = " ".join(texts(prs.slides[0]))
     assert "สรุปประชุม" in cover and "ทีมขาย" in cover and "16 ตุลาคม 2569" in cover and "สลิด" in cover
@@ -178,7 +222,9 @@ def test_title_slide_then_one_slide_per_outline_slide():
 
 
 def test_every_run_sets_the_thai_font_after_latin():
-    prs = render({"title": "ทดสอบ", "slides": [{"kind": "bullets", "title": "หัวข้อ", "bullets": ["ข้อความ"]}]})
+    prs = render(
+        {"title": "ทดสอบ", "slides": [{"kind": "bullets", "title": "หัวข้อ", "bullets": ["ข้อความ"]}]}
+    )
     for slide in prs.slides:
         for shape in slide.shapes:
             if not shape.has_text_frame:
@@ -194,16 +240,30 @@ def test_every_run_sets_the_thai_font_after_latin():
 
 def test_long_text_gets_a_smaller_font():
     short = render({"title": "t", "slides": [{"kind": "bullets", "title": "t", "bullets": ["สั้น"]}]})
-    long_ = render({"title": "t", "slides": [{"kind": "bullets", "title": "t",
-                                               "bullets": ["ยาวมาก" * 23] * 6}]})
-    size = lambda prs: max(r.font.size for s in prs.slides[1].shapes if s.has_text_frame
-                           for p in s.text_frame.paragraphs for r in p.runs if "t" != p.text)
+    long_ = render(
+        {
+            "title": "t",
+            "slides": [{"kind": "bullets", "title": "t", "bullets": ["ยาวมาก" * 23] * 6}],
+        }
+    )
+    size = lambda prs: max(
+        r.font.size
+        for s in prs.slides[1].shapes
+        if s.has_text_frame
+        for p in s.text_frame.paragraphs
+        for r in p.runs
+        if "t" != p.text
+    )
     assert size(long_) < size(short) and size(long_) >= Pt(16)
 
 
 def test_control_characters_and_newlines_are_cleaned():
-    prs = render({"title": "a\x00b", "slides": [{"kind": "bullets", "title": "t",
-                                                  "bullets": ["line1\nline2\x0b end"]}]})
+    prs = render(
+        {
+            "title": "a\x00b",
+            "slides": [{"kind": "bullets", "title": "t", "bullets": ["line1\nline2\x0b end"]}],
+        }
+    )
     body = " ".join(texts(prs.slides[1]))
     assert "line1 line2 end" in body and "\x0b" not in body
     assert "ab" in " ".join(texts(prs.slides[0]))
@@ -270,8 +330,14 @@ Q = {"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31
 
 
 def test_top_groups_plus_other_per_currency():
-    s = summary([("วัตถุดิบ", {"THB": 9000}), ("ค่าเดินทาง", {"THB": 250.5}),
-                 ("สาธารณูปโภค", {"THB": 120}), ("อุปกรณ์", {"USD": 10})])
+    s = summary(
+        [
+            ("วัตถุดิบ", {"THB": 9000}),
+            ("ค่าเดินทาง", {"THB": 250.5}),
+            ("สาธารณูปโภค", {"THB": 120}),
+            ("อุปกรณ์", {"USD": 10}),
+        ]
+    )
     cd = chart_data(s, ChartQuery.model_validate({**Q, "top": 2}), "th")
     assert cd.categories == ["วัตถุดิบ", "ค่าเดินทาง", "อื่นๆ"]
     assert cd.series == {"THB": [9000, 250.5, 120], "USD": [0, 0, 10]}
@@ -284,7 +350,9 @@ def test_day_groups_keep_date_order_and_no_other():
 
 
 def test_missing_keys_and_empty_data():
-    assert chart_data(summary([(None, {"THB": 1})]), ChartQuery.model_validate(Q), "th").categories == ["—"]
+    assert chart_data(
+        summary([(None, {"THB": 1})]), ChartQuery.model_validate(Q), "th"
+    ).categories == ["—"]
     assert chart_data(summary([]), ChartQuery.model_validate(Q), "th").empty
 
 
@@ -297,11 +365,19 @@ def test_chart_slide_draws_a_native_chart_with_the_given_numbers():
     assert list(chart.plots[0].series[0].values) == [9000.0, 370.5]
 
 
-@pytest.mark.parametrize("style, expected", [("bar", XL_CHART_TYPE.COLUMN_CLUSTERED),
-                                             ("line", XL_CHART_TYPE.LINE_MARKERS),
-                                             ("pie", XL_CHART_TYPE.PIE)])
+@pytest.mark.parametrize(
+    "style, expected",
+    [
+        ("bar", XL_CHART_TYPE.COLUMN_CLUSTERED),
+        ("line", XL_CHART_TYPE.LINE_MARKERS),
+        ("pie", XL_CHART_TYPE.PIE),
+    ],
+)
 def test_chart_styles(style, expected):
-    spec = {"title": "t", "slides": [{"kind": "chart", "title": "c", "chart": {**Q, "style": style}}]}
+    spec = {
+        "title": "t",
+        "slides": [{"kind": "chart", "title": "c", "chart": {**Q, "style": style}}],
+    }
     prs = render(spec, charts={0: ChartData(["a", "b"], {"THB": [1.0, 2.0]})})
     assert next(s.chart for s in prs.slides[1].shapes if s.has_chart).chart_type == expected
 
@@ -354,15 +430,39 @@ git commit -m "Salid: native deck charts from ledger summaries, sample deck scri
 - [ ] **Step 1: Write the failing tests** (`tests/salid/test_salid_qa.py`, `seeded` ledger from conftest: Alice 1000 + 250.5, Bob 9000 + 3000 + 120)
 
 ```python
-DECK = {"title": "สรุปค่าใช้จ่าย", "slides": [
-    {"kind": "chart", "title": "ตามหมวด",
-     "chart": {"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31"}}]}
+DECK = {
+    "title": "สรุปค่าใช้จ่าย",
+    "slides": [
+        {
+            "kind": "chart",
+            "title": "ตามหมวด",
+            "chart": {"group_by": "category", "start_date": "2026-10-01", "end_date": "2026-10-31"},
+        }
+    ],
+}
 
 
-def deck_ask(settings, store, *script, is_exec=True, user_id=EXEC_ID, question="ทำสไลด์สรุปค่าใช้จ่ายเดือนนี้", language="th"):
+def deck_ask(
+    settings,
+    store,
+    *script,
+    is_exec=True,
+    user_id=EXEC_ID,
+    question="ทำสไลด์สรุปค่าใช้จ่ายเดือนนี้",
+    language="th",
+):
     llm = scripted(*script)
-    return llm, ask(settings, store, question, guild_id=GUILD, is_exec=is_exec, user_id=user_id,
-                    model=llm, deck=True, language=language)
+    return llm, ask(
+        settings,
+        store,
+        question,
+        guild_id=GUILD,
+        is_exec=is_exec,
+        user_id=user_id,
+        model=llm,
+        deck=True,
+        language=language,
+    )
 
 
 def chart_values(data):
@@ -379,42 +479,75 @@ def test_create_deck_attaches_a_pptx_with_ledger_numbers(settings, seeded):
 
 
 def test_a_non_executive_chart_covers_only_their_own_receipts(settings, seeded):
-    _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("ok"),
-                    is_exec=False, user_id=ALICE)
+    _, a = deck_ask(
+        settings,
+        seeded,
+        fc_resp(("create_deck", DECK)),
+        text_resp("ok"),
+        is_exec=False,
+        user_id=ALICE,
+    )
     assert chart_values(a.files[0][1]) == {"วัตถุดิบ": 1000.0, "ค่าเดินทาง": 250.5}
 
 
 def test_an_invalid_outline_returns_an_error_and_a_fixed_call_succeeds(settings, seeded):
     bad = {"title": "t", "slides": [{"kind": "chart", "title": "c"}]}
-    llm, a = deck_ask(settings, seeded, fc_resp(("create_deck", bad)), fc_resp(("create_deck", DECK)),
-                      text_resp("ok"))
-    first = [p.function_response.response for c in llm.requests[1].contents for p in c.parts or []
-             if p.function_response][0]
+    llm, a = deck_ask(
+        settings,
+        seeded,
+        fc_resp(("create_deck", bad)),
+        fc_resp(("create_deck", DECK)),
+        text_resp("ok"),
+    )
+    first = [
+        p.function_response.response
+        for c in llm.requests[1].contents
+        for p in c.parts or []
+        if p.function_response
+    ][0]
     assert "chart" in json.dumps(first, ensure_ascii=False) and "error" in json.dumps(first)
     assert len(a.files) == 1
 
 
 def test_a_second_create_deck_replaces_the_first(settings, seeded):
     other = {"title": "Second", "slides": [{"kind": "bullets", "title": "b", "bullets": ["x"]}]}
-    _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), fc_resp(("create_deck", other)),
-                    text_resp("ok"))
+    _, a = deck_ask(
+        settings,
+        seeded,
+        fc_resp(("create_deck", DECK)),
+        fc_resp(("create_deck", other)),
+        text_resp("ok"),
+    )
     assert [n.split("-")[0] for n, _ in a.files] == ["second"]
 
 
 def test_deck_fixed_strings_follow_the_reply_language(settings, seeded):
-    _, a = deck_ask(settings, seeded, fc_resp(("create_deck", DECK)), text_resp("done"),
-                    question="make slides of this month's spending", language="auto")
+    _, a = deck_ask(
+        settings,
+        seeded,
+        fc_resp(("create_deck", DECK)),
+        text_resp("done"),
+        question="make slides of this month's spending",
+        language="auto",
+    )
     cover = Presentation(io.BytesIO(a.files[0][1])).slides[0]
-    assert "Made with Salid" in " ".join(s.text_frame.text for s in cover.shapes if s.has_text_frame)
+    assert "Made with Salid" in " ".join(
+        s.text_frame.text for s in cover.shapes if s.has_text_frame
+    )
 
 
 def test_no_deck_tool_without_deck_and_prompt_only_with_it(settings, seeded):
     llm = scripted(text_resp("hi"))
     ask(settings, seeded, "hi", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
     names = {d.name for t_ in llm.requests[0].config.tools for d in t_.function_declarations}
-    assert "create_deck" not in names and "create_deck" not in llm.requests[0].config.system_instruction
+    assert (
+        "create_deck" not in names
+        and "create_deck" not in llm.requests[0].config.system_instruction
+    )
     llm2, _ = deck_ask(settings, seeded, text_resp("hi"))
-    decl = {d.name: d for t_ in llm2.requests[0].config.tools for d in t_.function_declarations}["create_deck"]
+    decl = {d.name: d for t_ in llm2.requests[0].config.tools for d in t_.function_declarations}[
+        "create_deck"
+    ]
     assert '"kind"' in json.dumps(decl.parameters_json_schema)  # the nested slide schema is visible
     assert "create_deck" in llm2.requests[0].config.system_instruction
 ```
@@ -474,8 +607,14 @@ git commit -m "Salid: create_deck tool with data-bound charts; Answer.files"
 ```python
 def _deck_answer(bot, monkeypatch, files=(("deck-20261016.pptx", b"PK\x03\x04data"),)):
     seen = []
-    monkeypatch.setattr(botmod, "ask", lambda s, store, q, **kw: seen.append(kw) or SimpleNamespace(
-        text="ทำสไลด์ให้แล้วครับ", seconds=0, rounds=0, files=list(files)))
+    monkeypatch.setattr(
+        botmod,
+        "ask",
+        lambda s, store, q, **kw: (
+            seen.append(kw)
+            or SimpleNamespace(text="ทำสไลด์ให้แล้วครับ", seconds=0, rounds=0, files=list(files))
+        ),
+    )
     bot.__dict__.pop("_answer", None)
     return seen
 
@@ -484,9 +623,11 @@ async def test_the_deck_file_is_attached_to_the_reply(bot, world, monkeypatch):
     seen = _deck_answer(bot, monkeypatch)
     m = say(world, world.gen, "สลิด ทำสไลด์สรุปค่าใช้จ่าย")
     sent = []
+
     async def reply(text, **kw):
         sent.append((text, kw.get("files")))
         return Sent()
+
     m.reply = reply
     await bot._answer(m, world.g, m.author)
     assert seen[0]["deck"] is True
@@ -498,11 +639,15 @@ async def test_text_is_still_posted_when_the_file_cannot_be_attached(bot, world,
     _deck_answer(bot, monkeypatch)
     m = say(world, world.gen, "สลิด ทำสไลด์")
     sent = []
+
     async def reply(text, **kw):
         if kw.get("files"):
-            raise discord.Forbidden(SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions")
+            raise discord.Forbidden(
+                SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions"
+            )
         sent.append(text)
         return Sent()
+
     m.reply = reply
     await bot._answer(m, world.g, m.author)
     assert sent and sent[0].startswith("ทำสไลด์ให้แล้วครับ") and "แนบไฟล์สไลด์ไม่ได้" in sent[0]
