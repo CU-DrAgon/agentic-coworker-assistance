@@ -140,6 +140,29 @@ def test_text_only_answer_is_blocked_and_errors_are_classified(monkeypatch):
     assert promo.generate_scene(None, "m", photo(), "c") == (None, "error")
 
 
+def test_huge_photos_are_refused_before_decoding(monkeypatch):  # review #1
+    monkeypatch.setattr(promo, "MAX_PIXELS", 1_000_000)
+    with pytest.raises(promo.PhotoTooLarge):
+        promo.prepare_photo(png_bytes((1200, 1200)))
+    out = promo.promo_tools(ctx(photos=[(0, png_bytes((1200, 1200)))]))[0](
+        headline="h", scene="cafe"
+    )
+    assert out["status"] == "error" and "megapixels" in out["error"]
+
+
+def test_thai_scene_text_never_reaches_the_image_model():  # review #2
+    with pytest.raises(ValueError, match="English"):
+        promo.merge_spec(None, headline="h", scene="โต๊ะไม้ในร้านกาแฟ")
+    out = promo.promo_tools(ctx())[0](headline="h", scene="cafe ร้านกาแฟ")
+    assert out["status"] == "error" and "English" in out["error"]
+
+
+def test_one_image_call_per_kit_even_on_timeout():  # review #7
+    client = fake_client(httpx.ReadTimeout("t"), image_response(png_bytes((768, 1376))))
+    assert promo.generate_scene(client, "m", photo(), "cafe") == (None, "timeout")
+    assert len(client.models.calls) == 1
+
+
 def test_take_unit_counts_before_the_call_and_respects_the_cap():
     b = DailyBudget(2)
     assert [promo.take_unit(b, 1, "d") for _ in range(3)] == ["", "", "daily_limit"]

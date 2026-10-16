@@ -45,9 +45,11 @@ LIMITS = {"headline": 40, "scene": 300, "price": 20, "call_to_action": 24, "shop
 MIN_SCENE = 3
 PHOTO_MIMES = {"image/png", "image/jpeg", "image/webp"}
 MAX_PHOTO_SIDE = 2048
+MAX_PIXELS = 50_000_000  # bigger canvases are refused before decoding (bot memory is 2 GiB)
+_THAI = re.compile("[฀-๿]")
 LOW_QUALITY_SIDE = 400
 PROMO_TIMEOUT_MS = 60_000
-PROMO_RETRY_DELAYS = (3.0,)  # one retry: a stuck call ends in the fallback kit after ~2 min
+PROMO_RETRY_DELAYS: tuple[float, ...] = ()  # no retry: exactly one image call (and bill) per kit
 BLOCKED = {
     types.FinishReason.IMAGE_SAFETY,
     types.FinishReason.IMAGE_PROHIBITED_CONTENT,
@@ -126,6 +128,8 @@ def merge_spec(
         raise ValueError("headline is required (the main line on the image)")
     if len(out["scene"]) < MIN_SCENE:
         raise ValueError("scene is required: describe the setting around the product in English")
+    if _THAI.search(out["scene"]):  # the image model must never get Thai text (it would draw it)
+        raise ValueError("scene must be written in English; keep Thai for the headline")
     return PromoSpec(**out)
 
 
@@ -136,22 +140,35 @@ class Photo:
     short_side: int
 
 
+class PhotoTooLarge(ValueError):
+    """More than MAX_PIXELS: refused from the header, before anything is decoded."""
+
+
 def prepare_photo(data: bytes) -> Photo | None:
-    """Upright (EXIF), transparency on white, long side at most 2048 px, JPEG; None if unreadable."""
+    """Upright (EXIF), transparency on white, long side at most 2048 px, JPEG; None if unreadable.
+    Raises PhotoTooLarge from the header alone (a tiny file can claim a huge canvas), and shrinks
+    before any mode conversion so memory stays bounded in the shared bot process."""
     try:
-        with Image.open(io.BytesIO(data)) as im:
+        im = Image.open(io.BytesIO(data))
+    except Exception:
+        return None
+    with im:
+        if im.width * im.height > MAX_PIXELS:
+            raise PhotoTooLarge(f"photo is larger than {MAX_PIXELS // 1_000_000} megapixels")
+        try:
+            im.draft("RGB", (MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))  # JPEG: decode at a reduced scale
+            im.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE), Image.Resampling.LANCZOS)
             img = ImageOps.exif_transpose(im)
-            if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
                 rgba = img.convert("RGBA")
                 img = Image.new("RGB", rgba.size, "white")
                 img.paste(rgba, mask=rgba.getchannel("A"))
             img = img.convert("RGB")
-            img.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE), Image.Resampling.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, "JPEG", quality=90)
             return Photo(jpeg=buf.getvalue(), short_side=min(img.size))
-    except Exception:
-        return None
+        except Exception:
+            return None
 
 
 # ------------------------------------------------------------------ scene
@@ -414,6 +431,16 @@ class PromoCtx:
         shop_name: str = "",
         accent: str = "",
         file_index: int = -1,
+    ) -> dict:
+        try:
+            return self._make_kit(
+                headline, scene, price, call_to_action, shop_name, accent, file_index
+            )
+        except PhotoTooLarge as e:
+            return {"status": "error", "error": f"{e}; ask for a smaller photo"}
+
+    def _make_kit(
+        self, headline, scene, price, call_to_action, shop_name, accent, file_index
     ) -> dict:
         prev: PromoSpec | None = None
         if file_index is not None and file_index >= 0:
