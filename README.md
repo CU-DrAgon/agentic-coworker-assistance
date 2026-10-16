@@ -609,12 +609,13 @@ Add-to-Discord button, `HUB_ADMIN_EMAILS` for super admins. `SALID_GUILD_COLLECT
 `SALID_STORE` settings as the bot, so set `SALID_STORE=firestore` there to see the real ledger.
 Deep tasks are Discord-only.
 
-## Salid on Slack and LINE
+## Salid on Slack, LINE and Telegram
 
-The same Salid brain (`salid.qa.ask`, ADK agent) in Slack workspaces and LINE chats, as a separate
+The same Salid brain (`salid.qa.ask`, ADK agent) in Slack workspaces, LINE chats and Telegram chats, as a separate
 process that shares the Discord bot's stores and memory: `uv run python -m salid.platforms`. A platform
 starts only when its secrets are set (`SALID_SLACK_BOT_TOKEN` + `SALID_SLACK_APP_TOKEN`; `SALID_LINE_CHANNEL_SECRET`
-+ `SALID_LINE_CHANNEL_ACCESS_TOKEN`). Setup guides: [Slack](docs/platforms/slack.md), [LINE](docs/platforms/line.md).
++ `SALID_LINE_CHANNEL_ACCESS_TOKEN`; `SALID_TELEGRAM_BOT_TOKEN`). Setup guides: [Slack](docs/platforms/slack.md),
+[LINE](docs/platforms/line.md), [Telegram](docs/platforms/telegram.md).
 `uv run python scripts/platforms_smoke.py` shows what would start and checks the tokens read-only.
 
 Phase 1 covers Q&A (chat, links and web search, ledger questions), files (images and PDFs, receipts into
@@ -623,18 +624,21 @@ follow-up window), per-tenant feature switches and executives. Not available yet
 scheduling, PDFs and email, deliver-file, the assistant/COO tools, broadcasts, polls, voice, deep tasks, audio
 and video, image descriptions in memory.
 
-- **Tenant ids.** Every Slack workspace (`team_id`) and LINE channel (the bot's user id) is a tenant. Its
+- **Tenant ids.** Every Slack workspace (`team_id`), LINE channel (the bot's user id) and Telegram bot (its id from
+  `getMe`) is a tenant. Its
   `guild_id` is `2**62 | platform << 60 | sha256(key)[:60 bits]` (`salid/platforms/ids.py`): stable, nothing to
   persist, and always at or above `2**62`, which Discord snowflakes do not reach before 2049, so it can never
   collide with a Discord guild. Users, rooms and messages get stable positive ints the same way (unique inside
   a tenant; negative ids stay reserved for DM notes). The settings document is `salid_guilds/{tenant id}`.
 - **Who sees what.** Ledger: same rule as Discord (non-executives see only their own receipts; executives are
-  `SALID_SLACK_EXEC_USER_IDS` / `SALID_LINE_EXEC_USER_IDS` plus Slack workspace owners and admins). Memory: a room's
+  `SALID_SLACK_EXEC_USER_IDS` / `SALID_LINE_EXEC_USER_IDS` / `SALID_TELEGRAM_EXEC_USER_IDS` plus Slack workspace
+  owners and admins; Telegram group admins do not count). Memory: a room's
   memory is readable only if the asker is in that room and everyone who can read the answering room can too;
-  any doubt means that room alone or none. Slack computes it from conversation members; LINE cannot know who is in a
-  group, so a group uses its own memory and a 1:1 chat only its own history.
+  any doubt means that room alone or none. Slack computes it from conversation members; LINE and Telegram cannot know who is
+  in a group, so a group uses its own memory and a 1:1 chat only its own history.
 - **Security.** LINE webhook: `X-Line-Signature` is checked in constant time and unsigned requests get 401; the
-  reply is 200 at once and work runs in the background. Slack uses Socket Mode (no public endpoint). Tokens are
+  reply is 200 at once and work runs in the background. Slack uses Socket Mode and Telegram long polling (no public endpoint; the Telegram token sits in API URLs, which are
+  never logged). Tokens are
   `repr=False`; logs carry ids and timings only, never message text, tokens or file bytes. Bot and self messages are
   ignored and each room is limited to 8 answers a minute.
 - **Shared store.** Both processes can use the same Firestore project or SQLite file. The platform process purges old

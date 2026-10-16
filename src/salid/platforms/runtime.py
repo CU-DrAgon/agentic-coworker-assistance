@@ -157,6 +157,24 @@ async def run_line(a: Assistant, ps: PlatformSettings) -> None:
     await uvicorn.Server(config).serve()
 
 
+async def run_telegram(a: Assistant, ps: PlatformSettings) -> None:
+    from . import telegram
+
+    api = telegram.TelegramApi(ps.telegram_bot_token)
+    try:
+        me = await api.get_me()
+        port = telegram.TelegramPort(api)
+        adapter = telegram.TelegramAdapter(a, port, str(me["id"]), me.get("username") or "")
+        logger.info(
+            "telegram ready bot=%s tenant=%d",
+            me.get("username") or me["id"],
+            ids.tenant_id("telegram", str(me["id"])),
+        )
+        await telegram.Poller(api, adapter).run()
+    finally:
+        await api.aclose()
+
+
 async def run(s: Settings, ps: PlatformSettings) -> None:
     a = build_assistant(s, ps)
     jobs = [asyncio.create_task(memory_loop(a))]
@@ -164,5 +182,7 @@ async def run(s: Settings, ps: PlatformSettings) -> None:
         jobs.append(asyncio.create_task(run_slack(a, ps)))
     if ps.line_enabled:
         jobs.append(asyncio.create_task(run_line(a, ps)))
+    if ps.telegram_enabled:
+        jobs.append(asyncio.create_task(run_telegram(a, ps)))
     logger.info("platforms started: %s", ", ".join(ps.enabled_platforms()))
     await asyncio.gather(*jobs)

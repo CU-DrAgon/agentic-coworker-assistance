@@ -32,14 +32,20 @@ class PlatformSettings(BaseSettings):
     line_port: int = 8091
     line_reply_token_seconds: float = 25.0  # older than this: push instead of a reply token
 
-    # Behaviour shared by both platforms.
+    # Telegram Bot API: long polling, so there is no public endpoint.
+    telegram_bot_token: str = Field(default="", repr=False)  # from @BotFather
+    telegram_exec_user_ids: Annotated[set[str], NoDecode] = Field(default_factory=set)
+
+    # Behaviour shared by all platforms.
     platform_window_seconds: float = 180.0  # follow-ups of the person Salid just answered
     platform_thread_seconds: float = 3600.0  # a thread Salid answered in keeps counting this long
     platform_answers_per_minute: int = 8  # per room; more are dropped (loop protection)
     platform_slow_after_seconds: float = 6.0  # "one moment" only if no answer by then
     platform_max_concurrent: int = 6  # model calls running at once
 
-    @field_validator("slack_exec_user_ids", "line_exec_user_ids", mode="before")
+    @field_validator(
+        "slack_exec_user_ids", "line_exec_user_ids", "telegram_exec_user_ids", mode="before"
+    )
     @classmethod
     def _csv(cls, v):
         if isinstance(v, str):
@@ -54,5 +60,14 @@ class PlatformSettings(BaseSettings):
     def line_enabled(self) -> bool:
         return bool(self.line_channel_secret and self.line_channel_access_token)
 
+    @property
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token)
+
     def enabled_platforms(self) -> list[str]:
-        return [n for n, on in (("slack", self.slack_enabled), ("line", self.line_enabled)) if on]
+        flags = (
+            ("slack", self.slack_enabled),
+            ("line", self.line_enabled),
+            ("telegram", self.telegram_enabled),
+        )
+        return [n for n, on in flags if on]

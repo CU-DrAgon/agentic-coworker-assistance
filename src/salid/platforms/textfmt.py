@@ -170,6 +170,12 @@ def to_line(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", s).strip()
 
 
+def to_telegram(text: str) -> str:
+    """Markdown from the model -> plain text for Telegram. Plain on purpose: Telegram's HTML and
+    MarkdownV2 parse modes reject a whole message on one unescaped character."""
+    return to_line(text)
+
+
 # ------------------------------------------------------------------ Slack input
 
 _SLACK_TOKEN = re.compile(r"<([^<>]+)>")

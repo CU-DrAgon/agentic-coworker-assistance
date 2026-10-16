@@ -1,4 +1,4 @@
-"""Stable integer ids for Slack / LINE objects, in ranges that cannot collide with Discord.
+"""Stable integer ids for Slack / LINE / Telegram objects, in ranges that cannot collide with Discord.
 
 Salid's stores key everything by integers (guild, channel, user, message). Slack and LINE ids are
 strings, so each one is mapped to an int by hashing; nothing needs to be persisted and the same
@@ -7,7 +7,7 @@ input always gives the same id.
 * **Tenant** (`tenant_id`, used as `guild_id` everywhere): `2**62 | platform << 60 | hash60`.
   Discord snowflakes are `timestamp_ms_since_2015 << 22`; they stay below `2**62` until about
   October 2049, so ids at or above `2**62` are never Discord guilds. Bits 60-61 hold the platform
-  (1 Slack, 2 LINE), the other 60 bits a SHA-256 prefix of the workspace / channel key (a collision
+  (1 Slack, 2 LINE, 3 Telegram), the other 60 bits a SHA-256 prefix of the workspace / channel key (a collision
   among N tenants has probability about N**2 / 2**61: negligible). The value fits a signed int64
   (Firestore, SQLite). Collisions are still refused, not trusted away: the tenant's settings document
   records its owner (`guild_name`, see core.tenant_label) and a message from a different owner whose
@@ -23,8 +23,8 @@ from __future__ import annotations
 import hashlib
 
 DISCORD_CEILING = 1 << 62  # Discord snowflakes are below this until ~2049
-SLACK, LINE = "slack", "line"
-_PLATFORM_CODE = {SLACK: 1, LINE: 2}
+SLACK, LINE, TELEGRAM = "slack", "line", "telegram"
+_PLATFORM_CODE = {SLACK: 1, LINE: 2, TELEGRAM: 3}
 _LOW60 = (1 << 60) - 1
 _LOW62 = (1 << 62) - 1
 

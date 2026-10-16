@@ -1,5 +1,5 @@
 """What `scripts/platforms_smoke.py` prints: which platforms would start, and whether their tokens
-work, using one read-only API call each (Slack auth.test, LINE get bot info). Never prints a
+work, using one read-only API call each (Slack auth.test, LINE get bot info, Telegram getMe). Never prints a
 secret, only whether it is set and what it is called."""
 
 from __future__ import annotations
@@ -29,13 +29,18 @@ def plan(ps: PlatformSettings) -> list[str]:
             line_channel_access_token=bool(ps.line_channel_access_token),
         )
         + (f" (webhook port {ps.line_port})" if ps.line_enabled else ""),
+        "telegram: " + need(telegram_bot_token=bool(ps.telegram_bot_token)),
         f"slack executives: {len(ps.slack_exec_user_ids)} id(s) plus workspace admins/owners",
         f"line executives:  {len(ps.line_exec_user_ids)} id(s)",
+        f"telegram executives: {len(ps.telegram_exec_user_ids)} id(s) (group admins do not count)",
     ]
 
 
 async def check(
-    ps: PlatformSettings, slack_check: Checker | None = None, line_check: Checker | None = None
+    ps: PlatformSettings,
+    slack_check: Checker | None = None,
+    line_check: Checker | None = None,
+    telegram_check: Checker | None = None,
 ) -> list[str]:
     """Validate the tokens of the platforms that would start."""
     out: list[str] = []
@@ -47,6 +52,10 @@ async def check(
         if line_check is None:
             from .line import check as line_check
         out.append(await _one("line", line_check, ps))
+    if ps.telegram_enabled:
+        if telegram_check is None:
+            from .telegram import check as telegram_check
+        out.append(await _one("telegram", telegram_check, ps))
     return out
 
 
