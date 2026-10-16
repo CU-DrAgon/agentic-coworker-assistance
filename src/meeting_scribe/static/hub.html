@@ -1038,6 +1038,18 @@
   "th": "DM ส่วนตัว ปรับได้รายคน",
   "en": "Private DMs, adjustable per person"
  },
+ "f_approvals_n": {
+  "th": "คำขออนุมัติ (เบิก ซื้อ ลา)",
+  "en": "Approval requests (expense, purchase, leave)"
+ },
+ "f_approvals_d": {
+  "th": "สมาชิกขอให้สลิดส่งคำขออนุมัติ เช่น ขอเบิกค่าแท็กซี่ ขอซื้อของ ขอลา ไปให้หัวหน้า (ตามลำดับ role ของเซิร์ฟเวอร์ หรือคนที่ระบุ) สลิดถามยืนยันก่อนส่ง หัวหน้ากดอนุมัติหรือไม่อนุมัติใน DM และผู้ขอได้รับแจ้งผล มีสรุปในรายงานเย็นและเตือนหัวหน้าในสรุปเช้าถ้าค้างเกิน 1 วัน",
+  "en": "Members ask Salid to send an approval request (expense claim, purchase, leave) to their manager (by the server's role hierarchy, or a named person). Salid confirms before sending, the approver taps Approve or Decline in a DM and the requester is told the outcome. Counts appear in the evening report and approvers are reminded in the morning brief when something has waited over a day."
+ },
+ "f_approvals_w": {
+  "th": "ต้องยืนยันก่อนส่งทุกครั้ง",
+  "en": "Always confirmed before sending"
+ },
  "morning_time_l": {
   "th": "เวลาสรุปเช้า (DM)",
   "en": "Morning brief time (DM)"
@@ -1192,8 +1204,9 @@ const FEATURES = [
   { id: "followups" },
   { id: "reports" },
   { id: "briefings" },
+  { id: "approvals" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, approvals: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1426,7 +1439,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, approvals: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1510,7 +1523,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, approvals: features.approvals },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

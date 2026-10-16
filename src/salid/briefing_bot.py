@@ -151,6 +151,7 @@ class BriefingMixin:
                     uid, []
                 )
             ]
+            inp.approvals = self._approvals_waiting(gid, uid, now)
             edef = self.team.brief_times(gid)[1]
             h, m = (int(x) for x in (prefs.evening_time or edef).split(":"))
             since = datetime(today.year, today.month, today.day, h, m, tzinfo=zone) - timedelta(

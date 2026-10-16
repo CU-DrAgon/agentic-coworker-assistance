@@ -24,6 +24,7 @@ from datetime import UTC, date, datetime, timedelta
 from google.genai import types
 from pydantic import BaseModel
 
+from . import approvals as _approvals  # noqa: F401  (registers its i18n strings)
 from .coo_store import ALERTS, ASKS, PREFS, STATE, DocStore
 from .i18n import t
 from .llm import generate
@@ -460,10 +461,13 @@ class BriefInput:
     done: list[str] = field(default_factory=list)  # evening: titles done today
     still_open: list[dict] = field(default_factory=list)  # evening: {id, title, due}
     tomorrow: list[dict] = field(default_factory=list)  # evening: {time, title, link}
+    approvals: list[dict] = field(
+        default_factory=list
+    )  # morning: {id, requester, title, amount, days}
 
     def is_empty(self) -> bool:
         if self.kind == "morning":
-            return not (self.meetings or self.tasks_due or self.docs or self.asks)
+            return not (self.meetings or self.tasks_due or self.docs or self.asks or self.approvals)
         # open tasks alone do not make an evening brief (they are listed when something else is)
         return not (self.attended or self.new_tasks or self.done or self.tomorrow or self.asks)
 
@@ -482,6 +486,7 @@ class BriefInput:
             done=c(self.done, CAPS["done"]),
             still_open=c(self.still_open, CAPS["tasks"]),
             tomorrow=c(self.tomorrow, CAPS["meetings"]),
+            approvals=c(self.approvals, CAPS["tasks"]),
         )  # fmt: skip
 
     def links(self) -> list[str]:
@@ -499,6 +504,7 @@ _SECTIONS = (
     ("done", "TASKS DONE TODAY"),
     ("still_open", "TASKS STILL OPEN"),
     ("tomorrow", "TOMORROW'S MEETINGS"),
+    ("approvals", "APPROVAL REQUESTS WAITING FOR THIS PERSON TO DECIDE (over a day old)"),
 )
 
 
@@ -582,6 +588,11 @@ def render_plain(inp: BriefInput, lang: str = "th") -> str:
     section("bf_done", [f"• {x}" for x in inp.done])
     section("bf_open", task(inp.still_open))
     section("bf_meetings_tomorrow", meet(inp.tomorrow))
+    section(
+        "bf_approvals",
+        [t("bf_approval_line", lang, id=r["id"], requester=r["requester"], title=r["title"],
+           days=r["days"]) for r in inp.approvals],
+    )  # fmt: skip
     section(
         "bf_asks",
         [
