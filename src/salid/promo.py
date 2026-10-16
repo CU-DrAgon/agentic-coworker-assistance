@@ -21,14 +21,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-from google.genai import types
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel
 
-from . import cards
+from . import cards, imagegen
 from .cards import CardFonts
-from .llm import generate
 from .media import DailyBudget
 
 logger = logging.getLogger(__name__)
@@ -45,20 +42,8 @@ LIMITS = {"headline": 40, "scene": 300, "price": 20, "call_to_action": 24, "shop
 MIN_SCENE = 3
 PHOTO_MIMES = {"image/png", "image/jpeg", "image/webp"}
 MAX_PHOTO_SIDE = 2048
-MAX_PIXELS = 50_000_000  # bigger canvases are refused before decoding (bot memory is 2 GiB)
-_THAI = re.compile("[฀-๿]")
+MAX_PIXELS = imagegen.MAX_DECODE_PIXELS  # bigger canvases are refused before decoding
 LOW_QUALITY_SIDE = 400
-PROMO_TIMEOUT_MS = 60_000
-PROMO_RETRY_DELAYS: tuple[float, ...] = ()  # no retry: exactly one image call (and bill) per kit
-BLOCKED = {
-    types.FinishReason.IMAGE_SAFETY,
-    types.FinishReason.IMAGE_PROHIBITED_CONTENT,
-    types.FinishReason.NO_IMAGE,
-    types.FinishReason.IMAGE_RECITATION,
-    types.FinishReason.IMAGE_OTHER,
-    types.FinishReason.PROHIBITED_CONTENT,
-    types.FinishReason.SAFETY,
-}
 SCENE_PROMPT = (
     "Edit this product photo into a professional advertising photo.\n"
     "Keep the product exactly as it is: same shape, colours, label, logo, packaging, text printed "
@@ -128,7 +113,7 @@ def merge_spec(
         raise ValueError("headline is required (the main line on the image)")
     if len(out["scene"]) < MIN_SCENE:
         raise ValueError("scene is required: describe the setting around the product in English")
-    if _THAI.search(out["scene"]):  # the image model must never get Thai text (it would draw it)
+    if not imagegen.english_only(out["scene"]):  # the image model would draw Thai text
         raise ValueError("scene must be written in English; keep Thai for the headline")
     return PromoSpec(**out)
 
@@ -140,8 +125,7 @@ class Photo:
     short_side: int
 
 
-class PhotoTooLarge(ValueError):
-    """More than MAX_PIXELS: refused from the header, before anything is decoded."""
+PhotoTooLarge = imagegen.ImageTooLarge  # more than MAX_PIXELS, refused before decoding
 
 
 def prepare_photo(data: bytes) -> Photo | None:
@@ -149,12 +133,12 @@ def prepare_photo(data: bytes) -> Photo | None:
     Raises PhotoTooLarge from the header alone (a tiny file can claim a huge canvas), and shrinks
     before any mode conversion so memory stays bounded in the shared bot process."""
     try:
-        im = Image.open(io.BytesIO(data))
-    except Exception:
+        im = imagegen.open_capped(data, max_pixels=MAX_PIXELS)
+    except PhotoTooLarge:
+        raise
+    except ValueError:
         return None
     with im:
-        if im.width * im.height > MAX_PIXELS:
-            raise PhotoTooLarge(f"photo is larger than {MAX_PIXELS // 1_000_000} megapixels")
         try:
             im.draft("RGB", (MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))  # JPEG: decode at a reduced scale
             im.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE), Image.Resampling.LANCZOS)
@@ -177,36 +161,13 @@ def scene_prompt(scene: str) -> str:
 
 
 def generate_scene(client, model: str, photo: Photo, scene: str) -> tuple[Image.Image | None, str]:
-    """One Nano Banana edit of the photo into the new scene: (image, "") or (None, reason) with
-    reason "blocked" (safety / no image), "timeout" or "error"."""
-    if client is None:
-        return None, "error"
-    config = types.GenerateContentConfig(
-        response_modalities=["TEXT", "IMAGE"],
-        image_config=types.ImageConfig(aspect_ratio="9:16", image_size="2K"),
-        http_options=types.HttpOptions(timeout=PROMO_TIMEOUT_MS),
-    )  # no temperature / top_p / top_k / seed / logprobs: an API error on Nano Banana 2.1
-    contents = [types.Part.from_bytes(data=photo.jpeg, mime_type="image/jpeg"), scene_prompt(scene)]
-    try:
-        resp = generate(client, model, contents, config, delays=PROMO_RETRY_DELAYS)
-    except httpx.TimeoutException:
-        logger.warning("promo scene timed out")
-        return None, "timeout"
-    except Exception as e:  # never log contents
-        logger.warning("promo scene failed (%s)", type(e).__name__)
-        return None, "error"
-    cand = (resp.candidates or [None])[0]
-    if cand is None or cand.finish_reason in BLOCKED:
-        return None, "blocked"
-    for part in (cand.content.parts if cand.content else None) or []:
-        blob = part.inline_data
-        if blob is not None and blob.data and (blob.mime_type or "").startswith("image/"):
-            try:
-                return Image.open(io.BytesIO(blob.data)).convert("RGB"), ""
-            except Exception:
-                logger.warning("promo scene image could not be decoded")
-                return None, "error"
-    return None, "blocked"
+    """One Nano Banana edit of the photo into the new scene (one call, so one bill, per kit):
+    (image, "") or (None, reason) with reason "blocked" (safety / no image), "timeout" or
+    "error"."""
+    imgs, reason = imagegen.generate_images(
+        client, model, scene_prompt(scene), refs=[photo.jpeg], aspect="9:16", size="2K"
+    )
+    return (imgs[0] if imgs else None), reason
 
 
 def take_unit(budget: DailyBudget, guild_id: int, day: str) -> str:

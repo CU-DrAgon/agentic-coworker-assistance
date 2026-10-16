@@ -123,8 +123,7 @@ def test_blocked_finish_reasons(finish):
     assert promo.generate_scene(fake_client(resp), "m", photo(), "cafe") == (None, "blocked")
 
 
-def test_text_only_answer_is_blocked_and_errors_are_classified(monkeypatch):
-    monkeypatch.setattr(promo, "PROMO_RETRY_DELAYS", ())
+def test_text_only_answer_is_blocked_and_errors_are_classified():  # one attempt per call
     assert promo.generate_scene(fake_client(text_response("I can't")), "m", photo(), "c") == (
         None,
         "blocked",
