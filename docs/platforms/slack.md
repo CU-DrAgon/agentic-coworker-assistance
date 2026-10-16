@@ -41,7 +41,7 @@ and video files, image descriptions in memory, receipt forwarding, profiles.
 ```yaml
 display_information:
   name: Salid
-  description: Team assistant: questions, receipts and team memory
+  description: "Team assistant: questions, receipts and team memory"
   background_color: "#2d3142"
 features:
   app_home:
