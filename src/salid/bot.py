@@ -1093,6 +1093,7 @@ class SecretaryBot(discord.Client):
                 language=setting,
                 memory=memory,
                 interjection=interjection,
+                deck=self.team.enabled(gid, "decks") and not interjection,
                 **({"files": files, "actions": actions} if files else {}),
             )
         self._log_answer(gid, message.channel.id, is_exec, ans, t0, t_ctx, time.monotonic())
@@ -1102,9 +1103,10 @@ class SecretaryBot(discord.Client):
         sent = first = None
         sent_ids: list[int] = []
         for i, part in enumerate(chunks(ans.text)):
-            sent = await (
-                message.reply(part, mention_author=False) if i == 0 else message.channel.send(part)
-            )
+            if i == 0:
+                sent = await self._reply_with_files(message, part, getattr(ans, "files", ()), lang)
+            else:
+                sent = await message.channel.send(part)
             first = first or sent
             if getattr(sent, "id", None) is not None:
                 sent_ids.append(sent.id)
@@ -1118,6 +1120,20 @@ class SecretaryBot(discord.Client):
                     await message.add_reaction(reaction)
         self._note_answer(message, sent)
         return True
+
+    @staticmethod
+    async def _reply_with_files(message, text: str, files, lang: str):
+        """Reply with `text` and any files the agent built (a slide deck). If Discord refuses the
+        upload (no Attach Files permission, too large), the text still goes out with a note."""
+        if not files:
+            return await message.reply(text, mention_author=False)
+        attach = [discord.File(io.BytesIO(data), filename=name) for name, data in files]
+        try:
+            return await message.reply(text, mention_author=False, files=attach)
+        except discord.HTTPException as e:
+            logger.warning("could not attach %d file(s) (HTTP %s)", len(attach), e.status)
+            note = t("deck_attach_failed", lang)
+            return await message.reply(f"{text}\n{note}", mention_author=False)
 
     @staticmethod
     def _log_answer(gid, cid, is_exec, ans, t0: float, t_ctx: float, t_end: float) -> None:

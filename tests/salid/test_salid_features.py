@@ -6,6 +6,7 @@ import itertools
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import discord
 import pytest
 from conftest import GUILD, FakeClient, FakeEmbedder, json_resp, scripted, text_resp
 from test_bot_multitenant import ME, member
@@ -87,6 +88,64 @@ def _real_answer(bot, monkeypatch, text):
     )  # fmt: skip
     bot.__dict__.pop("_answer", None)
     return seen
+
+
+def _deck_answer(bot, monkeypatch, files=(("deck-20261016.pptx", b"PK\x03\x04data"),)):
+    seen = []
+    monkeypatch.setattr(
+        botmod,
+        "ask",
+        lambda s, store, q, **kw: (
+            seen.append(kw)
+            or SimpleNamespace(text="ทำสไลด์ให้แล้วครับ", seconds=0, rounds=0, files=list(files))
+        ),
+    )
+    bot.__dict__.pop("_answer", None)
+    return seen
+
+
+async def test_the_deck_file_is_attached_to_the_reply(bot, world, monkeypatch):
+    seen = _deck_answer(bot, monkeypatch)
+    m = say(world, world.gen, "สลิด ทำสไลด์สรุปค่าใช้จ่าย")
+    sent = []
+
+    async def reply(text, **kw):
+        sent.append((text, kw.get("files")))
+        return Sent()
+
+    m.reply = reply
+    await bot._answer(m, world.g, m.author)
+    assert seen[0]["deck"] is True
+    [(text, files)] = sent
+    assert text == "ทำสไลด์ให้แล้วครับ" and [f.filename for f in files] == ["deck-20261016.pptx"]
+
+
+async def test_text_is_still_posted_when_the_file_cannot_be_attached(bot, world, monkeypatch):
+    _deck_answer(bot, monkeypatch)
+    m = say(world, world.gen, "สลิด ทำสไลด์")
+    sent = []
+
+    async def reply(text, **kw):
+        if kw.get("files"):
+            raise discord.Forbidden(
+                SimpleNamespace(status=403, reason="Forbidden"), "Missing Permissions"
+            )
+        sent.append(text)
+        return Sent()
+
+    m.reply = reply
+    await bot._answer(m, world.g, m.author)
+    assert sent and sent[0].startswith("ทำสไลด์ให้แล้วครับ") and "แนบไฟล์สไลด์ไม่ได้" in sent[0]
+
+
+async def test_no_deck_for_interjections_or_when_the_flag_is_off(bot, world, monkeypatch):
+    seen = _deck_answer(bot, monkeypatch, files=())
+    m = say(world, world.gen, "ยอดเท่าไร")
+    await bot._answer(m, world.g, m.author, interjection=True)
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features=dict(decks=False)), "x")
+    bot.team._cache.clear()
+    await bot._answer(say(world, world.gen, "สลิด ทำสไลด์"), world.g, m.author)
+    assert [kw["deck"] for kw in seen] == [False, False]
 
 
 async def test_explicit_call_is_never_suppressed(bot, world, monkeypatch):

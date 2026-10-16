@@ -202,6 +202,7 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
             "history": "",
             "language": "th",
             "interjection": False,
+            "deck": True,
         }
     ]
     assert m.replies == ["ok"]
