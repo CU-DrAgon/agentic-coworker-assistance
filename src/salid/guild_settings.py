@@ -51,6 +51,7 @@ import re
 import secrets
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -275,6 +276,9 @@ class GuildSettings(GuildSettingsUpdate):
     icon_url: str = ""
     channels: list[Channel] = Field(default_factory=list)
     installed_at: str = ""
+    # Channel ids (text, voice, forum) everyone in the server can see; synced by the bot. Only
+    # items from these channels are shareable between workspaces / visible to plain members.
+    public_channel_ids: list[str] = Field(default_factory=list)
     active: bool = True
     updated_by: str = ""
     updated_at: str = ""
@@ -345,6 +349,7 @@ class GuildStore:
         channels: list[dict],
         active: bool = True,
         installed: bool = False,
+        public_channel_ids: list[str] | None = None,
     ) -> None:
         """Merge what the bot knows about the guild; never touches hub-managed fields."""
         data: dict[str, Any] = {
@@ -353,6 +358,8 @@ class GuildStore:
             "channels": channels,
             "active": active,
         }
+        if public_channel_ids is not None:
+            data["public_channel_ids"] = public_channel_ids
         if installed:
             data["installed_at"] = _now().isoformat(timespec="seconds")
         self._ref(guild_id).set(data, merge=True)
@@ -440,6 +447,16 @@ class GuildStore:
             }
         )
         return code
+
+    def peek_link_code(self, code: str) -> int:
+        """The guild a code belongs to, without consuming it. LinkError when unusable."""
+        snap = self.client.collection(self.link_collection).document(code).get()
+        info = snap.to_dict() if snap.exists else None
+        if not info or info.get("used"):
+            raise LinkError("code unknown or already used")
+        if datetime.fromisoformat(info["expires_at"]) <= _now():
+            raise LinkError("code expired")
+        return int(info["guild_id"])
 
     def redeem_link_code(self, code: str, email: str) -> tuple[int, GuildSettings]:
         """Atomically consume `code` and make `email` an admin of its guild.
@@ -550,6 +567,8 @@ class BotGuildSettings:
 
     def __init__(self, store: GuildStore, ttl: float = TTL_S, clock=time.monotonic):
         self.store, self._ttl, self._clock = store, ttl, clock
+        # (guild id) -> licensed? Set by the bot; an unlicensed guild has every feature off.
+        self.license_gate: Callable[[int], bool] | None = None
         self._cache: dict[int, tuple[float, GuildSettings]] = {}
 
     def current(self, guild_id: int) -> GuildSettings:
@@ -582,6 +601,8 @@ class BotGuildSettings:
             self._cache.pop(guild_id, None)
 
     def enabled(self, guild_id: int, feature: str) -> bool:
+        if self.license_gate is not None and not self.license_gate(guild_id):
+            return False
         return bool(getattr(self.current(guild_id).features, feature))
 
     def receipt_channel_ids(self, guild_id: int, env_ids: set[int]) -> set[int]:

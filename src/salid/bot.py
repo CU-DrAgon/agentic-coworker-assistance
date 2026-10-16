@@ -26,7 +26,12 @@ from .briefings import DocInfo, split_names
 from .broadcast_bot import BroadcastMixin
 from .captions import captions_tools
 from .catchup_bot import CatchupMixin
-from .channel_access import access_flags, hidden_channels, hidden_channels_messages
+from .channel_access import (
+    access_flags,
+    hidden_channels,
+    hidden_channels_messages,
+    public_channel_ids,
+)
 from .chat_tools import ChatActions
 from .config import Settings
 from .coo import CooMixin, DisclosureButton
@@ -72,6 +77,7 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .licensing import Licensing, make_licensing
 from .maps_bot import MapsMixin
 from .markets_bot import MarketsMixin
 from .media import media_candidates
@@ -124,6 +130,8 @@ from .scheduling import DiscordCalendar, MeetingService
 from .search_bot import SearchMixin
 from .secretary import SecretaryContext, SecretaryState
 from .secretary_store import SecretaryStore, make_secretary_store, new_id
+from .sharing import make_sharing
+from .sharing import set_default as set_sharing_default
 from .store import Store
 from .summary import (
     PERIODS,
@@ -268,6 +276,24 @@ class _DeepJob:
     starter_id: int
 
 
+class _LicensedTree(app_commands.CommandTree):
+    """Slash commands stay quiet in unlicensed guilds, except the `/ตั้งค่า` link flow."""
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        bot, guild = interaction.client, interaction.guild
+        licensing = getattr(bot, "licensing", None)
+        name = getattr(interaction.command, "name", "")
+        if guild is None or licensing is None or name in SETUP_COMMANDS:
+            return True
+        if await asyncio.to_thread(licensing.is_licensed, guild.id):
+            return True
+        with contextlib.suppress(discord.HTTPException):
+            await interaction.response.send_message(
+                t("unlicensed", "th", url=licensing.url), ephemeral=True
+            )
+        return False
+
+
 class SecretaryBot(
     TranslateMixin,
     FreetimeMixin,
@@ -299,6 +325,7 @@ class SecretaryBot(
         clock=time.monotonic,
         memory: MemoryStore | None = None,
         secretary_store: SecretaryStore | None = None,
+        licensing: Licensing | None = None,
     ) -> None:
         intents = discord.Intents(
             guilds=True,
@@ -315,8 +342,14 @@ class SecretaryBot(
         # Per-guild settings document (Firestore, or in memory for local dev).
         self.guilds_store = guilds or make_guild_store(settings)
         self.team = BotGuildSettings(self.guilds_store)
+        # License gate (salid.licensing): an unlicensed guild gets no features at all
+        self.licensing = licensing or make_licensing(settings, store, self.guilds_store)
+        self.team.license_gate = self.licensing.is_licensed
+        # ShareLinks between the workspaces of one org (salid.sharing); wiki_search / find_place
+        self.sharing = make_sharing(self.licensing.orgs, self.guilds_store)
+        set_sharing_default(self.sharing)
         self.archive = make_archive(settings)
-        self.tree = app_commands.CommandTree(self)
+        self.tree = _LicensedTree(self)
         self._clock = clock  # injectable so conversation timers are testable without sleeping
         self._convos: dict[int, _Convo] = {}  # channel -> running conversation
         self._pending: dict[int, _Pending] = {}  # join mode: channel -> candidates
@@ -477,6 +510,7 @@ class SecretaryBot(
                 for c in guild.text_channels
                 for flags in [access_flags(c, getattr(guild, "me", None))]
             ][:MAX_SYNCED_CHANNELS],
+            "public_channel_ids": public_channel_ids(guild),
         }
 
     async def _sync_guild(self, guild: discord.Guild, *, installed: bool = False) -> None:
@@ -608,8 +642,32 @@ class SecretaryBot(
         return bool(names & {r.name for r in member.roles})
 
     # ------------------------------------------------------------- routing
+    async def _licensed(self, guild_id: int) -> bool:
+        if not self.licensing.enforce:
+            return True
+        return await asyncio.to_thread(self.licensing.is_licensed, guild_id)
+
+    async def _unlicensed_notice(self, message: discord.Message) -> None:
+        """Unlicensed guild: nothing is read or stored; when addressed, one short line per day."""
+        try:
+            if not (mentions_bot(message, self.user) or self._starts_with_name(message)):
+                return
+            gid = message.guild.id
+            day = self.s.today().isoformat()
+            if await asyncio.to_thread(self.licensing.claim_notice, gid, day):
+                await message.reply(
+                    t("unlicensed", self._lang(message), url=self.licensing.url),
+                    mention_author=False,
+                )
+        except Exception:
+            logger.warning("could not send the license notice", exc_info=True)
+
     async def on_message(self, message: discord.Message):
         own = message.author == self.user
+        if message.guild is not None and not await self._licensed(message.guild.id):
+            if not own and not getattr(message.author, "bot", False):
+                await self._unlicensed_notice(message)
+            return  # unlicensed: no ingestion, no answers
         logged = False
         if message.guild is not None and (own or not getattr(message.author, "bot", False)):
             logged = await self._memory_record(message, own)
@@ -959,6 +1017,9 @@ class SecretaryBot(
         """Salid itself was disconnected (network, gateway, kicked): reconnect, else end."""
         if member == self.user and after.channel is None and before.channel is not None:
             await self.meetings.on_disconnected(before.channel.guild.id)
+        guild = getattr(member, "guild", None)
+        if guild is not None and not await self._licensed(guild.id):
+            return  # unlicensed: no auto-join
         try:
             await self.meetings.on_voice_activity(member, before, after)
         except Exception:
@@ -991,6 +1052,8 @@ class SecretaryBot(
         if resolved is None:  # Salid asked "which company?" (or switched); nothing recorded yet
             return
         guild, member = resolved
+        if not await self._licensed(guild.id):  # the license gate comes before any routing
+            return
         self._dm_note_footer(message, len(shared), guild)
         await self._personal_message(message, guild, member)
 
@@ -2949,7 +3012,7 @@ class SecretaryBot(
     async def _import_all(self) -> None:
         for guild in list(self.guilds):
             await asyncio.to_thread(self.team.current, guild.id)
-            if not self.team.enabled(guild.id, "memory"):
+            if not await self._licensed(guild.id) or not self.team.enabled(guild.id, "memory"):
                 continue
             targets = await self._import_targets(guild)
             res = await self.importer.run_guild(guild.id, targets)
@@ -3297,6 +3360,7 @@ class SecretaryBot(
             )
         except Exception:
             logger.warning("could not compute the role hierarchy scope", exc_info=True)
+        allowed, vis = self.sharing.with_shared_docs(guild.id, allowed, vis)  # org uploads
         return MemoryTools(
             self.memory_store,
             guild.id,
@@ -3347,6 +3411,7 @@ class SecretaryBot(
             )
         except Exception:
             logger.warning("could not compute the room hierarchy scope", exc_info=True)
+        allowed, vis = self.sharing.with_shared_docs(guild.id, allowed, vis)  # org uploads
         return MemoryTools(
             self.memory_store,
             guild.id,

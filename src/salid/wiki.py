@@ -418,6 +418,8 @@ class WikiTools:
         self.memory, self.repo, self.client, self.model = memory, repo, client, model
         self.lang, self.now, self.state, self.request_id = lang, now, state, request_id
         self.hooks = hooks
+        # other workspaces' public pages shared by a ShareLink: () -> [(WikiPage, workspace name)]
+        self.shared: Callable[[], list] | None = None
 
     # ---- scope
     def _readable(self) -> frozenset[int]:
@@ -457,13 +459,37 @@ class WikiTools:
     def wiki_search(self, query: str) -> dict:
         terms = _terms(query)
         found = find_pages(self._visible_pages(), query)[:5]
-        if not found:
+        extra = self._shared_hits(query, terms)
+        if not found and not extra:
             return {"count": 0, "pages": [], "note": "no wiki page matches; search the chat"}
-        return {
-            "count": len(found),
-            "pages": [{**self._view(p), "snippet": snippet_for(p, terms)} for _, p in found],
+        pages = [{**self._view(p), "snippet": snippet_for(p, terms)} for _, p in found]
+        out = {
+            "count": len(found) + len(extra),
+            "pages": pages + extra,
             "hint": "call wiki_get(topic) for the full page and mention updated_at",
         }
+        if extra:
+            out["note"] = "pages with shared_from come from another workspace (read-only)"
+        return out
+
+    def _shared_hits(self, query: str, terms: list[str]) -> list[dict]:
+        """Public pages of workspaces that share their wiki with this one (ShareLink "wiki")."""
+        if self.shared is None:
+            return []
+        try:
+            shared = self.shared()
+        except Exception:
+            return []
+        names = {id(p): name for p, name in shared}
+        hits = find_pages([p for p, _ in shared], query)[:3]
+        return [
+            {
+                **self._view(p),
+                "snippet": snippet_for(p, terms, 400),
+                "shared_from": names.get(id(p), ""),
+            }
+            for _, p in hits
+        ]
 
     def wiki_get(self, topic: str) -> dict:
         p, err = self._pick(topic)

@@ -405,6 +405,8 @@ class PlacesCtx:
     message_id: int = 0
     message_link: str = ""
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
+    # public company places of workspaces that share places here: () -> [(Place, workspace name)]
+    shared: Callable[[], list] | None = None
 
     def can_see(self, p: Place) -> bool:
         return may_know(p, self.asker_id, self.ranks, self.viewers_of, self.audience)
@@ -558,10 +560,33 @@ class PlaceTools:
         Maps link and (to its owner / creator / an executive) who can see it. Only places the
         asker, and everyone who will hear the answer, may know."""
         hits = self._visible(query)
-        if not hits:
-            return {"status": "not_found", "note": "no place that you may know matches"}
         hits.sort(key=lambda p: (p.owner_id != self.c.asker_id, -matches(p, query)))
-        return {"count": len(hits), "places": [self._view(p) for p in hits[:5]]}
+        views = [self._view(p) for p in hits[:5]]
+        views += self._shared_views(query)
+        if not views:
+            return {"status": "not_found", "note": "no place that you may know matches"}
+        return {"count": len(views), "places": views}
+
+    def _shared_views(self, query: str) -> list[dict]:
+        """Company places other workspaces share (public ones only; see salid.sharing)."""
+        if self.c.shared is None:
+            return []
+        try:
+            rows = self.c.shared()
+        except Exception:
+            return []
+        out = []
+        for p, workspace in rows:
+            if matches(p, query):
+                out.append(
+                    {
+                        "name": p.name,
+                        "address": p.address,
+                        "maps_link": maps_link(p),
+                        "shared_from": workspace,
+                    }
+                )
+        return out[:3]
 
     def list_places(self, kind: str = "") -> dict:
         """List the places the asker (and everyone who will hear the answer) may know."""

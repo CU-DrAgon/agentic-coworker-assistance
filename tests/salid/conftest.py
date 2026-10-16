@@ -123,3 +123,10 @@ def seeded(store):
     mk(store, 4, BOB, "Bob", "PEA", "2026-09-20", 3000.0, "สาธารณูปโภค")
     mk(store, 5, BOB, "Bob", "Ice Co", "2026-10-14", 120.0, conf=0.4)
     return store
+
+
+@pytest.fixture(autouse=True)
+def _license_off(monkeypatch):
+    """Existing tests build bots without organizations: the license gate is off unless a test
+    switches it on (Settings(license_enforce=True) / SALID_LICENSE_ENFORCE=true)."""
+    monkeypatch.setenv("SALID_LICENSE_ENFORCE", "false")
