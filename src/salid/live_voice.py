@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 from google.genai import types
 
+from .captions import normalize_language
 from .i18n import resolve_lang
 from .meeting import SPEAK_COOLDOWN_S, _connected, _stop_playback
 from .mentions import tag_candidates
@@ -134,6 +135,19 @@ def set_recording(recording: bool) -> dict:
     return {}
 
 
+def set_captions(on: bool, language: str = "original") -> dict:
+    """Live captions (subtitles) in the meeting's text chat. They are OFF unless someone asks. Call
+    with on=true when people ask for captions ("เปิดซับ", "เปิดซับให้หน่อย", "turn on captions"), with
+    language "th" or "en" when they also want a translation ("แปลเป็นอังกฤษให้ด้วย", "captions in
+    Thai"), and on=false for "ปิดซับ" / "captions off". Then confirm in one short sentence.
+
+    Args:
+        on: true to show captions, false to stop them.
+        language: "original" (as spoken, default), "th" (Thai) or "en" (English).
+    """
+    return {}
+
+
 def ask_salid(question: str) -> dict:
     """Ask the full Salid text assistant when the question needs TEAM information or current web
     info: what was said or decided in meetings/chats, tasks and owners, files, receipts and
@@ -158,6 +172,7 @@ _MEETING_TOOLS = {
     "post_note": "post_note",
     "ask_consent": "ask_consent",
     "set_recording": "set_recording",
+    "set_captions": "set_captions",
 }
 
 STATE_LISTENING = "(สถานะ: กำลังฟังอยู่ ยังไม่มีใครคุยกับคุณ เงียบไว้จนกว่าจะมีคนเรียกชื่อสลิด)"
@@ -348,6 +363,8 @@ def build_instruction(
         "ห้ามเรียก set_recording และห้ามพูดว่า “ไม่จดแล้ว” ให้พูดลาสั้น ๆ ประโยคเดียว เช่น “แล้วเจอกันนะคะ” แล้วเงียบ\n"
         "- การคุยกับคนต้องเป็นเสียงเท่านั้น ห้ามส่งข้อความซ้ำสิ่งที่พูด ส่วนสิ่งที่ควรจดจริง ๆ (มติ งานที่ต้องทำพร้อมเจ้าของและกำหนดเวลา "
         "ตัวเลขที่มีคนขอให้จำ) ให้เรียก post_note บรรทัดสั้น ๆ ต่อหนึ่งเรื่อง ไม่ใช่ทุกประโยค\n"
+        "- ซับไตเติล (คำบรรยายสด) ปิดอยู่เสมอจนกว่าจะมีคนขอ: ถ้าขอเปิดซับ/แปลให้ด้วย เรียก set_captions(on=true, language) "
+        "(original/th/en) ถ้าขอปิดซับเรียก set_captions(on=false) แล้วยืนยันสั้น ๆ\n"
         "- ถ้ามีคนบอกให้ส่งมติ/สรุปการประชุมไปห้องไหน ให้เรียกเครื่องมือ set_minutes_destination แล้วยืนยันสั้น ๆ\n"
         f"วันนี้คือ {now.date().isoformat()} (วัน{THAI_DAYS[now.weekday()]}) เวลา {now:%H:%M} เขตเวลา {settings.tz}. "
         "ถ้ามีคนถามว่าวันนี้/พรุ่งนี้/เมื่อวานวันอะไร ให้ตอบจากวันที่นี้เท่านั้น ห้ามเดาจากความจำ. "
@@ -470,7 +487,7 @@ class LiveVoice:
     async def build_config(self) -> types.LiveConnectConfig:
         s, sess = self.bot.s, self.session
         qa = await self._qa_enabled()
-        fns = [set_minutes_destination, post_note, ask_consent, set_recording]
+        fns = [set_minutes_destination, post_note, ask_consent, set_recording, set_captions]
         if qa:
             fns = [ask_salid, *fns]
         decls = [
@@ -728,6 +745,11 @@ class LiveVoice:
                 return await mgr.ask_consent(
                     self.session, str(a.get("text", "")), str(a.get("medium", "text"))
                 )
+            if name == "set_captions":
+                lang = normalize_language(a.get("language", "original"))
+                if lang is None:
+                    return {"error": "language must be original, th or en"}
+                return mgr.set_captions(self.session, bool(a.get("on", False)), lang)
             return mgr.set_recording(self.session, bool(a.get("recording", True)))
 
         if name != "ask_salid":

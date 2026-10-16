@@ -37,6 +37,7 @@ from pydantic import BaseModel
 
 from meeting_scribe.audio import to_flac
 
+from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
 from .gate import GateLine, notes_from_transcript
 from .i18n import resolve_lang, t
@@ -533,6 +534,8 @@ class MeetingSession:
     note_pass_at: float = 0.0
     engaged: bool = False  # False = listening (speaks only when its name is called)
     engaged_until: float = 0.0
+    captions: CaptionState = field(default_factory=CaptionState)  # live subtitles, off by default
+    captions_busy: bool = False
 
     @property
     def key(self) -> tuple[int, int]:
@@ -705,7 +708,66 @@ class MeetingManager:
             return {"status": "ignored", "reason": "leaving the meeting; say only a short goodbye"}
         s.recording = "not_recording"
         s.transcript.lines.clear()
+        s.captions.turn_off()  # no notes means no subtitles either, unless asked for again
         return {"status": "not_recording"}
+
+    # ---- live captions (off unless asked; see salid.captions)
+    def set_captions(self, s: MeetingSession, on: bool, language: str = "original") -> dict:
+        """Switch the room's captions. An explicit request also works while not recording (the
+        text is shown, never kept)."""
+        if s.ending or s.leaving:
+            return {"error": "meeting_ending"}
+        if on:
+            s.captions.turn_on(language, self._now())
+            return {"status": "on", "language": language}
+        s.captions.turn_off()
+        return {"status": "off"}
+
+    async def _caption_flush(self, s: MeetingSession) -> None:
+        """Post the buffered lines as "**Name:** text" (translated in one cheap call when a
+        language is set). No pings. Failures are logged; captions never break the meeting."""
+        if s.captions_busy:
+            return
+        s.captions_busy = True
+        try:
+            language = s.captions.language
+            batch = s.captions.take(self._now())
+            if not batch or not s.captions.on:
+                return
+            if language != "original":
+                texts = await asyncio.to_thread(
+                    translate_lines,
+                    self.bot.llm,
+                    self.bot.s.gate_model,
+                    [x for _, x in batch],
+                    language,
+                )
+                batch = [(sp, tx) for (sp, _), tx in zip(batch, texts, strict=True)]
+            if s.ending or not s.captions.on:
+                return
+            for msg in format_captions(batch):
+                await self._post_caption(s, msg)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("caption flush failed", exc_info=True)
+        finally:
+            s.captions_busy = False
+
+    async def _post_caption(self, s: MeetingSession, text: str) -> None:
+        """To the minutes/notes channel when one was chosen, else the room's text chat."""
+        chans = []
+        if s.minutes_channel_id is not None:
+            chans.append(s.voice_channel.guild.get_channel(s.minutes_channel_id))
+        chans += [s.text_channel, s.fallback_channel]
+        for ch in chans:
+            if ch is None:
+                continue
+            try:
+                await ch.send(text, allowed_mentions=discord.AllowedMentions.none())
+                return
+            except discord.HTTPException:
+                logger.warning("could not post captions to channel %s", getattr(ch, "id", "?"))
 
     # ---- consent: a colleague asking whether this is a meeting
     async def _consent_line(self, s: MeetingSession) -> str:
@@ -1370,6 +1432,8 @@ class MeetingManager:
                 now = time.monotonic()
                 s.enqueue(s.segmenter.tick(now))
                 self._consent_tick(s, now)
+                if s.captions.due(now) and not s.captions_busy:
+                    self._spawn(s, self._caption_flush(s))
                 if now - s.started > MEETING_MAX_S:
                     asyncio.create_task(self.end(s.key, "timeout"))
                     return
@@ -1461,6 +1525,8 @@ class MeetingManager:
             s.attendee_ids.add(seg.user_id)
             await self.bot.record_voice(s.voice_channel, seg.user_id, name, text, self.bot.s.now())
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
+        if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
+            s.captions.add(name, text)  # human speech only: never Salid's own words or notes
         said = parse_wake(text)
         called = said is not None
         if called and parse_meeting_command(said) == "leave":
@@ -1776,6 +1842,7 @@ class MeetingManager:
         if s is None or s.ending:
             return
         s.ending = True
+        s.captions.turn_off()  # captions stop with the meeting
         self.sessions.pop(key, None)
         held = (s.guild_id, getattr(s.body, "index", 0))
         self._reserved.add(held)  # the body stays taken until its voice connection is let go

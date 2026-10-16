@@ -21,6 +21,7 @@ from .ack import Ack, ack_flavor, ack_text
 from .archive import make_archive
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
+from .captions import captions_tools
 from .channel_access import access_flags, hidden_channels, hidden_channels_messages
 from .chat_tools import ChatActions
 from .config import Settings
@@ -1786,6 +1787,8 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
         chat_actions = self._chat_actions(
             message, guild, asker, is_exec, setting, asyncio.get_running_loop(), secretary
         )
+        if coo_tools:  # captions: live meeting subtitles, only for someone in the voice room
+            coo_tools = [*coo_tools, *self._captions_tools(asker)]
         return {
             "language": setting,
             "memory": memory,
@@ -1796,6 +1799,16 @@ class SecretaryBot(CooMixin, BriefingMixin, ProfileMixin, DeliverMixin, MediaMix
             **({"secretary": secretary} if secretary is not None else {}),
             **({"extra_tools": coo_tools} if coo_tools else {}),
         }
+
+    def _captions_tools(self, asker) -> list:
+        """`set_captions`: only for someone sitting in the voice channel of a running meeting."""
+
+        def session_of():
+            ch = getattr(getattr(asker, "voice", None), "channel", None)
+            gid = getattr(getattr(asker, "guild", None), "id", None)
+            return self.meetings.session_in(gid, ch.id) if ch is not None else None
+
+        return captions_tools(session_of, self.meetings.set_captions)
 
     @staticmethod
     def room_message(guild, asker, channel):

@@ -331,6 +331,7 @@ async def test_join_connects_live_at_once_and_builds_the_session_config(lv):
     names = [d.name for d in cfg.tools[0].function_declarations]
     assert names == [
         "ask_salid", "set_minutes_destination", "post_note", "ask_consent", "set_recording",
+        "set_captions",
     ]  # fmt: skip
     assert "spending_summary" not in names  # no raw ledger tools in Live mode
     assert "2026-10-14" in cfg.system_instruction
@@ -511,7 +512,8 @@ async def test_ask_salid_gets_the_secretary_and_coo_tools_for_the_lone_human(lv,
     s, live = await lv.join(5)
     live.push(tool_msg("ask_salid", {"question": "ประชุมพรุ่งนี้มีอะไรบ้าง"}))
     await until(lambda: live.tool_responses)
-    assert asked["secretary"] == "SEC" and asked["extra_tools"] == ["COO"]
+    assert asked["secretary"] == "SEC" and asked["extra_tools"][0] == "COO"
+    assert [getattr(f, "__name__", f) for f in asked["extra_tools"][1:]] == ["set_captions"]
     assert asked["sec_args"] == (5, True, s.text_channel.id)
     assert asked["coo_args"] == (5, True, "MEM")
     assert "p5" in asked["profile"]  # one person: their own profile
@@ -663,7 +665,9 @@ async def test_qa_feature_off_means_no_tools_in_the_config_and_a_refusal(lv):
     await asyncio.to_thread(lv.bot.team.current, 1000)
     s, live = await lv.join(5)
     names = [d.name for d in lv.connect.configs[0].tools[0].function_declarations]
-    assert names == ["set_minutes_destination", "post_note", "ask_consent", "set_recording"]
+    assert names == [
+        "set_minutes_destination", "post_note", "ask_consent", "set_recording", "set_captions",
+    ]  # fmt: skip
     assert "ดูข้อมูลของทีมไม่ได้" in lv.connect.configs[0].system_instruction
     live.push(tool_msg("ask_salid", {"question": "อะไร"}))
     await until(lambda: live.tool_responses)
