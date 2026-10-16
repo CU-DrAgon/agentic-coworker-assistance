@@ -108,13 +108,14 @@ def collect_company(
     people: dict[int, str],
     scope: Scope,
     approvals: dict | None = None,
+    include_memory: bool = True,
 ) -> CompanyInput:
     """`channels`: channels every report reader may read; `scope`: the report audience's scope
     (which DM notes and task sources they may see)."""
     d = day.isoformat()
     dm_ids = {dm_scope(a): a for a in scope.authors if a in people}
     readable = {*channels, *dm_ids}
-    sums = memory.summaries(guild_id, readable, d, d)
+    sums = memory.summaries(guild_id, readable, d, d) if include_memory else []
     ch_rows = []
     for s in sums:
         text = render_summary(s.summary, CHANNEL_SUMMARY_CHARS)
@@ -131,7 +132,11 @@ def collect_company(
     def person(uid: int) -> PersonDay:
         return by.setdefault(uid, PersonDay(uid, people.get(uid, str(uid))))
 
-    msgs = memory.messages(guild_id, readable, d, d, limit=5000, newest_first=False)
+    msgs = (
+        memory.messages(guild_id, readable, d, d, limit=5000, newest_first=False)
+        if include_memory
+        else []
+    )
     for m in msgs:
         if m.kind == "salid" or not m.author_id or m.author_id not in people:
             continue
@@ -311,15 +316,20 @@ def person_day(
     memory: MemoryStore,
     tasks: TaskRepo,
     channels: dict[int, str],
+    include_memory: bool = True,
 ) -> dict:
     """What `user_id` did on `day`: their own messages (channels + DM notes) and their tasks."""
     d = day.isoformat()
     ids = {*channels, dm_scope(user_id)}
-    mine: list[MemoryMessage] = [
-        m
-        for m in memory.messages(guild_id, ids, d, d, limit=5000, newest_first=False)
-        if m.author_id == user_id and m.kind in ("chat", "voice", "dm")
-    ]
+    mine: list[MemoryMessage] = (
+        [
+            m
+            for m in memory.messages(guild_id, ids, d, d, limit=5000, newest_first=False)
+            if m.author_id == user_id and m.kind in ("chat", "voice", "dm")
+        ]
+        if include_memory
+        else []
+    )
     per_channel: dict[str, int] = defaultdict(int)
     for m in mine:
         per_channel["DM" if m.kind == "dm" else channels.get(m.channel_id, str(m.channel_id))] += 1

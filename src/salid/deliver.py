@@ -185,7 +185,14 @@ class DeliverMixin:
     def _channel_of_id(self, guild, member, message_id: int):
         """A channel the member can read whose log holds this message id (bare-id sources)."""
         now = self.s.now()
-        start = (now - timedelta(days=self.team.memory_retention_days(guild.id))).date().isoformat()
+        start = (
+            (
+                now
+                - timedelta(days=self.team.fresh_memory_retention_days(guild.id, fail_closed=True))
+            )
+            .date()
+            .isoformat()
+        )
         ids = {c.id for c in self._all_channels(guild) if self._can_read(c, member)}
         for rec in self.memory_store.messages(
             guild.id, ids, start, now.date().isoformat(), limit=5000

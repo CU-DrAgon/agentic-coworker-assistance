@@ -590,16 +590,16 @@ class BotGuildSettings:
     def memory_retention_days(self, guild_id: int) -> int:
         return self.current(guild_id).memory_retention_days
 
-    def fresh_memory_retention_days(self, guild_id: int) -> int:
+    def fresh_memory_retention_days(self, guild_id: int, *, fail_closed: bool = False) -> int:
         """Retention read from the store NOW, bypassing the cache. Read paths that hide expired
-        memory use this: the hub writes the store directly, so the cached value can stay
-        longer than the real one for up to the TTL. The cache is refreshed with what is read;
-        if the store cannot be read, the last known value is used."""
+        memory use ``fail_closed=True``: the hub writes the store directly, so a failed read must
+        not expose data under a stale longer cached value. Purge scheduling keeps the last known
+        value instead, because deleting data on an unknown setting would be irreversible."""
         try:
             value = self.store.get(guild_id)
         except Exception:
             logger.warning("could not read retention of guild %s", guild_id, exc_info=True)
-            return self.memory_retention_days(guild_id)
+            return MIN_RETENTION_DAYS if fail_closed else self.memory_retention_days(guild_id)
         self._cache[guild_id] = (self._clock(), value)
         return value.memory_retention_days
 

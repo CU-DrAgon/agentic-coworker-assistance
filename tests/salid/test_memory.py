@@ -1199,6 +1199,23 @@ async def test_hub_shortening_applies_to_live_tools_before_the_settings_cache_ex
     assert bot.memory_store.summaries(GUILD, {10}, "2026-10-01", "2026-10-31") == []
 
 
+async def test_hub_shortening_fails_closed_when_the_fresh_settings_read_fails(
+    bot, world, monkeypatch
+):
+    """A transient settings-store failure must not restore a stale, longer retention window.
+    Purge callers use the non-destructive last-known fallback; user-facing reads clamp to one day."""
+    topic_day(bot.memory_store, "2026-10-08", 10, "expired-secret")
+    assert bot.team.memory_retention_days(GUILD) == 90  # primes the stale cache
+    tools = await bot._memory_tools_for(world.g, member(world.g, MANAGER, manage_guild=True), 10)
+    bot.team.store.set_memory_retention_days(GUILD, 1)  # hub writes behind the bot's cache
+
+    def unavailable(_guild_id):
+        raise RuntimeError("settings backend unavailable")
+
+    monkeypatch.setattr(bot.team.store, "get", unavailable)
+    assert tools.chat_days("2026-10-01", "2026-10-14")["count"] == 0
+
+
 async def test_a_retention_change_seen_by_the_tick_also_purges(bot, world):
     old = bkk(14, 9).astimezone(UTC) - timedelta(days=60)
     bot.memory_store.add_message(mk(bot.s, 1, old))
@@ -1471,3 +1488,38 @@ def test_query_only_search_uses_its_words_when_embedding_fails(mstore, settings)
     topic_day(st, "2026-10-05", 12, "marketing plan")
     r = tools.chat_search([], query="the marketing plan please")
     assert [(h["date"], h["match"]) for h in r["hits"]] == [("2026-10-05", "keyword")]
+
+
+def test_catchup_reads_the_hub_retention_live(bot, world):
+    from salid import catchup as cu
+
+    old = "expired-catchup-secret"
+    bot.memory_store.add_message(mk(bot.s, 8001, bkk(8, 9).astimezone(UTC), old))
+    assert bot.team.memory_retention_days(GUILD) == 90
+    bot.team.store.set_memory_retention_days(GUILD, 1)
+    src = bot._catchup_sources(world.g, member(world.g, MANAGER), {10: "general"})
+    assert src.retention_days() == 1
+    result = cu.gather(src, bkk(1, 9), bkk(14, 12))
+    assert old not in json.dumps(result.as_data(bot.s.zone), ensure_ascii=False)
+
+
+def test_person_day_hides_memory_outside_current_retention(bot, world):
+    old = "expired-person-day-secret"
+    bot.memory_store.add_message(mk(bot.s, 8002, bkk(8, 9).astimezone(UTC), old, uid=MANAGER))
+    assert bot.team.memory_retention_days(GUILD) == 90
+    bot.team.store.set_memory_retention_days(GUILD, 1)
+    result = bot._my_day(world.g, member(world.g, MANAGER), date(2026, 10, 8))
+    assert old not in json.dumps(result, ensure_ascii=False)
+
+
+def test_company_report_hides_memory_outside_current_retention(bot, world, monkeypatch):
+    from salid import reports
+
+    old = "expired-company-report-secret"
+    bot.memory_store.add_message(mk(bot.s, 8003, bkk(8, 9).astimezone(UTC), old, uid=MANAGER))
+    topic_day(bot.memory_store, "2026-10-08", 10, old)
+    assert bot.team.memory_retention_days(GUILD) == 90
+    bot.team.store.set_memory_retention_days(GUILD, 1)
+    monkeypatch.setattr(reports, "build_company_report", lambda _c, _m, inp, _lang: repr(inp))
+    result = bot._report_text(world.g, {MANAGER}, date(2026, 10, 8), "en")
+    assert old not in result

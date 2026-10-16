@@ -250,6 +250,11 @@ class CooMixin:
         )
         return build_coo_tools(c)
 
+    def _memory_day_retained(self, guild_id: int, day: date) -> bool:
+        """Whether a memory day is inside the guild's current retention window."""
+        days = self.team.fresh_memory_retention_days(guild_id, fail_closed=True)
+        return day >= self.s.now().date() - timedelta(days=days)
+
     def _my_day(self, guild, member, day: date) -> dict:
         channels = {
             ch.id: ch.name
@@ -264,6 +269,7 @@ class CooMixin:
             memory=self.memory_store,
             tasks=self.tasks,
             channels=channels,
+            include_memory=self._memory_day_retained(guild.id, day),
         )
 
     # ------------------------------------------------------------- disclosure
@@ -594,6 +600,7 @@ class CooMixin:
             people=self._people(guild),
             scope=scope,
             approvals=self._approval_counts(guild.id, day),
+            include_memory=self._memory_day_retained(guild.id, day),
         )
         text = reports.build_company_report(self.llm, self.s.gemini_model, inp, lang)
         news = self._company_news_section(guild, lang)  # followed customers / competitors

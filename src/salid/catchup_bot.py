@@ -41,7 +41,7 @@ class CatchupMixin:
                 gid, a, b, statuses=("scheduled", "started", "done")
             ),
             alerts=lambda since: self.alerts.since(gid, uid, since),
-            retention_days=lambda: self.team.memory_retention_days(gid),
+            retention_days=lambda: self.team.fresh_memory_retention_days(gid, fail_closed=True),
             meeting_link=join_link,
             **kw,
         )

@@ -3105,7 +3105,9 @@ class SecretaryBot(
         """Readable, non-off channels (text, voice chat) and threads (active, and archived ones
         of readable text channels). Private threads are skipped."""
         me = guild.me
-        floor = self.s.now() - timedelta(days=self.team.memory_retention_days(guild.id))
+        floor = self.s.now() - timedelta(
+            days=self.team.fresh_memory_retention_days(guild.id, fail_closed=True)
+        )
 
         def usable(ch):
             where = self._memory_channel(ch)
@@ -3302,7 +3304,11 @@ class SecretaryBot(
         gstate = self.importer.guild_state(gid)
         cap = self.s.memory_import_images_per_day
         now = self.s.now()
-        start = (now - timedelta(days=self.team.memory_retention_days(gid))).date().isoformat()
+        start = (
+            (now - timedelta(days=self.team.fresh_memory_retention_days(gid, fail_closed=True)))
+            .date()
+            .isoformat()
+        )
         rows = await asyncio.to_thread(
             self.memory_store.messages, gid, channel_ids, start, now.date().isoformat(),
             keyword="[image:", limit=5000,
@@ -3501,7 +3507,9 @@ class SecretaryBot(
             opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
             visibility=vis,
             embedder=self.embedder,
-            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(gid),
+            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(
+                gid, fail_closed=True
+            ),
         )
 
     def _room_scope(self, guild, voice_channel, humans) -> dict[int, str]:
@@ -3562,7 +3570,9 @@ class SecretaryBot(
             opener=self._make_opener(guild, allowed, asyncio.get_running_loop()),
             visibility=vis,
             embedder=self.embedder,
-            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(gid),
+            retention_of=lambda gid=guild.id: self.team.fresh_memory_retention_days(
+                gid, fail_closed=True
+            ),
         )
 
     # ------------------------------------------------------------- digest

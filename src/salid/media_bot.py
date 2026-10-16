@@ -270,7 +270,11 @@ class MediaMixin:
         enforced by the handler. Messages that are gone get "-unread" markers."""
         gid = guild.id
         now = self.s.now()
-        start = (now - timedelta(days=self.team.memory_retention_days(gid))).date().isoformat()
+        start = (
+            (now - timedelta(days=self.team.fresh_memory_retention_days(gid, fail_closed=True)))
+            .date()
+            .isoformat()
+        )
         rows: dict[int, object] = {}
         for kw in keywords:
             for rec in await asyncio.to_thread(
@@ -384,7 +388,11 @@ class MediaMixin:
         gid = guild.id
         if channel_id is None:  # bare message id: find it among the readable records
             now = self.s.now()
-            start = (now - timedelta(days=self.team.memory_retention_days(gid))).date().isoformat()
+            start = (
+                (now - timedelta(days=self.team.fresh_memory_retention_days(gid, fail_closed=True)))
+                .date()
+                .isoformat()
+            )
             recs = await asyncio.to_thread(
                 self.memory_store.messages, gid, set(allowed), start, now.date().isoformat(),
                 limit=5000,
