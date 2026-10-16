@@ -34,6 +34,7 @@ from .channel_access import (
     public_channel_ids,
 )
 from .chat_tools import ChatActions
+from .company_brain_bot import CompanyMixin, PlaybookButton
 from .config import Settings
 from .coo import CooMixin, DisclosureButton
 from .deep_task import (
@@ -318,6 +319,7 @@ class SecretaryBot(
     TravelMixin,
     MarketsMixin,
     IdeasMixin,
+    CompanyMixin,
     CooMixin,
     BriefingMixin,
     ProfileMixin,
@@ -471,6 +473,7 @@ class SecretaryBot(
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
+        self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -490,6 +493,7 @@ class SecretaryBot(
         self._register_commands()
         self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
         self.add_dynamic_items(ApprovalButton)  # same for approval requests
+        self.add_dynamic_items(PlaybookButton)  # company-playbook suggestions for admins
         self.add_dynamic_items(SwitchButton)
         self.add_dynamic_items(CompanyButton)  # the "which company?" DM buttons
         await self.tree.set_translator(SalidTranslator())
@@ -2036,6 +2040,7 @@ class SecretaryBot(
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
@@ -2043,12 +2048,14 @@ class SecretaryBot(
             extra_tools += self._search_tools(
                 message, guild, asker, is_exec, memory, extra_tools, lang
             )
+        company = self._company_block(message, guild, asker, is_exec, question, interjection)
         return {
             "language": setting,
             "memory": memory,
             "chat_actions": chat_actions,
             "people": list(people),
             **({"profile": profile_block(profile)} if profile is not None else {}),
+            **({"company": company} if company else {}),
             **self._web_kw(guild.id),
             **({"secretary": secretary} if secretary is not None else {}),
             **({"extra_tools": extra_tools} if extra_tools else {}),

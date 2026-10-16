@@ -1434,6 +1434,7 @@ def volatile_prompt(
     language: str,
     files: bool = False,
     profile: str = "",
+    company: str = "",  # salid.company_brain.company_block
     people: list[str] | None = None,
 ) -> str:
     """The per-request tail of the system prompt: date and time, the asker's scope, the
@@ -1449,6 +1450,7 @@ def volatile_prompt(
         p += INTERJECTION_PROMPT
     if files:
         p += FILES_PROMPT + MEDIA_PROMPT
+    p += company  # company playbook data block (salid.company_brain), "" when none
     p += profile  # the asker's own preferences (salid.profiles.profile_block), "" when none
     if people is not None:
         p += MENTION_PROMPT
@@ -1476,6 +1478,7 @@ def system_prompt(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    company: str = "",  # salid.company_brain.company_block
     freetime: bool = False,
     wiki: bool = False,
     places: bool = False,
@@ -1513,6 +1516,7 @@ def system_prompt(
         language=language,
         files=files,
         profile=profile,
+        company=company,
         people=people,
     )
 
@@ -1869,6 +1873,7 @@ def build_agent(
     people: list[str] | None = None,
     coo: bool = False,
     profile: str = "",
+    company: str = "",  # salid.company_brain.company_block
     freetime: bool = False,
     wiki: bool = False,
     thinking_level: str = "LOW",
@@ -1895,6 +1900,7 @@ def build_agent(
         people=people,
         coo=coo,
         profile=profile,
+        company=company,
         freetime=freetime,
         wiki=wiki,
         places=places,
@@ -2009,6 +2015,7 @@ async def ask_async(
     people: list[str] | None = None,
     extra_tools: list | None = None,
     profile: str = "",
+    company: str = "",  # salid.company_brain.company_block
     spoken: bool = False,
     tool_overrides: list | None = None,
 ) -> Answer:
@@ -2077,6 +2084,7 @@ async def ask_async(
         people=people,
         coo="list_tasks" in tool_names,
         profile=profile,
+        company=company,
         freetime="find_free_time" in tool_names,
         wiki="wiki_search" in tool_names,
         # Spoken answers sit between a person and the sound of silence: think as little as possible.
@@ -2171,6 +2179,7 @@ def ask(
     people: list[str] | None = None,
     extra_tools: list | None = None,
     profile: str = "",
+    company: str = "",  # salid.company_brain.company_block
     spoken: bool = False,
     tool_overrides: list | None = None,
 ) -> Answer:
@@ -2197,6 +2206,7 @@ def ask(
             people=people,
             extra_tools=extra_tools,
             profile=profile,
+            company=company,
             spoken=spoken,
             tool_overrides=tool_overrides,
         )
