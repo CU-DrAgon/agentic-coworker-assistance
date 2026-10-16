@@ -446,9 +446,9 @@ class CooMixin:
         first = await asyncio.to_thread(self._claim, guild.id, key)
         if first:
             with contextlib.suppress(discord.HTTPException):
-                await message.channel.send(
-                    t("dm_notice", resolve_lang("auto", message.content or ""))
-                )
+                # in the member's private channel in a server it is not a DM: say so
+                notice = "dm_notice" if message.guild is None else "dm_notice_room"
+                await message.channel.send(t(notice, resolve_lang("auto", message.content or "")))
 
     def _claim(self, guild_id: int, key: str) -> bool:
         """True the first time `key` is claimed for the guild (survives restarts)."""

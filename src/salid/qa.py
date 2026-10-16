@@ -30,6 +30,7 @@ from .freetime import FREETIME_PROMPT
 from .gate import extract_keywords
 from .gmaps import MAPS_PROMPT
 from .i18n import resolve_lang, t
+from .ideas import IDEAS_PROMPT
 from .markets import MARKETS_PROMPT
 from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
@@ -1349,6 +1350,16 @@ def particle_of(settings: Settings) -> str:
     return str(getattr(settings, "persona_particle", "") or "ค่ะ")
 
 
+def tool_files(tools: list) -> list[tuple[str, bytes]]:
+    """Files the extra tools made for the reply (a tool function's `outbox` list; each list once)."""
+    seen: list[list] = []
+    for f in tools:
+        box = getattr(f, "outbox", None)
+        if isinstance(box, list) and not any(box is s for s in seen):
+            seen.append(box)
+    return [item for box in seen for item in box]
+
+
 def stable_prompt(
     language: str,
     memory: bool,
@@ -1361,6 +1372,7 @@ def stable_prompt(
     search: bool = False,
     travel: bool = False,
     markets: bool = False,
+    ideas: bool = False,
     web: bool = False,
     secretary: bool = False,
     chat: bool = False,
@@ -1402,6 +1414,8 @@ def stable_prompt(
         p += CURRENCY_PROMPT + FLIGHT_PROMPT
     if markets:
         p += MARKETS_PROMPT
+    if ideas:
+        p += IDEAS_PROMPT
     if web:
         p += WEB_PROMPT
     if secretary:
@@ -1469,6 +1483,7 @@ def system_prompt(
     search: bool = False,
     travel: bool = False,
     markets: bool = False,
+    ideas: bool = False,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
@@ -1485,6 +1500,7 @@ def system_prompt(
         search=search,
         travel=travel,
         markets=markets,
+        ideas=ideas,
         web=web,
         secretary=secretary,
         chat=chat,
@@ -1861,6 +1877,7 @@ def build_agent(
     search: bool = False,
     travel: bool = False,
     markets: bool = False,
+    ideas: bool = False,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -1885,6 +1902,7 @@ def build_agent(
         search=search,
         travel=travel,
         markets=markets,
+        ideas=ideas,
     )
     model_calls = 0
 
@@ -2068,6 +2086,7 @@ async def ask_async(
         search="search_everything" in tool_names,
         travel="convert_currency" in tool_names,
         markets="stock_quote" in tool_names,
+        ideas="idea_save" in tool_names,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -2123,7 +2142,7 @@ async def ask_async(
         time.monotonic() - started,
         calls,
         created,
-        list(secretary.attachments) if secretary is not None else [],
+        [*(secretary.attachments if secretary is not None else []), *tool_files(tools)],
         model_calls=model_calls,
         tool_ms=tool_ms,
         **tokens,

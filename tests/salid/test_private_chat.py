@@ -345,3 +345,21 @@ def test_salid_overwrite_only_grants_permissions_salid_is_invited_with():
     ow = private_chat.overwrites(_G(), object())[_G.me]
     allowed, _ = ow.pair()
     assert allowed.value & ~_d.Permissions(SALID_PERMISSIONS).value == 0
+
+
+async def test_the_private_note_notice_says_this_private_channel_not_a_dm(bot, g):
+    m = dm_member(g)
+    ch, *_ = await bot.ensure_private_channel(g, m)
+    from test_bot_multitenant import Msg
+
+    msg = Msg(g, ch, m, "พรุ่งนี้ผมลา")
+    msg.created_at = datetime.now(UTC)
+    msg.id = 515151
+    await bot.on_message(msg)
+    notices = [text for text, _kw in ch.sent if isinstance(text, str) and text.startswith("ℹ️")]
+    assert notices == [t("dm_notice_room", "th")]
+    assert "ในห้องส่วนตัวนี้" in notices[0] and "ทาง DM" not in notices[0]
+    assert "this private channel" in t("dm_notice_room", "en") and "DM" not in t(
+        "dm_notice_room", "en"
+    )
+    assert "ทาง DM" in t("dm_notice", "th")  # a real DM keeps its wording

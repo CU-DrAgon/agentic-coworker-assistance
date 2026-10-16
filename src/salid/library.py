@@ -3,14 +3,16 @@ organization, by category, plus web uploads.
 
 Categories: `receipts` (ledger), `contracts_docs` (files Salid read in chat: PDF / Office / image
 notes in the memory log), `minutes` (voice meeting minutes), `reports` (PDF reports Salid made),
-`wiki` (knowledge base pages) and `uploads` (files uploaded on the web).
+`wiki` (knowledge base pages), `ideas` (idea / project documents, salid.ideas) and `uploads`
+(files uploaded on the web).
 
 Who sees what (decided here in code):
 
 * org owner / admin (and super admins): every item of every connected workspace, except private
-  DM notes, which never leave Discord;
+  DM notes, which never leave Discord, and ideas marked private by their owner;
 * plain member: web uploads and items whose source channel is public in its workspace
-  (`public_channel_ids`, see salid.channel_access); never the ledger.
+  (`public_channel_ids`, see salid.channel_access); never the ledger; ideas only when the owner
+  shared them with the team.
 
 Web uploads are stored in GCS (`SALID_RECEIPT_BUCKET`, prefix `salid-docs/<org>/`) when the bucket
 is set, else under `SALID_DOCS_LOCAL_DIR`; read, categorised and summarised by Flash-Lite, kept in
@@ -35,6 +37,7 @@ from pydantic import BaseModel
 
 from . import docs as docs_mod
 from .coo_store import MINUTES
+from .ideas import IdeaRepo, library_visible, render_markdown
 from .memory_store import MemoryMessage
 from .orgs import Org, Workspace
 from .sharing import (
@@ -49,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 ORG_DOCS = "salid_org_docs"  # guild = web workspace memory id, key = doc id
 REPORTS = "salid_reports"  # guild = workspace, key = id; {title, at, uri, by, channel_id}
-CATEGORIES = ("receipts", "contracts_docs", "minutes", "reports", "wiki", "uploads")
+CATEGORIES = ("receipts", "contracts_docs", "minutes", "reports", "wiki", "ideas", "uploads")
 # ShareLink category -> library categories it releases
 SHARE_MAP = {
     "documents": ("contracts_docs", "reports", "uploads"),
@@ -221,6 +224,7 @@ class Library:
         self.docs, self.ledger, self.memory, self.guilds = docs, ledger, memory, guilds
         self.s, self.blobs, self.analyzer = settings, blobs, analyzer
         self.wiki = WikiRepo(docs)
+        self.ideas = IdeaRepo(docs)
         self._now = now or (lambda: datetime.now(UTC))
 
     # ---- channels
@@ -249,6 +253,7 @@ class Library:
         self._gather_minutes(gid, base, viewer, public, out)
         self._gather_wiki(gid, base, viewer, public, out)
         self._gather_reports(gid, base, viewer, public, out)
+        self._gather_ideas(gid, base, viewer, out)
 
     def _gather_uploads(self, ws: Workspace, base: dict, out: Gathered) -> None:
         for d in self.docs.find(ORG_DOCS, ws.memory_id):
@@ -363,6 +368,25 @@ class Library:
             )
             out.items[item.id] = item
             out.text[item.id] = p.body
+
+    def _gather_ideas(self, gid, base, viewer, out: Gathered) -> None:
+        for d in self.ideas.all(gid):
+            if not library_visible(d, viewer.exec):
+                continue
+            md = render_markdown(d, "th", owner_line=False)
+            item = DocItem(
+                id=f"discord-{gid}:idea:{d.key}",
+                title=d.title,
+                category="ideas",
+                date=d.updated_at,
+                who=d.owner_name,
+                size=len(md),
+                preview=" ".join(next(iter(s.body for _k, s in d.ordered()), "").split())[:PREVIEW],
+                tags=[s.title for _k, s in d.ordered()][:6],
+                **base,
+            )
+            out.items[item.id] = item
+            out.text[item.id] = md
 
     def _gather_reports(self, gid, base, viewer, public, out: Gathered) -> None:
         for d in self.docs.find(REPORTS, gid):

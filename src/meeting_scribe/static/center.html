@@ -255,7 +255,7 @@ th: {
   st_active:"ใช้งานอยู่", st_past_due:"ค้างชำระ", st_expired:"หมดอายุ", st_suspended:"ถูกระงับ",
   tasks:"งาน", no_tasks:"ยังไม่มีงาน", assignee:"ผู้รับผิดชอบ", due:"กำหนด", status:"สถานะ", download:"ดาวน์โหลดไฟล์", reindex:"จัดทำดัชนีค้นหาใหม่", reindexed:"จัดทำดัชนีแล้ว {n} รายการ", shared_from:"แชร์จาก {n}", total_n:"ทั้งหมด {n} รายการ", conn_ok:"เชื่อมต่อ {p} สำเร็จ", conn_err:"เชื่อมต่อไม่สำเร็จ ({e})", approve:"อนุมัติ", reject:"ปฏิเสธ", pending_req:"คำขอแพ็กเกจที่รออยู่", all_orgs:"ทุกองค์กร", no_req:"ไม่มีคำขอ", days_left:"เหลือ {n} วัน", days_over:"หมดอายุแล้ว {n} วัน", license:"แพ็กเกจ", workspaces:"พื้นที่ทำงาน", docs:"เอกสาร", members:"สมาชิก", recent:"กิจกรรมล่าสุด", no_activity:"ยังไม่มีกิจกรรม",
   onboard:"เริ่มต้นใช้งาน", ob1:"สร้างองค์กร", ob2:"เพิ่มสลิดเข้าเซิร์ฟเวอร์ Discord ของคุณ", ob3:"พิมพ์ /ตั้งค่า ใน Discord แล้ววางรหัสที่ได้ในหน้า พื้นที่ทำงาน", ob4:"เลือกว่าจะแชร์ข้อมูลระหว่างเซิร์ฟเวอร์หรือไม่", ob_go:"ไปที่ พื้นที่ทำงาน", invite:"ลิงก์เชิญสลิด",
-  cat_all:"ทั้งหมด", cat_receipts:"ใบเสร็จ/ใบแจ้งหนี้", cat_contracts_docs:"สัญญาและเอกสาร", cat_minutes:"บันทึกประชุม", cat_reports:"รายงาน", cat_wiki:"ฐานความรู้", cat_uploads:"อัปโหลด",
+  cat_all:"ทั้งหมด", cat_receipts:"ใบเสร็จ/ใบแจ้งหนี้", cat_contracts_docs:"สัญญาและเอกสาร", cat_minutes:"บันทึกประชุม", cat_reports:"รายงาน", cat_wiki:"ฐานความรู้", cat_ideas:"ไอเดียและโปรเจกต์", cat_uploads:"อัปโหลด",
   cat_places:"สถานที่", cat_ledger:"บัญชีรายรับรายจ่าย", cat_tasks:"งาน", cat_documents:"เอกสาร",
   f_ws:"พื้นที่ทำงาน", f_all_ws:"ทั้งหมด", f_from:"ตั้งแต่", f_to:"ถึง", f_search:"ค้นหา", f_search_ph:"ค้นหาชื่อหรือเนื้อหา",
   c_title:"ชื่อ", c_ws:"พื้นที่", c_date:"วันที่", c_who:"โดย", c_size:"ขนาด", no_docs:"ยังไม่มีเอกสารในหมวดนี้", no_docs_hint:"เอกสารที่สลิดอ่านใน Discord หรือที่คุณอัปโหลดจะแสดงที่นี่",
@@ -284,7 +284,7 @@ en: {
   st_active:"Active", st_past_due:"Past due", st_expired:"Expired", st_suspended:"Suspended",
   tasks:"Tasks", no_tasks:"No tasks yet", assignee:"Assignee", due:"Due", status:"Status", download:"Download file", reindex:"Rebuild search index", reindexed:"Indexed {n} items", shared_from:"Shared from {n}", total_n:"{n} items", conn_ok:"Connected {p}", conn_err:"Connection failed ({e})", approve:"Approve", reject:"Reject", pending_req:"Pending plan requests", all_orgs:"All organizations", no_req:"No requests", days_left:"{n} days left", days_over:"Expired {n} days ago", license:"License", workspaces:"Workspaces", docs:"Documents", members:"Members", recent:"Recent activity", no_activity:"No activity yet",
   onboard:"Get started", ob1:"Create an organization", ob2:"Add Salid to your Discord server", ob3:"Type /ตั้งค่า in Discord and paste the code on the Workspaces page", ob4:"Choose whether to share data between servers", ob_go:"Go to Workspaces", invite:"Salid invite link",
-  cat_all:"All", cat_receipts:"Receipts/Invoices", cat_contracts_docs:"Contracts & docs", cat_minutes:"Meeting minutes", cat_reports:"Reports", cat_wiki:"Knowledge base", cat_uploads:"Uploads",
+  cat_all:"All", cat_receipts:"Receipts/Invoices", cat_contracts_docs:"Contracts & docs", cat_minutes:"Meeting minutes", cat_reports:"Reports", cat_wiki:"Knowledge base", cat_ideas:"Ideas & projects", cat_uploads:"Uploads",
   cat_places:"Places", cat_ledger:"Ledger", cat_tasks:"Tasks", cat_documents:"Documents",
   f_ws:"Workspace", f_all_ws:"All", f_from:"From", f_to:"To", f_search:"Search", f_search_ph:"Search title or content",
   c_title:"Title", c_ws:"Workspace", c_date:"Date", c_who:"By", c_size:"Size", no_docs:"No documents in this category", no_docs_hint:"Documents Salid reads in Discord, or that you upload, appear here.",
@@ -419,7 +419,7 @@ async function start() {
 /* ---------- helpers ---------- */
 const PLAT = { discord: "D", slack: "S", clickup: "C", web: "W" };
 const platBadge = (p) => el("div", { class: "plat " + (p in PLAT ? p : "soon"), "aria-hidden": "true" }, PLAT[p] || "?");
-const CATS = ["receipts", "contracts_docs", "minutes", "reports", "wiki", "uploads"];
+const CATS = ["receipts", "contracts_docs", "minutes", "reports", "wiki", "ideas", "uploads"];
 function licBadge(l) {
   if (!l) return el("span", { class: "badge", text: "-" });
   const cls = l.status === "active" ? "ok" : l.status === "past_due" ? "warn" : "err";
@@ -794,6 +794,7 @@ function mockApi(method, path, body) {
       { id: "discord-1:note:3", title: "สัญญาเช่าสำนักงาน.pdf", category: "contracts_docs", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(20), who: "สมชาย", size: 2400000, tags: ["pdf"], preview: "สัญญาเช่า 12 เดือน ค่าเช่า 35,000 บาท/เดือน", source_url: "https://discord.com/channels/1/2/4" },
       { id: "discord-2:minutes:4", title: "ประชุมทีมขาย 12 ต.ค.", category: "minutes", workspace: "discord-2", workspace_name: "ทีมเชียงใหม่", platform: "discord", date: d(4), who: "สลิด", size: null, tags: [], preview: "เป้าไตรมาส 4: 2.4 ล้านบาท", shared_from: null },
       { id: "discord-1:report:5", title: "รายงานยอดขายเดือนกันยายน", category: "reports", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(9), who: "สลิด", size: 310000, tags: [], preview: "ยอดขายรวม 1.92 ล้านบาท เพิ่มขึ้น 8%" },
+      { id: "discord-1:idea:9", title: "แจ้งเตือน CCTV ขึ้น Apple Watch สำหรับ รปภ.", category: "ideas", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(1), who: "มาลี", size: 5200, tags: ["ปัญหาและไอเดีย", "Business Model Canvas", "SWOT", "แพ็กเกจและราคา"], preview: "แจ้งเตือนภาพจากกล้องวงจรปิดไปที่นาฬิกาของ รปภ. และนิติบุคคลคอนโด" },
       { id: "discord-1:wiki:6", title: "คู่มือพนักงานใหม่", category: "wiki", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", date: d(40), who: "มาลี", size: null, tags: [], preview: "ขั้นตอนวันแรก, ระบบ VPN, สวัสดิการ", shared_from: "ออฟฟิศกรุงเทพ" },
       { id: "web:upload:7", title: "แผนการตลาด Q4.xlsx", category: "uploads", workspace: "web", workspace_name: "Salid Web", platform: "web", date: d(2), who: "owner@example.co.th", size: 88000, tags: ["plan"], preview: "(สรุปโดย AI) แผนแคมเปญ 3 ช่วง", source_url: "" },
     ];

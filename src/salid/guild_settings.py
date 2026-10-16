@@ -5,7 +5,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets}: bool, all
+                         private_channels, maps, search, travel, markets, ideas}: bool, all
                          default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
@@ -94,6 +94,7 @@ FEATURES = (
     "search",
     "travel",
     "markets",
+    "ideas",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -160,6 +161,7 @@ class Features(BaseModel):
     markets: bool = (
         True  # stock / gold / news tools, price alerts, market line in the morning brief
     )
+    ideas: bool = True  # idea / project documents, business frameworks (BMC, SWOT...), exports
 
 
 class Channel(BaseModel):
