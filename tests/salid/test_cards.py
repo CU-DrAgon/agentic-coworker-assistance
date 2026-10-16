@@ -72,6 +72,11 @@ def test_fit_breaks_at_spaces_and_keeps_every_line_inside():
     assert all(cards.font(BOLD, f.size).getlength(line) <= 600 for line in f.lines)
 
 
+def test_two_lines_are_balanced_not_greedy():
+    f = cards.fit_text("ลาเต้เย็น หอมกรุ่น ลดพิเศษ 20%", BOLD, 952, 2, (80, 40))
+    assert f.size == 80 and f.lines == ["ลาเต้เย็น หอมกรุ่น", "ลดพิเศษ 20%"]
+
+
 def test_fit_splits_a_long_spaceless_thai_run_only_at_syllable_boundaries():
     text = "ลาเต้เย็นหอมกรุ่นลดราคาพิเศษทั้งเดือนนี้เท่านั้น"  # 40+ chars, no spaces
     f = cards.fit_text(text, BOLD, 500, 2, (96, 48))
@@ -81,9 +86,19 @@ def test_fit_splits_a_long_spaceless_thai_run_only_at_syllable_boundaries():
 
 
 def test_line_height_leaves_room_for_marks():
+    # Kanit's ascent + descent (1.5 em) already spans stacked Thai marks: no extra leading
     fnt = cards.font(BOLD, 80)
     asc, desc = fnt.getmetrics()
-    assert cards.line_height(fnt) == round((asc + desc) * 1.15)
+    assert cards.line_height(fnt) == asc + desc
+
+
+def test_shadow_keeps_white_text_readable_on_light_backgrounds():
+    f = cards.fit_text("ลดพิเศษ 20%", BOLD, 952, 1, (80, 40))
+    plain, shaded = (Image.new("RGB", (1080, 300), "white") for _ in range(2))
+    cards.draw_lines(plain, 64, 50, f, BOLD, fill="white")
+    cards.draw_lines(shaded, 64, 50, f, BOLD, fill="white", shadow=6)
+    assert plain.convert("L").getextrema()[0] == 255  # white on white: invisible
+    assert shaded.convert("L").getextrema()[0] < 160  # the shadow outlines the glyphs
 
 
 def test_drawn_block_stays_in_its_box():

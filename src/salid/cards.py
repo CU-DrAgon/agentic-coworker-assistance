@@ -18,12 +18,13 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, features
+from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, features
 
 from .pdf_report import find_fonts
 
 FONTS_DIR = Path(__file__).parent / "fonts"
-LEADING = 1.15  # line height = (ascent + descent) * LEADING
+LEADING = 1.0  # line height = (ascent + descent) * LEADING; Kanit's 1.5 em already fits Thai marks
+SHADOW_ALPHA = 170  # opacity of the soft shadow under overlay text
 JPEG_QUALITIES = (90, 85, 80)
 
 
@@ -131,6 +132,21 @@ def _wrap(text: str, f: ImageFont.FreeTypeFont, max_width: int, split: bool) -> 
     return lines
 
 
+def _balance(text: str, lines: list[str], f: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
+    """Two greedy lines re-split at the space that makes them most even (no lone last word)."""
+    words = text.split()
+    if len(lines) != 2 or len(words) < 3 or " ".join(lines) != " ".join(words):
+        return lines  # not two lines of whole words (a split word stays as it is)
+    best = lines
+    best_w = max(f.getlength(line) for line in lines)
+    for k in range(1, len(words)):
+        cand = [" ".join(words[:k]), " ".join(words[k:])]
+        widest = max(f.getlength(line) for line in cand)
+        if widest <= max_width and widest < best_w:
+            best, best_w = cand, widest
+    return best
+
+
 def fit_text(
     text: str, path: str, max_width: int, max_lines: int, sizes: tuple[int, int]
 ) -> Fitted:
@@ -142,7 +158,7 @@ def fit_text(
     for size in steps:
         f = font(path, size)
         last = size == steps[-1]
-        lines = _wrap(text, f, max_width, split=last)
+        lines = _balance(text, _wrap(text, f, max_width, split=last), f, max_width)
         widths = [f.getlength(line) for line in lines] or [0.0]
         fits = max(widths) <= max_width and len(lines) <= max_lines
         if fits or last:
@@ -161,24 +177,31 @@ def draw_lines(
     fill: str,
     align: str = "left",
     width: int = 0,
+    shadow: int = 0,
 ) -> tuple[int, int, int, int]:
-    """Draw the fitted lines with their top-left at (x, y); returns the block box. The extra
-    leading is split above and below each line so tall Thai marks stay inside it."""
+    """Draw the fitted lines with their top-left at (x, y); returns the block box. Any extra
+    leading is split above and below each line so tall Thai marks stay inside it. `shadow` > 0
+    puts a soft dark shadow (blur radius in px) under the text, for text over photos."""
     f = font(path, fitted.size)
     asc, desc = f.getmetrics()
     lh = fitted.line_height
     block_w = width or fitted.width
-    draw = ImageDraw.Draw(img)
+    spots = []
     for i, line in enumerate(fitted.lines):
         free = block_w - f.getlength(line)
         dx = 0 if align == "left" else free if align == "right" else free / 2
-        draw.text(
-            (x + dx, y + i * lh + (lh - asc - desc) // 2 + asc),
-            line,
-            font=f,
-            fill=fill,
-            anchor="ls",
+        spots.append(((x + dx, y + i * lh + (lh - asc - desc) // 2 + asc), line))
+    if shadow > 0:
+        mask = Image.new("L", img.size, 0)
+        md = ImageDraw.Draw(mask)
+        for (sx, sy), line in spots:
+            md.text((sx, sy + max(1, shadow // 3)), line, font=f, fill=SHADOW_ALPHA, anchor="ls")
+        img.paste(
+            Image.new(img.mode, img.size, 0), (0, 0), mask.filter(ImageFilter.GaussianBlur(shadow))
         )
+    draw = ImageDraw.Draw(img)
+    for xy, line in spots:
+        draw.text(xy, line, font=f, fill=fill, anchor="ls")
     return (x, y, x + block_w, y + fitted.height)
 
 

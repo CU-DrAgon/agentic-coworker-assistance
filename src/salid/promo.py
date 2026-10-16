@@ -18,9 +18,11 @@ from dataclasses import dataclass
 
 import httpx
 from google.genai import types
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel
 
+from . import cards
+from .cards import CardFonts
 from .llm import generate
 from .media import DailyBudget
 
@@ -193,3 +195,127 @@ def take_unit(budget: DailyBudget, guild_id: int, day: str) -> str:
         return "daily_limit"
     budget.add(guild_id, day, 1)
     return ""
+
+
+# ------------------------------------------------------------------ layouts
+MASTER = (1536, 2752)  # the 9:16 scene the layouts are cut from (Nano Banana 2K)
+MARGIN = 64  # side margin of every format; the content box is x in [64, 1016]
+BADGE_PAD = (32, 16)
+PRICE_RADIUS = 24
+GAP = 24
+
+
+@dataclass(frozen=True)
+class Format:
+    name: str
+    size: tuple[int, int]
+    safe_top: int
+    safe_bottom: int
+    headline: tuple[int, int]  # font sizes (max, min)
+    price: tuple[int, int]
+    cta: tuple[int, int]
+    shop: tuple[int, int]
+
+
+FORMATS: tuple[Format, ...] = (
+    Format("promo-1x1.jpg", (1080, 1080), 48, 48, (80, 40), (64, 36), (40, 32), (32, 24)),
+    Format("promo-4x5.jpg", (1080, 1350), 48, 48, (88, 44), (64, 36), (40, 32), (32, 24)),
+    # Stories / Reels / TikTok draw their own buttons over the top 14% and bottom 20%
+    Format("promo-9x16.jpg", (1080, 1920), 270, 384, (96, 48), (72, 40), (44, 32), (36, 28)),
+)
+
+
+@dataclass
+class Placed:
+    kind: str  # shop | headline | price | cta
+    box: tuple[int, int, int, int]
+
+
+def fallback_scene(photo: Photo) -> Image.Image:
+    """The original photo on a blurred, darkened copy of itself, 9:16: the scene when the AI one is
+    unavailable (product centred in the same band the AI prompt asks for)."""
+    with Image.open(io.BytesIO(photo.jpeg)) as im:
+        src = im.convert("RGB")
+    canvas = cards.cover(src, MASTER).filter(ImageFilter.GaussianBlur(40))
+    canvas = ImageEnhance.Brightness(canvas).enhance(0.65)
+    box_w, box_h = MASTER[0] - 2 * 96, int(MASTER[1] * 0.75) - int(MASTER[1] * 0.20)
+    fit = ImageOps.contain(src, (box_w, box_h), Image.Resampling.LANCZOS)
+    canvas.paste(
+        fit, (96 + (box_w - fit.width) // 2, int(MASTER[1] * 0.20) + (box_h - fit.height) // 2)
+    )
+    return canvas
+
+
+def render_format(
+    scene: Image.Image, spec: PromoSpec, fmt: Format, fonts: CardFonts
+) -> tuple[Image.Image, list[Placed]]:
+    """One format: the scene cut to size, scrims for contrast, then shop name, headline, price
+    badge and call-to-action pill. Returns the image and where each text block was drawn."""
+    w, h = fmt.size
+    content_w = w - 2 * MARGIN
+    img = cards.cover(scene, fmt.size)
+    fill, text_fill = ACCENTS[spec.accent]
+    headline = cards.drawable(spec.headline, fonts.bold)
+    price = cards.drawable(spec.price, fonts.bold)
+    cta = cards.drawable(spec.call_to_action, fonts.bold)
+    shop = cards.drawable(spec.shop_name, fonts.regular)
+    placed: list[Placed] = []
+
+    def badge(text: str, sizes: tuple[int, int]) -> cards.Badge:
+        return cards.measure_badge(text, fonts.bold, sizes, content_w, BADGE_PAD)
+
+    def text(kind: str, f: cards.Fitted, path: str, y: int) -> None:
+        """White text straight on the photo: a soft shadow keeps it readable on light areas."""
+        box = cards.draw_lines(img, MARGIN, y, f, path, fill="#FFFFFF", shadow=max(2, f.size // 12))
+        placed.append(Placed(kind, box))
+
+    def pill(kind: str, b: cards.Badge, x: int, y: int, radius: int | None = None) -> None:
+        box = cards.draw_badge(
+            img, b, x, y, fonts.bold, fill=fill, text_fill=text_fill, radius=radius
+        )
+        placed.append(Placed(kind, box))
+
+    if fmt.safe_top > 48:  # 9:16: everything stacks down from under the top safe zone
+        cards.scrim(img, 0, int(0.40 * h), 170, 0)
+        cards.scrim(img, int(0.60 * h), h, 0, 190)
+        y = fmt.safe_top + GAP
+        if shop:
+            f = cards.fit_text(shop, fonts.regular, content_w, 1, fmt.shop)
+            text("shop", f, fonts.regular, y)
+            y += f.height + 12
+        f = cards.fit_text(headline, fonts.bold, content_w, 2, fmt.headline)
+        text("headline", f, fonts.bold, y)
+        y += f.height + GAP
+        if price:
+            b = badge(price, fmt.price)
+            pill("price", b, w - MARGIN - b.w, y, PRICE_RADIUS)
+        if cta:
+            b = badge(cta, fmt.cta)
+            pill("cta", b, (w - b.w) // 2, h - fmt.safe_bottom - 40 - b.h)
+        return img, placed
+
+    # feed (4:5, 1:1): price top-right, headline and a last row (shop | call to action) at the bottom
+    cards.scrim(img, int(0.55 * h), h, 0, 190)
+    if price:
+        b = badge(price, fmt.price)
+        pill("price", b, w - MARGIN - b.w, fmt.safe_top, PRICE_RADIUS)
+    bottom = h - fmt.safe_bottom
+    cta_b = badge(cta, fmt.cta) if cta else None
+    shop_f = None
+    if shop:
+        room = content_w - (cta_b.w + GAP if cta_b else 0)
+        shop_f = cards.fit_text(shop, fonts.regular, room, 1, fmt.shop)
+    row_h = max(cta_b.h if cta_b else 0, shop_f.height if shop_f else 0)
+    row_top = bottom - row_h
+    if cta_b:
+        pill("cta", cta_b, w - MARGIN - cta_b.w, bottom - cta_b.h)
+    if shop_f:
+        text("shop", shop_f, fonts.regular, row_top + (row_h - shop_f.height) // 2)
+    f = cards.fit_text(headline, fonts.bold, content_w, 2, fmt.headline)
+    text("headline", f, fonts.bold, (row_top - GAP if row_h else bottom) - f.height)
+    return img, placed
+
+
+def render_kit(scene: Image.Image, spec: PromoSpec, fonts: CardFonts) -> list[tuple[str, bytes]]:
+    """The three JPEGs, in FORMATS order."""
+    return [(f.name, cards.to_jpeg(render_format(scene, spec, f, fonts)[0])) for f in FORMATS]
