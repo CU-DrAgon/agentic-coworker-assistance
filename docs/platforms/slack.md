@@ -44,6 +44,10 @@ display_information:
   description: Team assistant: questions, receipts and team memory
   background_color: "#2d3142"
 features:
+  app_home:
+    home_tab_enabled: false
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false  # without these two, a DM shows "Sending messages to this app has been turned off"
   bot_user:
     display_name: Salid
     always_online: true
