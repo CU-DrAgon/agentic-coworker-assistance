@@ -155,11 +155,14 @@ curl -s localhost:8080/health
 ```
 
 Requires Python 3.12 (uv installs it), ffmpeg, and ADC for anything that touches GCP.
-Salid PDF tests (`tests/salid/test_secretary.py`) need a Thai TrueType font: `pdf_report.find_fonts`
-only knows the Linux paths that `Dockerfile.salid` installs (`fonts-thai-tlwg`). On macOS run them with
-`SALID_PDF_FONT=/System/Library/Fonts/Supplemental/Ayuthaya.ttf` (built in); without it 6 PDF tests fail
-with "no TrueType font found for PDFs". Promo-kit text needs the system `libfribidi`
-(`brew install fribidi`, and `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` when uv runs pytest).
+Salid PDF tests (`tests/salid/test_secretary.py`) need a Thai TrueType font. `pdf_report.find_fonts`
+tries `SALID_PDF_FONT`, then `src/salid/fonts/Sarabun-{Regular,Bold}.ttf` (not committed; dropping them
+there works on any OS), then Linux paths (TLWG from `Dockerfile.salid`, google-sarabun, noto, freefont).
+On macOS without either, 6 PDF tests fail with `UnicodeEncodeError: 'latin-1' codec` (the fallback is
+fpdf's Latin font); run them with `SALID_PDF_FONT=/System/Library/Fonts/Supplemental/Ayuthaya.ttf`
+(built in). Homebrew libraries need `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` set where uv runs
+pytest (`uv run env DYLD_FALLBACK_LIBRARY_PATH=... pytest`): `libopus` (`brew install opus`; the
+`test_meeting.py` sink tests) and `libfribidi` (`brew install fribidi`; promo-kit Thai text).
 
 ## Known limitations — do not "fix" without asking
 
