@@ -232,7 +232,9 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
             kind: nickname (what to call them), reply_length (value short / normal / detailed),
                 language (th or en, for DMs, personal briefs and private replies), focus_add /
                 focus_remove (a topic they care about), role_note (their job, e.g. "ดูแลบัญชี"),
-                style_add / style_remove (a short instruction such as "no emoji").
+                style_add / style_remove (a short instruction such as "no emoji"), delivery
+                (value dm = send my briefings, reminders and notices by DM instead of my private
+                Salid channel; channel = back to the channel).
             value: the text (or short / normal / detailed, th / en). Empty clears nickname,
                 reply_length, language or role_note.
         """

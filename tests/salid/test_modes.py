@@ -763,8 +763,8 @@ async def test_direct_messages_use_auto(bot, world, monkeypatch):
     th = Msg(None, world.gen, author, "สวัสดี")
     for m in (en, th):
         await bot.on_message(m)
-    assert en.replies == [t("dm", "en", mention="<@999>")]
-    assert th.replies == [t("dm", "th", mention="<@999>")]
+    assert en.replies[0].startswith(t("dmg_ask", "en"))  # two shared servers: asks which company
+    assert th.replies[0].startswith(t("dmg_ask", "th"))
 
 
 # ------------------------------------------------------------------ typed language commands
@@ -978,6 +978,8 @@ def test_every_slash_command_is_bilingual(bot):
         ("ยกเลิก", "cancel"),
         ("รายงาน", "report"),
         ("ตามทัน", "catchup"),
+        ("บริษัท", "company"),
+        ("ห้องส่วนตัว", "private-chat"),
     ]
     for th_name, en_name in pairs:
         assert {th_name, en_name} <= names

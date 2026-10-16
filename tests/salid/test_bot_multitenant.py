@@ -299,10 +299,10 @@ async def test_dm_answers_only_when_exactly_one_shared_guild(bot, world):
     dm = Msg(None, FakeChannel(1), SimpleNamespace(id=STAFF, bot=False), "ยอด")
     await bot.on_message(dm)
     assert answered == [GUILD]
-    member(world.b, STAFF)  # now in both guilds: ambiguous
+    member(world.b, STAFF)  # now in both guilds: ambiguous, so Salid asks which company
     dm2 = Msg(None, FakeChannel(1), SimpleNamespace(id=STAFF, bot=False), "ยอด")
     await bot.on_message(dm2)
-    assert answered == [GUILD] and "แท็ก <@999>" in dm2.replies[0]
+    assert answered == [GUILD] and dm2.replies[0].startswith(t("dmg_ask", "th"))
 
 
 # ------------------------------------------------------------------ lifecycle
@@ -416,6 +416,10 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "memory",
         "ห้อง",
         "channels",
+        "บริษัท",
+        "company",
+        "ห้องส่วนตัว",
+        "private-chat",
         "สรุป",
         "summary",
         "รายงาน",
@@ -423,7 +427,7 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "catchup",
         "report",
     }
-    assert all(c.guild_only for c in cmds.values())
+    assert all(c.guild_only for n, c in cmds.items() if n not in ("บริษัท", "company"))
 
 
 # ------------------------------------------------------------------ digest

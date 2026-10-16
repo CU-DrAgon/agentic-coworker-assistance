@@ -89,19 +89,41 @@ def name_list(names: list[str], lang: str, shown: int = 10) -> str:
     return f"{head} {'และอีก' if lang != 'en' else 'and'} {rest} {'คน' if lang != 'en' else 'more'}"
 
 
+ROUTER = None  # async (member, text, files, view) -> DMResult | None, set by the bot
+SENT_HOOK = None  # async (member, sent message), set by the bot
+
+
 @dataclass
 class DMResult:
     ok: bool
     reason: str = ""  # "" | "closed" | "not_found" | "error"
+    message: object = None  # the sent DM
 
 
-async def send_dm(member, text: str, files=()) -> DMResult:
-    """DM `member` (None = not in the server). Never raises."""
+async def send_dm(member, text: str, files=(), view=None) -> DMResult:
+    """Reach `member` (None = not in the server): their private Salid channel when they have one
+    (the bot's ROUTER), else a DM. Never raises."""
     if member is None:
         return DMResult(False, "not_found")
+    if ROUTER is not None:
+        try:
+            routed = await ROUTER(member, text, files, view)
+        except Exception:
+            logger.warning("private channel router failed", exc_info=True)
+            routed = None
+        if routed is not None:
+            return routed
     try:
-        await member.send(text, **({"files": list(files)} if files else {}))
-        return DMResult(True)
+        kw = {"files": list(files)} if files else {}
+        if view is not None:
+            kw["view"] = view
+        sent = await member.send(text, **kw)
+        if SENT_HOOK is not None:  # the bot tags the DM with its company (salid.dm_guild)
+            try:
+                await SENT_HOOK(member, sent)
+            except Exception:
+                logger.warning("DM sent hook failed", exc_info=True)
+        return DMResult(True, message=sent)
     except discord.Forbidden:
         logger.info("DM to %s failed (DMs closed)", getattr(member, "id", "?"))
         return DMResult(False, "closed")

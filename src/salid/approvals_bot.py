@@ -13,7 +13,6 @@ The rules and storage live in `salid.approvals`.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from datetime import date, datetime
 
@@ -168,21 +167,15 @@ class ApprovalMixin:
             reason=a.reason,
             id=a.id,
         )
-        try:
-            await approver.send(text, view=view)
-        except discord.HTTPException:
-            return False
-        return True
+        return (await self.deliver_to_person(guild, approver, text, view=view)).ok
 
     async def _send_cancel_dm(self, guild, a: Approval) -> bool:
         approver = guild.get_member(a.approver_id)
         if approver is None:
             return False
         lang = self._approval_user_lang(guild.id, a.approver_id)
-        with contextlib.suppress(discord.HTTPException):
-            await approver.send(t("appr_cancelled_dm", lang, name=a.requester_name, title=a.title))
-            return True
-        return False
+        text = t("appr_cancelled_dm", lang, name=a.requester_name, title=a.title)
+        return (await self.deliver_to_person(guild, approver, text)).ok
 
     # ------------------------------------------------------------- the approver's click
     async def handle_approval(
@@ -221,8 +214,7 @@ class ApprovalMixin:
             who=getattr(interaction.user, "display_name", a.approver_name),
             note=t("appr_note", rlang, note=decided.decision_note) if decided.decision_note else "",
         )
-        with contextlib.suppress(discord.HTTPException):
-            await requester.send(text)
+        await self.deliver_to_person(guild, requester, text)
 
     # ------------------------------------------------------------- report and briefing data
     def _approval_counts(self, guild_id: int, day: date) -> dict:

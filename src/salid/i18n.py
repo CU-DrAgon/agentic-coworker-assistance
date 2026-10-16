@@ -106,6 +106,89 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Salid keeps each server's data separate. Please tag {mention} in the chat channel of "
         "the server you mean.",
     },
+    "dmg_ask": {
+        "th": "คุยเรื่องบริษัทไหนคะ?",
+        "en": "Which company is this about?",
+    },
+    "dmg_switched": {
+        "th": "ได้ค่ะ ต่อไปนี้สลิดคุยเรื่องบริษัท {name} นะคะ",
+        "en": "Done. I'll talk about {name} from now on.",
+    },
+    "dmg_confirm": {
+        "th": "เปลี่ยนไปคุยเรื่องบริษัท {name} ใช่ไหมคะ?",
+        "en": "Switch to talking about {name}?",
+    },
+    "dmg_btn_ok": {"th": "ใช่ค่ะ", "en": "Yes"},
+    "dmg_btn_no": {"th": "ยกเลิก", "en": "Cancel"},
+    "dmg_kept": {"th": "ได้ค่ะ คุยเรื่องเดิมต่อนะคะ", "en": "OK, staying on the current company."},
+    "pc_category": {"th": "คุยกับสลิด (ส่วนตัว)", "en": "Salid private chats"},
+    "pc_topic": {
+        "th": "ห้องส่วนตัวของคุณกับสลิด",
+        "en": "Your private room with Salid",
+    },
+    "pc_welcome": {
+        "th": "สวัสดีค่ะ {mention} นี่คือห้องส่วนตัวของคุณกับสลิดค่ะ "
+        "ห้องนี้เห็นแค่คุณกับสลิด (และแอดมินของเซิร์ฟเวอร์ที่มีสิทธิ์ Administrator) "
+        "คุยได้เลยไม่ต้องแท็ก สลิดจะส่งสรุป เตือนงาน และขออนุมัติมาที่นี่ด้วยค่ะ "
+        "อยากรับทาง DM แทนก็บอกได้ หรือพิมพ์ “ลบห้องส่วนตัว” เพื่อลบห้องนี้ค่ะ",
+        "en": "Hi {mention}, this is your private room with Salid. Only you and Salid can see it "
+        "(plus server admins who have the Administrator permission). Just talk, no tag needed. "
+        "Salid will send your briefings, reminders and approval requests here. Prefer DMs? Say so. "
+        'Type "delete my private channel" to remove this room.',
+    },
+    "pc_created": {
+        "th": "สร้างห้องส่วนตัวให้แล้วค่ะ {channel} (เซิร์ฟเวอร์ {server})",
+        "en": "Your private channel is ready: {channel} ({server})",
+    },
+    "pc_exists": {
+        "th": "คุณมีห้องส่วนตัวอยู่แล้วค่ะ {channel} (เซิร์ฟเวอร์ {server})",
+        "en": "You already have a private channel: {channel} ({server})",
+    },
+    "pc_failed": {
+        "th": "สร้างห้องส่วนตัวไม่สำเร็จค่ะ ลองใหม่อีกครั้งนะคะ",
+        "en": "I couldn't create the private channel. Please try again.",
+    },
+    "pc_off": {
+        "th": "แอดมินปิดห้องส่วนตัวไว้ค่ะ",
+        "en": "Private channels are switched off by the admins.",
+    },
+    "pc_cap": {
+        "th": "เซิร์ฟเวอร์นี้ห้องเต็มใกล้ขีดจำกัดของ Discord แล้ว สลิดจะส่งทาง DM แทนนะคะ",
+        "en": "This server is near Discord's channel limit, so I'll use DMs instead.",
+    },
+    "pc_cap_admin": {
+        "th": "ห้องในเซิร์ฟเวอร์ใกล้ถึงขีดจำกัดของ Discord (500) สลิดเลยหยุดสร้างห้องส่วนตัวให้สมาชิกเพิ่ม และจะส่งทาง DM แทนค่ะ",
+        "en": "The server is close to Discord's channel limit (500), so I've paused creating private "
+        "channels and will use DMs for the rest.",
+    },
+    "pc_none": {"th": "คุณยังไม่มีห้องส่วนตัวค่ะ", "en": "You don't have a private channel."},
+    "pc_delete_ask": {
+        "th": "ลบห้องส่วนตัวของคุณใช่ไหมคะ? ตอบ “ยืนยัน” เพื่อลบค่ะ",
+        "en": 'Delete your private channel? Reply "confirm" to delete it.',
+    },
+    "pc_deleted": {"th": "ลบห้องส่วนตัวให้แล้วค่ะ", "en": "Your private channel is deleted."},
+    "pc_offer": {
+        "th": "หรือจะคุยในห้องส่วนตัวในเซิร์ฟเวอร์ก็ได้นะคะ (พิมพ์ “ขอห้องส่วนตัว” ในเซิร์ฟเวอร์นั้น)",
+        "en": 'Or talk in your private channel inside the server (say "make me a private channel").',
+    },
+    "pc_offer_link": {"th": "ห้องของคุณใน {server}: {url}", "en": "Your room in {server}: {url}"},
+    "cmd_private": _bi("สร้างห้องคุยส่วนตัวกับสลิด", "Create your private chat with Salid"),
+    "dmg_footer": {"th": "— บริษัท: {name}", "en": "— Company: {name}"},
+    "dmg_current": {"th": "ตอนนี้: {name}", "en": "Now: {name}"},
+    "dmg_not_yours": {
+        "th": "ปุ่มนี้ของคนอื่นค่ะ",
+        "en": "These buttons are for someone else.",
+    },
+    "dmg_gone": {
+        "th": "ดูเหมือนคุณไม่ได้อยู่ในเซิร์ฟเวอร์นั้นแล้วค่ะ เลือกใหม่ได้เลยนะคะ",
+        "en": "You no longer seem to be in that server. Please pick again.",
+    },
+    "dmg_none": {
+        "th": "สลิดไม่พบเซิร์ฟเวอร์ที่คุณอยู่ร่วมกับสลิดค่ะ",
+        "en": "I can't find a server we share.",
+    },
+    "cmd_company": _bi("เลือกบริษัทที่สลิดจะคุยด้วยใน DM", "Choose which company Salid talks about in DMs"),
+    "cmd_company_arg": _bi("ชื่อบริษัท (ไม่ใส่ = เลือกจากปุ่ม)", "Company name (empty = pick with buttons)"),
     "welcome": {
         "th": "สวัสดีค่ะ สลิด เลขาประจำทีมค่ะ 🐱 ทักสลิดได้เลย พิมพ์หรือส่งไฟล์ รูป เสียงมาได้หมด "
         "ห้องนี้คุยกับสลิดได้เลยไม่ต้องแท็ก ห้องอื่นแท็ก {mention} หรือเรียกชื่อสลิดก็พอ ({chat})\n"

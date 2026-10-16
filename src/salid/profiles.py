@@ -28,6 +28,7 @@ KINDS = (
     "nickname",
     "reply_length",
     "language",
+    "delivery",
     "focus_add",
     "focus_remove",
     "role_note",
@@ -52,6 +53,7 @@ class Profile(BaseModel):
     nickname: str = ""
     reply_length: str | None = None  # short | normal | detailed
     language: str | None = None  # th | en
+    dm_delivery: bool = False  # proactive messages by DM instead of the private Salid channel
     focus: list[str] = Field(default_factory=list)
     role_note: str = ""
     style_notes: list[str] = Field(default_factory=list)
@@ -62,6 +64,7 @@ class Profile(BaseModel):
             self.nickname
             or self.reply_length
             or self.language
+            or self.dm_delivery
             or self.focus
             or self.role_note
             or self.style_notes
@@ -117,6 +120,14 @@ def apply_change(p: Profile, kind: str, value) -> str:
             p.reply_length = v
         else:
             return "reply_length must be short, normal or detailed"
+    elif kind == "delivery":
+        v = raw.casefold()
+        if v in ("dm", "ดีเอ็ม") or v.startswith("dm") or "ส่วนตัว" in v and "ห้อง" not in v:
+            p.dm_delivery = True
+        elif v in _CLEAR or v in ("channel", "room", "ห้อง", "ห้องส่วนตัว"):
+            p.dm_delivery = False
+        else:
+            return "delivery must be dm or channel"
     elif kind == "language":
         v = _LANG_ALIASES.get(raw.casefold(), raw.casefold())
         if v in _CLEAR:
@@ -165,7 +176,7 @@ class ProfileTools:
             self.repo.delete(self.gid, self.uid)
             return {"status": "ok", "forgotten": "all"}
         base = kind.removesuffix("_add").removesuffix("_remove")
-        fields = {"nickname", "reply_length", "language", "focus", "role_note", "style"}
+        fields = {"nickname", "reply_length", "language", "delivery", "focus", "role_note", "style"}
         if base not in fields:
             return {"error": f"unknown kind; use one of {', '.join(KINDS)} or omit for all"}
         p = self.repo.get(self.gid, self.uid)
@@ -173,6 +184,8 @@ class ProfileTools:
             p.focus = []
         elif base == "style":
             p.style_notes = []
+        elif base == "delivery":
+            p.dm_delivery = False
         else:
             setattr(p, base, None if base in ("reply_length", "language") else "")
         if p.is_empty():
