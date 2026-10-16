@@ -37,6 +37,7 @@ from pydantic import BaseModel
 
 from meeting_scribe.audio import to_flac
 
+from . import attendance as att
 from . import meeting_doc as md
 from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
@@ -593,6 +594,11 @@ class MeetingSession:
     # meeting's own text channel.
     minutes_channel_id: int | None = None
     attendee_ids: set[int] = field(default_factory=set)  # everyone who was in the room or spoke
+    # Attendance log (flag `attendance_log`): who entered / left this voice channel and when;
+    # `att_pending` = events not yet posted to the text chat (see MeetingManager._attend_flush).
+    attendance: list[att.AttendanceEvent] = field(default_factory=list)
+    att_pending: list[att.AttendanceEvent] = field(default_factory=list)
+    att_task: Any = None
     # Recording state: "unknown" (joined by itself, not known to be a meeting), "recording" or
     # "not_recording" (nothing is logged to memory, no summary). See MeetingManager.set_recording.
     recording: str = "recording"
@@ -1147,6 +1153,7 @@ class MeetingManager:
             session.attendee_ids.add(m.id)
         await self._notice(session, t(announce, session.lang))
         await self._post_state(session, t("voice_state_join", session.lang))
+        await self._attend_start(session, self._humans(channel))
         logger.info(
             "meeting started in guild %s channel %s on voice body %d (%s)",
             guild.id, channel.id, body.index, origin,
@@ -1192,6 +1199,12 @@ class MeetingManager:
             s = self.sessions.get((entered.guild.id, entered.id))
             if s is not None:  # a new arrival may greet Salid without the name
                 s.attendee_ids.add(member.id)
+                self._attend_note(s, member, "joined")
+        gone = getattr(before, "channel", None)
+        if gone is not None and gone != entered:  # left or moved out (mute / deafen: no change)
+            s = self.sessions.get((gone.guild.id, gone.id))
+            if s is not None:
+                self._attend_note(s, member, "left")
         left = getattr(before, "channel", None)
         if left is not None and not self._humans(left):
             self._cooldown.pop((left.guild.id, left.id), None)  # a new gathering: a new chance
@@ -1199,6 +1212,81 @@ class MeetingManager:
             c for c in (getattr(before, "channel", None), getattr(after, "channel", None)) if c
         }:
             self.kick(ch)
+
+    # ---- attendance log (who entered / left the room, and when)
+    def _attend_on(self, s: MeetingSession) -> bool:
+        try:
+            return bool(self.bot.team.enabled(s.guild_id, "attendance_log"))
+        except Exception:
+            return False
+
+    def _attend_name(self, s: MeetingSession, member) -> str:
+        """Salid nickname (profile) else display name; "@" is defused so a name never pings."""
+        try:
+            nick = self.bot._profile_of(s.guild_id, member.id).nickname
+        except Exception:
+            nick = ""
+        name = str(nick or getattr(member, "display_name", "") or "")
+        return name.replace("@", "@\u200b")
+
+    def _attend_event(self, s: MeetingSession, member, kind: str) -> att.AttendanceEvent:
+        return att.AttendanceEvent(
+            member.id, self._attend_name(s, member), kind, self.bot.s.now(), self._now()
+        )
+
+    def _attend_seed(self, s: MeetingSession, members) -> list[att.AttendanceEvent]:
+        """Everyone already in the room count as "joined" at the start time (no chat post)."""
+        if not self._attend_on(s):
+            return []
+        out = []
+        for m in members:
+            ev = self._attend_event(s, m, "joined")
+            if att.record(s.attendance, ev)[0]:
+                out.append(ev)
+        return out
+
+    async def _attend_start(self, s: MeetingSession, members) -> None:
+        events = self._attend_seed(s, members)
+        if events:
+            await self._attend_post(s, events)
+
+    def _attend_note(self, s: MeetingSession, member, kind: str) -> None:
+        """One enter / leave of this voice channel by a person. A leave is held back for
+        `att.REJOIN_S` so a reconnect is neither logged nor posted; events within `att.BATCH_S`
+        share one chat message."""
+        if s.ending or getattr(member, "bot", False) or not self._attend_on(s):
+            return
+        added, retracted = att.record(s.attendance, self._attend_event(s, member, kind))
+        if retracted is not None and retracted in s.att_pending:
+            s.att_pending.remove(retracted)
+        if added:
+            s.att_pending.append(s.attendance[-1])
+            if s.att_task is None or s.att_task.done():
+                s.att_task = asyncio.create_task(self._attend_flush(s))
+                s.tasks.append(s.att_task)
+
+    @staticmethod
+    def _attend_delay(ev: att.AttendanceEvent) -> float:
+        return att.REJOIN_S if ev.kind == "left" else 0.0
+
+    async def _attend_flush(self, s: MeetingSession) -> None:
+        while s.att_pending and not s.ending:
+            wake = min(e.mono + self._attend_delay(e) for e in s.att_pending)
+            await self._sleep(max(0.0, wake - self._now()) + att.BATCH_S)
+            now = self._now()
+            ready = [e for e in s.att_pending if e.mono + self._attend_delay(e) <= now]
+            s.att_pending = [e for e in s.att_pending if e not in ready]
+            if ready and not s.ending:
+                await self._attend_post(s, ready)
+
+    async def _attend_post(self, s: MeetingSession, events: list[att.AttendanceEvent]) -> None:
+        if getattr(self.bot.s, "voice_state_posts", True) and not s.ending:
+            await self._post(s, att.chat_lines(events, s.lang))
+
+    def _attendance_people(self, s: MeetingSession, ended: datetime) -> list[att.Presence]:
+        if not self._attend_on(s):
+            return []
+        return att.presences(s.attendance, ended)
 
     def kick(self, ch) -> None:
         """Start (or keep) the auto-join attempt for one channel. Rapid duplicate events for the
@@ -1412,6 +1500,7 @@ class MeetingManager:
         )  # fmt: skip
         for m in humans:
             session.attendee_ids.add(m.id)
+        self._attend_seed(session, humans)  # after a restart: counted from now, nothing posted
         try:
             for at, speaker, text in await asyncio.to_thread(
                 self._logged_lines, guild, channel, session.transcript_from or started_at
@@ -2216,6 +2305,7 @@ class MeetingManager:
                 ended_at=ended,
                 attendees=self._attendee_names(s),
                 summary=s.summary_text,
+                attendance=self._attendance_people(s, ended),
             )
             lang = s.lang
             markdown = md.render_markdown(info, md.group_turns(lines), lang)
@@ -2292,8 +2382,10 @@ class MeetingManager:
         why = t(f"end_{reason}", s.lang) if reason in END_REASONS else reason
         header = t("meet_summary_header", s.lang, reason=why)
         s.summary_text = body
-        doc = await self._minutes_doc_file(s, self.bot.s.now())
-        for i, part in enumerate(chunks(header + body, 1900)):
+        ended = self.bot.s.now()
+        doc = await self._minutes_doc_file(s, ended)
+        block = att.minutes_block(self._attendance_people(s, ended), s.lang)
+        for i, part in enumerate(chunks(header + block + body, 1900)):
             sent = await self._post_minutes(s, part, files=[doc] if i == 0 and doc else None)
             if i == 0 and sent is not None:
                 s.summary_url = getattr(sent, "jump_url", "") or ""

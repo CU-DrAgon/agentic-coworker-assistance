@@ -66,6 +66,7 @@ def test_missing_document_means_defaults(gstore):
         bizfin=True,
         link_guard=True,
         meeting_transcript_doc=True,
+        attendance_log=True,
         promo=True,
         decks=True,
     )
