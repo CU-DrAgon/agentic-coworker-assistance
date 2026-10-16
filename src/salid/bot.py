@@ -166,6 +166,7 @@ from .summary import (
 from .translate_bot import TranslateMixin
 from .travel_bot import TravelMixin
 from .voice_pool import VoicePool
+from .votes_bot import VoteButton, VoteOfferButton, VotesMixin
 from .wiki_bot import WikiMixin
 
 logger = logging.getLogger(__name__)
@@ -326,6 +327,7 @@ class SecretaryBot(
     TranslateMixin,
     FreetimeMixin,
     PollsMixin,
+    VotesMixin,
     CatchupMixin,
     WikiMixin,
     ApprovalMixin,
@@ -487,6 +489,7 @@ class SecretaryBot(
         self._viewers: dict[tuple[int, int], tuple[float, frozenset[int]]] = {}  # (guild, channel)
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._polls_init()  # polls and DM forms (salid.polls_bot)
+        self._votes_init()  # meeting votes with button ballots (salid.votes_bot)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
         self._translate_init()  # translation + auto-translate (salid.translate_bot)
@@ -526,6 +529,7 @@ class SecretaryBot(
         self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
         self.add_dynamic_items(ApprovalButton)  # same for approval requests
         self.add_dynamic_items(PlaybookButton)  # company-playbook suggestions for admins
+        self.add_dynamic_items(VoteButton, VoteOfferButton)  # vote ballots + offers
         self.add_dynamic_items(SwitchButton)
         self.add_dynamic_items(CompanyButton)  # the "which company?" DM buttons
         await self.tree.set_translator(SalidTranslator())
@@ -843,6 +847,8 @@ class SecretaryBot(
                 await self._intake(message, quiet=mode == "listen")
             return
         called = mentioned or (self._starts_with_name(message))
+        if not called and mode in ("listen", "join"):
+            self.vote_offer_soon(message)  # a small vote offer from untagged talk (salid.votes_bot)
         if called and await self._meeting_command(message):
             return
         if called and await self._snooze_command(message):
@@ -2175,6 +2181,7 @@ class SecretaryBot(
                 if interjection
                 else self._poll_form_tools(message, guild, asker, is_exec, lang, new_id())
             ),
+            *([] if interjection else self._vote_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._catchup_tools(guild, asker, memory)),
             *([] if interjection else self._meeting_doc_tools(message, guild, asker, lang, loop)),
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
@@ -2953,6 +2960,7 @@ class SecretaryBot(
         await self._scheduler_due()
         await self._coo_due()
         await self._polls_forms_due()
+        await self._votes_due()
         await self._pc_sweep()
         await self._travel_due()
         await self._markets_due()

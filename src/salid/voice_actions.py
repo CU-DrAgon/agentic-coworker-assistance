@@ -34,6 +34,8 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "post_message",
         "set_availability",
         "create_poll",
+        "call_vote",  # votes: the opener is the speaker
+        "close_vote",
         "start_form",
         "set_captions",
         "set_captions_tool",
