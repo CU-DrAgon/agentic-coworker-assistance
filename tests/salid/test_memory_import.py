@@ -519,3 +519,73 @@ async def test_backlog_marks_vanished_messages_and_unreadable_images(bot, iw, wo
     assert FakeAtt.reads == 0 and bot.image_stats["described"] == 0
     await run_import(bot)  # nothing left to retry
     assert {m.message_id: m.text for m in logged(bot)} == texts
+
+
+# ------------------------------------------------------------------ access changes start an import
+@pytest.fixture
+def access(bot, world, monkeypatch):
+    started, synced = [], []
+    monkeypatch.setattr(botmod, "IMPORT_DEBOUNCE_S", 0.01)
+    monkeypatch.setattr(bot, "_start_import", lambda: started.append(1))
+    monkeypatch.setattr(bot, "_request_sync", lambda g: synced.append(g.id))
+    return started, synced
+
+
+async def debounce_wait():
+    await asyncio.sleep(0.05)
+
+
+async def test_channel_create_requests_import(bot, world, access):
+    started, synced = access
+    await bot.on_guild_channel_create(SimpleNamespace(guild=world.g))
+    await debounce_wait()
+    assert started == [1] and synced == [GUILD]
+
+
+async def test_channel_overwrite_change_requests_import_but_other_updates_do_not(
+    bot, world, access
+):
+    started, synced = access
+    same = SimpleNamespace(guild=world.g, name="a", overwrites={})
+    await bot.on_guild_channel_update(same, SimpleNamespace(**vars(same)))
+    await debounce_wait()
+    assert started == [] and synced == []
+    changed = SimpleNamespace(guild=world.g, name="a", overwrites={"x": 1})
+    await bot.on_guild_channel_update(same, changed)
+    await debounce_wait()
+    assert started == [1] and synced == [GUILD]
+
+
+async def test_own_role_change_requests_import(bot, world, access):
+    started, synced = access
+    before = SimpleNamespace(id=ME.id, guild=world.g, roles=[1])
+    await bot.on_member_update(before, SimpleNamespace(id=ME.id, guild=world.g, roles=[1, 2]))
+    await debounce_wait()
+    assert started == [1] and synced == [GUILD]
+    other = SimpleNamespace(id=5, guild=world.g, roles=[1, 2])
+    await bot.on_member_update(before, other)  # someone else
+    await bot.on_member_update(before, SimpleNamespace(id=ME.id, guild=world.g, roles=[1]))
+    await debounce_wait()
+    assert started == [1]
+
+
+async def test_role_permission_change_requests_import_only_for_salids_role(bot, world, access):
+    started, synced = access
+    role = SimpleNamespace(id=7, guild=world.g, permissions=2)
+    world.g.me = SimpleNamespace(id=ME.id, roles=[role])
+    await bot.on_guild_role_update(SimpleNamespace(permissions=1), role)
+    await debounce_wait()
+    assert started == [1] and synced == [GUILD]
+    foreign = SimpleNamespace(id=8, guild=world.g, permissions=2)
+    await bot.on_guild_role_update(SimpleNamespace(permissions=1), foreign)  # not Salid's role
+    await bot.on_guild_role_update(SimpleNamespace(permissions=2), role)  # unchanged
+    await debounce_wait()
+    assert started == [1]
+
+
+async def test_quick_events_start_a_single_import(bot, world, access):
+    started, _ = access
+    for _ in range(4):
+        await bot.on_guild_channel_create(SimpleNamespace(guild=world.g))
+    await debounce_wait()
+    assert started == [1]

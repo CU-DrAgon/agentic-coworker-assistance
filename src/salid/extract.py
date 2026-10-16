@@ -182,6 +182,7 @@ def ingest_attachment(
         category=ex.category,
         items=ex.items,
         payment_method=ex.payment_method,
+        invoice_no=(ex.invoice_no or None),
         confidence=ex.confidence,
         notes=ex.notes,
         context=note or None,
@@ -323,3 +324,48 @@ def apply_correction(
         f"{fmt_money(r.total, r.currency, lang)} | {r.category}"
     )
     return t("corr_done", lang, id=r.id, changed=changed, now=now)
+
+
+# ---------------------------------------------------------------- void / restore by reply
+
+_VOID_WORDS = ("ซ้ำ", "ลบ", "ยกเลิก", "duplicate", "dupe", "dup", "void", "delete", "cancel")
+_RESTORE_WORDS = ("กู้คืน", "restore", "undo", "un-void", "unvoid")
+_NEGATIONS = ("ไม่", "not ", "n't", "no ")
+
+
+def parse_void_command(text: str) -> str | None:
+    """ "void" / "restore" when a short reply is just that command (e.g. "ซ้ำ", "duplicate",
+    "void", "กู้คืน"); None for anything else, including negations ("ไม่ซ้ำ", "not a duplicate")
+    and long messages (those are corrections or chat)."""
+    s = text.strip().casefold().strip(" .!?,:;\"'`~-_*")
+    if not s or len(s) > 30 or any(n in s + " " for n in _NEGATIONS):
+        return None
+    if s.startswith(_RESTORE_WORDS):
+        return "restore"
+    if s.startswith(_VOID_WORDS):
+        return "void"
+    return None
+
+
+def apply_void_command(
+    store: Store, receipt: Receipt, action: str, by: str, lang: str = "th"
+) -> str:
+    """Void (soft delete) or restore one receipt; returns the reply text."""
+    voided = (receipt.status or "active") == "void"
+    if action == "void":
+        if voided:
+            return t("corr_already_void", lang, id=receipt.id)
+        r = store.set_status(receipt.id, "void", reason="duplicate (reply)", by=by)
+        key = "corr_void_done"
+    else:
+        if not voided:
+            return t("corr_not_void", lang, id=receipt.id)
+        r = store.set_status(receipt.id, "active")
+        key = "corr_restore_done"
+    return t(
+        key,
+        lang,
+        id=r.id,
+        vendor=r.vendor or t("unknown", lang),
+        total=fmt_money(r.total, r.currency, lang),
+    )

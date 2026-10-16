@@ -25,7 +25,13 @@ def test_aggregation_math(seeded):
     assert {g["key"]: g["total"] for g in s["groups"]} == {"วัตถุดิบ": 10120.0, "ค่าเดินทาง": 250.5}
     assert s["total_fmt"] == "฿10,370.50"
     v = t.spending_summary("2026-10-01", "2026-10-31", "vendor")["groups"]
-    assert v[0] == {"key": "Makro", "total": 10000.0, "count": 2, "total_fmt": "฿10,000"}
+    assert v[0] == {
+        "key": "Makro",
+        "total": 10000.0,
+        "totals_by_currency": {"THB": 10000.0},
+        "count": 2,
+        "total_fmt": "฿10,000",
+    }
     assert [g["key"] for g in t.spending_summary("2026-10-01", "2026-10-31", "day")["groups"]] == [
         "2026-10-01",
         "2026-10-05",
@@ -59,7 +65,13 @@ def test_non_exec_scoped_in_every_tool(seeded):
     t = LedgerTools(seeded, GUILD, forced_submitter_id=ALICE)
     assert t.spending_summary("2026-01-01", "2026-12-31")["total"] == 1250.5
     assert t.spending_summary("2026-01-01", "2026-12-31", "submitter")["groups"] == [
-        {"key": "Alice", "total": 1250.5, "count": 2, "total_fmt": "฿1,250.50"}
+        {
+            "key": "Alice",
+            "total": 1250.5,
+            "totals_by_currency": {"THB": 1250.5},
+            "count": 2,
+            "total_fmt": "฿1,250.50",
+        }
     ]
     assert {
         r["submitter"]
@@ -151,11 +163,19 @@ def test_exec_sees_everything(seeded, settings):
     assert "ไม่ใช่ผู้บริหาร" not in llm.requests[0].config.system_instruction
 
 
-def test_tools_are_the_four_ledger_tools(seeded, settings):
+def test_tools_are_the_ledger_tools(seeded, settings):
     llm = scripted(text_resp("ok"))
     ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
     names = {d.name for t in llm.requests[0].config.tools for d in t.function_declarations}
-    assert names == {"spending_summary", "list_receipts", "compare_periods", "flagged_receipts"}
+    assert names == {
+        "spending_summary",
+        "list_receipts",
+        "compare_periods",
+        "flagged_receipts",
+        "find_duplicates",
+        "void_receipts",
+        "restore_receipts",
+    }
 
 
 def test_bad_tool_args_return_error_to_model(seeded, settings):

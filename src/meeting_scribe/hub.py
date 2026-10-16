@@ -190,6 +190,7 @@ class ActivityItem(BaseModel):
     at: str  # ISO 8601, UTC
     status: str  # receipt: ok | review; meeting: the meeting status
     amount: float | None = None
+    currency: str | None = None  # ISO code of `amount`; missing counts as THB
 
 
 @router.get("/api/hub/me")
@@ -275,8 +276,16 @@ def build_activity(
 ) -> list[ActivityItem]:
     items: list[tuple[datetime, ActivityItem]] = []
     try:
-        for r in salid_store.recent(guild_id, limit):
-            flagged = r.confidence < 0.7 or r.total is None or r.possible_duplicate_of is not None
+        from salid.store import duplicate_extras
+
+        dup_ids = {r.id for r in duplicate_extras(salid_store.duplicate_groups(guild_id))}
+        for r in salid_store.recent(guild_id, limit):  # void receipts are excluded
+            flagged = (
+                r.confidence < 0.7
+                or r.total is None
+                or r.possible_duplicate_of is not None
+                or r.id in dup_ids
+            )
             at = _utc(r.created_at or r.effective_date)
             items.append(
                 (
@@ -287,6 +296,7 @@ def build_activity(
                         at=at.isoformat(timespec="seconds"),
                         status="review" if flagged else "ok",
                         amount=r.total,
+                        currency=(r.currency or "THB").upper(),
                     ),
                 )
             )

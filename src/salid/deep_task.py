@@ -13,6 +13,7 @@ Gemini CLI is an external Node binary (not installed by uv); its path comes from
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import json
 import logging
@@ -21,15 +22,17 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 
 from .config import Settings
 from .i18n import resolve_lang, t
 from .models import Receipt
-from .store import Store
+from .store import Store, cur_of
 
 logger = logging.getLogger(__name__)
 
@@ -106,21 +109,27 @@ def _aggregates(rows: list[Receipt]) -> dict:
     """Pre-computed numbers so the model cites figures instead of doing arithmetic."""
 
     def tally(key):
-        acc: dict[str, list] = defaultdict(lambda: [0.0, 0])
+        acc: dict[str, dict] = {}
         for r in rows:
-            a = acc[key(r)]
-            a[0] += r.total or 0.0
-            a[1] += 1
-        return {k: {"total": round(t, 2), "count": c} for k, (t, c) in sorted(acc.items())}
+            a = acc.setdefault(key(r), {"by": {}, "count": 0})
+            c = cur_of(r)
+            a["by"][c] = a["by"].get(c, 0.0) + (r.total or 0.0)
+            a["count"] += 1
+        return {k: _entry(a["by"], a["count"]) for k, a in sorted(acc.items())}
 
     by_month_cat: dict[str, dict] = defaultdict(dict)
     for (month, cat), v in tally_pairs(rows).items():
         by_month_cat[month][cat] = v
     vendors = tally(lambda r: r.vendor or "(ไม่ทราบ)")
-    top = dict(sorted(vendors.items(), key=lambda kv: -kv[1]["total"])[:20])
+    top = dict(
+        sorted(vendors.items(), key=lambda kv: -sum(kv[1]["totals_by_currency"].values()))[:20]
+    )
     return {
-        "currency_note": "totals are THB; receipts with a missing total count as 0",
-        "overall": {"total": round(sum(r.total or 0 for r in rows), 2), "count": len(rows)},
+        "currency_note": (
+            "amounts are per currency (totals_by_currency); NEVER add different currencies and do "
+            "not convert; a missing currency counts as THB; a missing total counts as 0"
+        ),
+        "overall": tally(lambda r: "all").get("all", _entry({}, 0)),
         "by_month": tally(lambda r: r.effective_date[:7]),
         "by_month_and_category": dict(sorted(by_month_cat.items())),
         "by_category": tally(lambda r: r.category),
@@ -135,17 +144,27 @@ def _aggregates(rows: list[Receipt]) -> dict:
 
 
 def tally_pairs(rows: list[Receipt]) -> dict[tuple[str, str], dict]:
-    acc: dict[tuple[str, str], list] = defaultdict(lambda: [0.0, 0])
+    acc: dict[tuple[str, str], dict] = {}
     for r in rows:
-        a = acc[(r.effective_date[:7], r.category)]
-        a[0] += r.total or 0.0
-        a[1] += 1
-    return {k: {"total": round(t, 2), "count": c} for k, (t, c) in acc.items()}
+        a = acc.setdefault((r.effective_date[:7], r.category), {"by": {}, "count": 0})
+        c = cur_of(r)
+        a["by"][c] = a["by"].get(c, 0.0) + (r.total or 0.0)
+        a["count"] += 1
+    return {k: _entry(a["by"], a["count"]) for k, a in acc.items()}
+
+
+def _entry(by: dict[str, float], count: int) -> dict:
+    by = {c: round(v, 2) for c, v in sorted(by.items())}
+    return {
+        "total": next(iter(by.values())) if len(by) == 1 else (0.0 if not by else None),
+        "totals_by_currency": by,
+        "count": count,
+    }
 
 
 TASK_TEMPLATE = """# งานจากผู้บริหาร (สลิด)
 
-วันนี้: {today} ({tz}). ข้อมูลทั้งหมดเป็นบาท (THB).
+วันนี้: {today} ({tz}). ยอดเงินแยกตามสกุล (totals_by_currency): ห้ามบวกรวมเงินต่างสกุล ห้ามแปลงอัตราแลกเปลี่ยน ให้รายงานแยกทีละสกุล (ไม่ระบุสกุล = THB).
 
 ## โจทย์
 {task}
@@ -319,7 +338,38 @@ def _read_report(ws: Path) -> str | None:
     return p.read_bytes()[:MAX_REPORT_BYTES].decode("utf-8", errors="replace").strip() or None
 
 
-def _run(cmd: list[str], env: dict, cwd: Path, timeout: float) -> tuple[int, str, str]:
+class DeepCancelled(DeepTaskError):
+    """The task was cancelled on request (not a failure)."""
+
+
+class DeepHandle:
+    """Lets another thread / task stop a running deep task: kills the Gemini CLI process group."""
+
+    def __init__(self) -> None:
+        self.proc: subprocess.Popen | None = None
+        self.cancelled = False
+        self._lock = threading.Lock()
+
+    def attach(self, proc) -> None:
+        with self._lock:
+            self.proc = proc
+            if self.cancelled:  # cancelled before the process existed
+                self._kill()
+
+    def cancel(self) -> None:
+        with self._lock:
+            self.cancelled = True
+            self._kill()
+
+    def _kill(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(self.proc.pid, signal.SIGKILL)
+
+
+def _run(
+    cmd: list[str], env: dict, cwd: Path, timeout: float, handle: DeepHandle | None = None
+) -> tuple[int, str, str]:
     proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
         cmd,
         cwd=cwd,
@@ -330,12 +380,16 @@ def _run(cmd: list[str], env: dict, cwd: Path, timeout: float) -> tuple[int, str
         text=True,
         start_new_session=True,
     )
+    if handle is not None:
+        handle.attach(proc)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         proc.communicate()
         raise DeepTaskError(f"งานใหญ่ใช้เวลานานเกิน {int(timeout)} วินาที จึงยกเลิก") from None
+    if handle is not None and handle.cancelled:
+        raise DeepCancelled("cancelled")
     return proc.returncode, out, err
 
 
@@ -346,15 +400,19 @@ def run_deep_task(
     *,
     guild_id: int,
     submitter_id: int | None = None,
-    runner=_run,
+    runner=None,
     lang: str = "th",
+    handle: DeepHandle | None = None,
 ) -> DeepResult:
     """Run one deep task on `guild_id`'s ledger only. `submitter_id` narrows the exported data
     further (None = the whole guild: execs only).
 
     `runner(cmd, env, cwd, timeout) -> (returncode, stdout, stderr)` is injectable for tests.
     `lang` (th / en / auto) is the report language and the language of messages and errors.
+    `handle` lets the caller cancel the run (kills the CLI process, raises `DeepCancelled`).
     """
+    if runner is None:
+        runner = partial(_run, handle=handle) if handle is not None else _run
     msg_lang = resolve_lang(lang, task)
     if not settings.gemini_cli_path:
         raise DeepTaskError(t("deep_disabled", msg_lang))

@@ -107,6 +107,14 @@ low-confidence or duplicate receipts, and replies in Thai. Executives ask questi
 ("how much did we spend on ingredients this week?") and get answers from ledger tool calls, plus an
 optional daily digest. Non-executives only see their own receipts.
 
+Duplicate bills (the same invoice sent twice, e.g. a PDF and a screenshot) are detected by one rule:
+same total and currency, dates within 3 days, and a similar vendor or the same invoice number.
+Ask Salid "which bills are duplicates?" and it lists each group (which copy stays, which would be
+deducted, the amount) and asks for confirmation; after an executive confirms, the extra copies are
+**voided** (soft delete: excluded from every total, list, digest and export, never hard-deleted,
+reversible with "restore"). Replying "ซ้ำ" / "duplicate" to a receipt reply voids it, "กู้คืน" /
+"restore" brings it back. The daily digest shows "possible duplicates awaiting review".
+
 **Multi-tenant.** Any Discord server (guild) can add Salid with the public invite link and gets its own
 isolated ledger and settings with no technical setup. The tenant key is the guild id: every receipt,
 dedupe check, Q&A tool, digest, deep-task export and hub view is scoped to one guild.
@@ -119,6 +127,15 @@ opens the private one-time link (valid 15 minutes) to manage the server in the h
 Google. Executives are the owner, members with Administrator or Manage Server, members with a role in the
 server's executive role names (default `ผู้บริหาร`, `Executive`) and `SALID_EXEC_USER_IDS`.
 
+- **Files to Salid (agent).** Send Salid an image, PDF or small text file (up to 4 files, 15 MB each, 20 MB
+  total) by @mention, name, reply, DM, in a chat-mode channel or inside the 3-minute conversation window. The
+  Google ADK agent (Gemini) reads the files itself, says what is inside, and decides what to do next:
+  receipts, tax invoices and transfer slips are recorded in the ledger (tool `record_receipt`, bound in code
+  to that message, author and server, honouring the `receipts` switch; replying to Salid's message still
+  corrects the receipt), documents, screenshots and charts are summarised with team memory and 1-3 suggested
+  next steps, questions written in an image are answered, and heavy analysis can start a deep task
+  (`start_deep_task`, executives only, `deep_tasks` switch). Receipt channels (and unaddressed images
+  elsewhere) keep the direct receipt pipeline.
 - **Channel modes** (`/โหมด` or `/mode`, or the hub's "โหมดของแต่ละห้อง"): per channel, `🔇 off` (ignore the
   channel), `👂 listen` (receipts get an emoji reaction only; an @mention gets 👂), `🙋 call` (default:
   answers when @mentioned or called by name, `สลิด` and misspellings but not `สลิป`; for 3 minutes
@@ -135,6 +152,14 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   `unsnooze`, `wake up`, `come back`. Slash commands have Thai names with English aliases (`/โหมด` `/mode`,
   `/ภาษา` `/language`, `/เข้าประชุม` `/join`, `/ออกประชุม` `/leave`, `/ตั้งค่า` `/setup`). The name is recognised in
   Latin letters too ("hey salid, what did we spend?").
+- **Deleting and cancelling.** Reply to one of Salid's messages with just `ลบ` / `ลบข้อความ` / `ยกเลิกข้อความ` /
+  `เอาออก` / `delete` / `remove` / `unsend` and Salid deletes it (all chunks of a long answer, tracked for about
+  24 h), then reacts 👍. Allowed for the person Salid was answering, server managers and executives. On a receipt
+  reply `ลบ` / `ยกเลิก` voids the receipt (restorable); `ลบข้อความ` / `delete message` also deletes Salid's
+  receipt message. `@Salid ยกเลิกงาน` / `cancel task` or `/ยกเลิก` `/cancel` stops the running deep task (kills
+  the Gemini CLI process) for whoever started it, managers and executives.
+- **Currencies.** Amounts are never added across currencies: summaries return `totals_by_currency`
+  (`total` only when a single currency is present), no FX conversion; a receipt with no currency counts as THB.
 - **Reply language** (`/ภาษา` or `/language`, `@Salid พูดภาษาอังกฤษ` / `speak English` / `English please`,
   `พูดไทย` / `speak Thai`, `ภาษาอัตโนมัติ` / `auto language`, or the hub's per-channel language select and the
   server default): `th` (default, the old behaviour), `en`, or `auto` (answer in the language of the message:
@@ -304,7 +329,7 @@ the Cloud Run pricing page for asia-southeast1).
 
 ## Salid command center (`/hub`)
 
-A Thai web page in the same app and Cloud Run service, multi-guild. Anyone signs in with Google (any
+A bilingual (Thai / English) web page in the same app and Cloud Run service, multi-guild. A TH | EN toggle in the header switches every string without a reload (choice kept in `localStorage`, default from the browser language: `th*` = Thai, else English); the dictionary is an inline JSON block in `static/hub.html` and a test checks both languages have the same keys. Anyone signs in with Google (any
 verified account); a guild switcher at the top lists the servers that account administers. Per server:
 the latest receipts, Salid expense Q&A as an executive, feature switches (receipts, Q&A, daily digest,
 deep tasks), receipt/ask/digest channels picked from the channel list the bot synced, the digest time and

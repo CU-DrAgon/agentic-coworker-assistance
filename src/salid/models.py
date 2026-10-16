@@ -28,6 +28,9 @@ class ReceiptExtraction(BaseModel):
     total: float | None = None
     category: Category = "อื่นๆ"
     items: list[Item] = Field(default_factory=list)
+    invoice_no: str | None = Field(
+        None, description="invoice / receipt / tax-invoice number printed on the document, or null"
+    )
     payment_method: str | None = None
     confidence: float = Field(0.0, description="0-1 confidence the extraction is correct")
     notes: str | None = None
@@ -57,4 +60,9 @@ class Receipt(BaseModel):
     context: str | None = None
     possible_duplicate_of: int | None = None
     created_at: str = ""
+    invoice_no: str | None = None
+    status: str = "active"  # "active" | "void" (soft delete: counted nowhere, never hard-deleted)
+    void_reason: str | None = None
+    voided_by: str | None = None
+    voided_at: str | None = None
     original_uri: str | None = None  # gs:// URI of the archived original (optional)

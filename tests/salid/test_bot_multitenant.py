@@ -132,7 +132,15 @@ async def test_other_channels_need_a_mention_with_a_file(bot, world):
     await bot.on_message(Msg(world.a, general, u, "รูป", [photo()], mention=True))
     txt = Att(filename="n.txt", content_type="text/plain", size=1)
     await bot.on_message(Msg(world.a, general, u, "อ่านนี่", [txt], mention=True))
-    assert bot.calls == [("intake", GUILD), ("answer", GUILD)]  # a .txt mention is a question
+    # @mention + a file goes to the agent (it reads the file and decides); a .txt is one too
+    assert bot.calls == [("answer", GUILD), ("answer", GUILD)]
+
+
+async def test_mention_with_a_file_is_direct_intake_only_when_qa_is_off(bot, world):
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features={"qa": False}), "x")
+    u = member(world.a, STAFF)
+    await bot.on_message(Msg(world.a, world.a.text_channels[0], u, "รูป", [photo()], mention=True))
+    assert bot.calls == [("intake", GUILD)]
 
 
 async def test_configured_channels_still_work_and_are_per_guild(bot, world):
@@ -212,7 +220,9 @@ async def test_deep_task_runs_on_the_asking_guild(bot, world, monkeypatch):
     del bot._answer
     await bot._answer(msg, world.b, msg.author)  # the owner is an executive
     await asyncio.gather(*bot._deep_tasks)
-    assert seen == [{"guild_id": OTHER_GUILD, "lang": "th"}]
+    assert [{k: v for k, v in kw.items() if k != "handle"} for kw in seen] == [
+        {"guild_id": OTHER_GUILD, "lang": "th"}
+    ]
 
 
 async def _append(lst, v):
@@ -325,6 +335,7 @@ class Interaction:
     def __init__(self, guild, user):
         self.guild, self.user, self.sent = guild, user, []
         self.response = SimpleNamespace(send_message=self._send)
+        self.followup = SimpleNamespace(send=self._send)
 
     async def _send(self, text, ephemeral=False):
         self.sent.append((text, ephemeral))
@@ -334,8 +345,11 @@ async def test_setup_command_gives_an_ephemeral_one_time_link(bot, world):
     bot.s = bot.s.model_copy(update={"hub_url": "https://hub.example/"})
     it = Interaction(world.a, member(world.a, MANAGER, manage_guild=True))
     await bot.handle_setup(it)
-    ((text, ephemeral),) = it.sent
-    assert ephemeral is True and "https://hub.example/hub?link=" in text
+    (text, ephemeral), (hidden, hidden_ephemeral) = it.sent  # the link, then the channel check
+    assert (
+        ephemeral is True and hidden_ephemeral is True and "https://hub.example/hub?link=" in text
+    )
+    assert hidden == t("hidden_none", "th")
     code = text.split("link=")[1].split()[0]
     doc = bot.guilds_store.client.collection("salid_link_codes").docs[code]
     assert doc["guild_id"] == GUILD and doc["discord_user_id"] == MANAGER and not doc["used"]
@@ -362,6 +376,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
     bot._register_commands()
     cmds = {c.name: c for c in bot.tree.get_commands()}
     assert set(cmds) == {
+        "ยกเลิก",
+        "cancel",
         "ตั้งค่า",
         "setup",
         "เข้าประชุม",
@@ -374,6 +390,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "language",
         "ความจำ",
         "memory",
+        "ห้อง",
+        "channels",
     }
     assert all(c.guild_only for c in cmds.values())
 

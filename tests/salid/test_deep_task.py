@@ -94,7 +94,11 @@ def test_exec_export_has_everything_and_user_export_is_scoped(seeded, ds):
     assert "Bob" in f1.seen["csv"] and f1.seen["agg"]["overall"]["total"] == 13370.5
     run_deep_task(ds, seeded, "t", guild_id=GUILD, submitter_id=ALICE, runner=f2)
     assert "Bob" not in f2.seen["csv"] and "Makro" in f2.seen["csv"]
-    assert f2.seen["agg"]["overall"] == {"total": 1250.5, "count": 2}
+    assert f2.seen["agg"]["overall"] == {
+        "total": 1250.5,
+        "totals_by_currency": {"THB": 1250.5},
+        "count": 2,
+    }
     assert "Bob" not in json.dumps(f2.seen["agg"], ensure_ascii=False)
 
 

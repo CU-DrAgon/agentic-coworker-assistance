@@ -517,3 +517,94 @@ def test_hub_memory_status_shows_import_progress(client):
     assert got["images_cap"] == 300 and got["images_done"] == 120
     assert client.get(url, headers=OTHER).status_code == 403  # other guild's admin
     assert client.get(f"/api/hub/guilds/{B}/memory-status", headers=AUTH).status_code == 403
+
+
+# ------------------------------------------------------------------ channels Salid cannot see
+def test_settings_expose_channel_visibility_for_the_hidden_channels_card(client):
+    client.guilds.upsert_guild(
+        A,
+        name="n",
+        icon_url="",
+        channels=[
+            {"id": "1", "name": "ok"},  # old synced data without the flags counts as visible
+            {"id": "2", "name": "secret", "visible": False, "readable_history": True},
+            {"id": "3", "name": "no-history", "visible": True, "readable_history": False},
+        ],
+    )
+    chans = client.get(f"/api/hub/guilds/{A}/settings", headers=AUTH).json()["channels"]
+    assert [(c["name"], c["visible"], c["readable_history"]) for c in chans] == [
+        ("ok", True, True),
+        ("secret", False, True),
+        ("no-history", True, False),
+    ]
+
+
+def test_hub_page_has_the_hidden_channels_card():
+    from importlib.resources import files
+
+    html = (files("meeting_scribe") / "static" / "hub.html").read_text(encoding="utf-8")
+    assert 'id="hidden-channels"' in html and "ห้องที่สลิดยังมองไม่เห็น" in html
+    assert "Read Message History" in html and "renderHidden" in html
+
+
+# ------------------------------------------------------------------ bilingual page (TH | EN)
+def _page_dict_and_html():
+    import json
+    import re
+    from pathlib import Path
+
+    html = (Path(__file__).parents[1] / "src/meeting_scribe/static/hub.html").read_text("utf-8")
+    m = re.search(r'<script type="application/json" id="i18n-data">(.*?)</script>', html, re.S)
+    assert m, "the dictionary must be an inline JSON block"
+    return json.loads(m.group(1)), html
+
+
+def test_hub_dictionary_has_same_keys_and_placeholders_in_both_languages():
+    import re
+
+    d, _ = _page_dict_and_html()
+    assert d
+    for key, entry in d.items():
+        assert set(entry) == {"th", "en"}, key
+        assert entry["th"].strip() and entry["en"].strip(), key
+        assert set(re.findall(r"\{(\w+)\}", entry["th"])) == set(
+            re.findall(r"\{(\w+)\}", entry["en"])
+        ), key
+
+
+def test_hub_every_used_key_exists_and_markup_has_no_hardcoded_thai():
+    import re
+
+    d, html = _page_dict_and_html()
+    used = set(re.findall(r'data-i18n(?:-html)?="([\w]+)"', html))
+    for attrs in re.findall(r'data-i18n-attr="([^"]+)"', html):
+        used |= {p.split(":")[1] for p in attrs.split(";")}
+    script = html.split('id="i18n-data"', 1)[1]
+    used |= set(re.findall(r'\bt\("(\w+)"', script))
+    used |= set(re.findall(r'\btx\((?:\$\("[\w-]+"\)|[^,()]*\([^()]*\)),\s*"(\w+)"', script))
+    used |= set(re.findall(r'\boption\([^,]+,\s*"(\w+)"\)', script))
+    used |= {
+        "f_" + f + s for f in re.findall(r'\{ id: "(\w+)"', script) for s in ("_n", "_d", "_w")
+    }
+    used |= {"mode_" + m for m in ("off", "listen", "call", "join", "chat")}
+    used |= {"lang_th", "lang_en", "lang_auto", "st_ok", "st_review", "st_recording"}
+    used |= {"st_summarizing", "st_done", "st_failed", "hc_why_hidden", "hc_why_history"}
+    used.discard("f_")  # prefix of the per-feature keys, covered above
+    assert used - set(d) == set(), used - set(d)
+    markup = html.split('<script type="application/json"', 1)[0]
+    markup = re.sub(r"<style>.*?</style>", "", markup, flags=re.S)
+    assert not re.search(r"[฀-๿]", markup.split("</head>", 1)[1])
+
+
+def test_hub_has_language_toggle_with_safe_storage_and_browser_default():
+    _, html = _page_dict_and_html()
+    assert html.count('data-lang="th"') >= 1 and html.count('data-lang="en"') >= 1
+    assert 'startsWith("th") ? "th" : "en"' in html
+    assert "localStorage.setItem(LANG_KEY" in html and "catch" in html
+    assert "toLocaleString(locale()" in html
+
+
+def test_activity_item_carries_currency(client, env):
+    from meeting_scribe.hub import ActivityItem
+
+    assert ActivityItem(kind="receipt", title="x", at="t", status="ok").currency is None
