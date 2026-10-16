@@ -25,6 +25,8 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Protocol
 
+from fastapi import FastAPI, HTTPException, Request
+
 from ..qa import MAX_FILE_BYTES
 from . import textfmt
 from .config import PlatformSettings
@@ -321,8 +323,6 @@ def _strip_self_mentions(text: str, mentionees: list[dict]) -> tuple[str, bool, 
 
 def create_app(channel_secret: str, adapter: LineAdapter, spawn: Callable | None = None):
     """The webhook app. `spawn(coro)` schedules background handling (default: asyncio task)."""
-    from fastapi import FastAPI, HTTPException, Request
-
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     tasks: set[asyncio.Task] = set()
 

@@ -247,10 +247,14 @@ class RoomBuffer:
         return out
 
     def prime(self, key: tuple, lines: list[HistLine]) -> None:
+        """Merge platform history (older lines) with what the buffer already saw."""
         q = self._q(key)
-        if not q:
-            for i, line in enumerate(lines):
-                q.append((f"h{i}", line))
+        have = {(line.at, line.text) for _, line in q}
+        merged = [(f"h{i}", x) for i, x in enumerate(lines) if (x.at, x.text) not in have]
+        merged += list(q)
+        merged.sort(key=lambda item: item[1].at)
+        q.clear()
+        q.extend(merged[-self._per :])
         self.primed.add(key)
 
 

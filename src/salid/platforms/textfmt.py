@@ -38,20 +38,22 @@ def split_text(text: str, limit: int, measure: Callable[[str], int] = len) -> li
         return []
     if measure(text) <= limit:
         return [text]
+    # with code fences: room for a closing and a reopening fence in every part
+    limit_in = max(limit - 8, 1) if "```" in text else limit
     units: list[str] = []  # smallest pieces that still keep their boundary character
     for para in re.split(r"(?<=\n\n)", text):
-        if measure(para) <= limit:
+        if measure(para) <= limit_in:
             units.append(para)
             continue
         for line in re.split(r"(?<=\n)", para):
-            if measure(line) <= limit:
+            if measure(line) <= limit_in:
                 units.append(line)
                 continue
             for word in re.split(r"(?<=[.!?。！？ ])", line):
-                units.extend([word] if measure(word) <= limit else _cut(word, limit, measure))
+                units.extend([word] if measure(word) <= limit_in else _cut(word, limit_in, measure))
     parts, cur = [], ""
     for u in units:
-        if cur and measure(cur + u) > limit:
+        if cur and measure(cur + u) > limit_in:
             parts.append(cur)
             cur = ""
         cur += u
@@ -127,7 +129,14 @@ def to_slack(text: str) -> str:
     s = _FENCE.sub(lambda m: keep("```\n" + _escape(m.group(1).strip("\n")) + "\n```"), s)
     s = _INLINE.sub(lambda m: keep("`" + _escape(m.group(1)) + "`"), s)
     s = _escape(s)
-    s = re.sub(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", r"*\1*", s, flags=re.M)  # headings -> bold
+    s = re.sub(
+        r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$", lambda m: keep(f"*{m[1]}*"), s, flags=re.M
+    )  # headings -> bold
+    s = re.sub(
+        r"\*\*(?!\s)(.+?)(?<!\s)\*\*|__(?!\s)(.+?)(?<!\s)__",
+        lambda m: keep(f"*{m[1] or m[2]}*"),
+        s,
+    )
     s = re.sub(r"^\s*([-*_])(?:\s*\1){2,}\s*$", "", s, flags=re.M)  # horizontal rules
     s = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", s, flags=re.M)  # bullets
     s = re.sub(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)", lambda m: keep(f"<{m[2]}|{m[1]}>"), s)
