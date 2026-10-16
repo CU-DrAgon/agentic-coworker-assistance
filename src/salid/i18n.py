@@ -1201,6 +1201,17 @@ CATALOG: dict[str, dict[str, str]] = {
         "higher role than yours may see it. If something is confidential, type “keep this private” "
         "and Salid will keep it to you alone.",
     },
+    "dm_notice_room": {
+        "th": "ℹ️ เรื่องงานที่คุณบอกสลิดในห้องส่วนตัวนี้ สลิดจะจดไว้ให้ทีม และผู้ที่ตำแหน่ง (role) สูงกว่าคุณอาจเห็นได้ "
+        "ถ้าเรื่องไหนเป็นความลับ พิมพ์ “เรื่องนี้เก็บเป็นความลับ” แล้วสลิดจะเก็บให้คุณคนเดียวค่ะ",
+        "en": "ℹ️ Work information you tell Salid in this private channel is noted for the team, and "
+        "people with a higher role than yours may see it. If something is confidential, type "
+        "“keep this private” and Salid will keep it to you alone.",
+    },
+    "long_answer_note": {
+        "th": "คำตอบยาว สลิดสรุปสั้นๆ ไว้ข้างบน ส่งฉบับเต็มเป็นไฟล์แนบให้แล้วค่ะ 📎",
+        "en": "This answer is long, so here is a short summary; the full text is attached. 📎",
+    },
     "dm_private_marked": {
         "th": "รับทราบค่ะ เรื่องนี้เก็บเป็นความลับ เห็นเฉพาะคุณคนเดียว สลิดจะไม่เอาไปรายงานหรือบอกใครคะ 🔒",
         "en": "Understood. That stays confidential: only you can see it, and Salid will not report "

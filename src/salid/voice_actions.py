@@ -58,6 +58,10 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "market_watch",
         "market_brief",
         "track_news_topic",
+        "idea_save",
+        "idea_export",
+        "idea_share",
+        "business_framework",
     }
 )
 
