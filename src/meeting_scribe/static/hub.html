@@ -252,6 +252,7 @@
           <label><span data-i18n="default_tone_l"></span> <select class="field" id="default-tone"></select><small data-i18n="default_tone_s"></small></label>
           <label><span data-i18n="tone_note_l"></span> <input type="text" id="tone-note" maxlength="200" data-i18n-attr="placeholder:tone_note_ph"><small data-i18n="tone_note_s"></small></label>
           <label><input type="checkbox" id="personal-settings" checked> <span data-i18n="personal_l"></span><small data-i18n="personal_s"></small></label>
+          <label><input type="checkbox" id="captions-default"> <span data-i18n="captions_default_l"></span><small data-i18n="captions_default_s"></small></label>
           <fieldset id="task-mode" style="border:0;padding:0;margin:0 0 8px">
             <legend data-i18n="task_mode_l"></legend>
             <label><input type="radio" name="task-confirm" value="notify" checked> <span data-i18n="task_mode_notify_l"></span><small data-i18n="task_mode_notify_s"></small></label>
@@ -657,6 +658,14 @@
  "personal_s": {
   "th": "ปิดแล้วทุกคนใช้การตั้งค่าขององค์กร (ภาษา โทน โหมดมอบหมายงาน)",
   "en": "When off, everyone uses the organisation's settings (language, tone, task mode)."
+ },
+ "captions_default_l": {
+  "th": "แสดงคำบรรยายสด (ข้อความที่ถอดจากเสียง) ในแชตห้องประชุมทุกครั้ง",
+  "en": "Show live captions (transcribed speech) in the meeting chat by default"
+ },
+ "captions_default_s": {
+  "th": "ปิดไว้ = เหมือนเดิม ไม่แสดงข้อความ ผู้ร่วมประชุมสั่งเปิด/ซ่อนเฉพาะประชุมนั้นได้",
+  "en": "Off = as before, nothing is shown. People in a meeting can still turn captions on or off for that meeting."
  },
  "task_mode_l": {
   "th": "โหมดมอบหมายงาน",
@@ -1940,6 +1949,7 @@ function fillSettings(s) {
   renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language, s.channel_tones, s.default_tone);
   $("tone-note").value = s.tone_note || "";
   $("personal-settings").checked = s.personal_settings !== false;
+  $("captions-default").checked = s.captions_default === "on";
   for (const r of document.querySelectorAll('input[name="task-confirm"]')) r.checked = r.value === (s.task_confirm_mode || "notify");
   $("digest-time").value = s.digest_time || "18:00";
   $("followup-time").value = s.followup_time || "10:00";
@@ -2030,6 +2040,7 @@ async function save() {
     default_tone: $("default-tone").value || "cheerful",
     tone_note: $("tone-note").value.trim(),
     personal_settings: $("personal-settings").checked,
+    captions_default: $("captions-default").checked ? "on" : "off",
     task_confirm_mode: (document.querySelector('input[name="task-confirm"]:checked') || {}).value || "notify",
     digest_time: $("digest-time").value || "18:00",
     followup_time: $("followup-time").value || "10:00",
