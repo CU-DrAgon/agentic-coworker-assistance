@@ -31,7 +31,9 @@ class PlatformSettings(BaseSettings):
         "127.0.0.1"  # put TLS in front (reverse proxy / tunnel); 0.0.0.0 in a container
     )
     line_port: int = 8091
-    line_reply_token_seconds: float = 25.0  # older than this: push instead of a reply token
+    line_reply_token_seconds: float = (
+        50.0  # older than this: push instead of a reply token (token lives ~1 min)
+    )
 
     # Telegram Bot API: long polling, so there is no public endpoint.
     telegram_bot_token: str = Field(default="", repr=False)  # from @BotFather
