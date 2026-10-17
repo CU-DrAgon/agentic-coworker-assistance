@@ -7,6 +7,7 @@ renderer. Everything here is pure: no network, no model calls, nothing written t
 
 from __future__ import annotations
 
+import contextvars
 import io
 import re
 import unicodedata
@@ -27,6 +28,7 @@ from pptx.util import Inches, Pt
 from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
 
 from .i18n import t
+from .pdf_report import DECK_FONTS
 
 MAX_TITLE_CHARS = 80
 MAX_SUBTITLE_CHARS = 120
@@ -219,14 +221,25 @@ def format_deck_date(d: date, lang: str) -> str:
     return f"{d.day} {EN_MONTHS[d.month - 1]} {d.year}"
 
 
+_DECK_LANG: contextvars.ContextVar[str] = contextvars.ContextVar("deck_lang", default="th")
+
+
 def _thai_font(rpr) -> None:
     """Put the Thai font in the complex-script slot (`a:cs`, right after `a:latin`) of a run's
-    or a chart's character properties; python-pptx does not expose it."""
-    for old in rpr.findall(qn("a:cs")):
-        rpr.remove(old)
+    or a chart's character properties; python-pptx does not expose it. zh / ja / ko get their
+    Noto Sans CJK face in the east-asian slot (`a:ea`), hi its Devanagari face in `a:cs`."""
+    for tag in ("a:ea", "a:cs"):
+        for old in rpr.findall(qn(tag)):
+            rpr.remove(old)
+    script = DECK_FONTS.get(_DECK_LANG.get())
     cs = OxmlElement("a:cs")
-    cs.set("typeface", THAI_FONT)
-    rpr.find(qn("a:latin")).addnext(cs)
+    cs.set("typeface", script if _DECK_LANG.get() == "hi" else THAI_FONT)
+    latin = rpr.find(qn("a:latin"))
+    latin.addnext(cs)
+    if script and _DECK_LANG.get() != "hi":
+        ea = OxmlElement("a:ea")
+        ea.set("typeface", script)
+        latin.addnext(ea)
 
 
 def _run(paragraph, text: str, size, color, bold: bool = False, raw: bool = False):
@@ -397,6 +410,14 @@ def _list_notes_master(prs) -> None:
 
 
 def render_deck(spec: DeckSpec, charts: dict[int, ChartData], *, lang: str, today: date) -> bytes:
+    token = _DECK_LANG.set(lang)
+    try:
+        return _render_deck(spec, charts, lang=lang, today=today)
+    finally:
+        _DECK_LANG.reset(token)
+
+
+def _render_deck(spec: DeckSpec, charts: dict[int, ChartData], *, lang: str, today: date) -> bytes:
     """The deck as `.pptx` bytes: a title slide, then one slide per outline slide. `charts` maps
     the index of a chart slide to its data (fetched from the ledger by the caller)."""
     prs = Presentation()

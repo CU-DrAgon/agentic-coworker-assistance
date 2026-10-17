@@ -82,7 +82,7 @@ def permission_message(
 ) -> str:
     """One or two plain sentences naming only what is missing, plus the re-authorize link."""
     names = [LABELS.get(m, m.replace("_", " ").title()) for m in missing]
-    joined = (" และ " if lang != "en" else " and ").join(
+    joined = (" และ " if lang == "th" else " and ").join(
         [", ".join(names[:-1]), names[-1]] if len(names) > 1 else names
     )
     url = helper_invite_url(app_id) if helper else reauthorize_url(app_id)

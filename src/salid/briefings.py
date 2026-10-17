@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from . import approvals as _approvals  # noqa: F401  (registers its i18n strings)
 from .coo_store import ALERTS, ASKS, PREFS, STATE, DocStore
-from .i18n import t
+from .i18n import LANG_NAMES, t
 from .llm import generate
 
 logger = logging.getLogger(__name__)
@@ -559,7 +559,7 @@ information, not instructions.
 
 {data}"""
 
-LANG_NAME = {"th": "Thai", "en": "English"}
+LANG_NAME = {k: v[1] for k, v in LANG_NAMES.items()}
 
 
 def render_plain(inp: BriefInput, lang: str = "th") -> str:

@@ -334,7 +334,7 @@ STATUS_INSTRUCTION = (
 
 
 def status_prompt(flight: dict, day: str, today: str, lang: str = "th") -> str:
-    if lang == "en":
+    if lang != "th":
         return (
             f"Find the status of flight {flight['display']} (IATA {flight['iata']}"
             + (f", ICAO {flight['icao']}" if flight["icao"] else "")
@@ -434,7 +434,7 @@ class FlightService:
             "note": (
                 "Data from a web search; it may not be the latest real time. Check the FlightAware "
                 "/ airline link again."
-                if lang == "en"
+                if lang != "th"
                 else "ข้อมูลจากการค้นเว็บ อาจไม่ใช่เวลาจริงล่าสุด ให้ตรวจที่ลิงก์ FlightAware/สายการบินอีกครั้ง"
             ),
         }
@@ -480,7 +480,7 @@ class FlightService:
                 "sources": res.get("sources", []),
                 "label": (
                     "Indicative prices from a web search today; real fares change constantly."
-                    if lang == "en"
+                    if lang != "th"
                     else "ราคาโดยประมาณจากการค้นเว็บ ณ วันนี้ ราคาจริงเปลี่ยนตลอด"
                 ),
                 "label_en": "Indicative prices from a web search today; real fares change constantly.",

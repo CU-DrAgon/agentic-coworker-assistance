@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from . import longtext
 from .coo_store import CONTESTS, DocStore
+from .i18n import LANGS
 from .ideas_pdf import markdown_pdf
 from .llm import generate
 from .pdf_report import FontSet
@@ -201,14 +202,14 @@ def left_text(delta: timedelta, lang: str) -> str:
     if secs >= 86400:
         n = round(secs / 86400) if secs % 86400 > 43200 else secs // 86400
         n = max(n, 1)
-        return f"{n} วัน" if lang != "en" else f"{n} day{'s' if n != 1 else ''}"
+        return f"{n} วัน" if lang == "th" else f"{n} day{'s' if n != 1 else ''}"
     n = max(1, round(secs / 3600))
-    return f"{n} ชั่วโมง" if lang != "en" else f"{n} hour{'s' if n != 1 else ''}"
+    return f"{n} ชั่วโมง" if lang == "th" else f"{n} hour{'s' if n != 1 else ''}"
 
 
 # ------------------------------------------------------------------ rendering
 def render_markdown(c: Contest, lang: str = "th", zone=None) -> str:
-    th = lang != "en"
+    th = lang == "th"
     out = [f"# {c.name}", ""]
     meta = [x for x in (c.organizer, c.track, c.kind, c.url) if x]
     if meta:
@@ -445,7 +446,7 @@ def build_plan(
     Open deliverables are spread over the milestones (their own `due` wins) and given to their
     owner, else to the team members in turn. `free_days`: days the team has free time (None =
     unknown), milestones move to the latest such day."""
-    th = lang != "en"
+    th = lang == "th"
     today = now.astimezone(zone).date()
     names = [n for n in (team or {}).values() if n]
     upcoming = sorted(
@@ -686,7 +687,7 @@ def contest_from_extract(x: _Extract, zone) -> tuple[Contest, list[str]]:
         organizer=" ".join(x.organizer.split())[:100],
         kind=kind,
         track=" ".join(x.track.split())[:150],
-        language="th" if x.language == "th" else "en",
+        language=x.language if x.language in LANGS else "en",
         deadlines=deadlines,
         requirements=_clean(x.requirements),
         judging_criteria=crit,
@@ -1287,7 +1288,7 @@ class ContestCtx:
             + (f": {k.description}" if k.description else "")
             for i, k in enumerate(crit, 1)
         )
-        th = self.lang != "en"
+        th = self.lang == "th"
         prompt = (
             "You are a strict but fair judge of this contest. Score the project against EACH "
             "criterion from 0 to 10 (be honest; 10 is exceptional), with one-line reasons. "
@@ -1335,7 +1336,7 @@ class ContestCtx:
             }
         if self.client is None:
             return {"status": "error", "error": "no model available"}
-        th = self.lang != "en"
+        th = self.lang == "th"
         prompt = (
             "For each technology the contest suggests, say how it relates to the project: "
             "`used` (the project already uses it or clearly needs it), `could_use_cheaply` "
@@ -1378,7 +1379,11 @@ class ContestCtx:
             return err or {}
         if self.client is None:
             return {"status": "error", "error": "no model available"}
-        lang = language.strip().lower() if language.strip().lower() in ("th", "en") else c.language
+        lang = (
+            language.strip().lower()
+            if language.strip().lower() in LANGS and language.strip().lower() != "auto"
+            else c.language
+        )
         proj_note = ""
         if c.linked_idea:
             r = self.idea_get(c.linked_idea)
@@ -1414,7 +1419,7 @@ class ContestCtx:
                 if not scenes:
                     return {"status": "error", "error": "empty script; try again"}
                 md = f"# {c.name} - video script ({_mmss(total)})\n\n" + render_script(
-                    scenes, lang != "en"
+                    scenes, lang == "th"
                 )
             else:
                 spec = {

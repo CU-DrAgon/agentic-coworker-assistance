@@ -54,7 +54,7 @@ class PromoMixin:
                     client=self.llm,
                     model=self.s.promo_image_model,
                     budget=self.promo_budget,
-                    fonts=cards.card_fonts(),
+                    fonts=cards.card_fonts(self._lang(message)),
                 )
             )
         except Exception:

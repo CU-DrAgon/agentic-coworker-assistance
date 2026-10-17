@@ -696,6 +696,34 @@
   "th": "English",
   "en": "English"
  },
+ "lang_zh": {
+  "th": "中文",
+  "en": "中文"
+ },
+ "lang_hi": {
+  "th": "हिन्दी",
+  "en": "हिन्दी"
+ },
+ "lang_ms": {
+  "th": "Bahasa Melayu",
+  "en": "Bahasa Melayu"
+ },
+ "lang_id": {
+  "th": "Bahasa Indonesia",
+  "en": "Bahasa Indonesia"
+ },
+ "lang_vi": {
+  "th": "Tiếng Việt",
+  "en": "Tiếng Việt"
+ },
+ "lang_ko": {
+  "th": "한국어",
+  "en": "한국어"
+ },
+ "lang_ja": {
+  "th": "日本語",
+  "en": "日本語"
+ },
  "lang_auto": {
   "th": "อัตโนมัติ (ตามภาษาที่พิมพ์)",
   "en": "Auto (follow the language typed)"
@@ -1693,7 +1721,7 @@ function renderDigestSelect(channels, selected, id = "digest-id", noneKey = "dig
 }
 
 const MODES = ["off", "listen", "call", "join", "chat"];
-const LANGUAGES = ["th", "en", "auto"];
+const LANGUAGES = ["th", "en", "zh", "hi", "ms", "id", "vi", "ko", "ja", "auto"];
 let currentModes = {}, currentLanguages = {};
 function option(value, key) { return Object.assign(tx(document.createElement("option"), key), { value }); }
 function languageSelect(value, withDefault) {

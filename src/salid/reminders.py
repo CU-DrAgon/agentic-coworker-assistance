@@ -238,7 +238,7 @@ def _days_text(rec: dict, lang: str) -> str:
         return t("rem_every_day", lang)
     if wd == [0, 1, 2, 3, 4]:
         return t("rem_every_weekday", lang)
-    names = _EN_DAYS if lang == "en" else _TH_DAYS
+    names = _EN_DAYS if lang != "th" else _TH_DAYS
     return t("rem_every_on", lang, days=", ".join(names[i] for i in wd))
 
 
@@ -266,7 +266,7 @@ def fmt_next(dt: datetime, now: datetime, lang: str) -> str:
         return t("rem_today", lang, hm=f"{dt:%H:%M}")
     if delta == 1:
         return t("rem_tomorrow", lang, hm=f"{dt:%H:%M}")
-    day = (_EN_DAYS if lang == "en" else _TH_DAYS)[dt.weekday()]
+    day = (_EN_DAYS if lang != "th" else _TH_DAYS)[dt.weekday()]
     return f"{day} {dt:%Y-%m-%d %H:%M}"
 
 

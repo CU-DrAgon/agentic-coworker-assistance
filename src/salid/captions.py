@@ -17,11 +17,12 @@ from typing import Any
 
 from google.genai import types
 
+from .i18n import LANGS, lang_name
 from .llm import generate
 
 logger = logging.getLogger(__name__)
 
-LANGUAGES = ("original", "th", "en")
+LANGUAGES = ("original", *(x for x in LANGS if x != "auto"))
 FLUSH_EVERY_S = 12.0
 MAX_BATCH = 30  # lines per translation call
 MAX_PENDING = 120  # older lines are dropped if posting cannot keep up
@@ -86,9 +87,9 @@ order.
 
 def translate_lines(client: Any, model: str, texts: list[str], language: str) -> list[str]:
     """Translate several lines in ONE call. Falls back to the original text on any failure."""
-    if language not in ("th", "en") or not texts:
+    if language not in LANGS or language == "auto" or not texts:
         return list(texts)
-    lang = "Thai" if language == "th" else "English"
+    lang = lang_name(language)
     prompt = _TRANSLATE_PROMPT.format(
         lang=lang, n=len(texts), lines=json.dumps(texts, ensure_ascii=False)
     )

@@ -83,4 +83,4 @@ def test_every_entry_has_both_languages_with_the_same_placeholders():
     for key, entry in CATALOG.items():
         assert set(entry) == {"th", "en"}, key
         assert set(field.findall(entry["th"])) == set(field.findall(entry["en"])), key
-    assert set(LANGS) == {"th", "en", "auto"}
+    assert set(LANGS) == {"th", "en", "zh", "hi", "ms", "id", "vi", "ko", "ja", "auto"}

@@ -30,7 +30,7 @@ from functools import partial
 from pathlib import Path
 
 from .config import Settings
-from .i18n import resolve_lang, t
+from .i18n import EXTRA, lang_name, resolve_lang, t
 from .models import Receipt
 from .store import Store, cur_of
 
@@ -202,7 +202,10 @@ def _report_lang(lang: str, task: str) -> str:
     """The "write the report in ..." phrase of TASK.md: th / en as chosen, auto follows the task."""
     if lang == "auto":
         return t("deep_report_lang_auto", "th")
-    return t("deep_report_lang", resolve_lang(lang, task))
+    resolved = resolve_lang(lang, task)
+    if resolved in EXTRA:
+        return f"in {lang_name(resolved)}"
+    return t("deep_report_lang", resolved)
 
 
 def prepare_workspace(

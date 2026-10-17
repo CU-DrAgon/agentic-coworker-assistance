@@ -329,7 +329,7 @@ class BroadcastMixin:
                 parts.append(
                     t("bc_report_failed", lang, count=len(failed), names=name_list(failed, lang))
                 )
-            report = f"<@{asker.id}> " + ("; " if lang == "en" else " · ").join(parts)
+            report = f"<@{asker.id}> " + ("; " if lang != "th" else " · ").join(parts)
             await message.channel.send(
                 report[:2000],
                 allowed_mentions=discord.AllowedMentions(

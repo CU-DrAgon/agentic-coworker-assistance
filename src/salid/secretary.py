@@ -30,7 +30,7 @@ from .email_out import (
     OutgoingEmail,
     clean_addresses,
 )
-from .i18n import t
+from .i18n import LANGS, t
 from .pdf_report import custom_pdf, expense_pdf, find_fonts, minutes_pdf, totals_by_currency
 from .permissions import guild_missing, permission_message
 from .scheduling import (
@@ -129,7 +129,7 @@ class SecretaryTools:
         return self.c.service.get_guild(self.c.guild_id)
 
     def _lang(self) -> str:
-        return self.c.lang if self.c.lang in ("th", "en") else "th"
+        return self.c.lang if self.c.lang in LANGS and self.c.lang != "auto" else "th"
 
     def _perm_help(self) -> dict:
         try:

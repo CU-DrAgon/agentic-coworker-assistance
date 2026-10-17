@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 from .geo import Endpoint, parse_when, resolve_endpoint
 from .gmaps import GoogleHttp, MapsError
+from .i18n import map_language_code
 from .places import PlacesCtx
 from .weather import RAIN_NOTE_PCT, WeatherService
 
@@ -57,7 +58,7 @@ def _secs(v) -> int | None:
 def fmt_duration(sec: int, lang: str) -> str:
     m = max(1, round(sec / 60))
     h, mi = divmod(m, 60)
-    if lang == "en":
+    if lang != "th":
         return f"{h} h {mi} min" if h and mi else (f"{h} h" if h else f"{mi} min")
     return f"{h} ชม. {mi} นาที" if h and mi else (f"{h} ชม." if h else f"{mi} นาที")
 
@@ -85,7 +86,7 @@ class RouteService:
             return hit[1]
         body: dict = {
             "origin": {"address": origin}, "destination": {"address": destination},
-            "travelMode": MODES[mode], "languageCode": "en" if lang == "en" else "th",
+            "travelMode": MODES[mode], "languageCode": map_language_code(lang),
             "regionCode": "TH", "computeAlternativeRoutes": False, "units": "METRIC",
         }  # fmt: skip
         if mode in ("drive", "two_wheeler"):
@@ -237,10 +238,10 @@ class TravelTools:
             if delay >= 300 and delay >= 0.1 * static:
                 m = round(delay / 60)
                 out["traffic_note"] = (
-                    f"~{m} min slower than usual because of traffic" if lang == "en"
+                    f"~{m} min slower than usual because of traffic" if lang != "th"
                     else f"รถติดกว่าปกติ ~{m} นาที")  # fmt: skip
         if r["summary"]:
-            out["route_summary"] = ("via " if lang == "en" else "ผ่าน") + r["summary"]
+            out["route_summary"] = ("via " if lang != "th" else "ผ่าน") + r["summary"]
         if r["lines"]:
             out["transit_lines"] = r["lines"]
         if leave is not None:
@@ -255,7 +256,7 @@ class TravelTools:
         rain = self._rain(a, leave or depart, now)
         if rain is not None and rain >= RAIN_NOTE_PCT:
             out["rain_note"] = (
-                f"rain likely ({round(rain)}%), it may take longer" if lang == "en"
+                f"rain likely ({round(rain)}%), it may take longer" if lang != "th"
                 else f"ฝนตก ({round(rain)}%) อาจใช้เวลานานขึ้น")  # fmt: skip
         out["estimate"] = "this is a rough estimate; real traffic can differ"
         return out

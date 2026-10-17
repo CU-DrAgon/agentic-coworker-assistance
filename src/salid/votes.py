@@ -52,7 +52,7 @@ def clean_vote(question: str, options, minutes, lang: str) -> tuple[str, list[st
             seen.add(o.casefold())
             opts.append(o)
     if not opts:
-        opts = list(DEFAULT_OPTIONS["en" if lang == "en" else "th"])
+        opts = list(DEFAULT_OPTIONS["en" if lang != "th" else "th"])
     if len(opts) < MIN_OPTIONS:
         return {"error": "need_at_least_2_options"}
     if len(opts) > MAX_OPTIONS:

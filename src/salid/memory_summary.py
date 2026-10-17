@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from .i18n import LANG_NAMES
 from .llm import generate
 from .memory_store import MemoryMessage
 
@@ -49,7 +50,7 @@ class SummaryDoc(BaseModel):
     open_questions: list[str] = Field(default_factory=list)
 
 
-LANG_NAME = {"th": "Thai", "en": "English"}
+LANG_NAME = {k: v[1] for k, v in LANG_NAMES.items()}
 
 PROMPT = """You maintain the day summary of ONE Discord channel for a team assistant.
 Language of the summary: {language}. Keep names, amounts, dates and IDs exactly as written; do not invent anything; \

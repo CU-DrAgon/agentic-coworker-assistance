@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field
 
 from .coo_store import PROFILES, DocStore
-from .i18n import resolve_lang
+from .i18n import LANG_NAMES, LANGS, resolve_lang
 from .tone import RESET as TONE_RESET
 from .tone import label as tone_label
 from .tone import resolve_tone
@@ -42,8 +42,19 @@ KINDS = (
     "tone",
 )
 LENGTHS = ("short", "normal", "detailed")
-LANGUAGES = ("th", "en")
-_LANG_ALIASES = {"thai": "th", "ไทย": "th", "ภาษาไทย": "th", "english": "en", "อังกฤษ": "en"}
+LANGUAGES = tuple(x for x in LANGS if x != "auto")
+_LANG_ALIASES = {
+    "thai": "th",
+    "ไทย": "th",
+    "ภาษาไทย": "th",
+    "english": "en",
+    "อังกฤษ": "en",
+    **{
+        alias.lower(): code
+        for code, names in LANG_NAMES.items()
+        for alias in (*names, f"ภาษา{names[2]}")
+    },
+}
 _LEN_ALIASES = {"brief": "short", "concise": "short", "long": "detailed", "full": "detailed"}
 _CLEAR = {"", "none", "null", "default", "auto", "reset", "clear"}
 _CTRL = re.compile(r"[\x00-\x1f\x7f`]+")

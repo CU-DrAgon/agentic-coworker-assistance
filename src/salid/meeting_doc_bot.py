@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import discord
 
 from .coo_store import MINUTES
+from .i18n import LANGS
 from .meeting_doc import Line, MeetingDocCtx, meeting_document_tools
 from .minutes import can_see
 from .pdf_report import find_fonts
@@ -59,7 +60,7 @@ class MeetingDocMixin:
 
         return MeetingDocCtx(
             asker_id=asker.id,
-            lang=lang if lang in ("th", "en") else "th",
+            lang=lang if lang in LANGS and lang != "auto" else "th",
             org=getattr(guild, "name", "") or "",
             records=lambda: self.docs.find(MINUTES, gid),
             can_view_voice=can_view_voice,

@@ -34,7 +34,7 @@ from .flights import FLIGHT_PROMPT
 from .freetime import FREETIME_PROMPT
 from .gate import extract_keywords
 from .gmaps import MAPS_PROMPT
-from .i18n import resolve_lang, t
+from .i18n import EXTRA, base_lang, lang_name, reply_language_line, resolve_lang, t
 from .ideas import IDEAS_PROMPT
 from .markets import MARKETS_PROMPT
 from .media import parse_message_ref
@@ -1062,8 +1062,14 @@ PERSONA_IDENTITY = {
 
 def persona(language: str = "th", tone: str = DEFAULT_TONE, note: str = "") -> str:
     """Identity + the style of `tone` (th / en / auto), plus the owner's optional wording note."""
-    lang = language if language in PERSONA_IDENTITY else "th"
-    return PERSONA_IDENTITY[lang] + tone_block(tone, lang, note)
+    lang = (
+        language
+        if language in PERSONA_IDENTITY
+        else base_lang(language)
+        if language in EXTRA
+        else "th"
+    )
+    return reply_language_line(language) + PERSONA_IDENTITY[lang] + tone_block(tone, lang, note)
 
 
 PERSONA = {lang: persona(lang) for lang in PERSONA_IDENTITY}  # the default (cheerful) tone
@@ -1433,9 +1439,15 @@ def stable_prompt(
     each tool family that is registered). It comes first so Gemini's implicit prefix cache can
     reuse it across requests and tool rounds (the tone is part of the text, so a cached prefix is
     never shared across tones). `particle`: the persona's politeness particle."""
-    lang = language if language in PERSONA_IDENTITY else "th"
+    lang = (
+        language
+        if language in PERSONA_IDENTITY
+        else base_lang(language)
+        if language in EXTRA
+        else "th"
+    )
     p = (
-        persona(lang, tone, tone_note)
+        persona(language, tone, tone_note)
         + HUMAN_STYLE_PROMPT
         + tone_override(tone, lang)
         + "คุยได้ทุกเรื่อง: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
@@ -1483,7 +1495,7 @@ def stable_prompt(
         p += CHAT_TOOLS_PROMPT
     if deck:
         p += DECK_PROMPT
-    return apply_particle(p, particle)
+    return apply_particle(p, "ค่ะ" if language in EXTRA else particle)
 
 
 def volatile_prompt(
@@ -1516,7 +1528,13 @@ def volatile_prompt(
     if people is not None:
         p += MENTION_PROMPT
         p += "\nคนที่แท็กได้ (ชื่อที่แสดง): " + (", ".join(people) if people else "(ยังไม่มีรายชื่อ)")
-    if language == "en":
+    if language in EXTRA:
+        p += (
+            f"\nLanguage: write your whole reply in {lang_name(language)} ({lang_name(language, 0)}), "
+            "including quoted memory, documents and titles; translate content in other languages "
+            "instead of copying it. Keep the name Salid."
+        )
+    elif language == "en":
         p += (
             "\nLanguage: write your whole reply in English, including quoted memory, documents and "
             "titles; translate Thai content instead of copying it."
@@ -1525,7 +1543,7 @@ def volatile_prompt(
         p += (
             "\nLanguage: reply in the same language as the user's latest message (Thai or English)."
         )
-    return apply_particle(p, particle_of(settings))
+    return apply_particle(p, "ค่ะ" if language in EXTRA else particle_of(settings))
 
 
 def system_prompt(

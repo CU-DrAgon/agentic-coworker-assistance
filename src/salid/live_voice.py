@@ -39,7 +39,7 @@ from google.genai import types
 
 from .captions import normalize_language
 from .fillers import POOL_SIZE, ClipCache, FillerWriter, write_line
-from .i18n import resolve_lang
+from .i18n import EXTRA, lang_name, resolve_lang
 from .i18n import t as catalog
 from .meeting import (
     SPEAK_COOLDOWN_S,
@@ -249,7 +249,7 @@ NAME_DEDUPE_S = 10.0  # a classic name hit this soon after a Live-transcript hit
 # used when it is ready in time (`Settings.voice_ack_timeout_s`), otherwise one of these.
 FILLERS = {
     lang: [catalog(f"ack_voice_{n}", lang) for n in range(1, POOL_SIZE + 1)]
-    for lang in ("th", "en")
+    for lang in ("th", "en", *EXTRA)
 }
 PRERENDER_FIRST = 4  # clips synthesized ahead per language (bounded TTS cost)
 # Status lines ("still working", "sent to the background", "vote sent") are typed in the meeting chat,
@@ -531,8 +531,10 @@ def build_instruction_en(
     history: str = "",
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
+    reply_lang: str | None = None,
 ) -> str:
     """The English system instruction (guild language "en"): English persona, no Thai particles.
+    `reply_lang`: a second-tier language (zh, ja...) to speak instead of English.
     `tone` (salid.tone) sets the persona line, the same style as the text answers."""
     now = now or settings.now()
     p = (
@@ -625,7 +627,13 @@ def build_instruction_en(
             "receipts, say plainly that you cannot look it up at the moment; you can still answer general "
             "knowledge yourself.\n"
         )
-    if language == "auto":
+    if reply_lang in EXTRA:
+        p += (
+            f"Language: always speak {lang_name(reply_lang)} ({lang_name(reply_lang, 0)}); "
+            "keep names and vendors as they are. Polite, natural register for that language. "
+            "Never use Thai particles.\n"
+        )
+    elif language == "auto":
         p += "Language: reply in the language the speaker uses; default to English. Never use Thai particles.\n"
     else:
         p += "Language: always speak English (keep names and vendors as they are).\n"
@@ -636,6 +644,10 @@ def build_instruction_en(
             "\nContext: what people in the room just said (reference only, do not answer it):\n"
             + history
             + "\n"
+        )
+    if reply_lang in EXTRA:
+        p = p.replace(
+            "Speak plain natural English only.", f"Speak plain, natural {lang_name(reply_lang)}."
         )
     return p
 
@@ -653,6 +665,9 @@ def build_instruction(
     """System instruction for the Live session (built per connect so the date is current). Thai by
     default; English persona and rules when the session's resolved `lang` (or `language`) is en.
     `tone`: the salid.tone preset of the meeting's text channel (persona line, TH and EN)."""
+    reply = lang or language
+    if reply in EXTRA:
+        return build_instruction_en(settings, language, now, qa, history, tone, tone_note, reply)
     if lang == "en" or language == "en":
         return build_instruction_en(settings, language, now, qa, history, tone, tone_note)
     now = now or settings.now()

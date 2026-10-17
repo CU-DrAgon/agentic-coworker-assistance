@@ -54,7 +54,7 @@ def is_confirm(text: str) -> bool:
 def channel_name(nickname: str, lang: str = "th") -> str:
     """`สลิด-<nickname>` (`salid-<nickname>` in English): lower case, spaces to dashes, Thai kept,
     other symbols dropped."""
-    prefix = CHANNEL_PREFIX_EN if lang == "en" else CHANNEL_PREFIX
+    prefix = CHANNEL_PREFIX_EN if lang != "th" else CHANNEL_PREFIX
     slug = re.sub(r"[^\w฀-๿-]+", "-", (nickname or "").strip().casefold())
     slug = re.sub(r"-{2,}", "-", slug).strip("-_")
     return f"{prefix}-{slug}"[:MAX_NAME] if slug else prefix
