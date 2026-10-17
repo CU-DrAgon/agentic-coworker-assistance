@@ -1356,10 +1356,13 @@ class MeetingManager:
         body = self._free_body(guild.id)
         if body is None:
             cand = self._claim((guild.id, channel.id), channel, origin, scheduled, self._now())
+            # Never take the body from the same room, nor from a session that joined or resumed
+            # in the last 15 s (a restart used to kill the just-resumed meeting this way).
+            fresh_s = self._now() - 15.0
             active = [
                 self._claim(s.key, s.voice_channel, s.origin, s.meeting_id is not None, s.started)
                 for s in self.sessions_in_guild(guild.id)
-                if not s.ending
+                if not s.ending and s.key != (guild.id, channel.id) and s.started < fresh_s
             ]
             victim = pick_victim(cand, active)
             if victim is None:
