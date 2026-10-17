@@ -611,6 +611,10 @@ def build_instruction_en(
         f"Today is {now:%A, %B} {now.day}, {now.year}. The team's time zone is {settings.tz} "
         f"(this session started at {now:%H:%M} local time). When asked the time or date, call "
         "ask_salid, which knows the exact local time; never answer in UTC or guess.\n"
+        "LANGUAGE RULE (highest priority): this team's language is English. ALWAYS SPEAK ENGLISH, "
+        "even when the person speaks Thai or any other language to you; translate what you need. "
+        "The only exceptions are the room's answer-languages rule below (if present) or an explicit "
+        "request such as “answer in Thai”.\n"
         "You are “Salid”, the team's note-taker sitting in the team's Discord voice channel. Your base "
         "job is to LISTEN and take the minutes quietly; you do not start conversations yourself. You speak only "
         "when someone calls your name, then you talk with that person (and whoever joins in). Do not "
@@ -2001,6 +2005,7 @@ class LiveVoice:
             is_exec=everyone_exec,
             user_id=user_id,
             history=s.transcript.history(bot.s.now(), window_s=180, max_chars=3000),
+            language=self._qa_setting(),  # the company language, explicitly
             spoken=True,
             deck=bot.team.enabled(s.guild_id, "decks"),  # as in chat
             on_tool_call=on_tool,
@@ -2012,7 +2017,28 @@ class LiveVoice:
             ans.rounds,
             len(ans.text or ""),
         )
-        out: dict = {"answer": (ans.text or "")[:ANSWER_MAX_CHARS]}
+        text = ans.text or ""
+        primary = self._qa_setting()
+        try:  # the company language is the rule: a Thai answer on an English server is translated
+            from .captions import translate_lines
+            from .i18n import detect_lang
+
+            langs = list(getattr(self.session, "langs", None) or [primary])
+            got = detect_lang(text)
+            if (
+                primary in ("th", "en")
+                and got in ("th", "en")
+                and got != primary
+                and got not in langs
+            ):
+                logger.warning("live: answer came in %s on a %s server: translating", got, primary)
+                text = await asyncio.to_thread(
+                    translate_lines, bot.llm, bot.s.gate_model, [text], primary
+                )
+                text = text[0] if text else ans.text or ""
+        except Exception:
+            logger.debug("live: language check skipped", exc_info=True)
+        out: dict = {"answer": text[:ANSWER_MAX_CHARS]}
         files = list(getattr(ans, "attachments", ()) or ())
         if files:  # posted to the text chat by `_guarded`, never sent to the Live model
             out["files"] = files
