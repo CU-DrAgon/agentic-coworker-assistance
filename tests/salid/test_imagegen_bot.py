@@ -134,17 +134,17 @@ async def test_one_read_before_the_take_and_one_read_modify_write_for_it(bot, wo
     assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 2, f"images_user_{m.id}": 2}
 
 
-async def test_units_without_an_image_go_back_to_both_stored_counts(bot, world):
+async def test_only_units_without_a_model_call_go_back_in_the_stored_counts(bot, world):
     m, day = world.staff, bot.s.today().isoformat()
     bot.llm = fake_client(image_response(png_bytes((64, 64))), RuntimeError("x"))
     [tool] = bot._image_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [])
-    out = tool(prompt="a cup", count=2)
-    assert out["count_made"] == 1 and out["images_left_today"] == 4
-    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 1, f"images_user_{m.id}": 1}
-    bot.llm = None  # no client: nothing can be made, nothing stays taken
+    out = tool(prompt="a cup", count=2)  # a failed call may be billed: it stays charged
+    assert out["count_made"] == 1 and out["images_left_today"] == 3
+    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 2, f"images_user_{m.id}": 2}
+    bot.llm = None  # no client: no call is made, so nothing stays taken
     [tool] = bot._image_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [])
     assert tool(prompt="a cup")["status"] == "error"
-    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 1, f"images_user_{m.id}": 1}
+    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 2, f"images_user_{m.id}": 2}
 
 
 def test_the_stored_budget_has_no_unused_available():

@@ -427,7 +427,8 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   illustration offered), and "เอาแบบที่ 2 แต่โทนอุ่นขึ้น" edits a result of the last batch (`revise`; the clean images
   are kept 30 minutes per person and channel in process memory, never stored). Limits `SALID_IMAGES_PER_DAY` (20
   per guild) and `SALID_IMAGES_PER_USER_DAY` (5 per person in a server), counted per image before the calls
-  (images that do not come back or cannot be delivered are given back) in the DocStore (`salid_media_usage`, key = the day, fields `images` and
+  (blocked, timed-out or failed images count too; only a request that never reaches the model is given back) in
+  the DocStore (`salid_media_usage`, key = the day, fields `images` and
   `images_user_<id>`), so a restart does not reset them; a bigger request is trimmed to what is left and the
   reply says so. The reply says the images were made with AI. Logs carry guild, counts and time only, never the
   prompt or the images.

@@ -978,8 +978,8 @@ class MediaUsage:
     before each paid step: key "YYYY-MM" for video (`ads`, `hero_seconds`, `music_clips`), key
     "YYYY-MM-DD" for images and promo kits (`images`, `images_user_<id>`, `promo_kits`, see
     `imagegen_bot.StoredDailyBudget`). Given back (`give_back`, never below 0) only for what was
-    never billed or never delivered: the ad of a job that ended before any paid media, the hero
-    seconds of a create the service refused, image units with no delivered image. Every
+    never billed: the ad of a job that ended before any paid media, the hero seconds of a create
+    the service refused, image units for which no model call was made. Every
     read-modify-write of a document is one read and one write under one lock (one bot
     process)."""
 

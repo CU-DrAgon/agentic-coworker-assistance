@@ -269,38 +269,66 @@ def test_budgets_are_taken_per_image_before_the_calls(monkeypatch):
     assert taken == [(2, 2)] and out["count_made"] == 2 and out["images_left_today"] == 3
 
 
-def test_units_of_images_that_did_not_come_back_are_given_back():
+def test_a_failed_call_stays_charged():
+    """Every real call may be billed (blocked, timed out or failed): its unit stays taken."""
     c = ictx(client=fake_client(image_response(png_bytes((64, 64))), RuntimeError("x")))
     out = imagegen.image_tools(c)[0](prompt="a cup", count=2)
     assert out["status"] == "ok" and out["count_made"] == 1 and out["files"] == ["image-1.png"]
-    assert c.guild_budget.used(1, c.day) == 1 and c.user_budget.used(7, c.day) == 1
-    assert "refused or failed" in out["note"] and out["images_left_today"] == 4
+    assert c.guild_budget.used(1, c.day) == 2 and c.user_budget.used(7, c.day) == 2
+    assert "refused or failed" in out["note"] and out["images_left_today"] == 3
 
 
-def test_nothing_made_is_an_error_and_its_units_are_given_back():
-    c = ictx(client=fake_client(text_response("no")))
+@pytest.mark.parametrize(
+    "result, reason",
+    [(text_response("no"), "blocked"), (httpx.ReadTimeout("t"), "timeout"),
+     (RuntimeError("x"), "error")],
+)  # fmt: skip
+def test_nothing_made_by_a_real_call_is_an_error_that_stays_charged(result, reason):
+    c = ictx(client=fake_client(result))
     out = imagegen.image_tools(c)[0](prompt="a cup")
-    assert out["status"] == "error" and out["reason"] == "blocked" and out["count_made"] == 0
-    assert c.user_budget.used(7, c.day) == 0 and c.guild_budget.used(1, c.day) == 0
-    assert out["images_left_today"] == 5 and c.memory.get(c.key) is None
+    assert out["status"] == "error" and out["reason"] == reason and out["count_made"] == 0
+    assert c.user_budget.used(7, c.day) == 1 and c.guild_budget.used(1, c.day) == 1
+    assert out["images_left_today"] == 4 and c.memory.get(c.key) is None
 
 
-def test_no_client_gives_every_unit_back():
+def test_no_client_means_no_call_and_every_unit_back():
     c = ictx(client=None)
     out = imagegen.image_tools(c)[0](prompt="a cup", count=3)
     assert out["status"] == "error" and out["reason"] == "error"
+    assert out["images_left_today"] == 5
     assert c.guild_budget.used(1, c.day) == 0 and c.user_budget.used(7, c.day) == 0
 
 
-def test_a_crash_after_the_calls_gives_the_units_back(monkeypatch):
+def test_a_prompt_refused_before_the_call_takes_nothing():
+    c = ictx()
+    out = imagegen.image_tools(c)[0](prompt="แมวในร้านกาแฟ", count=2)
+    assert out["status"] == "error" and c.client.models.calls == []
+    assert c.guild_budget.used(1, c.day) == 0 and c.user_budget.used(7, c.day) == 0
+
+
+def test_an_overlay_failure_still_delivers_the_images_without_text(monkeypatch):
     def broken(*a, **kw):
         raise RuntimeError("font gone")
 
     monkeypatch.setattr(imagegen, "overlay", broken)
     c = ictx()
-    out = imagegen.image_tools(c)[0](prompt="a cup", count=2, headline="ลดพิเศษ")
-    assert out["status"] == "error" and c.outbox == [] and c.memory.get(c.key) is None
-    assert c.guild_budget.used(1, c.day) == 0 and c.user_budget.used(7, c.day) == 0
+    t = imagegen.image_tools(c)[0]
+    out = t(prompt="a cup", count=2, headline="ลดพิเศษ")
+    assert out["status"] == "ok" and out["files"] == ["image-1.png", "image-2.png"]
+    assert [n for n, _ in t.outbox] == out["files"] and len(c.memory.get(c.key)) == 2
+    assert "without the text" in out["note"] and out["count_made"] == 2
+    assert c.guild_budget.used(1, c.day) == 2 and c.user_budget.used(7, c.day) == 2  # billed
+
+
+def test_a_later_failure_with_no_text_to_drop_stays_charged(monkeypatch):
+    def broken(img):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(imagegen, "_png", broken)
+    c = ictx()
+    out = imagegen.image_tools(c)[0](prompt="a cup", count=2)
+    assert out["status"] == "error" and c.outbox == []
+    assert c.guild_budget.used(1, c.day) == 2 and c.user_budget.used(7, c.day) == 2
 
 
 def test_reference_photos_are_never_of_a_real_person():
@@ -420,17 +448,17 @@ def test_images_that_never_fit_are_dropped_from_the_end_and_said(monkeypatch):
     assert out["status"] == "ok" and out["files"] == ["image-1.jpg"] == [n for n, _ in t.outbox]
     assert sum(len(d) for _, d in t.outbox) <= c.max_bytes
     assert "upload limit" in out["note"] and out["count_made"] == 1
-    assert c.user_budget.used(7, c.day) == 1 and len(c.memory.get(c.key)) == 1  # 2 given back
+    assert c.user_budget.used(7, c.day) == 3 and len(c.memory.get(c.key)) == 1  # all 3 billed
 
 
-def test_a_batch_that_cannot_fit_at_all_is_an_error_with_its_units_back(monkeypatch):
+def test_a_batch_that_cannot_fit_at_all_is_an_error_and_stays_charged(monkeypatch):
     noisy = [Image.effect_noise((512, 512), 120).convert("RGB") for _ in range(2)]
     monkeypatch.setattr(imagegen, "generate_images", lambda *a, **k: (list(noisy), ""))
     c = ictx(max_bytes=100)
     t = imagegen.image_tools(c)[0]
     out = t(prompt="static on an old tv", count=2)
     assert out["status"] == "error" and out["reason"] == "too_large" and t.outbox == []
-    assert c.user_budget.used(7, c.day) == 0 and c.memory.get(c.key) is None
+    assert c.user_budget.used(7, c.day) == 2 and c.memory.get(c.key) is None  # both billed
 
 
 def test_a_small_batch_stays_png():

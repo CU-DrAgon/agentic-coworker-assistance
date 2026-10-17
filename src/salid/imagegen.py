@@ -16,8 +16,10 @@ promo kits, `create_image` and the video ad stills, and the guards every caller 
   then drops trailing images and the result says so). Daily limits per guild and per person (any
   `DayBudget`: `media.DailyBudget`, or the DocStore-backed one the bot uses,
   `imagegen_bot.StoredDailyBudget`, whose `pair` reads both counts at once), taken per image
-  before the calls; the units of images not delivered (none came back, a later step failed, or
-  dropped for the upload limit) are given back. References are only photos of
+  before the calls and given back only when no model call is made (no client, or a prompt
+  refused before the call): blocked, timed-out and failed calls stay charged, and when the text
+  overlay (or a later step) fails the billed images are sent without the text, with a note.
+  References are only photos of
   products, logos, food or places, never of a real person (the tool description and NOTE tell
   the agent; spec section 5). `ImageMemory` keeps the last batch per (guild, channel, user) for
   revisions, in process memory only.
@@ -201,6 +203,10 @@ NOTE_FAILED = (
 )
 NOTE_LIMIT = "Today's image limit for this server (or this person) is used up."
 NOTE_DROPPED = " Only {n} of {made} images fit this server's upload limit; say so."
+NOTE_NO_TEXT = (
+    " The text could not be added, so the images are sent without the text; say so and offer to"
+    " try again."
+)
 FAILED = {
     "blocked": "the image service refused this description; suggest a different one",
     "timeout": "the image service timed out; suggest trying again",
@@ -538,22 +544,31 @@ class ImageCtx:
         if n <= 0:
             return {"status": "limit", "note": NOTE_LIMIT}
         t0 = time.monotonic()
-        images: list[Image.Image] = []
-        files: list[tuple[str, bytes]] = []
-        try:
+        if self.client is None or not english_only(prompt):
+            # generate_images makes no call then, so nothing is billed: the units go back. Every
+            # real call stays charged (blocked, timed out or failed, Vertex may bill it).
+            budgets.give_back(self.guild_id, self.user_id, self.day, n)
+            left += n
+            images, reason = [], "error"
+        else:
             images, reason = generate_images(
                 self.client, self.model, prompt, refs=refs, aspect=aspect, size=size, count=n
             )
+        extra = ""
+        try:
             files, kept = self._files(images, headline, subtitle, accent, aspect == "9:16")
-            if images and not files:
-                reason = "too_large"
-            if files:
-                self.outbox[:] = files  # a second call in the same turn replaces the first batch
-                self.memory.put(self.key, kept[: len(files)])
-        finally:  # the units of images not delivered go back (a crash included)
-            if len(files) < n:
-                budgets.give_back(self.guild_id, self.user_id, self.day, n - len(files))
-                left += n - len(files)
+        except Exception as e:
+            if not (headline or subtitle):
+                raise  # nothing to leave out; the images stay charged (they were billed)
+            # billed images are never thrown away: send them without the text
+            logger.warning("image overlay failed (%s): sending without text", type(e).__name__)
+            files, kept = self._files(images, "", "", accent, aspect == "9:16")
+            extra = NOTE_NO_TEXT
+        if images and not files:
+            reason = "too_large"
+        if files:
+            self.outbox[:] = files  # a second call in the same turn replaces the first batch
+            self.memory.put(self.key, kept[: len(files)])
         logger.info(
             "image guild=%s made=%d asked=%d ms=%d",
             self.guild_id,
@@ -575,6 +590,7 @@ class ImageCtx:
             note += NOTE_FAILED
         if len(files) < len(images):
             note += NOTE_DROPPED.format(n=len(files), made=len(images))
+        note += extra
         return {
             "status": "ok",
             "files": [name for name, _ in files],
