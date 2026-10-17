@@ -496,6 +496,7 @@ async def test_during_the_hold_other_talk_is_not_an_engaged_conversation(lv, mon
 async def test_the_hold_expires_and_listening_returns(lv, monkeypatch):
     s, live = await lv.join(5)
     sent = capture_cues(live)
+    monkeypatch.setattr(lv.mgr.bot.s, "hush_hold_seconds", 90.0, raising=False)
     lv.mgr._hush(s)
     await asyncio.sleep(0.05)
     lv.mgr._consent_tick(s, time.monotonic() + 91)

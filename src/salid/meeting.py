@@ -2243,10 +2243,12 @@ class MeetingManager:
 
     def _hush(self, s: MeetingSession) -> None:
         """Told to be quiet: stop talking now, forget any pending wake, go back to listening, and
-        stay silent for `hush_hold_seconds` unless her name comes with words. No reply."""
+        stay silent until her name comes with words (or, when `hush_hold_seconds` > 0, for that
+        long). No reply: silence is the acknowledgement."""
         now = time.monotonic()
         fresh = now - s.hushed_at > 3.0  # the Live transcript and the classic hit are one hush
-        s.hushed_at, s.hushed_until = now, now + self._hush_hold_s()
+        hold = self._hush_hold_s()  # 0 = no timer: silent until her name comes with words
+        s.hushed_at, s.hushed_until = now, (now + hold) if hold > 0 else float("inf")
         s.pending_wake.clear()
         if s.live is not None:
             s.live.hush(fresh)
