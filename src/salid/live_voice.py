@@ -584,6 +584,7 @@ def _langs_block(langs: list[str] | None, company_only: bool, prompt_lang: str) 
         return ""
     # No spoken announcements of settings ("I'll answer in English…"): the mode is shown as a
     # text line in the meeting chat only (the owner, 2026-10-18: it sounded like a cheap gadget).
+    rule = aud.second_language_rule(langs, prompt_lang)
     return rule.lstrip("\n")
 
 
