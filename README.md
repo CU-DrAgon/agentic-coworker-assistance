@@ -435,12 +435,38 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   and one "สร้างด้วย AI" label, and encodes an H.264 MP4 under the server's upload limit (1 MiB under it, at most
   19 MiB; DMs 9 MiB). The MP4 comes back as a reply with the scene list and a suggested caption ending in
   `#สร้างด้วยAI`. Needs ffmpeg and `libfribidi`. Limits: `SALID_VIDEO_ADS_PER_MONTH` (10 per guild, taken when the
-  job starts, not refunded), one job per guild and `SALID_VIDEO_MAX_JOBS` (2) across the bot. Generated motion
-  shots (`SALID_VIDEO_HERO_MODEL`, budget `SALID_VIDEO_HERO_SECONDS_PER_MONTH`, 60 s per guild) and music
-  (`SALID_VIDEO_MUSIC_MODEL`) stay off while their model settings are empty. Job records (`salid_video_jobs`: state,
-  times, cost estimate, failure reason; never the brief, storyboard or media) and monthly usage
-  (`salid_media_usage`, key `YYYY-MM`) live in the DocStore; jobs cut off by a restart are marked failed and the
-  requester is asked to try again. Logs: one line per step (guild, step, ms, cost estimate).
+  job starts, not refunded), one job per guild and `SALID_VIDEO_MAX_JOBS` (2) across the bot. Job records
+  (`salid_video_jobs`: state, times, cost estimate, failure reason; never the brief, storyboard or media) and
+  monthly usage (`salid_media_usage`, key `YYYY-MM`) live in the DocStore; jobs cut off by a restart are marked
+  failed and the requester is asked to try again. Logs: one line per step (guild, step, ms, cost estimate).
+- **Video ad add-ons: hero clips and music** (`src/salid/videogen.py`, both **off** while their settings are empty,
+  which is the default; with both empty an ad is exactly the slideshow above). Both go through the google-genai
+  Interactions API and are **unverified on this project**: nobody with project access has run them yet.
+  - *Hero clips* (`SALID_VIDEO_HERO_MODEL`, e.g. `gemini-omni-1.1-flash-preview` as in the spec; the installed SDK
+    lists `gemini-omni-1.1-flash` and `gemini-omni-flash-preview`, so let the probe decide the id): a storyboard
+    scene with source `hero` becomes a generated Gemini Omni clip of its still (image-to-video, 9:16, 720p, 4-6 s,
+    inline delivery, background job polled every 10 s for up to 8 minutes, cancelled with the ad). The English
+    prompt loses its quote characters and gets "Single continuous shot, no on-screen text, no dialogue."; a Thai
+    prompt is never sent. The clip is cover-cropped to 1080x1920 30 fps (never stretched), its last frame held to
+    the scene's length, and its sound dropped. The seconds requested (the scene rounded up, 4 to 6) are taken from
+    `SALID_VIDEO_HERO_SECONDS_PER_MONTH` (60 per guild) before each call and never refunded; blocked, failed, timed
+    out or over the budget, the scene keeps its slow-zoom clip.
+  - *Music* (`SALID_VIDEO_MUSIC_MODEL`, e.g. `lyria-3-clip-preview`; only when the request asks for music): one
+    instrumental Lyria clip per ad from a fixed English prompt, counted as `music_clips` in `salid_media_usage`
+    before the call (cap `SALID_VIDEO_ADS_PER_MONTH`), turned into a 48 kHz stereo WAV cut to the ad with fades and
+    mixed 18 dB under the narration. The call shape (`interactions.create(model, input=<text>)`, audio in
+    `output_audio`) follows the Gemini API docs and the SDK; any failure means an ad without music.
+  - *Probe* (live, billed, **only with human approval** and ADC for `SALID_GCP_PROJECT`):
+    `uv run python scripts/salid_media_probe.py --image --video [--music]` makes one 1K image, one 4 s 360p Omni
+    clip and optionally one Lyria clip, writes them to `/tmp/salid-media-probe/` only, and prints latency, status
+    and usage (never credentials; errors as type, code and status only). It refuses to run when
+    `GOOGLE_APPLICATION_CREDENTIALS` points to a key of another project (unset it and run
+    `gcloud auth application-default login`). Live tests: `uv run pytest -m live -k "create_image or omni or
+    slideshow"` (one image, one Omni probe that skips on 403 / PERMISSION_DENIED, one full 15 s slideshow ad saved
+    under a printed temp folder).
+  - *Human gates* (never without approval and GCP project access): the probe `--image --video`, the live tests
+    above, a visual check of a real ad, push and PR, the deploy, and setting `SALID_VIDEO_HERO_MODEL` /
+    `SALID_VIDEO_MUSIC_MODEL` (after the probe shows the model works on this project).
 - **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
   retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
   same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.

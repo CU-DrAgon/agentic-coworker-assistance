@@ -940,10 +940,9 @@ def test_music_hook_runs_when_enabled_and_its_track_is_mixed(tmp_path, fake_pipe
     assert fake_pipeline.assembled[0]["audio"] is None  # no voice asked for
 
 
-def test_no_music_track_yet_means_no_music(tmp_path, fake_pipeline):
-    run(tmp_path, settings=S_MUSIC, music=True)  # the hook returns None (until Task 7)
+def test_no_music_track_means_no_music(tmp_path, fake_pipeline):
+    run(tmp_path, settings=S_MUSIC, music=True)  # the hook returns None
     assert fake_pipeline.music_calls == 1 and fake_pipeline.assembled[0]["music"] is None
-    assert videoad._music_track(None, S_MUSIC, sb(5, 5, 5, 5), 20, None, Path("m")) is None
 
 
 def test_cancel_during_stills_stops_paid_steps(tmp_path, fake_pipeline):  # Review Focus 4
@@ -1043,11 +1042,6 @@ def test_hero_month_budget_used_up_means_no_hero_call(tmp_path, fake_pipeline, c
     lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("video guild=")]
     assert all(" step=" in ln for ln in lines)  # only step lines use the step prefix
     assert any("hero budget" in r.getMessage() for r in caplog.records)
-
-
-def test_hero_hook_is_off_until_task_7():
-    scene = sb(5, 5, 5, 5).scenes[0]
-    assert videoad._hero_clip(None, S_HERO, Path("x.png"), scene, None, Path("o")) is False
 
 
 def say_fails(text):
