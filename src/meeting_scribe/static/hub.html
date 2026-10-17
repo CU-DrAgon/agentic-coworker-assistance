@@ -1424,6 +1424,18 @@
   "th": "ภาพ AI ไม่เกิน 20 ภาพต่อวันต่อเซิร์ฟเวอร์ เป็นภาพคอนเซปต์ ไม่ใช่โมเดล 3 มิติหรือแบบวิศวกรรม ราคาต้องตรวจซ้ำก่อนซื้อจริง",
   "en": "Up to 20 AI images per server per day; they are concept renders, not 3D models or engineering drawings; prices must be re-checked before buying"
  },
+ "f_data_n": {
+  "th": "วิเคราะห์ข้อมูลจากไฟล์ Excel / CSV",
+  "en": "Spreadsheet and CSV analysis"
+ },
+ "f_data_d": {
+  "th": "ส่งไฟล์ Excel (.xlsx .xls) CSV หรือ JSON แล้วให้สลิดอ่านโครงสร้าง ตรวจคุณภาพข้อมูล ตอบคำถามด้วย SQL สรุปตัวเลข ทำกราฟ (แท่ง เส้น วงกลม กระจาย ฮิสโตแกรม) และส่งผลเป็นไฟล์ Excel/CSV เก็บชุดข้อมูลไว้ถามต่อได้ (ตั้งแต่ปีพ.ศ. ตัวเลขมีคอมมา ฿ และ % แปลงให้เอง)",
+  "en": "Send an Excel (.xlsx .xls), CSV or JSON file and Salid reads its structure, checks the data quality, answers questions with SQL, summarises numbers, draws charts (bar, line, pie, scatter, histogram) and returns results as Excel/CSV; datasets can be saved for later questions (Buddhist-year dates, thousands separators, ฿ and % are converted)"
+ },
+ "f_data_w": {
+  "th": "ไฟล์ไม่เกิน 25 MB และไม่เกิน 200,000 เซลล์ต่อตาราง ชุดข้อมูลที่เก็บไว้คนที่อ่านห้องต้นทางได้จึงจะเห็น (จากแชตส่วนตัวเห็นเฉพาะเจ้าของ) ตัวเลขทุกตัวมาจากคำสั่ง SQL ไม่ใช่การเดา",
+  "en": "Files up to 25 MB and 200,000 cells per table. A saved dataset is visible only to people who can read the channel it came from (from a private chat only to its owner). Every number comes from a SQL query, not a guess"
+ },
  "f_link_guard_n": {
   "th": "เตือนลิงก์อันตราย",
   "en": "Dangerous link guard"
@@ -1616,9 +1628,10 @@ const FEATURES = [
   { id: "bizfin" },
   { id: "promo" },
   { id: "concept" },
+  { id: "data" },
   { id: "link_guard" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, promo: true, concept: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, promo: true, concept: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1868,7 +1881,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, concept: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, concept: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1954,7 +1967,7 @@ async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
     features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, quotations: features.quotations },
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, votes: features.votes, vote_offers: features.vote_offers, reminders: features.reminders, projects: features.projects, project_notes: features.project_notes },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, votes: features.votes, vote_offers: features.vote_offers, reminders: features.reminders, projects: features.projects, project_notes: features.project_notes, data: features.data },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,

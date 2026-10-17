@@ -94,6 +94,11 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "investment_metrics",
         "financial_projection",
         "verify_slip",
+        # data studio: charts / exports / saved datasets are attached to or kept for the speaker
+        "data_chart",
+        "data_export",
+        "data_save",
+        "data_forget",
     }
 )
 
