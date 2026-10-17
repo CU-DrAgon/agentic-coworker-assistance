@@ -36,7 +36,8 @@ Gemini (`gemini-3.5-flash`, transcribe + diarize) → Firestore. On Stop: `/fini
 | `discord_post.py` | Embed + transcript attachment; never logs the webhook URL |
 | `pipeline.py` | `process_chunk`, `finalize` (idempotent, per-process lock) |
 | `app.py` | FastAPI routes; health check is `/health` (Cloud Run reserves `/healthz`) |
-| `static/index.html` | Recorder UI, live transcript, summary |
+| `static/index.html` | Recorder UI, live transcript, summary, served at `/recorder` |
+| `static/salid.html` | Salid public landing page, served at `/` (and `/salid` → 301 `/`): bilingual TH/EN (`salid-language` in localStorage → browser language → English), hero film + still from `static/salid/` (mounted at `/static/salid`, the only static dir exposed), callouts name shipped features only. Site map: `/` landing, `/recorder`, `/hub`, `/center`. |
 | `hub.py` / `static/hub.html` | Salid command center, multi-guild: `/hub` (Thai) + `/api/hub/{me,guilds,link}` and `/api/hub/guilds/{id}/{settings,activity,ask}`. Google ID token as Bearer, verified against `HUB_GOOGLE_CLIENT_ID` (empty = 503); any verified account signs in, guild routes need the email in that guild's `admin_emails` (else 403); `HUB_ADMIN_EMAILS` = optional super admins (all guilds + meeting activity). `POST /api/hub/link` redeems a `/ตั้งค่า` code in a Firestore transaction. No server secret, no Discord secret or token in the web service. |
 | `scripts/deploy.sh` | Idempotent Cloud Run deploy + IAM + Secret Manager + Pub/Sub push subscription |
 | `scripts/resummarize_dry_run.py` | Re-run the summarizer on a stored meeting and print before/after. Read-only, but calls Vertex AI. |
@@ -195,6 +196,13 @@ build order: `docs/superpowers/specs/2026-10-18-salid-workspace-parity-design.md
 - Secret Manager secret `discord-webhook-url`
 - Deployed URL: `gcloud run services describe meeting-scribe --region asia-southeast1 --format='value(status.url)'`
   (keep it private: there is no auth on the app)
+- Custom domain **https://salid.frontier-tech.app** (Cloud Run domain mapping created 17 Oct 2026; GoDaddy
+  CNAME `salid` → `ghs.googlehosted.com`; domain verified by the gcloud account). Env set on the service
+  on 17 Oct 2026: `SALID_STORE=firestore`, `HUB_GOOGLE_CLIENT_ID` (public OAuth web client, origins =
+  both run.app URLs + the custom domain + `http://localhost:8080`), `SALID_HUB_URL=https://salid.frontier-tech.app`.
+  Still unset: `SALID_DISCORD_CLIENT_ID` (invite buttons show "not configured" until then).
+- `.gcloudignore` exists (includes `.gitignore`, drops `.claude/`, `.git/`, `tests/`), so a source deploy no
+  longer relies on `.gitignore` alone.
 
 ## Credentials and safety rules
 
@@ -204,8 +212,9 @@ build order: `docs/superpowers/specs/2026-10-18-salid-workspace-parity-design.md
 - Before any commit: `git status` and `git diff --cached`. `.env`, `samples/` and `*.json` key files
   must never be staged.
 - Do not create service-account key files. Use `gcloud auth login` + `gcloud auth application-default login`.
-- `gcloud run deploy --source .` uploads the directory. There is no `.gcloudignore`, so `.gitignore`
-  applies and excludes `.env`. Confirm before deploying.
+- `gcloud run deploy --source .` uploads the directory; `.gcloudignore` includes `.gitignore` (so `.env`
+  is excluded) and drops `.claude/`. Confirm before deploying. Plain `gcloud run deploy meeting-scribe
+  --source . --region asia-southeast1` keeps the existing env vars and secrets (no new secret version).
 - `scripts/deploy.sh` pushes the webhook from `.env` into Secret Manager as a **new version**. Run it
   only intentionally.
 - **Never set `USE_PUBSUB=true` locally**: it routes finalize to the production push endpoint.

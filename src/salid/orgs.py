@@ -49,6 +49,7 @@ STATUSES = ("active", "past_due", "expired", "suspended")
 CATEGORIES = ("documents", "wiki", "places", "minutes", "ledger", "tasks")
 NAMESPACE_BASE = 2**62
 TRIAL_DAYS = 14
+TRIAL_SEATS = 10_000  # "no limit" for the launch trial (LicenseRequestBody caps seats at 10,000)
 
 
 def _now() -> datetime:
@@ -229,9 +230,11 @@ class UnknownMember(KeyError):
 
 
 # ------------------------------------------------------------------ store
-def trial_license(days: int = TRIAL_DAYS, now: datetime | None = None) -> License:
-    until = ((now or _now()) + timedelta(days=days)).date().isoformat()
-    return License(plan="trial", status="active", seats=5, valid_until=until)
+def trial_license(days: int | None = None, now: datetime | None = None) -> License:
+    """The launch trial: open-ended and effectively unlimited (no payment exists yet). Pass `days`
+    for a time-boxed trial (`TRIAL_DAYS` is the intended length once plans go live)."""
+    until = ((now or _now()) + timedelta(days=days)).date().isoformat() if days else None
+    return License(plan="trial", status="active", seats=TRIAL_SEATS, valid_until=until)
 
 
 class OrgStore:

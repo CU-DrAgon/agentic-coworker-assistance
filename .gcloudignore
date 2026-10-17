@@ -1,0 +1,6 @@
+# `gcloud run deploy --source .` uploads the working directory. Keep the git ignores (.env, samples/,
+# key files) and also drop local agent worktrees, which are not part of the service.
+#!include:.gitignore
+.git/
+.claude/
+tests/

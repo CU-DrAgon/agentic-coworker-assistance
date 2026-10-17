@@ -550,6 +550,7 @@ def test_old_single_team_endpoints_are_gone(client):
 
 def test_home_page_links_to_hub(client):
     assert 'href="/hub"' in client.get("/").text
+    assert 'href="/hub"' in client.get("/recorder").text
 
 
 def test_update_model_is_what_the_hub_writes():

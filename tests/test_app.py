@@ -102,15 +102,18 @@ def pubsub_body(payload) -> dict:
 
 def test_index_and_healthz(client):
     assert client.get("/healthz").json() == {"status": "ok"}
-    r = client.get("/")
+    r = client.get("/recorder")
     assert r.status_code == 200 and "Meeting Scribe" in r.text
     assert 'id="salid-add" href=""' in r.text  # no client id configured: link hidden by the page
+    home = client.get("/")
+    assert home.status_code == 200 and 'id="i18n-data"' in home.text  # Salid landing page
+    assert client.get("/salid", follow_redirects=False).headers["location"] == "/"
 
 
 def test_index_renders_salid_invite_link(env, client):
     env.setenv("SALID_DISCORD_CLIENT_ID", "123456789012345678")
     get_settings.cache_clear()
-    r = client.get("/")
+    r = client.get("/recorder")
     from meeting_scribe.app import CREATE_EVENTS, MANAGE_EVENTS, SALID_PERMISSIONS
 
     assert SALID_PERMISSIONS == 1166416 | (1 << 44) | (1 << 33) | (1 << 49)

@@ -26,6 +26,7 @@ from salid.orgs import (
     Workspace,
     WorkspaceTaken,
     namespaced_id,
+    trial_license,
     workspace_memory_id,
 )
 from salid.places import PlaceRepo, PlacesCtx, PlaceTools, make_source
@@ -68,7 +69,10 @@ def test_create_lookup_and_indexes(orgs):
     org = orgs.create("Acme", "Boss@Example.com")
     assert org.owner_email == "boss@example.com" and org.role_of("BOSS@example.com") == "owner"
     assert [w.platform for w in org.workspaces] == ["web"]
-    assert org.license.plan == "trial" and org.license.valid_until == "2026-10-30"
+    assert org.license.plan == "trial" and org.license.valid_until is None  # launch: open-ended
+    assert (
+        org.license.seats == 10_000 and trial_license(days=14, now=NOW).valid_until == "2026-10-30"
+    )
     assert orgs.get(org.id).name == "Acme" and orgs.get("nope") is None
     assert [o.id for o in orgs.orgs_of_email("boss@example.com")] == [org.id]
     assert orgs.orgs_of_email("x@example.com") == []

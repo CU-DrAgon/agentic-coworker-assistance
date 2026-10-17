@@ -258,12 +258,14 @@ def test_me_lists_orgs_with_roles_and_super_sees_all(w):
     assert {o["role"] for o in sup["orgs"]} == {"super"}
 
 
-def test_create_org_gives_owner_web_workspace_and_14_day_trial(w):
+def test_create_org_gives_owner_web_workspace_and_open_ended_trial(w):
     r = w.client.post("/api/center/orgs", json={"name": "New Co"}, headers=H["stranger"])
     assert r.status_code == 200, r.text
     org = r.json()
     assert org["role"] == "owner" and org["owner_email"] == "stranger@example.com"
-    assert org["license"]["plan"] == "trial" and org["license"]["days_left"] in (13, 14)
+    lic = org["license"]
+    assert lic["plan"] == "trial" and lic["days_left"] is None and lic["active"]  # no end, no cap
+    assert lic["seats"] == 10_000
     assert [x["platform"] for x in org["workspaces"]] == ["web"]
     assert w.client.get(f"/api/center/orgs/{org['id']}", headers=H["stranger"]).status_code == 200
     for i in range(center.MAX_ORGS_PER_USER):

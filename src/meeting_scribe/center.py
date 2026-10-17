@@ -368,7 +368,7 @@ class CreateOrg(BaseModel):
 async def create_org(
     body: CreateOrg, email: str = Depends(hub.require_user), orgs: OrgStore = Depends(get_orgs)
 ) -> OrgView:
-    """The creator becomes owner; the license is a 14-day trial."""
+    """The creator becomes owner; the license is the open-ended launch trial."""
 
     def run() -> Org:
         mine = [o for o in orgs.orgs_of_email(email) if o.role_of(email) == "owner"]
