@@ -411,7 +411,7 @@ RESULT_CUE_SHORT_EN = (
     "(The requested job is done. Job {job}, question: {question}. Say ONE short sentence: "
     "“The {question} result is in the chat.” and stop. Do not read the result out.)"
 )
-SHORT_ANSWER_CHARS = 160  # an answer this short is spoken in full
+SHORT_ANSWER_CHARS = 700  # an answer this short is spoken in full (only long lists go "see the chat")
 FAILED_CUE = (
     "(งานที่ขอไว้ งาน {job} คำถาม: {question} ทำไม่สำเร็จ — แจ้งสั้น ๆ ว่าทำให้ไม่ได้ "
     "โดยพูดตามนี้ ห้ามเรียบเรียงใหม่: {answer})"

@@ -133,7 +133,7 @@ class Settings(BaseSettings):
     # job runs on, the room keeps talking, and the result is announced at the next pause
     # (`live_result_pause_seconds` of no room audio, waited for at most `live_result_wait_seconds`;
     # it is always posted to the text chat). At most `live_max_jobs` run at once per session.
-    live_foreground_seconds: float = 12.0
+    live_foreground_seconds: float = 25.0  # most lookups stay conversational (spoken when done)
     # How a finished background job is announced by voice: "short" = one sentence ("the result is in
     # the chat"; an answer of <= 160 chars is said in full), "full" = the whole result, "off" =
     # chat only (SALID_LIVE_RESULT_VOICE). Progress is never spoken.
