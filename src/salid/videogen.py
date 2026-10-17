@@ -11,7 +11,11 @@ model settings are set (`SALID_VIDEO_HERO_MODEL`, `SALID_VIDEO_MUSIC_MODEL`; emp
   the Gemini API docs and the installed SDK (which maps the Lyria models' `outputs` onto
   `output_audio`); nobody with project access has run it on Vertex yet, so any failure is None.
 
-Model ids are settings; `scripts/salid_media_probe.py` checks them live (human approval only).
+Paid creates (`start_hero`, `music_clip`) should get `llm.make_media_client` (no SDK retry on
+5xx, so one request never starts two paid jobs); polls and cancel the normal client.
+`error_status` / `permission_denied` read both SDK error families (the Interactions API raises
+compat errors such as PermissionDeniedError with `.status_code`, not `.code`). Model ids are
+settings; `scripts/salid_media_probe.py` checks them live (human approval only).
 Never logs prompts or media: only reasons, statuses and exception type names.
 """
 
@@ -106,6 +110,32 @@ def start_hero(
     return str(iid)
 
 
+def _status(interaction) -> str:
+    """The interaction's status in lower case ("" when there is none)."""
+    return str(getattr(interaction, "status", "") or "").lower()
+
+
+def error_status(e: BaseException) -> tuple[int | None, str]:
+    """(HTTP status code, status text) of an SDK error, (None, "") for anything else. Covers
+    both families: `google.genai.errors.APIError` (`.code`, `.status`) and the Interactions API's
+    compat errors (`.status_code`, the JSON body's `error.status`, e.g. PermissionDeniedError)."""
+    code = getattr(e, "status_code", None) or getattr(e, "code", None)
+    status = getattr(e, "status", None)
+    body = getattr(e, "body", None)
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict):
+        code = code or err.get("code")
+        status = status or err.get("status")
+    return (code if isinstance(code, int) else None), str(status or "")
+
+
+def permission_denied(e: BaseException) -> bool:
+    """True if `e` is the service refusing these credentials (HTTP 403 / PERMISSION_DENIED)."""
+    code, status = error_status(e)
+    denied = type(e).__name__ == "PermissionDeniedError"
+    return denied or code == 403 or status == "PERMISSION_DENIED"
+
+
 def _cancel(client, interaction_id: str) -> None:
     try:
         client.interactions.cancel(interaction_id)
@@ -155,7 +185,7 @@ def wait_hero(
             logger.warning("hero clip poll failed: %s", type(e).__name__)
             _cancel(client, interaction_id)
             return None, "error"
-        status = str(getattr(interaction, "status", "") or "")
+        status = _status(interaction)
         if status == "completed":
             try:
                 data = _inline(getattr(interaction, "output_video", None))
@@ -196,7 +226,7 @@ def music_clip(client, model: str, prompt_en: str, seconds: int) -> bytes | None
             input=prompt_en.strip() + MUSIC_SUFFIX.format(seconds=int(seconds)),
             timeout=MUSIC_TIMEOUT_S,
         )
-        status = str(getattr(interaction, "status", "") or "")
+        status = _status(interaction)
         if status != "completed":
             logger.warning("music clip ended with status %s", status[:40])
             return None

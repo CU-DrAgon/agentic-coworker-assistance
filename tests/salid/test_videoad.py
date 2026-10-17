@@ -803,13 +803,13 @@ def fake_pipeline(monkeypatch):
         out.write_bytes(b"mp4")
         return out
 
-    def hero(client, settings, still, scene, handle, out):
+    def hero(client, settings, still, scene, handle, out, *, media_client=None):
         fp.hero_calls += 1
         if fp.hero_ok:
             out.write_bytes(b"hero")
         return fp.hero_ok
 
-    def music(client, settings, board, seconds, handle, out):
+    def music(client, settings, board, seconds, handle, out, *, media_client=None):
         fp.music_calls += 1
         if not fp.music_ok:
             return None
@@ -977,7 +977,7 @@ def test_hero_cost_is_counted_as_soon_as_its_seconds_are_taken(
 ):
     h = videoad.VideoHandle()
 
-    def hero(client, settings, still, scene, handle, out):
+    def hero(client, settings, still, scene, handle, out, *, media_client=None):
         handle.cancelled.set()  # cancelled while the first hero clip is being made
         return False
 

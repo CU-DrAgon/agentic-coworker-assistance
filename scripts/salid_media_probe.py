@@ -4,16 +4,17 @@
         [--video-model ID] [--music-model ID]
 
 --image  one 1K 9:16 Nano Banana image (SALID_IMAGE_MODEL), about $0.03.
---video  one 4 s 360p Gemini Omni image-to-video clip, inline delivery (SALID_VIDEO_HERO_MODEL,
-         else --video-model, default gemini-omni-1.1-flash-preview), well under $1.
---music  one Lyria clip (SALID_VIDEO_MUSIC_MODEL, else --music-model, default
+--video  one 4 s 360p Gemini Omni image-to-video clip, inline delivery (--video-model, else
+         SALID_VIDEO_HERO_MODEL, else gemini-omni-1.1-flash-preview), well under $1.
+--music  one Lyria clip (--music-model, else SALID_VIDEO_MUSIC_MODEL, else
          lyria-3-clip-preview), about $0.04; this call shape is unverified, the probe checks it.
+Paid creates use `llm.make_media_client` (no SDK retry on 5xx), as the bot does.
 
 Needs ADC for SALID_GCP_PROJECT (`gcloud auth application-default login`). Refuses to run when
 GOOGLE_APPLICATION_CREDENTIALS points to a key of another project. Files go to
 /tmp/salid-media-probe/ only; nothing is stored anywhere else. Prints latency, status, usage and
-the file written for each call; never credentials, and of an error only its type, code and status
-(messages may carry account details).
+the file written for each call; never credentials, and of an error only its type, HTTP status code
+and status text (messages may carry account details).
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from PIL import Image, ImageDraw
 
 from salid import imagegen, videogen
 from salid.config import Settings
-from salid.llm import make_client
+from salid.llm import make_client, make_media_client
 
 OUT_DIR = Path("/tmp/salid-media-probe")
 OMNI_DEFAULT = "gemini-omni-1.1-flash-preview"
@@ -104,10 +105,12 @@ class RecordingClient:
 
 
 def _error(e: BaseException | None) -> str:
-    """An error as type, code and status only (messages may carry account details)."""
+    """An error as type, HTTP status code and status text only (messages may carry account
+    details); both SDK error families (`videogen.error_status`)."""
     if e is None:
         return "none"
-    return f"{type(e).__name__} code={getattr(e, 'code', None)} status={getattr(e, 'status', None)}"
+    code, status = videogen.error_status(e)
+    return f"{type(e).__name__} status_code={code} status={status or None}"
 
 
 def _usage(obj) -> str:
@@ -152,17 +155,18 @@ def probe_image(client: RecordingClient, model: str) -> bool:
     return True
 
 
-def probe_video(client: RecordingClient, model: str) -> bool:
-    calls = client.interactions
+def probe_video(main: RecordingClient, media: RecordingClient, model: str) -> bool:
+    """The create on `media` (as the bot does), polls and cancel on `main`."""
+    calls = main.interactions
     t = time.monotonic()
     try:
-        iid = videogen.start_hero(client, model, _cup_png(), VIDEO_PROMPT, 4, resolution="360p")
+        iid = videogen.start_hero(media, model, _cup_png(), VIDEO_PROMPT, 4, resolution="360p")
     except Exception as e:
         ms = int((time.monotonic() - t) * 1000)
         print(f"video model={model} ms={ms} status=not-started usage=none error={_error(e)}")
         return False
     data, reason = videogen.wait_hero(
-        client, iid, cancelled=threading.Event(), poll_s=POLL_S, timeout_s=videogen.TIMEOUT_S
+        main, iid, cancelled=threading.Event(), poll_s=POLL_S, timeout_s=videogen.TIMEOUT_S
     )
     ms = int((time.monotonic() - t) * 1000)
     last = calls.last
@@ -181,10 +185,10 @@ def probe_video(client: RecordingClient, model: str) -> bool:
     return True
 
 
-def probe_music(client: RecordingClient, model: str) -> bool:
-    calls = client.interactions
+def probe_music(media: RecordingClient, model: str) -> bool:
+    calls = media.interactions
     t = time.monotonic()
-    data = videogen.music_clip(client, model, MUSIC_PROMPT, 30)
+    data = videogen.music_clip(media, model, MUSIC_PROMPT, 30)
     ms = int((time.monotonic() - t) * 1000)
     last = calls.last
     usage = getattr(last, "usage", None)
@@ -220,15 +224,16 @@ def main(argv: list[str] | None = None) -> int:
         print(problem, file=sys.stderr)
         return 1
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    client = RecordingClient(make_client(s))
+    main, media = RecordingClient(make_client(s)), RecordingClient(make_media_client(s))
     print(f"project={s.gcp_project} location={s.gemini_location} out={OUT_DIR}")
     ok = True
     if args.image:
-        ok = probe_image(client, s.image_model) and ok
+        ok = probe_image(main, s.image_model) and ok
     if args.video:
-        ok = probe_video(client, args.video_model or s.video_hero_model or OMNI_DEFAULT) and ok
+        model = args.video_model or s.video_hero_model or OMNI_DEFAULT
+        ok = probe_video(main, media, model) and ok
     if args.music:
-        ok = probe_music(client, args.music_model or s.video_music_model or LYRIA_DEFAULT) and ok
+        ok = probe_music(media, args.music_model or s.video_music_model or LYRIA_DEFAULT) and ok
     return 0 if ok else 1
 
 

@@ -442,12 +442,17 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
 - **Video ad add-ons: hero clips and music** (`src/salid/videogen.py`, both **off** while their settings are empty,
   which is the default; with both empty an ad is exactly the slideshow above). Both go through the google-genai
   Interactions API and are **unverified on this project**: nobody with project access has run them yet.
+  Their paid requests go through a separate client with no SDK retry on 5xx / 408 / 409 (a retry after the
+  service accepted the job would start, and bill, a second one); only a 429 is retried once, and the SDK
+  still retries a connection error or timeout once. Polls and cancels use the normal client.
   - *Hero clips* (`SALID_VIDEO_HERO_MODEL`, e.g. `gemini-omni-1.1-flash-preview` as in the spec; the installed SDK
     lists `gemini-omni-1.1-flash` and `gemini-omni-flash-preview`, so let the probe decide the id): a storyboard
     scene with source `hero` becomes a generated Gemini Omni clip of its still (image-to-video, 9:16, 720p, 4-6 s,
     inline delivery, background job polled every 10 s for up to 8 minutes, cancelled with the ad). The English
-    prompt loses its quote characters and gets "Single continuous shot, no on-screen text, no dialogue."; a Thai
-    prompt is never sent. The clip is cover-cropped to 1080x1920 30 fps (never stretched), its last frame held to
+    prompt loses its quote characters and gets "Slow cinematic camera push-in. Single continuous shot, no
+    on-screen text, no dialogue."; a Thai prompt is never sent. A scene whose still fell back to the plain
+    accent card gets no hero call, and once the service refuses one hero request the other hero scenes keep
+    their slow-zoom clips without spending their seconds. The clip is cover-cropped to 1080x1920 30 fps (never stretched), its last frame held to
     the scene's length, and its sound dropped. The seconds requested (the scene rounded up, 4 to 6) are taken from
     `SALID_VIDEO_HERO_SECONDS_PER_MONTH` (60 per guild) before each call and never refunded; blocked, failed, timed
     out or over the budget, the scene keeps its slow-zoom clip.
@@ -459,11 +464,13 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   - *Probe* (live, billed, **only with human approval** and ADC for `SALID_GCP_PROJECT`):
     `uv run python scripts/salid_media_probe.py --image --video [--music]` makes one 1K image, one 4 s 360p Omni
     clip and optionally one Lyria clip, writes them to `/tmp/salid-media-probe/` only, and prints latency, status
-    and usage (never credentials; errors as type, code and status only). It refuses to run when
+    and usage (never credentials; errors as type, HTTP status code and status text only). Its paid
+    requests use the same no-retry client as the bot. It refuses to run when
     `GOOGLE_APPLICATION_CREDENTIALS` points to a key of another project (unset it and run
     `gcloud auth application-default login`). Live tests: `uv run pytest -m live -k "create_image or omni or
-    slideshow"` (one image, one Omni probe that skips on 403 / PERMISSION_DENIED, one full 15 s slideshow ad saved
-    under a printed temp folder).
+    slideshow"` (one image; one Omni probe that skips when the service answers 403 / PERMISSION_DENIED, read
+    from either SDK error family, since Interactions errors carry `status_code` rather than `code`; one full
+    15 s slideshow ad saved under a printed temp folder).
   - *Human gates* (never without approval and GCP project access): the probe `--image --video`, the live tests
     above, a visual check of a real ad, push and PR, the deploy, and setting `SALID_VIDEO_HERO_MODEL` /
     `SALID_VIDEO_MUSIC_MODEL` (after the probe shows the model works on this project).

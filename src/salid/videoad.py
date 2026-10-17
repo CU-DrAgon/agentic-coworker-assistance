@@ -347,6 +347,7 @@ STILL_WORKERS = 3  # scenes whose still is made at the same time
 STILL_TRIES = 2  # one try and one retry (none when blocked), then the fallback card
 STILL_PROMPT = "{prompt}\nNo text, letters, numbers, logos or watermarks anywhere in the picture."
 CARD_TOP, CARD_BOTTOM = 0.70, 0.45  # accent darkened to this at the card's top / bottom
+_CARD_MARK = "salid_fallback_card"  # Image.info key set on fallback cards
 CAPTION_SIZES = (88, 48)
 CAPTION_LINES = 3
 LABEL_SIZE = 30
@@ -376,7 +377,14 @@ def fallback_card(accent: str) -> Image.Image:
     fill = ImageColor.getrgb(ACCENTS.get(accent, ACCENTS["red"])[0])
     top = Image.new("RGB", (W, H), tuple(round(c * CARD_TOP) for c in fill))
     bottom = Image.new("RGB", (W, H), tuple(round(c * CARD_BOTTOM) for c in fill))
-    return Image.composite(bottom, top, Image.linear_gradient("L").resize((W, H)))
+    card = Image.composite(bottom, top, Image.linear_gradient("L").resize((W, H)))
+    card.info[_CARD_MARK] = True  # the runner gives such a scene no hero clip
+    return card
+
+
+def is_fallback_card(img: Image.Image) -> bool:
+    """True if `img` is a `fallback_card` (a scene with no picture to animate)."""
+    return bool(img.info.get(_CARD_MARK))
 
 
 def _ai_still(client, model: str, scene: Scene) -> tuple[Image.Image | None, int]:
@@ -874,6 +882,7 @@ USAGE = "salid_media_usage"  # DocStore kind: per guild, key "YYYY-MM": ads, her
 STILL_USD = 0.0504  # one 2K Nano Banana 2.1 image
 HERO_USD_PER_S = 0.15  # one second of Omni image-to-video (estimate to verify)
 MUSIC_USD = 0.04  # one Lyria clip (estimate to verify)
+HERO_MOTION = "Slow cinematic camera push-in."  # the motion every hero clip asks for
 MUSIC_PROMPT = (
     "Warm, upbeat background music for a short vertical video ad of a small local shop: light "
     "percussion, a friendly melody and a steady tempo, mixed to sit under a voice-over."
@@ -888,6 +897,11 @@ class Cancelled(Exception):
 
 class MonthLimit(RuntimeError):
     """The guild's video ads for this month are used up (the tool's peek raced another job)."""
+
+
+class HeroRefused(RuntimeError):
+    """The video service refused to start a hero clip (any error from the create call): the
+    runner asks for no more hero clips in this ad. The message is the error's type name."""
 
 
 def _noop(step: str, detail: str) -> None:
@@ -958,28 +972,52 @@ class VideoResult:
     steps_ms: dict[str, int]
 
 
-def _hero_clip(client, settings, still: Path, scene: Scene, handle: VideoHandle, out: Path) -> bool:
+def hero_prompt(scene: Scene) -> str:
+    """The Omni prompt of a hero scene (`start_hero` appends HERO_SUFFIX): its English picture
+    prompt without quote characters, then HERO_MOTION; "" when no words are left."""
+    text = videogen.strip_quotes(scene.image_prompt_en).rstrip(" .")
+    return f"{text}. {HERO_MOTION}" if text else ""
+
+
+def _hero_clip(
+    client,
+    settings,
+    still: Path,
+    scene: Scene,
+    handle: VideoHandle,
+    out: Path,
+    *,
+    media_client=None,
+) -> bool:
     """A generated motion clip of `scene` from its `still`, written to `out`; False when there is
     none (the scene keeps its motion clip). Called only for hero scenes and only when
     `settings.video_hero_model` is set; the runner has already taken (and billed)
     `videogen.hero_seconds(scene.seconds)` from the month's budget, so nothing is taken here.
 
-    One Omni call: the scene's English prompt without quote characters (a Thai prompt is refused
-    before any call), `hero_seconds` long, polled until done (a job cancel wakes the wait,
+    One Omni call on `media_client` (no SDK retry on 5xx; None = `client`): `hero_prompt`
+    (English only: anything else is refused before any call), `hero_seconds` long. Any error from
+    that create raises HeroRefused. Polled on `client` until done (a job cancel wakes the wait,
     cancels the interaction and raises Cancelled). The returned MP4 is conformed to exactly the
     scene's length by `conform_clip`. Blocked, timed out, failed or unreadable -> False."""
-    prompt = videogen.strip_quotes(scene.image_prompt_en)
+    prompt = hero_prompt(scene)
+    if not videogen.plain_english(prompt):
+        logger.warning("video hero clip not started: prompt is not plain English")
+        return False
+    try:
+        still_png = still.read_bytes()
+    except OSError as e:
+        logger.warning("video hero clip not started: %s", type(e).__name__)
+        return False
     try:
         iid = videogen.start_hero(
-            client,
+            media_client or client,
             settings.video_hero_model,
-            still.read_bytes(),
+            still_png,
             prompt,
             videogen.hero_seconds(scene.seconds),
         )
-    except Exception as e:  # refused prompt, unreadable still or a failed request
-        logger.warning("video hero clip not started: %s", type(e).__name__)
-        return False
+    except Exception as e:  # never the message: it may carry account details
+        raise HeroRefused(type(e).__name__) from e
     data, reason = videogen.wait_hero(
         client, iid, cancelled=handle.cancelled, sleep=handle.cancelled.wait
     )
@@ -1001,16 +1039,25 @@ def _hero_clip(client, settings, still: Path, scene: Scene, handle: VideoHandle,
 
 
 def _music_track(
-    client, settings, board: Storyboard, seconds: float, handle: VideoHandle, out: Path
+    client,
+    settings,
+    board: Storyboard,
+    seconds: float,
+    handle: VideoHandle,
+    out: Path,
+    *,
+    media_client=None,
 ) -> Path | None:
     """A background music track for the ad (`seconds` long) written to `out` and returned; None
     when there is none (the ad has no music). Called only when the user asked for music and
     `settings.video_music_model` is set, after the runner took the month's music clip. One
-    Lyria call with the fixed English MUSIC_PROMPT (`videogen.music_clip`, unverified API; None
-    on any failure), then `conform_music` to a 48 kHz stereo WAV cut to the ad with fades.
-    Raises Cancelled when the job was cancelled meanwhile, RuntimeError when ffmpeg cannot read
-    the audio."""
-    data = videogen.music_clip(client, settings.video_music_model, MUSIC_PROMPT, math.ceil(seconds))
+    Lyria call on `media_client` (None = `client`) with the fixed English MUSIC_PROMPT
+    (`videogen.music_clip`, unverified API; None on any failure), then `conform_music` to a
+    48 kHz stereo WAV cut to the ad with fades. Raises Cancelled when the job was cancelled
+    meanwhile, RuntimeError when ffmpeg cannot read the audio."""
+    data = videogen.music_clip(
+        media_client or client, settings.video_music_model, MUSIC_PROMPT, math.ceil(seconds)
+    )
     check(handle)
     if not data:
         return None
@@ -1046,6 +1093,7 @@ def run_video_ad(
     handle: VideoHandle,
     usage: MediaUsage,
     month: str,
+    media_client=None,
 ) -> VideoResult:
     """Make the whole ad in `workdir` (blocking; the bot runs it in a worker thread).
 
@@ -1057,6 +1105,10 @@ def run_video_ad(
     `settings.video_music_model` is set, via `_music_track`; one `music_clips` taken from the
     month's budget first, capped at `settings.video_ads_per_month`), captions (`label=False`:
     `assemble` adds the one AI label) and the final `ad-YYYYMMDD-HHMM.mp4` under `budget_mib`.
+    Paid media creates (hero clips, music) go to `media_client` (`llm.make_media_client`: no SDK
+    retry on 5xx; None = `client`); a hero scene whose still is the fallback card, or whose
+    prompt is not plain English, gets no hero call (and no budget), and after the service refuses
+    one hero clip (HeroRefused) the rest keep their motion clips without taking their seconds.
     `check(handle)` runs before every step and every hero call. `handle.cost_usd` counts each
     paid call as soon as it is made, so a cancelled job still reports what it spent. Raises
     Cancelled, StoryboardError or RuntimeError. Logs one line per step (guild, step, ms, cost
@@ -1113,6 +1165,14 @@ def run_video_ad(
     done("stills", t0, billed * STILL_USD)
 
     heroes = [i for i, s in enumerate(scenes) if s.source == "hero"][:heroes_allowed]
+    usable = [
+        i
+        for i in heroes
+        if not is_fallback_card(images[i]) and videogen.plain_english(hero_prompt(scenes[i]))
+    ]
+    if len(usable) < len(heroes):  # no picture to animate, or no English prompt: no budget spent
+        logger.info("video hero skipped for %d scenes: guild=%s", len(heroes) - len(usable), gid)
+    heroes = usable
     if heroes:
         check(handle)
         _report(handle, "hero", f"{len(heroes)} shots")
@@ -1130,9 +1190,14 @@ def run_video_ad(
             spend(secs * HERO_USD_PER_S)
             out = workdir / f"hero{i}.mp4"
             try:
-                made = _hero_clip(client, settings, stills[i], scenes[i], handle, out)
+                made = _hero_clip(
+                    client, settings, stills[i], scenes[i], handle, out, media_client=media_client
+                )
             except Cancelled:
                 raise
+            except HeroRefused as e:  # the next request would be refused too: spend no more
+                logger.warning("video hero refused (%s): no more hero clips in this ad", e)
+                break
             except Exception as e:  # the scene keeps its motion clip
                 logger.warning("video hero clip failed: %s", type(e).__name__)
                 made = False
@@ -1167,7 +1232,13 @@ def run_video_ad(
                 spend(MUSIC_USD)
                 try:
                     music = _music_track(
-                        client, settings, board, sum(seconds), handle, workdir / "music.wav"
+                        client,
+                        settings,
+                        board,
+                        sum(seconds),
+                        handle,
+                        workdir / "music.wav",
+                        media_client=media_client,
                     )
                 except Cancelled:
                     raise

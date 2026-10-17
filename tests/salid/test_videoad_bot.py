@@ -110,9 +110,12 @@ def runner(monkeypatch):
     is the cost estimate it reports before its first step."""
     r = SimpleNamespace(calls=[], error=None, wait_cancel=False, spent=0.0)
 
-    def fake(req, *, client, settings, say, workdir, budget_mib, handle, usage, month):
+    def fake(
+        req, *, client, settings, say, workdir, budget_mib, handle, usage, month, media_client=None
+    ):
         r.calls.append(SimpleNamespace(req=req, workdir=workdir, budget=budget_mib, month=month,
-                                       handle=handle, say=say))  # fmt: skip
+                                       handle=handle, say=say, client=client,
+                                       media_client=media_client))  # fmt: skip
         if not usage.take(req.guild_id, month, "ads", 1, settings.video_ads_per_month):
             raise videoad.MonthLimit("month limit")
         handle.cost_usd = r.spent
@@ -136,6 +139,13 @@ def ready(bot, monkeypatch):
     """ffmpeg and Thai shaping available, quick timers; the flag is still off."""
     monkeypatch.setattr(videoad_bot, "ffmpeg_ready", lambda: True)
     monkeypatch.setattr(videoad_bot.cards, "thai_ready", lambda: True)
+    bot.media_clients = []
+
+    def media_client(settings):  # never a real client in tests
+        bot.media_clients.append(SimpleNamespace(settings=settings))
+        return bot.media_clients[-1]
+
+    monkeypatch.setattr(videoad_bot, "make_media_client", media_client)
 
     async def sleep(s):
         bot.clock.advance(s)
@@ -372,6 +382,22 @@ async def test_hero_shots_and_music_are_ignored_while_their_models_are_empty(on,
     assert out == STARTED
     await settle(on)
     assert runner.calls[1].req.hero_shots == 2 and runner.calls[1].req.music is True
+
+
+async def test_paid_media_calls_get_their_own_client_only_when_enabled(on, world, runner):
+    tool, _ = tool_for(on, world)
+    tool(brief="a")
+    await settle(on)
+    assert runner.calls[0].media_client is None and on.media_clients == []  # add-ons off
+    assert runner.calls[0].client is on.llm
+    on.s.video_hero_model = "omni-test"
+    for _ in range(2):
+        tool(brief="b", hero_shots=1)
+        await settle(on)
+    [made] = on.media_clients  # made once, then reused
+    assert made.settings is on.s
+    assert runner.calls[1].media_client is made and runner.calls[2].media_client is made
+    assert runner.calls[1].client is on.llm  # polls and everything else stay on the main client
 
 
 async def test_the_budget_follows_the_message_server_and_dms_get_the_default(on, world, runner):

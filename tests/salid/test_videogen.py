@@ -25,7 +25,7 @@ from test_videoad import (
     sources,
 )
 
-from salid import videoad, videogen
+from salid import llm, videoad, videogen
 
 REAL_HERO = videoad._hero_clip  # fake_pipeline replaces the hook; these tests put it back
 REAL_MUSIC = videoad._music_track
@@ -56,9 +56,10 @@ class FakeInteractions:
 
     def _interaction(self, status: str, model: str | None = None) -> gi.Interaction:
         content = []
-        if status == "completed" and self.video is not None:
+        done = status.lower() == "completed"
+        if done and self.video is not None:
             content.append({"type": "video", "data": b64(self.video), "mime_type": "video/mp4"})
-        if status == "completed" and self.audio is not None:
+        if done and self.audio is not None:
             content.append({"type": "audio", "data": b64(self.audio), "mime_type": "audio/mpeg"})
         steps = [{"type": "model_output", "content": content}] if content else []
         return gi.Interaction.model_validate(
@@ -192,6 +193,14 @@ def test_other_endings(status, reason):
     assert c.cancelled == []
 
 
+def test_statuses_are_compared_in_any_case():
+    c = FakeInteractions(["IN_PROGRESS", "Completed"], b"MP4")
+    assert videogen.wait_hero(c, "i", cancelled=Event(), sleep=no_sleep) == (b"MP4", "")
+    assert videogen.wait_hero(FakeInteractions(["FAILED"]), "i", cancelled=Event(),
+                              sleep=no_sleep) == (None, "blocked")  # fmt: skip
+    assert videogen.music_clip(FakeInteractions(["COMPLETED"], audio=b"MP3"), "m", "a", 9) == b"MP3"
+
+
 def test_a_failing_poll_is_an_error_and_cancels(caplog):
     class Broken(FakeInteractions):
         def get(self, id, **kw):
@@ -275,9 +284,10 @@ def test_logs_never_carry_prompts(caplog):
 
 
 # ------------------------------------------------------------------ the real SDK, offline
-def sdk_client(monkeypatch, tmp_path, answer):
+def sdk_client(monkeypatch, tmp_path, answer, options=types.HttpOptions):
     """A real google-genai client on the Gemini API whose HTTP goes to `answer(request)` (no
-    network, no credentials: an API key and no Vertex/ADC lookup)."""
+    network, no credentials: an API key and no Vertex/ADC lookup). `options(httpx_client=...)`
+    makes its HttpOptions (`llm.media_http_options` for the paid-media client)."""
     for name in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(tmp_path / "none.json"))
@@ -290,7 +300,7 @@ def sdk_client(monkeypatch, tmp_path, answer):
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
     client = genai.Client(
-        vertexai=False, api_key="offline-test", http_options=types.HttpOptions(httpx_client=http)
+        vertexai=False, api_key="offline-test", http_options=options(httpx_client=http)
     )
     return client, seen
 
@@ -364,6 +374,60 @@ def test_music_answer_matches_the_installed_sdk(monkeypatch, tmp_path, legacy):
     assert "background" not in body and "Instrumental only" in str(body["input"])
 
 
+UNAVAILABLE = {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}
+DENIED = {"error": {"code": 403, "message": "detail-of-the-account", "status": "PERMISSION_DENIED"}}
+
+
+def test_paid_creates_are_never_retried_on_a_5xx(monkeypatch, tmp_path):
+    """A 503 after Omni / Lyria accepted the job would start (and bill) a second one: the media
+    client sends exactly one POST per paid call."""
+
+    def answer(request):
+        return httpx.Response(503, json=UNAVAILABLE)
+
+    client, seen = sdk_client(monkeypatch, tmp_path, answer, llm.media_http_options)
+    with pytest.raises(Exception) as err:
+        videogen.start_hero(client, "omni", b"PNG", "a latte", 5)
+    assert videogen.error_status(err.value) == (503, "UNAVAILABLE")
+    assert [m for m, _, _ in seen] == ["POST"]
+    seen.clear()
+    assert videogen.music_clip(client, "lyria-3-clip-preview", "Warm shop music.", 20) is None
+    assert [m for m, _, _ in seen] == ["POST"]
+
+
+def test_the_media_client_has_no_retries_but_429():
+    s = FixedClockSettings(gcp_project="p", gemini_location="global")
+    options = llm.make_media_client(s)._api_client._http_options
+    assert options.timeout == llm.REQUEST_TIMEOUT_MS
+    assert options.retry_options.attempts == 1 and options.retry_options.http_status_codes == [429]
+    assert llm.make_client(s)._api_client._http_options.retry_options is None  # unchanged
+
+
+def test_a_403_is_recognised_as_permission_denied(monkeypatch, tmp_path):
+    def answer(request):
+        return httpx.Response(403, json=DENIED)
+
+    client, _ = sdk_client(monkeypatch, tmp_path, answer, llm.media_http_options)
+    with pytest.raises(Exception) as err:
+        videogen.start_hero(client, "omni", b"PNG", "a latte", 4, resolution="360p")
+    e = err.value
+    assert type(e).__name__ == "PermissionDeniedError" and getattr(e, "code", None) is None
+    assert videogen.permission_denied(e) and videogen.error_status(e) == (403, "PERMISSION_DENIED")
+    printed = load_probe()._error(e)
+    assert "PermissionDeniedError" in printed and "status_code=403" in printed
+    assert "PERMISSION_DENIED" in printed and "detail-of-the-account" not in printed
+
+
+def test_permission_denied_in_both_error_families():
+    from google.genai import errors
+
+    assert videogen.permission_denied(errors.ClientError(403, DENIED))
+    assert videogen.error_status(errors.ClientError(403, DENIED)) == (403, "PERMISSION_DENIED")
+    assert not videogen.permission_denied(errors.ServerError(503, UNAVAILABLE))
+    assert not videogen.permission_denied(RuntimeError("403 PERMISSION_DENIED"))  # text only
+    assert videogen.error_status(RuntimeError("x")) == (None, "")
+
+
 # ------------------------------------------------------------------ the runner
 def tiny_mp4(tmp_path, size="360x640", seconds=2.0) -> bytes:
     """A real H.264 MP4 of a test pattern (with a sine tone), like a model's inline clip."""
@@ -398,10 +462,13 @@ def pipeline(request):
     return request.getfixturevalue("fake_pipeline")
 
 
-def run_ad(tmp_path, *, settings=S_HERO, handle=None, usage=None, client=NO_CLIENT, **kw):
+def run_ad(
+    tmp_path, *, settings=S_HERO, handle=None, usage=None, client=NO_CLIENT, media_client=None, **kw
+):
     return videoad.run_video_ad(
         req(**kw),
         client=client,
+        media_client=media_client,
         settings=settings,
         say=lambda t: SILENCE,
         workdir=tmp_path,
@@ -533,9 +600,71 @@ def test_hero_prompts_lose_their_quotes_and_thai_never_starts(tmp_path, real_her
     monkeypatch.setattr(videoad, "plan_storyboard", plan)
     monkeypatch.setattr(videoad.videogen, "start_hero", REAL_START)
     c = FakeInteractions(["failed"])
-    run_ad(tmp_path, client=c, hero_shots=2)
+    usage = videoad.MediaUsage(d := MemDocs())
+    run_ad(tmp_path, client=c, hero_shots=2, usage=usage)
     [created] = c.created  # the Thai prompt was refused before any call
-    assert created["input"][-1]["text"] == "a baristas hands pour art" + videogen.HERO_SUFFIX
+    assert created["input"][-1]["text"] == (
+        "a baristas hands pour art. Slow cinematic camera push-in." + videogen.HERO_SUFFIX
+    )
+    assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 5  # none for the Thai one
+
+
+def test_the_hero_prompt_carries_a_motion_cue():
+    scene = sb(5, 5, 5, 5, src="hero", prompt="a latte on a table.").scenes[0]
+    assert videoad.hero_prompt(scene) == f"a latte on a table. {videoad.HERO_MOTION}"
+    assert videoad.HERO_MOTION == "Slow cinematic camera push-in."
+    assert videogen.plain_english(videoad.HERO_MOTION + videogen.HERO_SUFFIX)
+    assert videoad.hero_prompt(sb(5, 5, 5, 5, prompt="“”").scenes[0]) == ""  # nothing left
+
+
+def test_a_scene_left_with_the_fallback_card_gets_no_hero_call(tmp_path, real_hero, monkeypatch):
+    def stills(client, model, scenes, photos, accent, fonts):
+        imgs = [Image.new("RGB", (108, 192), (90, 90, 90)) for _ in scenes]
+        imgs[0] = videoad.fallback_card(accent)  # scene 0's picture failed
+        return imgs, 2
+
+    monkeypatch.setattr(videoad, "scene_stills", stills)
+    monkeypatch.setattr(videoad.videogen, "wait_hero", lambda *a, **k: (None, "blocked"))
+    usage = videoad.MediaUsage(d := MemDocs())
+    run_ad(tmp_path, hero_shots=2, usage=usage)
+    assert [s["still"] for s in real_hero.starts] == [(tmp_path / "still1.png").read_bytes()]
+    assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 5
+    assert videoad.is_fallback_card(videoad.fallback_card("red"))
+    assert not videoad.is_fallback_card(Image.new("RGB", (4, 4)))
+
+
+def test_a_refused_start_skips_the_other_heroes_without_their_seconds(
+    tmp_path, pipeline, monkeypatch, caplog
+):
+    monkeypatch.setattr(videoad, "_hero_clip", REAL_HERO)
+    starts = []
+
+    def refuse(client, model, still_png, prompt_en, seconds, **kw):
+        starts.append(seconds)
+        raise RuntimeError("403 PERMISSION_DENIED for this project")
+
+    monkeypatch.setattr(videoad.videogen, "start_hero", refuse)
+    usage = videoad.MediaUsage(d := MemDocs())
+    h = videoad.VideoHandle()
+    res = run_ad(tmp_path, hero_shots=2, usage=usage, handle=h)
+    assert starts == [5] and res.path.exists()  # one refusal, the second hero never asked
+    assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 5
+    assert h.cost_usd == pytest.approx(2 * videoad.STILL_USD + 5 * videoad.HERO_USD_PER_S)
+    clips = pipeline.assembled[0]["clips"]
+    assert clips[:2] == [tmp_path / "clip0.mp4", tmp_path / "clip1.mp4"]
+    assert "PERMISSION_DENIED" not in caplog.text and "video hero refused" in caplog.text
+
+
+def test_paid_creates_go_to_the_media_client_and_polls_to_the_main_one(
+    tmp_path, pipeline, monkeypatch
+):
+    monkeypatch.setattr(videoad, "_hero_clip", REAL_HERO)
+    monkeypatch.setattr(videoad, "_music_track", REAL_MUSIC)
+    main, media = FakeInteractions(["failed"]), FakeInteractions(["failed"])
+    both = FixedClockSettings(video_hero_model="omni-test", video_music_model="music-test")
+    run_ad(tmp_path, settings=both, client=main, media_client=media, hero_shots=1, music=True)
+    assert [kw["model"] for kw in media.created] == ["omni-test", "music-test"]
+    assert main.created == [] and main.got == ["i"] and media.got == []
 
 
 def test_hero_logs_carry_no_prompt(tmp_path, real_hero, monkeypatch, caplog):
@@ -704,6 +833,7 @@ def test_probe_refuses_another_projects_key_before_any_client(tmp_path, monkeypa
         raise AssertionError("no client may be made")
 
     monkeypatch.setattr(mod, "make_client", no_client)
+    monkeypatch.setattr(mod, "make_media_client", no_client)
     monkeypatch.setattr(mod, "OUT_DIR", tmp_path / "out")
     assert mod.main(["--image", "--video"]) == 1
     out = capsys.readouterr()
@@ -725,13 +855,16 @@ def test_probe_writes_only_to_its_tmp_folder():
 
 
 def test_probe_runs_offline_with_a_fake_client(tmp_path, monkeypatch, capsys):
-    """The whole probe with a fake client (image, Omni and music): files land in OUT_DIR and the
-    output has latency, status and usage lines."""
+    """The whole probe with fake clients (image, Omni and music): paid creates on the media
+    client, polls on the main one, files in OUT_DIR, latency / status / usage printed."""
     mod = load_probe()
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", str(fake_key(tmp_path, "proj-ok")))
     monkeypatch.setenv("SALID_GCP_PROJECT", "proj-ok")
+    monkeypatch.setenv("SALID_VIDEO_HERO_MODEL", "setting-omni")
+    monkeypatch.setenv("SALID_VIDEO_MUSIC_MODEL", "setting-lyria")
     monkeypatch.setattr(mod, "OUT_DIR", tmp_path / "out")
-    fake = FakeInteractions(["in_progress", "completed"], b"MP4", audio=b"MP3")
+    fake = FakeInteractions(["in_progress", "completed"], b"MP4")  # the main client
+    media = FakeInteractions(["completed"], audio=b"MP3")
 
     def image_call(model, contents, config):
         assert config.image_config.image_size == "1K"
@@ -744,14 +877,20 @@ def test_probe_runs_offline_with_a_fake_client(tmp_path, monkeypatch, capsys):
 
     fake.models = type("M", (), {"generate_content": staticmethod(
         lambda *, model, contents, config: image_call(model, contents, config))})()  # fmt: skip
+    media.models = fake.models
     monkeypatch.setattr(mod, "make_client", lambda s: fake)
+    monkeypatch.setattr(mod, "make_media_client", lambda s: media)
     monkeypatch.setattr(mod, "POLL_S", 0.0)
-    assert mod.main(["--image", "--video", "--music"]) == 0
+    assert mod.main(["--image", "--video", "--music", "--video-model", "flag-omni"]) == 0
     files = sorted(p.name for p in (tmp_path / "out").iterdir())
     assert files == ["image.png", "music.mp3", "omni.mp4"]
     assert (tmp_path / "out" / "omni.mp4").read_bytes() == b"MP4"
     assert Image.open(tmp_path / "out" / "image.png").size == (576, 1024)
-    video = fake.created[0]
+    video, music = media.created
+    assert video["model"] == "flag-omni" and music["model"] == "setting-lyria"  # flag > setting
+    assert fake.created == [] and fake.got == ["i", "i"] and media.got == []
+    assert "--video-model, else SALID_VIDEO_HERO_MODEL" in " ".join(mod.__doc__.split())
+    assert "--music-model, else SALID_VIDEO_MUSIC_MODEL" in " ".join(mod.__doc__.split())
     assert video["response_format"][0]["resolution"] == "360p"
     assert video["response_format"][0]["duration"] == "4s"
     text = capsys.readouterr().out

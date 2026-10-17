@@ -36,6 +36,7 @@ import discord
 from . import cards, speech
 from .dm import send_dm
 from .i18n import CATALOG, resolve_lang, t
+from .llm import make_media_client
 from .promo import PHOTO_MIMES
 from .videoad import (
     LENGTHS,
@@ -119,6 +120,18 @@ class VideoAdMixin:
         self._video_lock = threading.Lock()  # agent tools may run in worker threads
         self._video_swept = False
         self.video_usage = MediaUsage(self.docs)
+        self._video_media = None  # made by `_video_media_client` when an add-on is on
+
+    def _video_media_client(self):
+        """The client for paid media creates (`llm.make_media_client`: no SDK retry on 5xx),
+        made once and only while a hero or music model is set; None otherwise (no paid create
+        can happen, and the runner falls back to `self.llm`)."""
+        if not (self.s.video_hero_model or self.s.video_music_model):
+            return None
+        with self._video_lock:
+            if self._video_media is None:
+                self._video_media = make_media_client(self.s)
+            return self._video_media
 
     # ------------------------------------------------------------- agent tool
     def _video_tools(self, message, guild, asker, files) -> list:
@@ -295,6 +308,7 @@ class VideoAdMixin:
                     run_video_ad,
                     req,
                     client=self.llm,
+                    media_client=self._video_media_client(),
                     settings=self.s,
                     say=say,
                     workdir=Path(tmp),

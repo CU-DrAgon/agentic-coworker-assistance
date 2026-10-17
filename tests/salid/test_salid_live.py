@@ -295,6 +295,7 @@ def test_live_omni_probe(tmp_path):
     from promo_helpers import probe
 
     from salid import videogen
+    from salid.llm import make_media_client
 
     s = Settings.from_env()
     model = s.video_hero_model or "gemini-omni-1.1-flash-preview"
@@ -302,10 +303,12 @@ def test_live_omni_probe(tmp_path):
     prompt = "A white ceramic cup on a wooden table, steam rising slowly, gentle camera push-in."
     t = time.monotonic()
     try:
-        iid = videogen.start_hero(client, model, _cup_png(), prompt, 4, resolution="360p")
-    except Exception as e:
-        code, status = getattr(e, "code", None), str(getattr(e, "status", "") or "")
-        if code == 403 or "PERMISSION_DENIED" in status:
+        iid = videogen.start_hero(
+            make_media_client(s), model, _cup_png(), prompt, 4, resolution="360p"
+        )
+    except Exception as e:  # Interactions errors: PermissionDeniedError with .status_code 403
+        if videogen.permission_denied(e):
+            code, status = videogen.error_status(e)
             pytest.skip(f"Omni refused these credentials ({code} {status}); needs project access")
         raise
     data, reason = videogen.wait_hero(client, iid, cancelled=Event(), poll_s=5.0)
