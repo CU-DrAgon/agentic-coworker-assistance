@@ -10,7 +10,8 @@ promo kits, `create_image` and the video ad stills, and the guards every caller 
 - `open_capped`: the decode guard for images decoded in the shared bot process (2 GiB).
 - `create_image` (`image_tools`, bound by `imagegen_bot.ImageMixin`): 1-4 images from an English
   prompt, an attached photo or a remembered result as the reference, optional Thai/English text
-  typeset by `overlay` on a scrim band (top for 9:16, bottom otherwise), PNG files. Daily limits
+  typeset by `overlay` on a scrim band (top for 9:16, bottom otherwise), PNG files (the whole
+  batch as JPEG when the PNGs pass OUTBOX_MAX_BYTES, under Discord's upload limit). Daily limits
   per guild and per person (`DailyBudget`), taken per image before the calls (blocked calls are
   billed too). `ImageMemory` keeps the last batch per (guild, channel, user) for revisions, in
   process memory only.
@@ -182,6 +183,7 @@ SUBTITLE_MAX = 60
 REF_SIDE = 2048  # an attached reference photo is shrunk to this long side (like promo photos)
 MEMORY_SIDE = 1376  # remembered results: 1K kept as made, 2K halved (a reference needs no more)
 MEMORY_BYTES = 128 * 1024 * 1024  # all remembered results together, least recently used dropped
+OUTBOX_MAX_BYTES = 20 * 1024 * 1024  # one reply's files (Discord refuses the whole upload above)
 NOTE = (
     "Reply briefly in the user's language: the images are attached and were made with AI. Do not "
     "describe people in them as real."
@@ -436,19 +438,24 @@ class ImageCtx:
         images, reason = generate_images(
             self.client, self.model, prompt, refs=refs, aspect=aspect, size=size, count=n
         )
-        files, kept = [], []
+        files, kept, shown = [], [], []
         for i, img in enumerate(images, 1):
             small = img.copy()
             small.thumbnail((MEMORY_SIDE, MEMORY_SIDE), Image.Resampling.LANCZOS)
             kept.append(_png(small))  # the reference for `revise`: never the overlay text
             if headline or subtitle:
-                shown, _ = overlay(
-                    img, headline, subtitle, accent, self.fonts, top=aspect == "9:16"
-                )
-                data = _png(shown)
+                img, _ = overlay(img, headline, subtitle, accent, self.fonts, top=aspect == "9:16")
+                data = _png(img)
             else:
                 data = kept[-1] if small.size == img.size else _png(img)
+            shown.append(img)
             files.append((f"image-{i}.png", data))
+        if sum(len(d) for _, d in files) > OUTBOX_MAX_BYTES:  # the whole batch, one format
+            each = OUTBOX_MAX_BYTES // len(shown)
+            files = [
+                (f"image-{i}.jpg", cards.to_jpeg(img, max_bytes=each))
+                for i, img in enumerate(shown, 1)
+            ]
         if files:
             self.outbox[:] = files  # a second call in the same turn replaces the first batch
             self.memory.put(self.key, kept)

@@ -329,6 +329,28 @@ def test_files_are_png_with_overlay_and_memory_keeps_the_clean_images():
     assert len(c.memory.get(c.key)) == 1
 
 
+def test_a_batch_over_the_upload_budget_becomes_jpeg(monkeypatch):
+    noisy = [Image.effect_noise((2048, 2048), 120).convert("RGB") for _ in range(4)]
+    monkeypatch.setattr(imagegen, "generate_images", lambda *a, **k: (list(noisy), ""))
+    c = ictx()
+    t = imagegen.image_tools(c)[0]
+    out = t(prompt="static on an old tv", count=4, size="2K", headline="ทีวีเก่า")
+    names = [n for n, _ in t.outbox]
+    assert out["status"] == "ok" and out["files"] == names
+    assert names == ["image-1.jpg", "image-2.jpg", "image-3.jpg", "image-4.jpg"]
+    assert sum(len(d) for _, d in t.outbox) <= imagegen.OUTBOX_MAX_BYTES
+    with Image.open(io.BytesIO(t.outbox[0][1])) as im:
+        assert im.format == "JPEG" and im.size == (2048, 2048)
+    assert all(d.startswith(b"\x89PNG") for d in c.memory.get(c.key))  # memory stays PNG
+
+
+def test_a_small_batch_stays_png():
+    t = imagegen.image_tools(ictx())[0]
+    out = t(prompt="a cup", count=4, size="1K")
+    assert out["files"] == [f"image-{i}.png" for i in range(1, 5)]
+    assert all(d.startswith(b"\x89PNG") for _, d in t.outbox)
+
+
 def test_overlay_darkens_the_band_and_draws_thai():
     w, h = 1024, 1024
     out, placed = imagegen.overlay(

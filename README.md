@@ -414,7 +414,8 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   `uv run python scripts/salid_sample_promo.py <photo>` (offline; `--live` makes one billed call) and the live test
   `pytest tests/salid/test_salid_live.py -m live -k promo -s`.
 - **Images from a description** (`src/salid/imagegen.py`, `imagegen_bot.py`, feature flag `images`, default on):
-  "วาดรูปแมวในร้านกาแฟ สไตล์สีน้ำ" and the `create_image` tool returns 1-4 PNGs (`image-1.png` ...) in 1:1, 4:5,
+  "วาดรูปแมวในร้านกาแฟ สไตล์สีน้ำ" and the `create_image` tool returns 1-4 PNGs (`image-1.png` ...; the whole batch
+  as `image-N.jpg` when the PNGs would pass 20 MiB, so the reply stays under Discord's upload limit) in 1:1, 4:5,
   9:16 or 16:9, 1K or 2K, made with Nano Banana (`SALID_IMAGE_MODEL`, default `gemini-nano-banana-2.1`, location
   `global`, one call per image, no retry). The agent writes the prompt in English (a Thai prompt is refused before
   any call, because the model would draw the Thai); Thai or English text the user wants on the image goes in
