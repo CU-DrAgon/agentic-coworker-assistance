@@ -62,6 +62,7 @@ def test_missing_document_means_defaults(gstore):
         markets=True,
         ideas=True,
         company_learning=True,
+        company_knowledge=True,
         contests=True,
         bizfin=True,
         link_guard=True,

@@ -43,6 +43,7 @@ from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_
 from .memory_index import entries_for
 from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
 from .memory_summary import render_summary, summary_items
+from .people_tools import KNOWLEDGE_PROMPT
 from .places import PLACES_PROMPT
 from .projects import PROJECTS_PROMPT
 from .reminders import REMINDERS_PROMPT
@@ -1503,6 +1504,7 @@ def stable_prompt(
     tone_note: str = "",
     concept: bool = False,
     data: bool = False,
+    knowledge: bool = False,
 ) -> str:
     """The part of the system prompt that is identical for every request in one language, tone and
     tool set (persona, rules, capabilities, duplicate rules, memory guidance, and the guidance of
@@ -1563,6 +1565,8 @@ def stable_prompt(
         p += BIZFIN_PROMPT
     if data:
         p += data_studio.playbook()
+    if knowledge:
+        p += KNOWLEDGE_PROMPT["th" if lang == "th" else "en"]
     if web:
         p += WEB_PROMPT
     if secretary:
@@ -1663,6 +1667,7 @@ def system_prompt(
     contests: bool = False,
     bizfin: bool = False,
     data: bool = False,
+    knowledge: bool = False,
     deck: bool = False,
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
@@ -1691,6 +1696,7 @@ def system_prompt(
         contests=contests,
         bizfin=bizfin,
         data=data,
+        knowledge=knowledge,
         deck=deck,
         web=web,
         secretary=secretary,
@@ -2157,6 +2163,7 @@ def build_agent(
     contests: bool = False,
     bizfin: bool = False,
     data: bool = False,
+    knowledge: bool = False,
     max_rounds: int = MAX_ROUNDS,
     deck: bool = False,
     tone: str = DEFAULT_TONE,
@@ -2194,6 +2201,7 @@ def build_agent(
         contests=contests,
         bizfin=bizfin,
         data=data,
+        knowledge=knowledge,
         deck=deck,
         tone=tone,
         tone_note=tone_note,
@@ -2410,6 +2418,7 @@ async def ask_async(
         contests="contest_add" in tool_names,
         bizfin="unit_economics" in tool_names,
         data="data_sql" in tool_names,
+        knowledge="who_to_ask" in tool_names,
         max_rounds=max_rounds,
         deck=sink is not None,
         tone=tone,

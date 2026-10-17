@@ -10,6 +10,7 @@ marks open tasks done when the new messages say so. Daily follow-ups and the `li
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import logging
 import re
@@ -279,6 +280,8 @@ def no_deadline_due(tasks: list[Task], today: date, zone, working_days: int = 3)
 class TaskRepo:
     def __init__(self, docs: DocStore):
         self.docs = docs
+        # called with the task after it became done (company knowledge: "delivered X")
+        self.on_done: Callable[[Task], None] | None = None
 
     def get(self, guild_id: int, task_id: str) -> Task | None:
         d = self.docs.get(TASKS, guild_id, task_id)
@@ -361,7 +364,11 @@ class TaskRepo:
         task.done_at = _now_iso() if status == "done" else ""
         if note:
             task.note = note[:500]
-        return self.save(task)
+        saved = self.save(task)
+        if status == "done" and self.on_done is not None:
+            with contextlib.suppress(Exception):  # learning never blocks a status change
+                self.on_done(saved)
+        return saved
 
 
 # ---------------------------------------------------------------- the summary hook

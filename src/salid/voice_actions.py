@@ -60,6 +60,9 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "send_email",
         "draft_email",
         "deliver_file",
+        "set_role",  # company knowledge: executives (or the person) record a role
+        "person_left",  # executives record that someone left (handover, open tasks)
+        "handover",
         "remember_my_preference",
         "forget_my_preferences",
         "set_auto_translate",

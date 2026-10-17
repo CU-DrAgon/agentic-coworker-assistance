@@ -152,7 +152,8 @@ class CooMixin:
         self._coo_last = float("-inf")
 
     def _on_summary_all(self, guild_id, channel_id, day, summary, messages) -> None:
-        """The memory scheduler's hook (worker thread): tasks first, then projects heard in chat.
+        """The memory scheduler's hook (worker thread): tasks first, then projects heard in chat, then
+        what the company learns about its people.
         Each part is guarded so one failing never blocks the other."""
         try:
             created = self.task_tracker.on_summary(guild_id, channel_id, day, summary, messages)
@@ -165,6 +166,12 @@ class CooMixin:
                 listener.on_summary(guild_id, channel_id, day, summary, messages)
             except Exception:
                 logger.warning("project listening failed", exc_info=True)
+        people = getattr(self, "people_listener", None)  # company knowledge (people_listen.py)
+        if people is not None:
+            try:
+                people.on_summary(guild_id, channel_id, day, summary, messages)
+            except Exception:
+                logger.warning("people listening failed", exc_info=True)
 
     def _role_members(self, guild_id: int, text: str) -> list[int] | None:
         """Human member ids of the guild role a text names ("ทีม tech", "@Tech", "<@&id>");

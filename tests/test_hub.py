@@ -290,6 +290,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         markets=True,
         ideas=True,
         company_learning=True,
+        company_knowledge=True,
         contests=True,
         bizfin=True,
         link_guard=True,

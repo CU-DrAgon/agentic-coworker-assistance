@@ -34,7 +34,7 @@ from .catchup import parse_since
 
 logger = logging.getLogger(__name__)
 
-SOURCES = ("chat", "files", "wiki", "receipts", "tasks", "meetings", "places")
+SOURCES = ("chat", "files", "wiki", "receipts", "tasks", "meetings", "places", "people")
 TOP_N = 10
 PER_SOURCE_CAP = 5  # so one chatty source cannot fill the whole answer
 SNIPPET = 160
@@ -369,6 +369,32 @@ def tasks_adapter(list_tasks: Callable) -> Callable:
     return run
 
 
+def people_adapter(who_to_ask: Callable) -> Callable:
+    """Person dossiers (company knowledge): who does or knows about the query. The tool already
+    hides what the asker may not read."""
+
+    def run(_kws: list[str], query: str, _a: date, _b: date) -> list[Hit]:
+        res = who_to_ask(query)
+        out: list[Hit] = []
+        for i, p in enumerate((res or {}).get("people") or []):
+            why = p.get("why")
+            if isinstance(why, list):
+                why = "; ".join(f"{w.get('what', '')}: {w.get('text', '')}" for w in why[:2])
+            out.append(
+                Hit(
+                    "people",
+                    title=p.get("name", ""),
+                    snippet=_cut(str(why or "")),
+                    who=p.get("name", ""),
+                    rank=max(0.0, 1.0 - i / 5),
+                    open_with=f"person_profile(name={p.get('name', '')!r})",
+                )
+            )
+        return out
+
+    return run
+
+
 def places_adapter(find_place: Callable) -> Callable:
     def run(keywords: list[str], _q: str, _a: date, _b: date) -> list[Hit]:
         seen: dict[str, Hit] = {}
@@ -480,6 +506,8 @@ def build_sources(
         src.adapters["tasks"] = tasks_adapter(f)
     if (f := _tool(tools, "find_place")) is not None:
         src.adapters["places"] = places_adapter(f)
+    if (f := _tool(tools, "who_to_ask")) is not None:
+        src.adapters["people"] = people_adapter(f)
     if list_meetings is not None:
         src.adapters["meetings"] = meetings_adapter(list_meetings, user_id, zone)
     if ledger is not None:
@@ -505,6 +533,9 @@ def pick_sources(sources, available: list[str]) -> tuple[list[str], list[str]]:
             "receipt": "receipts",
             "ledger": "receipts",
             "place": "places",
+            "person": "people",
+            "colleagues": "people",
+            "dossiers": "people",
         }.get(w, w)
         for w in want
     ]
@@ -626,7 +657,7 @@ def search_tools(
         until: str | None = None,
     ) -> dict:
         """Search ALL the team's internal information in one call: chat history, shared files and
-        attachments, wiki pages, receipts, tasks, meetings and minutes, and saved places, limited
+        attachments, wiki pages, receipts, tasks, meetings and minutes, saved places and colleagues (who does or knows what), limited
         to what the asker may see. Returns the best ~10 hits with source, date, who, a one-line
         snippet and a link. Thai and English both work (the query is expanded with synonyms, e.g.
         ใบเสนอราคา also finds "quotation"). Use for "where is...", "who said...", "find the file
@@ -635,7 +666,7 @@ def search_tools(
 
         Args:
             query: what to find, in the user's words (a few words, not a sentence).
-            sources: "auto" (all) or a list from: chat, files, wiki, receipts, tasks, meetings, places.
+            sources: "auto" (all) or a list from: chat, files, wiki, receipts, tasks, meetings, places, people.
             since: optional start: YYYY-MM-DD, "last week", "30 days", "เมื่อวาน".
             until: optional end date YYYY-MM-DD.
         """

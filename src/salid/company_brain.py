@@ -162,6 +162,34 @@ class Suggestion(BaseModel):
     source_message_link: str = ""
 
 
+class PersonRef(BaseModel):
+    user_id: int = 0
+    name: str = ""
+
+
+class OrgPosition(BaseModel):
+    title: str = ""
+    people: list[PersonRef] = Field(default_factory=list)
+
+
+class OrgDept(BaseModel):
+    name: str = ""
+    head: PersonRef | None = None
+    positions: list[OrgPosition] = Field(default_factory=list)
+
+
+class WhoTopic(BaseModel):
+    topic: str
+    people: list[PersonRef] = Field(default_factory=list)  # best first
+
+
+class KeyContact(BaseModel):
+    name: str
+    context: str = ""
+    count: int = 1
+    last_seen: str = ""
+
+
 class CompanyPlaybook(BaseModel):
     industry: str = ""
     about: str = ""
@@ -175,6 +203,12 @@ class CompanyPlaybook(BaseModel):
     history: list[str] = Field(default_factory=list)
     nudged_at: str = ""
     profile: dict[str, str] = Field(default_factory=dict)  # PROFILE_FIELDS -> value
+    # company map (salid.people): rebuilt nightly from the member list and the person dossiers,
+    # only from what the whole server can read; never taught by hand
+    org: list[OrgDept] = Field(default_factory=list)
+    who_to_ask: list[WhoTopic] = Field(default_factory=list)
+    key_contacts: list[KeyContact] = Field(default_factory=list)
+    org_built_at: str = ""
 
     def is_empty(self) -> bool:
         return not (
@@ -361,6 +395,36 @@ def _q(x: str) -> str:
     return f"“{x}”"
 
 
+PEOPLE_CHARS = 600
+
+
+def people_section(pb: CompanyPlaybook, lang: str = "en") -> str:
+    """A compact "people & roles" line (<= PEOPLE_CHARS): departments with heads and members, then
+    the top topics with who to ask. "" when the company map is empty. Unsafe text is skipped."""
+    en = lang != "th"
+    parts: list[str] = []
+    for d in pb.org:
+        names = [p.name for pos in d.positions for p in pos.people if p.name]
+        if not names:
+            continue
+        label = d.name or ("Unassigned" if en else "ไม่ระบุแผนก")
+        head = f"{'head' if en else 'หัวหน้า'} {d.head.name}; " if d.head and d.head.name else ""
+        parts.append(f"{label} ({head}{', '.join(dict.fromkeys(names))})")
+    asks = [
+        f"{w.topic} -> {', '.join(p.name for p in w.people[:2] if p.name)}"
+        for w in pb.who_to_ask
+        if any(p.name for p in w.people)
+    ]
+    line = ""
+    if parts:
+        line = ("Departments: " if en else "แผนก: ") + "; ".join(parts)
+    if asks:
+        line += (" | " if line else "") + ("Who to ask: " if en else "ถามใคร: ") + "; ".join(asks)
+    if not line or injection_reason(line):
+        return ""
+    return line if len(line) <= PEOPLE_CHARS else line[: PEOPLE_CHARS - 1].rstrip() + "…"
+
+
 def company_block(
     pb: CompanyPlaybook, question: str = "", *, nudge: bool = False, lang: str = "en"
 ) -> str:
@@ -409,6 +473,14 @@ def company_block(
     out = ""
     if body:
         out += " | ".join(body)
+    people = people_section(pb, lang)
+    if people:
+        head = (
+            "People and roles (learned from work, may be incomplete): "
+            if en
+            else "คนและบทบาท (เรียนรู้จากการทำงาน อาจไม่ครบ): "
+        )
+        out += ("\n" if out else "") + head + people
     packs = pack_summary(pb.packs)
     if packs:
         head = (

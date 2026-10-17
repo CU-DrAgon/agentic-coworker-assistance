@@ -151,6 +151,7 @@ from .modes import (
 from .naming import command_text, mentions_name
 from .nodue_bot import NoDeadlineMixin
 from .pdf_report import find_fonts, font_note
+from .people_bot import PeopleMixin
 from .permissions import (
     channel_missing,
     guild_missing,
@@ -357,6 +358,7 @@ class SecretaryBot(
     WikiMixin,
     ApprovalMixin,
     DMGuildMixin,
+    PeopleMixin,  # before PrivateChatMixin: chains on_member_remove (salid.people_bot)
     PrivateChatMixin,
     BroadcastMixin,
     PlacesMixin,
@@ -551,6 +553,7 @@ class SecretaryBot(
         self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
         self._contests_init()  # hackathons / grants / tenders (salid.contests_bot)
         self._bizfin_init()  # finance calculators, benchmark, security (salid.bizfin_bot)
+        self._people_init()  # who does what, whom to ask, handover (salid.people_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -2351,6 +2354,12 @@ class SecretaryBot(
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
+            # company knowledge: who does what / whom to ask / how we do it / onboarding / handover
+            *(
+                []
+                if interjection
+                else self._people_tools(message, guild, asker, is_exec, memory, lang)
+            ),
             *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
             # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
@@ -3395,6 +3404,7 @@ class SecretaryBot(
         await self._reminders_due()
         await self._nodue_due()
         await self._pc_sweep()
+        await self._people_due()
         await self._travel_due()
         await self._markets_due()
         await self._contests_due()

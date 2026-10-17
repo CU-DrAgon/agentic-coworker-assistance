@@ -118,6 +118,9 @@ class PrivateChatMixin:
             welcome = with_hint(
                 aud.tt("pc_welcome", langs, mention=member.mention), "welcome_help", lang=lang
             )
+            extra = await asyncio.to_thread(self._people_welcome, guild, member, langs)
+            if extra:  # what the company does, who to ask (company knowledge)
+                welcome += "\n" + extra
             chosen = self._person_langs(guild.id, member.id) != ["auto"]
             if aud.MODE_NOTICES and chosen:  # the answering mode, once, + how to change it
                 company_only = self._audience_mode(guild.id) == "company_only"
