@@ -512,6 +512,44 @@ def test_runner_uses_a_hero_clip_and_falls_back_to_motion(tmp_path, real_hero, m
     assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 5  # no refund
 
 
+def test_the_pending_hero_id_is_reported_until_the_clip_ends(tmp_path, real_hero, monkeypatch):
+    """A restart while Omni works would leave the paid job running: the job record gets the
+    interaction id (via the progress callback) while it is pending, and loses it afterwards."""
+    seen, reports = [], []
+    h = videoad.VideoHandle(progress=lambda step, _d: reports.append((step, h.hero_id)))
+
+    def wait(client, iid, **kw):
+        seen.append(h.hero_id)
+        return None, "blocked"
+
+    monkeypatch.setattr(videoad.videogen, "wait_hero", wait)
+    run_ad(tmp_path, hero_shots=1, handle=h)
+    assert seen == ["i1"] and h.hero_id == ""
+    at = reports.index(("hero", "i1"))
+    assert reports[at + 1] == ("hero", "") and reports[-1] == ("render", "")
+
+
+def test_the_hero_id_is_cleared_when_the_job_is_cancelled(tmp_path, pipeline, monkeypatch):
+    monkeypatch.setattr(videoad, "_hero_clip", REAL_HERO)
+    h = videoad.VideoHandle()
+    c = FakeInteractions(["in_progress"] * 10, None, on_get=lambda n: h.cancelled.set())
+    with pytest.raises(videoad.Cancelled):
+        run_ad(tmp_path, client=c, handle=h, hero_shots=1)
+    assert h.hero_id == "" and c.cancelled == ["i"]
+
+
+def test_cancel_hero_is_best_effort():
+    c = FakeInteractions()
+    videogen.cancel_hero(c, "abc")
+    assert c.cancelled == ["abc"]
+
+    class Broken(FakeInteractions):
+        def cancel(self, id, **kw):
+            raise RuntimeError("detail-of-the-account")
+
+    videogen.cancel_hero(Broken(), "abc")  # never raises
+
+
 @needs_ffmpeg
 def test_a_returned_clip_is_transcoded_into_the_hero_scene(tmp_path, real_hero, monkeypatch):
     mp4 = tiny_mp4(tmp_path)
@@ -618,7 +656,7 @@ def test_the_hero_prompt_carries_a_motion_cue():
 
 
 def test_a_scene_left_with_the_fallback_card_gets_no_hero_call(tmp_path, real_hero, monkeypatch):
-    def stills(client, model, scenes, photos, accent, fonts):
+    def stills(client, model, scenes, photos, accent, fonts, *, cancelled=None):
         imgs = [Image.new("RGB", (108, 192), (90, 90, 90)) for _ in scenes]
         imgs[0] = videoad.fallback_card(accent)  # scene 0's picture failed
         return imgs, 2

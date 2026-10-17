@@ -39,7 +39,7 @@ Args:
     music: add background music (only when enabled for this server)."""
 RECORD_KEYS = {
     "guild_id", "channel_id", "requester_id", "state", "created_at", "updated_at", "cost_usd",
-    "reason",
+    "reason", "hero_id",
 }  # fmt: skip
 FILE = "ad-20261014-1200.mp4"
 
@@ -107,15 +107,17 @@ def board():
 def runner(monkeypatch):
     """A fake `run_video_ad`: takes the month's ad like the real one, reports each step (after
     waiting for a cancel when `wait_cancel`), then raises `error` or writes a tiny MP4. `spent`
-    is the cost estimate it reports before its first step."""
-    r = SimpleNamespace(calls=[], error=None, wait_cancel=False, spent=0.0)
+    is the cost estimate it reports before its first step; `cancel_at_end` presses Cancel after
+    the last step (too late for the runner to notice)."""
+    r = SimpleNamespace(calls=[], error=None, wait_cancel=False, spent=0.0, cancel_at_end=False)
 
     def fake(
         req, *, client, settings, say, workdir, budget_mib, handle, usage, month, media_client=None
     ):
         r.calls.append(SimpleNamespace(req=req, workdir=workdir, budget=budget_mib, month=month,
                                        handle=handle, say=say, client=client,
-                                       media_client=media_client))  # fmt: skip
+                                       media_client=media_client,
+                                       thread=threading.current_thread().name))  # fmt: skip
         if not usage.take(req.guild_id, month, "ads", 1, settings.video_ads_per_month):
             raise videoad.MonthLimit("month limit")
         handle.cost_usd = r.spent
@@ -128,6 +130,8 @@ def runner(monkeypatch):
             raise r.error
         out = workdir / FILE
         out.write_bytes(b"mp4")
+        if r.cancel_at_end:
+            handle.cancelled.set()
         return videoad.VideoResult(out, board(), 0.25, {"storyboard": 1})
 
     monkeypatch.setattr(videoad_bot, "run_video_ad", fake)
@@ -222,6 +226,19 @@ async def test_not_offered_by_default_nor_in_voice_or_interjections(ready, world
     assert order.index("create_video_ad") == order.index("create_image") + 1
 
 
+async def test_a_voice_room_gets_no_tool_even_with_an_empty_file_list(on, world):
+    """Newer voice code passes files=[] and a room stand-in (no `reply`): still no tool."""
+    m = world.staff
+    kw = dict(setting="th", lang="th", question="x", memory=None, profile=None)
+    for room in (
+        on.room_message(world.g, m, world.pub, room={m.id}),  # an answer spoken to the room
+        on.room_message(world.g, m, world.pub),  # a private answer asked by voice
+    ):
+        assert on._video_tools(room, world.g, m, []) == []
+        tools = on._agent_kwargs(room, world.g, m, False, files=[], **kw).get("extra_tools", [])
+        assert "create_video_ad" not in names(tools)
+
+
 async def test_offered_when_an_admin_turns_it_on(ready, world):
     ready.guilds_store.save_settings(
         GUILD, GuildSettingsUpdate(features={"video_ads": True}), "admin@example.com"
@@ -311,17 +328,27 @@ async def test_a_second_request_in_the_same_guild_is_busy(on, world, runner):
 
 
 async def test_the_bot_runs_at_most_video_max_jobs_at_once(on, world, runner):
-    assert on.s.video_max_jobs == 2
+    assert on.s.video_max_jobs == 1  # one render at a time in the shared bot
     on._video_jobs[111] = SimpleNamespace(job_id="x", guild_id=111)
-    on._video_jobs[222] = SimpleNamespace(job_id="y", guild_id=222)
     tool, _ = tool_for(on, world)
     assert tool(brief="a")["status"] == "busy"
     await settle(on)
-    assert runner.calls == [] and set(on._video_jobs) == {111, 222}
+    assert runner.calls == [] and set(on._video_jobs) == {111}
+    on.s.video_max_jobs = 2
+    on._video_jobs[222] = SimpleNamespace(job_id="y", guild_id=222)
+    assert tool(brief="a")["status"] == "busy"
     del on._video_jobs[222]
     assert tool(brief="a") == STARTED
     await settle(on)
     assert len(runner.calls) == 1 and set(on._video_jobs) == {111}
+
+
+async def test_jobs_run_in_their_own_pool_sized_to_video_max_jobs(on, world, runner):
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert runner.calls[0].thread.startswith("salid-video")  # not asyncio's default pool
+    assert on._video_pool._max_workers == on.s.video_max_jobs == 1
 
 
 async def test_the_month_limit_refuses_before_anything_starts(on, world, runner):
@@ -480,6 +507,21 @@ async def test_delivery_falls_back_to_the_channel_when_the_request_is_gone(on, w
     assert records(on)[0]["state"] == "done"
 
 
+async def test_delivery_falls_back_to_the_channel_on_any_reply_error(on, world, runner, caplog):
+    class Odd(RMsg):  # e.g. a stand-in message without a working reply
+        async def reply(self, text, **kw):
+            raise AttributeError("secret E")
+
+    caplog.set_level("INFO", logger="salid.videoad_bot")
+    capture_posts(world.pub)
+    tool, _ = tool_for(on, world, msg=Odd(world.g, world.pub, world.staff, "x"))
+    tool(brief="a")
+    await settle(on)
+    last = world.pub.posted[-1]
+    assert last.kw["file"].filename == FILE and records(on)[0]["state"] == "done"
+    assert "AttributeError" in caplog.text and "secret E" not in caplog.text  # the type only
+
+
 async def test_an_upload_refused_still_sends_the_text_with_a_note(on, world, runner):
     class TooBig(RMsg):
         async def reply(self, text, **kw):
@@ -546,6 +588,30 @@ async def test_cancel_by_someone_else_is_refused_and_the_job_keeps_running(on, w
     assert world.pub.posted[0].edits[-1] == (t("video_cancelled", "th"), {"view": None})
 
 
+async def test_cancel_shows_cancelling_at_once(on, world, runner):
+    job, view, _ = await start_waiting_job(on, world, runner)
+    it = Click(world.g, world.staff, world.pub, on)
+    await view.children[0].callback(it)
+    assert it.edited == [{"content": t("video_cancelling", "th"), "view": None}]
+    on._video_progress(job, "render")  # a step reported late never overwrites it
+    assert job.edit_task is None or job.edit_task.done()
+    await settle(on)
+    assert world.pub.posted[0].edits[-1] == (t("video_cancelled", "th"), {"view": None})
+    assert t("video_cancelling", "en") != t("video_cancelling", "th")
+
+
+async def test_a_cancel_after_the_render_delivers_nothing(on, world, runner):
+    capture_posts(world.pub)
+    runner.cancel_at_end = True  # Cancel pressed after the runner's last check
+    tool, msg = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert msg.replies == [] and all("file" not in p.kw for p in world.pub.posted)
+    [rec] = records(on)
+    assert rec["state"] == "cancelled" and rec["cost_usd"] == 0.25
+    assert world.pub.posted[0].edits[-1] == (t("video_cancelled", "th"), {"view": None})
+
+
 async def test_an_admin_may_cancel_any_job(on, world, runner):
     job, view, msg = await start_waiting_job(on, world, runner)
     it = Click(world.g, world.admin, world.pub, on)
@@ -605,6 +671,49 @@ async def test_restart_marks_running_jobs_failed_and_tells_the_requester(
     assert bot.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 1}
     assert any("video_restarted" in m or t("video_restarted", "th") in m for m in world.pub.sent)
     assert any(f"<@{world.staff.id}>" in m for m in world.pub.sent)
+
+
+async def test_the_record_holds_the_pending_hero_id_only_while_it_runs(bot, world):
+    job = videoad_bot.VideoJob(
+        job_id="j", guild_id=GUILD, channel_id=world.pub.id, requester_id=1, lang="th",
+        created_at="x",
+    )  # fmt: skip
+    job.handle.hero_id = "omni-1"
+    bot._video_save(job, "hero")
+    assert bot.docs.get("salid_video_jobs", GUILD, "j")["hero_id"] == "omni-1"
+    job.handle.hero_id = ""
+    bot._video_save(job, "hero")
+    assert "hero_id" not in bot.docs.get("salid_video_jobs", GUILD, "j")
+
+
+class Interactions:
+    """A client whose `interactions.cancel` records ids (or raises `error`)."""
+
+    def __init__(self, error=None):
+        self.cancelled, self.error, self.interactions = [], error, self
+
+    def cancel(self, id, **kw):
+        self.cancelled.append(id)
+        if self.error is not None:
+            raise self.error
+
+
+@pytest.mark.parametrize("error", [None, RuntimeError("secret F")], ids=["ok", "fails"])
+async def test_the_sweep_cancels_a_hero_clip_a_restart_left_running(bot, world, error, caplog):
+    def job(state, **extra):
+        return {"guild_id": GUILD, "channel_id": world.pub.id, "requester_id": world.staff.id,
+                "state": state, **extra}  # fmt: skip
+
+    bot.llm = Interactions(error)
+    bot.docs.put("salid_video_jobs", GUILD, "j1", job("hero", hero_id="omni-1"))
+    bot.docs.put("salid_video_jobs", GUILD, "j2", job("stills"))
+    bot.docs.put("salid_video_jobs", GUILD, "j3", job("done", hero_id="omni-old"))
+    await bot._sweep_video_jobs()  # never raises
+    assert bot.llm.cancelled == ["omni-1"]
+    for key in ("j1", "j2"):
+        rec = bot.docs.get("salid_video_jobs", GUILD, key)
+        assert rec["state"] == "failed" and rec["reason"] == "restarted" and "hero_id" not in rec
+    assert "secret F" not in caplog.text
 
 
 async def test_the_sweep_runs_once_and_skips_live_and_finished_jobs(bot, world):

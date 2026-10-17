@@ -12,10 +12,12 @@ promo kits, `create_image` and the video ad stills, and the guards every caller 
   prompt, an attached photo or a remembered result as the reference, optional Thai/English text
   typeset by `overlay` on a scrim band (top for 9:16, bottom otherwise), PNG files (the whole
   batch as JPEG when the PNGs pass `ImageCtx.max_bytes`, which follows the server's upload
-  limit, at most OUTBOX_MAX_BYTES). Daily limits
-  per guild and per person (`DailyBudget`), taken per image before the calls (blocked calls are
-  billed too). `ImageMemory` keeps the last batch per (guild, channel, user) for revisions, in
-  process memory only.
+  limit, at most OUTBOX_MAX_BYTES). Daily limits per guild and per person (any `DayBudget`:
+  `media.DailyBudget`, or the DocStore-backed one the bot uses, `imagegen_bot.StoredDailyBudget`),
+  taken per image before the calls (blocked calls are billed too). References are only photos of
+  products, logos, food or places, never of a real person (the tool description and NOTE tell
+  the agent; spec section 5). `ImageMemory` keeps the last batch per (guild, channel, user) for
+  revisions, in process memory only.
 
 Never logs prompts or images.
 """
@@ -31,7 +33,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 from google.genai import types
@@ -40,7 +42,6 @@ from PIL import Image, ImageOps
 from . import cards
 from .cards import CardFonts
 from .llm import generate
-from .media import DailyBudget
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +188,9 @@ MEMORY_BYTES = 128 * 1024 * 1024  # all remembered results together, least recen
 OUTBOX_MAX_BYTES = 20 * 1024 * 1024  # one reply's files at most; the bot lowers it per server
 NOTE = (
     "Reply briefly in the user's language: the images are attached and were made with AI. Do not "
-    "describe people in them as real."
+    "describe people in them as real. Reference photos (file_index, revise) are only for photos "
+    "of products, logos, food or places, never a photo of a real person: refuse that and offer "
+    "an illustration instead."
 )
 NOTE_TRIMMED = " Only {n} of {asked} could be made today (daily limit)."
 NOTE_FAILED = (
@@ -345,6 +348,17 @@ def _error(message: str) -> dict:
     return {"status": "error", "error": message}
 
 
+class DayBudget(Protocol):
+    """Units used per key (guild or person) per day: `media.DailyBudget` (memory) or
+    `imagegen_bot.StoredDailyBudget` (DocStore, survives restarts)."""
+
+    cap: float
+
+    def used(self, key: int, day: str) -> float: ...
+
+    def add(self, key: int, day: str, amount: float) -> None: ...
+
+
 @dataclass
 class ImageCtx:
     """One request's create_image tool, bound by the bot (guild, channel and author are never
@@ -359,8 +373,8 @@ class ImageCtx:
     key: Key
     client: Any
     model: str
-    guild_budget: DailyBudget
-    user_budget: DailyBudget
+    guild_budget: DayBudget
+    user_budget: DayBudget
     fonts: CardFonts
     max_bytes: int = OUTBOX_MAX_BYTES  # this reply's files together (the server's upload limit)
     outbox: list[tuple[str, bytes]] = field(default_factory=list)
@@ -511,6 +525,8 @@ def image_tools(ctx: ImageCtx) -> list[Callable]:
         typesets them). For a product photo the user attached, pass its number as `file_index`. To change
         one of the last results ("เอาแบบที่ 2 แต่โทนอุ่นขึ้น") pass `revise` = its number (1-4) with the new
         prompt; the last results are remembered for 30 minutes. Never depict real public figures or children.
+        `file_index` and `revise` are only for photos of products, logos, food or places,
+        never a photo of a real person: refuse that and offer an illustration instead.
 
         Args:
             prompt: English description, max 600 characters.
@@ -520,7 +536,7 @@ def image_tools(ctx: ImageCtx) -> list[Callable]:
             headline: optional text on the image, max 40 characters, in the user's language.
             subtitle: optional second line, max 60 characters.
             accent: subtitle pill colour: red, orange, green, blue, gold or black.
-            file_index: attached photo to use as a reference; -1 = none.
+            file_index: attached photo (a product, logo, food or place) to use as a reference; -1 = none.
             revise: number of a remembered result to edit; 0 = new images.
         """
         try:

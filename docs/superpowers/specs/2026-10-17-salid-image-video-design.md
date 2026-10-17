@@ -126,8 +126,9 @@ create_image(prompt="", aspect="1:1", count=1, size="1K", headline="", subtitle=
 - Offered when the `images` flag is on and Thai shaping works (`cards.thai_ready()`); not in voice
   answers or interjections.
 - Limits: `SALID_IMAGES_PER_DAY` (20 per guild) and `SALID_IMAGES_PER_USER_DAY` (5), counted per
-  image before the calls (`DailyBudget`); a request for more than what is left is trimmed and the
-  note says so.
+  image before the calls in DocStore kind `salid_media_usage` (key = the day, fields `images` and
+  `images_user_<id>`, so restarts keep them); a request for more than what is left is trimmed and
+  the note says so.
 
 ### 3. `create_video_ad` tool and the job (`videoad.py`, `videogen.py`, `videoad_bot.py`)
 
@@ -179,15 +180,16 @@ message, at most every 5 s, with a Cancel button for the requester or an admin):
 
 - `VideoJob` records in DocStore kind `salid_video_jobs` (id, guild, channel, requester, state:
   queued / storyboard / stills / hero / audio / render / done / failed / cancelled, timestamps,
-  estimated and actual cost, error reason). The brief, storyboard text and media are never stored.
-  On startup, jobs left running are marked failed and the requester is told to try again.
+  cost estimate, error reason; the actual cost comes from Cloud billing, not from the record).
+  The brief, storyboard text and media are never stored. On startup, jobs left running are
+  marked failed and the requester is told to try again.
 - Monthly usage in DocStore kind `salid_media_usage`, key `YYYY-MM`, per guild: `ads`,
   `hero_seconds`, `music_clips`; checked and incremented before each paid step.
 - Settings: `SALID_IMAGE_MODEL` (`gemini-nano-banana-2.1`), `SALID_IMAGES_PER_DAY` (20),
   `SALID_IMAGES_PER_USER_DAY` (5), `SALID_VIDEO_ADS_PER_MONTH` (10),
   `SALID_VIDEO_HERO_MODEL` ("" = off; `gemini-omni-1.1-flash-preview` once verified),
   `SALID_VIDEO_HERO_SECONDS_PER_MONTH` (60), `SALID_VIDEO_MUSIC_MODEL` ("" = off),
-  `SALID_VIDEO_MAX_JOBS` (2 across the bot). Promo keeps `SALID_PROMO_*`.
+  `SALID_VIDEO_MAX_JOBS` (1 across the bot). Promo keeps `SALID_PROMO_*`.
 - Flags: `images` (default on), `video_ads` (default off); hub toggles with Thai/English copy.
 
 ### 5. Safety, privacy, observability
@@ -235,7 +237,7 @@ probe (`scripts/salid_media_probe.py`, inline delivery, nothing stored); one ful
 | Garbled Thai, uncanny people or food | Thai typeset in code; shop photos preferred; no synthetic presenters; safety settings |
 | Thai FDA / likeness / AI-labelling rules | Regulated-category rule, no real people, AI label and reply note |
 | Long jobs vs Discord limits | Deferred reply, progress message, result posted later, size budget re-encode |
-| ffmpeg render time / memory in the shared bot | 1080x1920 at 30 fps for ≤ 30 s, max 2 jobs, worker threads |
+| ffmpeg render time / memory in the shared bot | 1080x1920 at 30 fps for ≤ 30 s, max 1 job, a dedicated render pool, ffmpeg niced with 2 encoder threads |
 | Model churn | All model IDs are settings; probe script to re-check |
 
 ## Rollout

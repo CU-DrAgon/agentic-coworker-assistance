@@ -421,24 +421,31 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   any call, because the model would draw the Thai); Thai or English text the user wants on the image goes in
   `headline` / `subtitle` and is typeset by Salid on a scrim band (top for 9:16, bottom otherwise, subtitle in an
   accent pill), so it needs `libfribidi` like promo kits. An attached product photo can be the reference
-  (`file_index`), and "เอาแบบที่ 2 แต่โทนอุ่นขึ้น" edits a result of the last batch (`revise`; the clean images
+  (`file_index`; only photos of products, logos, food or places: a photo of a real person is refused and an
+  illustration offered), and "เอาแบบที่ 2 แต่โทนอุ่นขึ้น" edits a result of the last batch (`revise`; the clean images
   are kept 30 minutes per person and channel in process memory, never stored). Limits `SALID_IMAGES_PER_DAY` (20
-  per guild) and `SALID_IMAGES_PER_USER_DAY` (5 per person), counted per image before the calls (blocked images
-  count too); a bigger request is trimmed to what is left and the reply says so. The reply says the images were
-  made with AI. Logs carry guild, counts and time only, never the prompt or the images.
+  per guild) and `SALID_IMAGES_PER_USER_DAY` (5 per person in a server), counted per image before the calls
+  (blocked images count too) in the DocStore (`salid_media_usage`, key = the day, fields `images` and
+  `images_user_<id>`), so a restart does not reset them; a bigger request is trimmed to what is left and the
+  reply says so. The reply says the images were made with AI. Logs carry guild, counts and time only, never the
+  prompt or the images.
 - **Video ads** (`src/salid/videoad.py`, `videoad_bot.py`, feature flag `video_ads`, **default off**: each ad costs
   money, so an admin turns it on in the hub): "ทำวิดีโอโฆษณาลาเต้เย็น ลด 20% ยาว 20 วิ" (product photos welcome)
   and the `create_video_ad` tool starts a background job; the agent answers in one line and Salid posts a progress
-  message with a Cancel button (the requester or an admin; it stops before the next paid step). The job plans a
-  storyboard (4-6 scenes, 15/20/30 s), makes a 9:16 still per scene (Nano Banana, or the shop's own photo), turns
+  message with a Cancel button (the requester or an admin; the message says "cancelling…" at once, the job
+  stops before the next paid step, queued scene pictures included, and nothing is posted after a cancel). The
+  job plans a storyboard (4-6 scenes, 15/20/30 s), makes a 9:16 still per scene (Nano Banana, or the shop's own photo), turns
   each into a slow-zoom clip, adds Thai narration (`speech.say`; if it fails the ad keeps captions only), captions
   and one "สร้างด้วย AI" label, and encodes an H.264 MP4 under the server's upload limit (1 MiB under it, at most
   19 MiB; DMs 9 MiB). The MP4 comes back as a reply with the scene list and a suggested caption ending in
   `#สร้างด้วยAI`. Needs ffmpeg and `libfribidi`. Limits: `SALID_VIDEO_ADS_PER_MONTH` (10 per guild, taken when the
-  job starts, not refunded), one job per guild and `SALID_VIDEO_MAX_JOBS` (2) across the bot. Job records
+  job starts, not refunded), one job per guild and `SALID_VIDEO_MAX_JOBS` (1) across the bot; renders run in
+  their own thread pool of that size, and every ffmpeg run is niced (`nice -n 10`) with 2 encoder threads so the
+  bot stays responsive (measure render time on the production image before raising it). Job records
   (`salid_video_jobs`: state, times, cost estimate, failure reason; never the brief, storyboard or media) and
   monthly usage (`salid_media_usage`, key `YYYY-MM`) live in the DocStore; jobs cut off by a restart are marked
-  failed and the requester is asked to try again. Logs: one line per step (guild, step, ms, cost estimate).
+  failed (a hero clip one left running, its record's `hero_id`, is cancelled) and the requester is asked to try
+  again. Logs: one line per step (guild, step, ms, cost estimate).
 - **Video ad add-ons: hero clips and music** (`src/salid/videogen.py`, both **off** while their settings are empty,
   which is the default; with both empty an ad is exactly the slideshow above). Both go through the google-genai
   Interactions API and are **unverified on this project**: nobody with project access has run them yet.

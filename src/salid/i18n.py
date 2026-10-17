@@ -1003,6 +1003,10 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "video_reason_render": {"th": "ตัดต่อวิดีโอไม่สำเร็จ", "en": "the video could not be rendered"},
     "video_reason_error": {"th": "เกิดข้อผิดพลาด", "en": "something went wrong"},
+    "video_cancelling": {
+        "th": "กำลังยกเลิกการทำวิดีโอค่ะ…",
+        "en": "Cancelling the video ad…",
+    },
     "video_cancelled": {"th": "ยกเลิกการทำวิดีโอแล้วค่ะ", "en": "The video ad was cancelled."},
     "video_restarted": {
         "th": "วิดีโอโฆษณาที่สั่งไว้ทำไม่เสร็จเพราะสลิดรีสตาร์ต รบกวนสั่งใหม่อีกครั้งนะคะ",

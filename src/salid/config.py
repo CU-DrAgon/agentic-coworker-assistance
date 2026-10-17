@@ -197,10 +197,11 @@ class Settings(BaseSettings):
     images_per_day: int = 20
     images_per_user_day: int = 5
     # Video ads (salid.videoad): finished ads per guild/month, hero motion seconds per guild/month,
-    # jobs running at once across the bot, and the Omni hero / music models ("" = off).
+    # jobs running at once across the bot (1: a render shares the bot's CPU; measure before
+    # raising it), and the Omni hero / music models ("" = off).
     video_ads_per_month: int = 10
     video_hero_seconds_per_month: int = 60
-    video_max_jobs: int = 2
+    video_max_jobs: int = 1
     video_hero_model: str = ""
     video_music_model: str = ""
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).

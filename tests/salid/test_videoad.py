@@ -295,6 +295,28 @@ def test_a_blocked_still_is_not_retried(monkeypatch):
     assert stills[0].tobytes() == videoad.fallback_card("gold").tobytes()
 
 
+def test_no_still_is_started_or_retried_after_a_cancel(monkeypatch):
+    cancelled, calls = threading.Event(), []
+
+    def gen(*a, **k):  # the user presses Cancel while the first still is being made
+        calls.append(1)
+        cancelled.set()
+        return [], "error"
+
+    monkeypatch.setattr(videoad.imagegen, "generate_images", gen)
+    monkeypatch.setattr(videoad, "STILL_WORKERS", 1)  # the other scenes are queued
+    stills, billed = videoad.scene_stills(
+        object(), "m", sb(5, 5, 5, 5).scenes, [], "red", FONTS, cancelled=cancelled
+    )
+    assert calls == [1] and billed == 1  # no retry, no queued still: nothing more is billed
+    assert len(stills) == 4
+    calls.clear()
+    stills, billed = videoad.scene_stills(
+        object(), "m", sb(5, 5, 5, 5).scenes[:2], [], "red", FONTS, cancelled=cancelled
+    )
+    assert calls == [] and billed == 0  # already cancelled: no call at all
+
+
 def test_photo_scenes_use_the_shop_photo_without_a_model_call(monkeypatch):
     monkeypatch.setattr(videoad.imagegen, "generate_images", lambda *a, **k: 1 / 0)
     stills, billed = videoad.scene_stills(
@@ -467,6 +489,7 @@ def test_motion_clip_runs_ffmpeg_without_a_shell(monkeypatch, tmp_path):
         return Done()
 
     monkeypatch.setattr(videoad.subprocess, "run", run)
+    monkeypatch.setattr(videoad, "_low_priority", lambda: [])  # no `nice` on this machine
     with pytest.raises(RuntimeError, match="Error opening input: boom"):
         videoad.motion_clip(tmp_path / "s.png", 2.0, 0, tmp_path / "c.mp4")
     cmd = seen["cmd"]
@@ -475,6 +498,25 @@ def test_motion_clip_runs_ffmpeg_without_a_shell(monkeypatch, tmp_path):
     for flag in ("libx264", "yuv420p", "veryfast", "18", str(tmp_path / "c.mp4")):
         assert flag in cmd
     assert cmd[cmd.index("-t") + 1] == "2.000"
+
+
+def test_encodes_run_at_low_priority_with_two_threads(monkeypatch, tmp_path):
+    calls = fake_ffmpeg(monkeypatch, [1000] * 4)
+    which = {"nice": "/usr/bin/nice"}
+    monkeypatch.setattr(videoad.shutil, "which", lambda name: which.get(name))
+    videoad.motion_clip(tmp_path / "s.png", 2.0, 0, tmp_path / "c.mp4")
+    videoad.conform_clip(tmp_path / "omni.mp4", 2.0, tmp_path / "h.mp4")
+    caps = caption_files(tmp_path, 2)
+    clips = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
+    videoad.assemble(clips, [2.0, 2.0], caps, None, tmp_path / "o.mp4", budget_mib=9)
+    assert len(calls) == 3
+    for cmd in calls:
+        assert cmd[:4] == ["/usr/bin/nice", "-n", "10", "ffmpeg"]
+        assert opt(cmd, "-threads") == "2"  # an output option: the x264 encoder's threads
+        assert cmd.index("-threads") > max(i for i, a in enumerate(cmd) if a == "-i")
+    which.clear()  # no `nice` installed: plain ffmpeg
+    videoad.motion_clip(tmp_path / "s.png", 2.0, 0, tmp_path / "c.mp4")
+    assert calls[-1][0] == "ffmpeg" and opt(calls[-1], "-threads") == "2"
 
 
 # ------------------------------------------------------------------ narration and assembly
@@ -779,8 +821,10 @@ def fake_pipeline(monkeypatch):
             board.scenes[i].source = "hero"
         return board
 
-    def stills(client, model, scenes, photos, accent, fonts):
-        fp.stills.append(dict(model=model, n=len(scenes), photos=photos, accent=accent))
+    def stills(client, model, scenes, photos, accent, fonts, *, cancelled=None):
+        fp.stills.append(
+            dict(model=model, n=len(scenes), photos=photos, accent=accent, cancelled=cancelled)
+        )
         if fp.on_stills is not None:
             fp.on_stills()
         return [Image.new("RGB", (108, 192), (90, 90, 90)) for _ in scenes], 2
@@ -970,6 +1014,7 @@ def test_cancel_during_stills_skips_the_motion_clips(tmp_path, fake_pipeline):
         run(tmp_path, handle=h)
     assert fake_pipeline.motion == [] and fake_pipeline.assembled == []
     assert h.cost_usd == pytest.approx(2 * videoad.STILL_USD)  # the stills were billed
+    assert fake_pipeline.stills[0]["cancelled"] is h.cancelled  # queued stills stop too
 
 
 def test_hero_cost_is_counted_as_soon_as_its_seconds_are_taken(

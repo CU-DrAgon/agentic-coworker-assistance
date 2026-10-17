@@ -5,8 +5,9 @@ model settings are set (`SALID_VIDEO_HERO_MODEL`, `SALID_VIDEO_MUSIC_MODEL`; emp
 - `start_hero` / `wait_hero`: one Gemini Omni clip of a hero scene from its still
   (`image_to_video`; `text_to_video` without a still), 9:16, 720p, 4-6 s, inline delivery, run
   in the background and polled every 10 s for up to 8 minutes; a job cancel or the timeout
-  cancels the interaction. The prompt must be English without quote characters (Omni evaluates
-  English only, and quotes invite on-screen text); HERO_SUFFIX is appended.
+  cancels the interaction (`cancel_hero`, also used by the bot for one a restart left running).
+  The prompt must be English without quote characters (Omni evaluates English only, and quotes
+  invite on-screen text); HERO_SUFFIX is appended.
 - `music_clip`: one Lyria clip (instrumental), synchronous. UNVERIFIED: the call shape follows
   the Gemini API docs and the installed SDK (which maps the Lyria models' `outputs` onto
   `output_audio`); nobody with project access has run it on Vertex yet, so any failure is None.
@@ -136,7 +137,9 @@ def permission_denied(e: BaseException) -> bool:
     return denied or code == 403 or status == "PERMISSION_DENIED"
 
 
-def _cancel(client, interaction_id: str) -> None:
+def cancel_hero(client, interaction_id: str) -> None:
+    """Cancel a hero clip's interaction (a job cancel, the timeout, or one a restart left
+    running). Best effort: never raises, logs the error type only."""
     try:
         client.interactions.cancel(interaction_id)
     except Exception as e:  # best effort: it may have finished already
@@ -177,13 +180,13 @@ def wait_hero(
     deadline = time.monotonic() + timeout_s
     while True:
         if cancelled.is_set():
-            _cancel(client, interaction_id)
+            cancel_hero(client, interaction_id)
             return None, "cancelled"
         try:
             interaction = client.interactions.get(interaction_id)
         except Exception as e:
             logger.warning("hero clip poll failed: %s", type(e).__name__)
-            _cancel(client, interaction_id)
+            cancel_hero(client, interaction_id)
             return None, "error"
         status = _status(interaction)
         if status == "completed":
@@ -201,7 +204,7 @@ def wait_hero(
             logger.warning("hero clip ended with status %s", status[:40])
             return None, "error"
         if time.monotonic() >= deadline:
-            _cancel(client, interaction_id)
+            cancel_hero(client, interaction_id)
             return None, "timeout"
         sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
 

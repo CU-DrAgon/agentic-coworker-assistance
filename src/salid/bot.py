@@ -470,7 +470,6 @@ class SecretaryBot(
         self.image_stats = {"described": 0, "failed": 0, "skipped": 0}  # cost visibility
         self._init_media()
         self._init_promo()
-        self._init_images()
         self.importer = MemoryImporter(
             self.memory_store,
             settings,
@@ -502,6 +501,7 @@ class SecretaryBot(
         dm_module.ROUTER = self._private_route
         dm_module.SENT_HOOK = self._dm_sent_hook  # every Salid DM is tagged with its company
         self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
+        self._init_images()  # create_image daily caps in the DocStore, after self.docs
         self._init_video_ads()  # create_video_ad jobs, after self.docs (salid.videoad_bot)
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
@@ -2193,9 +2193,11 @@ class SecretaryBot(
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
             # make_promo_kit: chat only (voice passes no files), with a photo or a remembered kit
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
-            # create_image: chat only (voice passes no files), with or without a photo
+            # create_image: chat only, with or without a photo; never in a voice room (files
+            # None, or a `room_message` stand-in with files=[]: imagegen_bot.spoken)
             *([] if interjection else self._image_tools(message, guild, asker, files)),
-            # create_video_ad: chat only, flag video_ads (default off); a background job
+            # create_video_ad: chat only (same voice gate), flag video_ads (default off); a
+            # background job
             *([] if interjection else self._video_tools(message, guild, asker, files)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),

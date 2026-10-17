@@ -1,3 +1,4 @@
+import inspect
 import io
 import logging
 
@@ -268,6 +269,15 @@ def test_nothing_made_is_an_error_but_still_counted():
     out = imagegen.image_tools(c)[0](prompt="a cup")
     assert out["status"] == "error" and out["reason"] == "blocked" and out["count_made"] == 0
     assert c.user_budget.used(7, c.day) == 1 and c.memory.get(c.key) is None
+
+
+def test_reference_photos_are_never_of_a_real_person():
+    """Spec section 5: a reference (attached photo or a revised result) is a product, logo, food
+    or place; a photo of a real person is refused with an illustration offered instead."""
+    doc = inspect.getdoc(imagegen.image_tools(ictx())[0])
+    for text in (doc, imagegen.NOTE):
+        assert "products, logos, food or places" in text
+        assert "never a photo of a real person" in text and "illustration" in text
 
 
 def test_note_is_the_ai_reminder_without_extras_when_all_were_made():

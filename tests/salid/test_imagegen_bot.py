@@ -27,6 +27,19 @@ async def test_offered_for_chat_with_or_without_a_photo_not_for_voice(bot, world
     assert bot._image_tools(msg, world.g, m, None) == []  # voice path
 
 
+async def test_a_voice_room_gets_no_tool_even_with_an_empty_file_list(bot, world):
+    """Newer voice code passes files=[] and a room stand-in (no `reply`): still no tool."""
+    m = world.staff
+    kw = dict(setting="th", lang="th", question="x", memory=None, profile=None)
+    for room in (
+        bot.room_message(world.g, m, world.pub, room={m.id}),  # an answer spoken to the room
+        bot.room_message(world.g, m, world.pub),  # a private answer asked by voice
+    ):
+        assert bot._image_tools(room, world.g, m, []) == []
+        tools = bot._agent_kwargs(room, world.g, m, False, files=[], **kw).get("extra_tools", [])
+        assert "create_image" not in names(tools)
+
+
 async def test_flag_off_or_no_raqm_means_no_tool(bot, world, monkeypatch):
     m = world.staff
     msg = TMsg(world.g, world.pub, m, "x")
@@ -63,11 +76,33 @@ async def test_tool_is_bound_to_guild_channel_author_and_both_budgets(bot, world
     assert out["status"] == "ok" and len(tool.outbox) == 2
     assert qa.tool_files([tool]) == tool.outbox  # what Answer.attachments carries
     day = bot.s.today().isoformat()
-    assert bot.image_budget.used(GUILD, day) == 2 and bot.image_user_budget.used(m.id, day) == 2
-    assert bot.image_budget.cap == 20 and bot.image_user_budget.cap == 5
+    user_budget = bot.image_user_budget.for_guild(GUILD)
+    assert bot.image_budget.used(GUILD, day) == 2 and user_budget.used(m.id, day) == 2
+    assert bot.image_budget.cap == 20 and bot.image_user_budget.cap == user_budget.cap == 5
+    # persisted per guild and day: a restart keeps both counts
+    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 2, f"images_user_{m.id}": 2}
     assert len(bot.image_memory.get((GUILD, world.pub.id, m.id))) == 2
     assert bot.llm.models.calls[0][0] == "gemini-nano-banana-2.1"
     assert bot.llm.models.calls[0][1][0].inline_data is not None  # the attached photo
+
+
+async def test_daily_caps_survive_a_restart(bot, world):
+    m, day = world.staff, bot.s.today().isoformat()
+    bot.docs.put("salid_media_usage", GUILD, day, {"images": 19})  # made before the restart
+    bot._init_images()  # a restart: fresh process state, the same DocStore
+    img = image_response(png_bytes((64, 64)))
+    bot.llm = fake_client(img, img)
+    [tool] = bot._image_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [])
+    out = tool(prompt="a cup", count=2)
+    assert out["status"] == "ok" and out["count_made"] == 1 and out["images_left_today"] == 0
+    assert "Only 1 of 2" in out["note"] and len(bot.llm.models.calls) == 1
+    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 20, f"images_user_{m.id}": 1}
+    assert tool(prompt="a cup")["status"] == "limit" and len(bot.llm.models.calls) == 1
+    other = world.boss  # the per-person cap is stored too
+    bot.docs.put("salid_media_usage", GUILD, day, {f"images_user_{other.id}": 5})
+    bot._init_images()
+    [tool] = bot._image_tools(TMsg(world.g, world.pub, other, "x"), world.g, other, [])
+    assert tool(prompt="a cup")["status"] == "limit" and len(bot.llm.models.calls) == 1
 
 
 async def test_unusable_attachments_are_not_offered_as_references(bot, world):

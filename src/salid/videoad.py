@@ -12,21 +12,25 @@ for their scene, shop photos left unused), then a storyboard with hard problems 
 Part 2, the pictures: `scene_stills` makes one 1080x1920 still per scene (AI scenes and hero
 scenes through `imagegen.generate_images`, at most 3 at a time, one retry unless blocked, then
 a textless accent `fallback_card`; `photo:N` scenes from the shop photo framed by `frame_photo`,
-or an AI still when that photo is missing or unreadable). `motion_clip` turns a still into a
-slow zoom clip with ffmpeg, and `caption_png` draws the scene caption and the "สร้างด้วย AI"
-label on a transparent overlay, inside the Reels / TikTok safe area `SAFE`.
+or an AI still when that photo is missing or unreadable; after a job cancel no further still is
+started or retried). `motion_clip` turns a still into a slow zoom clip with ffmpeg, and
+`caption_png` draws the scene caption and the "สร้างด้วย AI" label on a transparent overlay,
+inside the Reels / TikTok safe area `SAFE`.
 
 Part 3, sound and the final cut: `narration_wav` lays each scene's spoken line at the scene's
 start, cut to the scene, into one 48 kHz WAV as long as the ad. `assemble` crossfades the
 clips, overlays the captions per scene and one AI label for the whole video, mixes narration
 and optional music, and encodes an H.264 / AAC MP4 under `budget_mib` (from the guild's upload
-limit), re-encoding smaller when the first try is over it.
+limit), re-encoding smaller when the first try is over it. Every ffmpeg run is niced
+(`nice -n 10` when `nice` exists) and the x264 encodes use ENCODE_THREADS, so a render shares
+the bot's CPU instead of starving it.
 
 Part 4, the job: `run_video_ad` runs every step for one `VideoRequest` in a work directory
 (blocking; the bot runs it in a worker thread, see `videoad_bot`), checking the `VideoHandle`
 for a cancel before each step and taking the guild's monthly usage (`MediaUsage`) before each
-paid step. Generated hero motion shots (`_hero_clip`: Gemini Omni via `videogen`, the clip
-conformed to its scene by `conform_clip`) and music (`_music_track`: Lyria via `videogen`, as a
+paid step (the daily image counters of `imagegen_bot` use the same store). Generated hero
+motion shots (`_hero_clip`: Gemini Omni via `videogen`, the clip conformed to its scene by
+`conform_clip`) and music (`_music_track`: Lyria via `videogen`, as a
 WAV by `conform_music`) run only while `SALID_VIDEO_HERO_MODEL` / `SALID_VIDEO_MUSIC_MODEL` are
 set; any failure there keeps the scene's motion clip or leaves the ad without music.
 
@@ -40,6 +44,7 @@ import io
 import logging
 import math
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -387,14 +392,19 @@ def is_fallback_card(img: Image.Image) -> bool:
     return bool(img.info.get(_CARD_MARK))
 
 
-def _ai_still(client, model: str, scene: Scene) -> tuple[Image.Image | None, int]:
+def _ai_still(
+    client, model: str, scene: Scene, cancelled: threading.Event | None = None
+) -> tuple[Image.Image | None, int]:
     """(still or None, images billed) for a generated scene: one try, and one retry after an
     error or a timeout (a blocked prompt would most likely be blocked again). No call (and no
-    bill) without a client or with Thai in the prompt (imagegen would refuse it)."""
+    bill) without a client, with Thai in the prompt (imagegen would refuse it) or once
+    `cancelled` is set (checked before every try)."""
     billed = 0
     if client is not None and imagegen.english_only(scene.image_prompt_en):
         prompt = STILL_PROMPT.format(prompt=scene.image_prompt_en)
         for _ in range(STILL_TRIES):
+            if cancelled is not None and cancelled.is_set():
+                break
             imgs, reason = imagegen.generate_images(client, model, prompt, aspect="9:16", size="2K")
             billed += 1
             if imgs:
@@ -423,19 +433,28 @@ def _photo_still(scene: Scene, photos: list[bytes]) -> Image.Image | None:
 
 
 def scene_stills(
-    client, model: str, scenes: list[Scene], photos: list[bytes], accent: str, fonts: CardFonts
+    client,
+    model: str,
+    scenes: list[Scene],
+    photos: list[bytes],
+    accent: str,
+    fonts: CardFonts,
+    *,
+    cancelled: threading.Event | None = None,
 ) -> tuple[list[Image.Image], int]:
     """One 1080x1920 still per scene, in scene order, and the number of images billed (one per
     image-model call). `photo:N` scenes use the shop photo without a model call (framed one at
     a time, so at most one big photo is decoded at once); AI and hero scenes (and photo scenes
     whose photo is unusable) are generated from the scene's English prompt, STILL_WORKERS
     scenes at a time; a blocked still, or one that fails twice, becomes the textless
-    `fallback_card` in `accent`. `fonts` is unused since cards carry no text (kept so callers
+    `fallback_card` in `accent`. Once `cancelled` (the job's cancel) is set, no queued still is
+    started and none is retried (no more paid calls; those scenes get the card, and the runner
+    raises Cancelled right after). `fonts` is unused since cards carry no text (kept so callers
     keep one signature)."""
     stills: list[Image.Image | None] = [_photo_still(s, photos) for s in scenes]
     todo = [i for i, img in enumerate(stills) if img is None]
     with ThreadPoolExecutor(max_workers=STILL_WORKERS) as pool:
-        made = list(pool.map(lambda i: _ai_still(client, model, scenes[i]), todo))
+        made = list(pool.map(lambda i: _ai_still(client, model, scenes[i], cancelled), todo))
     billed = 0
     for i, (img, n) in zip(todo, made, strict=True):
         billed += n
@@ -491,12 +510,21 @@ def caption_png(
 # ------------------------------------------------------------------ motion
 FFMPEG_TIMEOUT_S = 120
 ZOOM = 0.10  # a scene zooms between 1.0 and 1.10
+NICE = 10  # renders yield the CPU to the bot's event loop and the other features
+ENCODE_THREADS = ("-threads", "2")  # x264 threads per encode (an output option)
+
+
+def _low_priority() -> list[str]:
+    """The `nice -n NICE` prefix of every ffmpeg run, or [] where there is no `nice`."""
+    nice = shutil.which("nice")
+    return [nice, "-n", str(NICE)] if nice else []
 
 
 def _ffmpeg(args: list[str], *, data: bytes | None = None, timeout: int = FFMPEG_TIMEOUT_S) -> None:
-    """Run ffmpeg with `args` (no shell), feeding `data` to its stdin when given. Raises
-    RuntimeError with ffmpeg's last stderr line."""
-    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *args]
+    """Run ffmpeg with `args` (no shell, at low priority: `_low_priority`), feeding `data` to
+    its stdin when given. Raises RuntimeError with ffmpeg's last stderr line."""
+    cmd = [*_low_priority(), "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
+    cmd += args
     kw: dict = {"check": False, "capture_output": True, "timeout": timeout}
     if data is not None:
         kw["input"] = data
@@ -546,6 +574,7 @@ def motion_clip(still: Path, seconds: float, index: int, out: Path) -> None:
             "yuv420p",
             "-c:v",
             "libx264",
+            *ENCODE_THREADS,
             "-preset",
             "veryfast",
             "-crf",
@@ -571,7 +600,8 @@ def conform_clip(src: Path, seconds: float, out: Path) -> None:
     _ffmpeg(
         [
             *("-i", str(src), "-vf", chain, "-an", "-t", f"{seconds:.3f}"),
-            *("-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18"),
+            *("-pix_fmt", "yuv420p", "-c:v", "libx264", *ENCODE_THREADS),
+            *("-preset", "veryfast", "-crf", "18"),
             str(out),
         ]
     )
@@ -817,7 +847,8 @@ def _assemble_args(
     return [
         *args,
         *("-filter_complex", ";".join(graph), *maps),
-        *("-c:v", "libx264", "-profile:v", "high", "-preset", X264_PRESET, "-pix_fmt", "yuv420p"),
+        *("-c:v", "libx264", *ENCODE_THREADS, "-profile:v", "high", "-preset", X264_PRESET),
+        *("-pix_fmt", "yuv420p"),
         *("-b:v", f"{kbps}k", "-maxrate", f"{int(kbps * 1.1)}k", "-bufsize", f"{2 * kbps}k"),
         *audio_out,
         *("-movflags", "+faststart", "-t", f"{sum(seconds):.3f}", str(out)),
@@ -911,12 +942,15 @@ def _noop(step: str, detail: str) -> None:
 @dataclass
 class VideoHandle:
     """Shared between the bot and the job thread: `cancelled` stops the job before its next
-    step; `progress(step, detail)` is called when a step starts (detail: counts only);
-    `cost_usd` is the job's cost estimate so far (for the job record)."""
+    step; `progress(step, detail)` is called when a step starts (detail: counts only), and
+    again with "hero" whenever `hero_id` changes; `cost_usd` is the job's cost estimate so far
+    and `hero_id` the Omni interaction id of the hero clip being made ("" when none), both for
+    the job record (a restart cancels a pending hero clip from it)."""
 
     cancelled: threading.Event = field(default_factory=threading.Event)
     progress: Callable[[str, str], None] = _noop
     cost_usd: float = 0.0
+    hero_id: str = ""
 
 
 def check(handle: VideoHandle) -> None:
@@ -926,9 +960,10 @@ def check(handle: VideoHandle) -> None:
 
 
 class MediaUsage:
-    """Monthly media usage per guild in DocStore kind `salid_media_usage`, key "YYYY-MM", one
-    number per field (`ads`, `hero_seconds`, `music_clips`), taken before each paid step and
-    never refunded."""
+    """Media usage per guild in DocStore kind `salid_media_usage`, one number per field, taken
+    before each paid step and never refunded: key "YYYY-MM" for video (`ads`, `hero_seconds`,
+    `music_clips`), key "YYYY-MM-DD" for images (`images`, `images_user_<id>`, see
+    `imagegen_bot.StoredDailyBudget`)."""
 
     def __init__(self, docs):
         self.docs = docs
@@ -939,14 +974,21 @@ class MediaUsage:
 
     def take(self, guild_id: int, month: str, field: str, amount: float, cap: float) -> bool:
         """Add `amount` to `field` unless that would pass `cap`; False (nothing written) then."""
+        return self._add(guild_id, month, field, amount, cap)
+
+    def add(self, guild_id: int, key: str, field: str, amount: float) -> None:
+        """Add `amount` to `field` (the caller checked its cap)."""
+        self._add(guild_id, key, field, amount, None)
+
+    def _add(self, guild_id: int, key: str, field: str, amount: float, cap: float | None) -> bool:
         with _USAGE_LOCK:
-            doc = dict(self.docs.get(USAGE, guild_id, month) or {})
+            doc = dict(self.docs.get(USAGE, guild_id, key) or {})
             doc.pop("guild_id", None)  # Firestore adds it on write
             total = float(doc.get(field) or 0) + amount
-            if total > cap:
+            if cap is not None and total > cap:
                 return False
             doc[field] = int(total) if total.is_integer() else total
-            self.docs.put(USAGE, guild_id, month, doc)
+            self.docs.put(USAGE, guild_id, key, doc)
             return True
 
 
@@ -996,9 +1038,11 @@ def _hero_clip(
 
     One Omni call on `media_client` (no SDK retry on 5xx; None = `client`): `hero_prompt`
     (English only: anything else is refused before any call), `hero_seconds` long. Any error from
-    that create raises HeroRefused. Polled on `client` until done (a job cancel wakes the wait,
-    cancels the interaction and raises Cancelled). The returned MP4 is conformed to exactly the
-    scene's length by `conform_clip`. Blocked, timed out, failed or unreadable -> False."""
+    that create raises HeroRefused. While it runs, its interaction id is `handle.hero_id`
+    (reported through `handle.progress("hero", ...)` when it is set and when it is cleared).
+    Polled on `client` until done (a job cancel wakes the wait, cancels the interaction and
+    raises Cancelled). The returned MP4 is conformed to exactly the scene's length by
+    `conform_clip`. Blocked, timed out, failed or unreadable -> False."""
     prompt = hero_prompt(scene)
     if not videogen.plain_english(prompt):
         logger.warning("video hero clip not started: prompt is not plain English")
@@ -1018,9 +1062,15 @@ def _hero_clip(
         )
     except Exception as e:  # never the message: it may carry account details
         raise HeroRefused(type(e).__name__) from e
-    data, reason = videogen.wait_hero(
-        client, iid, cancelled=handle.cancelled, sleep=handle.cancelled.wait
-    )
+    handle.hero_id = iid  # in the job record while Omni works (a restart cancels it)
+    _report(handle, "hero", "pending")
+    try:
+        data, reason = videogen.wait_hero(
+            client, iid, cancelled=handle.cancelled, sleep=handle.cancelled.wait
+        )
+    finally:
+        handle.hero_id = ""
+        _report(handle, "hero")
     check(handle)  # the job was cancelled: the interaction is cancelled too
     if data is None:
         logger.warning("video hero clip failed (%s)", reason)
@@ -1151,7 +1201,13 @@ def run_video_ad(
     t0 = time.monotonic()
     fonts = cards.card_fonts()
     images, billed = scene_stills(
-        client, settings.image_model, scenes, req.photos, req.accent, fonts
+        client,
+        settings.image_model,
+        scenes,
+        req.photos,
+        req.accent,
+        fonts,
+        cancelled=handle.cancelled,  # a cancel stops the stills still queued
     )
     spend(billed * STILL_USD)  # billed now, even if a cancel stops the motion clips
     stills, clips = [], []

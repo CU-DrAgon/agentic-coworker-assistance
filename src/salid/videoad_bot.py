@@ -2,18 +2,23 @@
 
 `VideoAdMixin` gives `SecretaryBot`:
 - `_video_tools`: the `create_video_ad` agent tool (appended to `extra_tools` by `_agent_kwargs`)
-  for chat answers (voice never passes files, interjections never get it), only when the guild's
-  `video_ads` flag is on (default off), ffmpeg is installed and Thai text can be shaped. Guild,
-  channel, author and the attached photos are bound here, never model input;
+  for chat answers (never in a voice room, see `imagegen_bot.spoken`; interjections never get
+  it), only when the guild's `video_ads` flag is on (default off), ffmpeg is installed and Thai
+  text can be shaped. Guild, channel, author and the attached photos are bound here, never model
+  input;
 - the background job: the tool validates, peeks at the month's ads and reserves the guild's slot
   (one job per guild, `SALID_VIDEO_MAX_JOBS` across the bot) before anything starts, then
-  `run_video_ad` runs in a worker thread in a temp dir that is always removed. One progress
+  `run_video_ad` runs in the bot's own render pool (`_video_pool`, `SALID_VIDEO_MAX_JOBS`
+  threads, never asyncio's default pool) in a temp dir that is always removed. One progress
   message in the asker's channel, edited at most every 5 s with the current step, carries a
-  Cancel button for the requester or an admin; the MP4 comes back as a reply to the request with
-  the scene list and a suggested caption;
-- job records in DocStore kind `salid_video_jobs` (written on every state change; never the
-  brief, the storyboard or media) and `_sweep_video_jobs`: on the first `on_ready`, jobs a restart
-  cut off are marked failed and their requester is told to ask again (usage is not refunded).
+  Cancel button for the requester or an admin (pressed: "cancelling…" at once, and nothing is
+  delivered afterwards); the MP4 comes back as a reply to the request with the scene list and a
+  suggested caption;
+- job records in DocStore kind `salid_video_jobs` (written on every state change, with the
+  pending Omni interaction id `hero_id` while a hero clip is made; never the brief, the
+  storyboard or media) and `_sweep_video_jobs`: on the first `on_ready`, jobs a restart cut off
+  are marked failed, a hero clip they left running is cancelled (best effort) and their
+  requester is told to ask again (usage is not refunded).
 
 Jobs and their slots live in this process (one bot process, like `memory_index` and `recent`).
 """
@@ -22,20 +27,23 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import shutil
 import tempfile
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import discord
 
-from . import cards, speech
+from . import cards, speech, videogen
 from .dm import send_dm
 from .i18n import CATALOG, resolve_lang, t
+from .imagegen_bot import spoken
 from .llm import make_media_client
 from .promo import PHOTO_MIMES
 from .videoad import (
@@ -121,6 +129,10 @@ class VideoAdMixin:
         self._video_swept = False
         self.video_usage = MediaUsage(self.docs)
         self._video_media = None  # made by `_video_media_client` when an add-on is on
+        # renders run here, not in asyncio's default pool (shared with every to_thread call)
+        self._video_pool = ThreadPoolExecutor(
+            max_workers=max(1, self.s.video_max_jobs), thread_name_prefix="salid-video"
+        )
 
     def _video_media_client(self):
         """The client for paid media creates (`llm.make_media_client`: no SDK retry on 5xx),
@@ -135,10 +147,10 @@ class VideoAdMixin:
 
     # ------------------------------------------------------------- agent tool
     def _video_tools(self, message, guild, asker, files) -> list:
-        """`create_video_ad` for this message, or [] (voice, flag off, no ffmpeg, no Thai
-        shaping). Never raises."""
+        """`create_video_ad` for this message, or [] (a voice room, flag off, no ffmpeg, no
+        Thai shaping). Never raises."""
         try:
-            if files is None or not self.team.enabled(guild.id, "video_ads"):
+            if spoken(message, files) or not self.team.enabled(guild.id, "video_ads"):
                 return []
             if not ffmpeg_ready():
                 _warn_once("ffmpeg", "ffmpeg missing: create_video_ad off")
@@ -304,19 +316,23 @@ class VideoAdMixin:
         state, reason, text = "done", "", ""
         with tempfile.TemporaryDirectory(prefix="salid-video-") as tmp:
             try:
-                res = await asyncio.to_thread(
-                    run_video_ad,
-                    req,
-                    client=self.llm,
-                    media_client=self._video_media_client(),
-                    settings=self.s,
-                    say=say,
-                    workdir=Path(tmp),
-                    # the upload limit where the reply goes (a DM: discord.py's 10 MiB default)
-                    budget_mib=budget_mib(getattr(message.guild, "filesize_limit", None)),
-                    handle=job.handle,
-                    usage=self.video_usage,
-                    month=self.s.now().strftime("%Y-%m"),
+                res = await loop.run_in_executor(
+                    self._video_pool,
+                    functools.partial(
+                        run_video_ad,
+                        req,
+                        client=self.llm,
+                        media_client=self._video_media_client(),
+                        settings=self.s,
+                        say=say,
+                        workdir=Path(tmp),
+                        # the upload limit where the reply goes (a DM: discord.py's 10 MiB
+                        # default)
+                        budget_mib=budget_mib(getattr(message.guild, "filesize_limit", None)),
+                        handle=job.handle,
+                        usage=self.video_usage,
+                        month=self.s.now().strftime("%Y-%m"),
+                    ),
                 )
             except asyncio.CancelledError:
                 # shutdown: tell the thread before its temp dir is removed (it stops before its
@@ -339,19 +355,28 @@ class VideoAdMixin:
                 state, reason = "failed", "error"
             if state == "done":
                 job.handle.cost_usd = res.cost_usd
-                await self._video_deliver(job, message, res)
-                text = t("video_done", lang)
+                if job.handle.cancelled.is_set():  # pressed after the runner's last check
+                    logger.info("video job cancelled before delivery: guild=%s", job.guild_id)
+                    state, text = "cancelled", t("video_cancelled", lang)
+                else:
+                    await self._video_deliver(job, message, res)
+                    text = t("video_done", lang)
         if reason and not text:
             text = t("video_failed", lang, reason=t(f"video_reason_{reason}", lang))
         await self._video_finish(job, message, state, text, reason=reason)
 
     def _video_progress(self, job: VideoJob, step: str) -> None:
         """A step started (on the loop): show its label, at most one edit per PROGRESS_EVERY_S
-        (a step that comes sooner waits, and the latest label wins)."""
+        (a step that comes sooner waits, and the latest label wins). Nothing after a cancel (the
+        message says "cancelling…") or when the label is unchanged (a hero clip's id came or
+        went)."""
         key = f"video_step_{step}"
-        if job.final or job.msg is None or key not in CATALOG:
+        if job.final or job.msg is None or key not in CATALOG or job.handle.cancelled.is_set():
             return
-        job.label = t(key, job.lang)
+        label = t(key, job.lang)
+        if label == job.label:
+            return
+        job.label = label
         if job.edit_task is not None and not job.edit_task.done():
             return  # the pending edit will show this label
         wait = max(0.0, job.last_edit + PROGRESS_EVERY_S - self._clock())
@@ -360,7 +385,7 @@ class VideoAdMixin:
     async def _video_edit_after(self, job: VideoJob, wait: float) -> None:
         if wait > 0:
             await self._sleep(wait)
-        if job.final:
+        if job.final or job.handle.cancelled.is_set():
             return
         job.last_edit = self._clock()
         try:
@@ -392,16 +417,17 @@ class VideoAdMixin:
                 )
 
     async def _video_deliver(self, job: VideoJob, message, res) -> None:
-        """Reply to the request with the MP4, the scene list and a suggested caption. Upload
-        refused: the text with a note. Request gone: the same in its channel."""
+        """Reply to the request with the MP4, the scene list and a suggested caption. Reply
+        failed (request gone, or any other error): the same in its channel. Upload refused there
+        too: the text with a note."""
         text, allowed = self._video_reply(job, res), self._video_mentions(job)
         files = [discord.File(str(res.path), filename=res.path.name)]
         try:
             try:
                 await self._reply_with_uploads(message, text, allowed, {"files": files})
                 return
-            except discord.HTTPException:
-                logger.info("video reply failed; posting in the channel instead")
+            except Exception as e:  # gone, refused, or not a message that can be replied to
+                logger.info("video reply failed (%s); posting in the channel", type(e).__name__)
             files.append(discord.File(str(res.path), filename=res.path.name))
             try:
                 await message.channel.send(text, file=files[-1], allowed_mentions=allowed)
@@ -435,8 +461,8 @@ class VideoAdMixin:
         return text if len(text) <= MAX_REPLY else f"{head}\n\n{tail}"
 
     def _video_save(self, job: VideoJob, state: str, *, reason: str = "") -> None:
-        """Write the job's record (blocking). Never the brief, storyboard or media. Never
-        raises."""
+        """Write the job's record (blocking), with `hero_id` while a hero clip is pending. Never
+        the brief, storyboard or media. Never raises."""
         try:
             self.docs.put(
                 JOBS,
@@ -451,6 +477,8 @@ class VideoAdMixin:
                     "updated_at": self.s.now().isoformat(timespec="seconds"),
                     "cost_usd": round(job.handle.cost_usd, 4),
                     "reason": reason,
+                    # the Omni clip being made: a restart cancels it (`_sweep_video_jobs`)
+                    **({"hero_id": job.handle.hero_id} if job.handle.hero_id else {}),
                 },
             )
         except Exception:
@@ -477,14 +505,18 @@ class VideoAdMixin:
                 return
             job.handle.cancelled.set()
             logger.info("video job cancel requested: guild=%s", job.guild_id)
-            await interaction.response.edit_message(view=None)
+            # at once (the job stops before its next step; a step running can take minutes)
+            await interaction.response.edit_message(
+                content=t("video_cancelling", job.lang), view=None
+            )
         except discord.HTTPException:
             logger.info("video cancel response failed", exc_info=True)
 
     # ------------------------------------------------------------- restart
     async def _sweep_video_jobs(self) -> None:
         """Once per process (the first on_ready; reconnects fire it again): jobs a restart cut
-        off are marked failed with reason "restarted" and their requester is told to ask again.
+        off are marked failed with reason "restarted", the hero clip one left running (its
+        record's `hero_id`) is cancelled, best effort, and their requester is told to ask again.
         Usage is not refunded. Never raises.
 
         Requests keep working while it runs, so each job is checked again right before it is
@@ -517,12 +549,24 @@ class VideoAdMixin:
                     "reason": "restarted",
                     "updated_at": self.s.now().isoformat(timespec="seconds"),
                 }
+                hero_id = str(update.pop("hero_id", "") or "")
                 try:
                     await asyncio.to_thread(self.docs.put, JOBS, guild.id, key, update)
                 except Exception:
                     logger.warning("video job %s not marked failed", key, exc_info=True)
                     continue
+                if hero_id:
+                    await asyncio.to_thread(self._video_cancel_hero, hero_id)
                 await self._video_tell_restarted(guild, doc)
+
+    def _video_cancel_hero(self, interaction_id: str) -> None:
+        """Cancel the Omni clip a restart left running (it would run, and bill, to its end), on
+        the normal client. Best effort (blocking); never raises, logs the error type only."""
+        try:
+            if self.llm is not None:
+                videogen.cancel_hero(self.llm, interaction_id)
+        except Exception as e:
+            logger.warning("video hero cancel after a restart failed: %s", type(e).__name__)
 
     def _video_is_live(self, guild_id: int, job_id: str) -> bool:
         """This process runs (or is launching) the job `job_id` of the guild."""
