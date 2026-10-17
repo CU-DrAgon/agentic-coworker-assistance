@@ -17,6 +17,7 @@ from salid import votes as V
 from salid.bot import SecretaryBot
 from salid.coo_store import FirestoreDocStore, SQLiteDocStore
 from salid.dm import DMResult
+from salid.hints import hint
 from salid.meeting import MeetingManager
 from salid.votes_bot import VoteButton, VoteOfferButton
 
@@ -287,6 +288,7 @@ async def test_default_voters_are_the_room_and_each_gets_one_ballot(vw):
         (m,) = vw.private[uid].sent  # exactly one message in the private channel
         assert "มติ: เลื่อนเปิดตัวไปเดือนหน้าไหม" in m.content and "จากการประชุม ห้องประชุม" in m.content
         assert [i.item.label for i in m.view.children] == ["เห็นด้วย", "ไม่เห็นด้วย", "งดออกเสียง"]
+        assert hint("vote_how", "th") in m.content  # how to vote
         assert v["delivered"][str(uid)]["message_id"] == m.id
     (tally,) = vw.text.sent  # one tally message in the meeting chat
     assert "โหวตแล้ว 0/3" in tally.content and v["tally_message_id"] == tally.id

@@ -24,6 +24,7 @@ import discord
 
 from . import votes as V
 from .dm import SENSITIVE_DM_RE, send_dm
+from .hints import with_hint
 from .i18n import t
 from .mentions import match_members
 
@@ -321,6 +322,7 @@ class VotesMixin:
                     key, ulang, question=vote["question"], room=vote["room"],
                     opener=vote["opener_name"], time=V.hhmm(vote["closes_at"], tz),
                 )  # fmt: skip
+                body = with_hint(body, "vote_how", lang=ulang)
                 res = await send_dm(m, body, view=ballot_view(vote))
                 sent = getattr(res, "message", None)
                 if res.ok and sent is not None:

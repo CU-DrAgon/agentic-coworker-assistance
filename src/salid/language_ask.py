@@ -21,6 +21,7 @@ import logging
 
 import discord
 
+from .hints import with_hint
 from .i18n import LANG_NAMES, LANGS, LANGUAGE_LABELS, t
 from .modes import CHAT_CHANNEL_NAME, CHAT_CHANNEL_NAME_EN, chat_channel_name, is_chat_channel_name
 
@@ -36,6 +37,14 @@ PLACEHOLDER = "Choose a language · เลือกภาษา"
 OPTION_ORDER = ("en", "th", *(k for k in LANG_NAMES if k not in ("en", "th")))
 # Names of the chat channel Salid creates itself; a reused channel has any other name.
 OWN_CHAT_NAMES = {CHAT_CHANNEL_NAME, CHAT_CHANNEL_NAME_EN}
+
+
+def both_hint(key: str) -> str:
+    """A hint in English and Thai, each on its own ℹ️ line (the language is not known yet)."""
+    return "\n".join(with_hint("", key, lang=lang).strip() for lang in ("en", "th"))
+
+
+QUESTION_FULL = QUESTION + "\n" + both_hint("lang_how")
 
 
 def both(key: str) -> str:
@@ -88,7 +97,7 @@ class LanguageAskMixin:
         if target is None:
             return False
         try:
-            await target.send(QUESTION, view=ask_view())
+            await target.send(QUESTION_FULL, view=ask_view())
         except discord.HTTPException:
             logger.warning("could not ask the language in guild %s", guild.id, exc_info=True)
             return False
@@ -145,12 +154,16 @@ class LanguageAskMixin:
         text = (
             t("lang_ask_done", value, label=t(f"lang_label_{value}", value))
             + "\n\n"
-            + t(
-                "welcome",
-                value,
-                mention=self.user.mention,
-                chat=where,
-                days=self.team.memory_retention_days(guild.id),
+            + with_hint(
+                t(
+                    "welcome",
+                    value,
+                    mention=self.user.mention,
+                    chat=where,
+                    days=self.team.memory_retention_days(guild.id),
+                ),
+                "welcome_help",
+                lang=value,
             )
         )
         await interaction.response.edit_message(content=text, view=None)

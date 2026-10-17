@@ -11,6 +11,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from . import task_handshake as H
+from .hints import legend, status_marker
 from .memory_access import Scope
 from .tasks import (
     STATUSES,
@@ -47,7 +48,9 @@ class CooTools:
         owner_answered: Callable[[list[Task], list[Task]], None] | None = None,
         find_project: Callable[[str], tuple[str, str]] | None = None,
         channel_id: int = 0,
+        lang: str = "en",
     ):
+        self.lang = lang
         self.guild_id, self.asker_id, self.is_exec, self.scope = guild_id, asker_id, is_exec, scope
         self.tasks, self.people, self.today, self.memory = tasks, people, today, memory
         self._request, self._my_day = request_disclosure, my_day
@@ -63,6 +66,7 @@ class CooTools:
             "due": t.due or None,
             "status": t.status,
             "overdue": is_overdue(t, self.today()),
+            "marker": status_marker(t.confirm, is_overdue(t, self.today()), self.lang) or None,
             "link": t.source_link or None,
             "note": t.note or None,
             "confirm": t.confirm or None,
@@ -99,6 +103,8 @@ class CooTools:
             out["note"] = f"showing the first {MAX_TASKS}"
         if not rows:
             out["note"] = "no matching tasks that this person may see"
+        if any(v["marker"] for v in out["tasks"]):
+            out["legend"] = legend(self.lang)  # show once, as the last line, when a marker is used
         return out
 
     def add_task(

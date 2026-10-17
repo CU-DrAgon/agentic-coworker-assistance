@@ -28,6 +28,7 @@ from . import reports
 from .coo_store import STATE, make_doc_store
 from .coo_tools import CooTools, build_coo_tools
 from .disclosure import Disclosure, DisclosureRepo, pick_owner
+from .hints import with_hint, with_legend
 from .i18n import resolve_lang, t
 from .memory import build_message, message_text
 from .memory_access import (
@@ -301,6 +302,7 @@ class CooMixin:
             owner_answered=partial(self._owner_tools_done, guild.id),
             find_project=partial(self._task_project, guild, member, is_exec),
             channel_id=COO_CHANNEL.get(),
+            lang=lang,
         )
         return build_coo_tools(c)
 
@@ -591,7 +593,8 @@ class CooMixin:
                 for x in items[:10]
             ]
             lines.append(t("fu_footer", lang, id=items[0].id))
-            if (await self.deliver_to_person(guild, member, "\n".join(lines))).ok:
+            text = with_legend(with_hint("\n".join(lines), "task_id", lang=lang), lang)
+            if (await self.deliver_to_person(guild, member, text)).ok:
                 n += 1
         logger.info("follow-ups: guild=%s dms=%d", guild.id, n)
         return n

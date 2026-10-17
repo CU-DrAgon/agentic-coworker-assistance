@@ -13,6 +13,7 @@ from salid import guild_settings as gs
 from salid import language_ask as la
 from salid.bot import SecretaryBot
 from salid.guild_settings import GuildSettings, MemoryGuildStore
+from salid.hints import hint
 from salid.i18n import LANGS, locale_lang, resolve_lang, t
 from salid.modes import CHAT_CHANNEL_NAME, CHAT_CHANNEL_NAME_EN
 from salid.store import SQLiteStore
@@ -217,7 +218,7 @@ def test_the_menu_lists_the_nine_languages_in_their_own_script_and_english():
     labels = {o.value: o.label for o in select.options}
     assert labels["ja"] == "日本語 · Japanese" and labels["th"] == "ไทย · Thai"
     assert select.custom_id == la.CUSTOM_ID == "salid:lang:ask"
-    assert "language" in la.QUESTION and "ภาษา" in la.QUESTION
+    assert "language" in la.QUESTION_FULL and "ภาษา" in la.QUESTION_FULL
     assert isinstance(la.ask_view(), discord.ui.View) and la.ask_view().timeout is None
 
 
@@ -248,6 +249,7 @@ async def test_an_admin_pick_saves_the_language_and_confirms_in_it(bot, world):
     assert kind == "edit" and view is None
     assert text.startswith(t("lang_ask_done", "th", label=t("lang_label_th", "th")))
     assert t("welcome", "th", mention=ME.mention, chat=world.chat.mention, days=90)[:20] in text
+    assert hint("welcome_help", "th") in text  # how to ask for help is in the welcome
     # the chat channel Salid created follows the language
     assert world.chat.renamed == [CHAT_CHANNEL_NAME] and world.chat.name == CHAT_CHANNEL_NAME
 
@@ -318,7 +320,9 @@ async def test_joining_welcomes_in_english_then_asks_once(bot, world):
     await bot.on_guild_join(world.g)
     sent = world.chat.sent
     assert sent[0].startswith("Hi, I'm Salid")  # English welcome
-    assert sent[1] == la.QUESTION and isinstance(world.chat.views[1], discord.ui.View)
+    assert hint("welcome_help", "en") in sent[0]
+    assert hint("lang_how", "en") in sent[1] and hint("lang_how", "th") in sent[1]
+    assert sent[1] == la.QUESTION_FULL and isinstance(world.chat.views[1], discord.ui.View)
     assert len(sent) == 2
     assert stored(bot).language_asked_at and not stored(bot).language_chosen
     assert bot.team.channel_language(GUILD, 10) == "auto"  # until answered
@@ -333,17 +337,17 @@ async def test_a_server_that_already_chose_is_not_asked_again_on_rejoin(bot, wor
 
 async def test_startup_asks_every_unanswered_server_once_in_the_chat_channel(bot, world):
     await bot._ask_unanswered_languages()
-    assert world.chat.sent == [la.QUESTION] and world.gen.sent == []
+    assert world.chat.sent == [la.QUESTION_FULL] and world.gen.sent == []
     assert stored(bot).language_asked_at
     await bot._ask_unanswered_languages()  # a restart, a second ready event
-    assert world.chat.sent == [la.QUESTION]
+    assert world.chat.sent == [la.QUESTION_FULL]
 
 
 async def test_startup_falls_back_to_the_system_channel_and_skips_chosen_servers(bot, world):
     world.g.text_channels[:] = [world.gen]
     world.g.system_channel = world.gen
     await bot._ask_unanswered_languages()
-    assert world.gen.sent == [la.QUESTION]
+    assert world.gen.sent == [la.QUESTION_FULL]
     other = FakeGuild(2, "B", [Chan(30, CHAT_CHANNEL_NAME)])
     bot.guilds_store.set_server_language(2, "en")
     assert await bot._post_language_question(other) is False and other.text_channels[0].sent == []
@@ -363,9 +367,9 @@ async def test_on_ready_asks_after_the_guilds_are_synced(bot, world):
     bot._start_import = lambda: None
     bot.meetings.resume_all, bot.meetings.scan_all = noop, lambda: None
     await bot.on_ready()
-    assert world.chat.sent == [la.QUESTION]
+    assert world.chat.sent == [la.QUESTION_FULL]
     await bot.on_ready()
-    assert world.chat.sent == [la.QUESTION]
+    assert world.chat.sent == [la.QUESTION_FULL]
 
 
 # ------------------------------------------------------------------ DMs

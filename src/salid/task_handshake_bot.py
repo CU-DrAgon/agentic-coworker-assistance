@@ -16,6 +16,8 @@ import logging
 import discord
 
 from . import task_handshake as H
+from .hints import hint as hint_text
+from .hints import with_hint
 from .tasks import Task
 
 logger = logging.getLogger(__name__)
@@ -79,7 +81,11 @@ class TaskEditModal(discord.ui.Modal):
             label=H.t("hs_f_title", lang)[:45], default=task.title, max_length=300
         )
         self.f_due = discord.ui.TextInput(
-            label=H.t("hs_f_due", lang)[:45], default=task.due, required=False, max_length=40
+            label=H.t("hs_f_due", lang)[:45],
+            default=task.due,
+            required=False,
+            max_length=40,
+            placeholder=hint_text("ph_due", lang)[:100],
         )
         self.f_note = discord.ui.TextInput(
             label=H.t("hs_f_note", lang)[:45],
@@ -132,7 +138,11 @@ class OwnerModal(discord.ui.Modal):
     def __init__(self, guild_id: int, task: Task, lang: str) -> None:
         super().__init__(title=H.t("hs_owner_modal", lang)[:45])
         self.guild_id, self.task_id = guild_id, task.id
-        self.f_who = discord.ui.TextInput(label=H.t("hs_owner_field", lang)[:45], max_length=100)
+        self.f_who = discord.ui.TextInput(
+            label=H.t("hs_owner_field", lang)[:45],
+            max_length=100,
+            placeholder=hint_text("ph_who", lang)[:100],
+        )
         self.add_item(self.f_who)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -188,10 +198,25 @@ class TaskHandshakeMixin:
 
         return channel_of, project_of
 
-    def _handshake_text(self, guild, tasks: list[Task], lang: str, edited=frozenset()) -> str:
+    def _handshake_text(
+        self, guild, tasks: list[Task], lang: str, edited=frozenset(), first_time=False
+    ) -> str:
         channel_of, project_of = self._handshake_names(guild)
         return H.render_message(
-            tasks, lang, channel_of=channel_of, project_of=project_of, edited=edited
+            tasks,
+            lang,
+            channel_of=channel_of,
+            project_of=project_of,
+            edited=edited,
+            first_time=first_time,
+        )
+
+    def _first_card(self, guild_id: int, member_id: int, batch_ids=frozenset()) -> bool:
+        """Blocking. True when no task of this person, outside `batch_ids` (the cards being sent
+        now, so a nudge of the first card is still a first card), has been through the handshake."""
+        return not any(
+            x.confirm and x.id not in batch_ids
+            for x in self.tasks.list(guild_id, status=None, assignee_id=member_id)
         )
 
     @staticmethod
@@ -248,14 +273,24 @@ class TaskHandshakeMixin:
             return
         lang = self._person_lang(guild.id, giver.id)
         await self.deliver_to_person(
-            guild, giver, H.t("hs_team_unclear", lang, title=task.title, id=task.id)
+            guild,
+            giver,
+            with_hint(
+                H.t("hs_team_unclear", lang, title=task.title, id=task.id),
+                "reassign",
+                "mention",
+                lang=lang,
+            ),
         )
 
     async def _handshake_send(self, guild, member, batch: list[Task], *, nudge: bool = False):
         """One message, one card per task. On success the tasks become `pending` (a nudge keeps
         the original time) and remember the message. Returns whether it was delivered."""
         lang = self._person_lang(guild.id, member.id)
-        text = self._handshake_text(guild, batch, lang)
+        first = await asyncio.to_thread(
+            self._first_card, guild.id, member.id, frozenset(x.id for x in batch)
+        )
+        text = self._handshake_text(guild, batch, lang, first_time=first)
         res = await self.deliver_to_person(
             guild, member, text, view=self._handshake_view(guild.id, batch, lang)
         )
@@ -468,7 +503,7 @@ class TaskHandshakeMixin:
     async def _handshake_edit_boss_card(self, interaction, guild, task, lang, status_key) -> None:
         who = guild.get_member(task.assignee_id)
         name = getattr(who, "display_name", "") or task.assignee_name
-        text = H.boss_card_text(task, name, lang) + "\n" + H.t(status_key, lang)
+        text = H.boss_card_text(task, name, lang, hint=False) + "\n" + H.t(status_key, lang)
         await self._handshake_edit_message(interaction, text, None, text)
 
     async def _handshake_edit_message(self, interaction, text, view, fallback) -> None:
@@ -802,7 +837,8 @@ class TaskHandshakeMixin:
         res = await self._owner_resolve(guild, task, kind, name)
         if res.unresolved:
             await interaction.response.send_message(
-                H.t("hs_owner_unknown", lang, name=res.unresolved), ephemeral=True
+                with_hint(H.t("hs_owner_unknown", lang, name=res.unresolved), "mention", lang=lang),
+                ephemeral=True,
             )
             return
         rows = await asyncio.to_thread(self._owner_rows, guild, res.tasks[0])
@@ -881,14 +917,17 @@ class TaskHandshakeMixin:
         lang = self._person_lang(guild.id, member.id, message.content or "")
         if len(cands) > 1:
             lines = [H.t("hs_owner_which", lang)] + [f"#{x.id} {x.title[:60]}" for x in cands[:5]]
-            await message.reply("\n".join(lines), mention_author=False)
+            await message.reply(
+                with_hint("\n".join(lines), "task_id", lang=lang), mention_author=False
+            )
             return True
         task = cands[0]
         kind, name = answer
         res = await self._owner_resolve(guild, task, kind, name)
         if res.unresolved:
             await message.reply(
-                H.t("hs_owner_unknown", lang, name=res.unresolved), mention_author=False
+                with_hint(H.t("hs_owner_unknown", lang, name=res.unresolved), "mention", lang=lang),
+                mention_author=False,
             )
             return True
         await self._owner_edit_by_ref(guild, res.tasks[0])

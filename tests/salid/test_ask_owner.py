@@ -24,6 +24,7 @@ from test_task_handshake import (
 
 from salid import task_handshake as H
 from salid.coo_store import SQLiteDocStore
+from salid.hints import with_hint
 from salid.i18n import t
 from salid.tasks import Task
 
@@ -131,7 +132,9 @@ async def test_an_unknown_name_keeps_the_card_waiting(hs, world):
     await hs._handshake_offer(GUILD, [task])
     click = Click(world.staff)
     await hs.handle_owner_answer(click, "oo", GUILD, task.id, "ไม่มีคนนี้")
-    assert click.sent == [(t("hs_owner_unknown", "th", name="ไม่มีคนนี้"), True)]
+    assert click.sent == [
+        (with_hint(t("hs_owner_unknown", "th", name="ไม่มีคนนี้"), "mention", lang="th"), True)
+    ]
     assert not click.edited and hs.tasks.get(GUILD, task.id).confirm == "owner_asked"
 
 
@@ -183,7 +186,7 @@ async def test_one_nudge_after_24_hours_then_it_stays_unassigned(hs, world):
 def test_marker_in_followups_and_the_company_report_input():
     task = Task(guild_id=GUILD, title="x", confirm="owner_asked")
     assert H.pending_marker(task, "th") == t("hs_owner_marker", "th")
-    assert H.pending_marker(task, "en") == "⏳ owner pending"
+    assert H.pending_marker(task, "en") == "❓ owner pending"
 
 
 def test_old_documents_load_without_owner_message():

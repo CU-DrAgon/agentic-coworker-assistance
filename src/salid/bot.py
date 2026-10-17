@@ -76,6 +76,8 @@ from .guild_settings import (
     make_guild_store,
     valid_retention_days,
 )
+from .hints import with_hint
+from .hints_bot import HintsMixin
 from .i18n import (
     LANGS,
     LANGUAGE_LABELS,
@@ -363,6 +365,7 @@ class SecretaryBot(
     BizfinMixin,
     CooMixin,
     BriefingMixin,
+    HintsMixin,
     ProfileMixin,
     DeliverMixin,
     PromoMixin,
@@ -650,12 +653,16 @@ class SecretaryBot(
             where = chat.mention if chat else f"#{chat_channel_name(lang)}"
             with contextlib.suppress(discord.HTTPException):
                 await target.send(
-                    t(
-                        "welcome",
-                        lang,
-                        mention=self.user.mention,
-                        chat=where,
-                        days=self.team.memory_retention_days(guild.id),
+                    with_hint(
+                        t(
+                            "welcome",
+                            lang,
+                            mention=self.user.mention,
+                            chat=where,
+                            days=self.team.memory_retention_days(guild.id),
+                        ),
+                        "welcome_help",
+                        lang=lang,
                     )
                 )
                 if guild.id in self._chat_perm_missing:  # say exactly what is missing, once
@@ -887,6 +894,8 @@ class SecretaryBot(
         if called and await self._tone_command(message):
             return
         if called and await self._task_mode_command(message):
+            return
+        if called and await self._help_command(message):
             return
         if called and await self._private_command(message, message.guild, message.author):
             return
@@ -1247,6 +1256,8 @@ class SecretaryBot(
         if await self._personal_tone_command(message, guild, member):  # their own tone
             return
         if await self._task_mode_command(message, guild, member):  # their own task mode
+            return
+        if await self._help_command(message, guild, member):  # "how do I use Salid?"
             return
         if await self._owner_answer_command(message, guild, member):  # "who takes this task?"
             return

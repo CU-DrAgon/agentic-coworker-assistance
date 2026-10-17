@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 import discord
 
 from .dm import DMResult, send_dm
+from .hints import with_hint
 from .i18n import base_lang, resolve_lang, t
 from .permissions import guild_missing, permission_message
 from .private_chat import (
@@ -111,7 +112,7 @@ class PrivateChatMixin:
             logger.warning("could not save the private channel settings", exc_info=True)
         with contextlib.suppress(discord.HTTPException):
             await ch.send(
-                t("pc_welcome", lang, mention=member.mention),
+                with_hint(t("pc_welcome", lang, mention=member.mention), "welcome_help", lang=lang),
                 allowed_mentions=discord.AllowedMentions(users=[member]),
             )
         return ch, True, ""

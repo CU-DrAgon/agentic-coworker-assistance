@@ -451,6 +451,27 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
 - `MemoryService.delete_guild(guild_id)` wipes a guild's memory; the bot does not call it on removal because it
   keeps every other guild record too (retention expires the data).
 
+### How to answer Salid (สัญลักษณ์และวิธีตอบ)
+
+Salid explains these on every message that expects a typed answer; "Salid help" / "สลิด ใช้งานยังไง"
+shows the guide at any time (the text lives in `src/salid/hints.py`, `help_tasks`).
+
+**English**
+- Three ways to hand out work: just talk and Salid picks tasks up, tag Salid under a message that gives work, or tell Salid directly ("give @Toey the slides by friday").
+- The assignee gets a card: Accept / Edit / Not mine. If Salid cannot tell who owns a task she asks the giver: Mine / Someone else / Not a task.
+- You can type instead of pressing a button: "task #id done", "task #id to @name", "mine", "not a task".
+- `#id` is the task id; `@name` tags a person (type @ and pick the name); due dates: today, tomorrow, friday, 2026-10-20.
+- Status symbols: ⏳ awaiting confirmation, 🔏 awaiting approval, ❓ owner pending, ⚠️ overdue, ✅ done.
+- See your tasks with "my tasks" or on the `/pm` page (Workspace Settings shows the same legend).
+
+**ภาษาไทย**
+- สั่งงานได้ 3 ทาง: พูดคุยตามปกติ สลิดจับงานเอง, แท็กสลิดใต้ข้อความที่มอบงาน, หรือบอกสลิดตรงๆ ("ให้ @เตย ทำสไลด์ศุกร์นี้")
+- คนรับงานจะได้การ์ด กดรับงาน / แก้ไข / ไม่ใช่ของฉัน ถ้าสลิดไม่รู้ว่าเป็นงานของใคร จะถามคนมอบ: ของฉัน / ให้คนอื่น / ไม่ใช่งาน
+- พิมพ์ตอบแทนปุ่มได้: "งาน #รหัส เสร็จแล้ว", "งาน #รหัส ให้ @ชื่อ", "ของฉัน", "ไม่ใช่งาน"
+- `#รหัส` คือรหัสงาน, `@ชื่อ` คือแท็กคน (พิมพ์ @ แล้วเลือกชื่อ), กำหนดส่ง: วันนี้ พรุ่งนี้ ศุกร์ 2026-10-20
+- สัญลักษณ์สถานะ: ⏳ รอยืนยัน, 🔏 รออนุมัติ, ❓ รอระบุผู้รับ, ⚠️ เลยกำหนด, ✅ เสร็จ
+- ดูงานได้ที่ "งานของฉัน" หรือหน้า `/pm` (หน้าตั้งค่ามีสัญลักษณ์เดียวกัน)
+
 ### Executive assistant / COO mode
 
 Salid acts as the team's executive assistant: it watches what people do on its own (nobody reports to it),

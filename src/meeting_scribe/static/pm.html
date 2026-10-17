@@ -260,6 +260,7 @@ const S = /*I18N-START*/{
   i_person:["บุคคล","Person"], i_open_tasks:["งานค้าง","Open tasks"], i_projects:["โครงการ","Projects"], i_overload:["งานเยอะเกินไป (> 8)","Heavy load (> 8)"], i_done_total:["งานเสร็จ / ทั้งหมด","Tasks done / total"], i_none:["ยังไม่มีข้อมูล","No data yet."],
   i_comp:["การแข่งขัน","Competition"], i_planned:["วางแผน","Planned"], i_spent:["ใช้จริง","Spent"], i_total:["รวม","Total"], i_locked:["ข้อมูลงบประมาณเห็นได้เฉพาะฝ่ายการเงินและผู้ดูแล","Budget data is visible to finance and admins only."],
   /* settings */
+  s_legend:["สัญลักษณ์สถานะงาน","Task status symbols"], lg_pending:["⏳ รอยืนยัน","⏳ awaiting confirmation"], lg_awaiting:["🔏 รออนุมัติ","🔏 awaiting approval"], lg_owner:["❓ รอระบุผู้รับ","❓ owner pending"], lg_overdue:["⚠️ เลยกำหนด","⚠️ overdue"], lg_done:["✅ เสร็จ","✅ done"],
   s_members:["สมาชิก","Members"], s_email:["อีเมล","Email"], s_role:["บทบาท","Role"], s_finance:["ผู้อนุมัติการเงิน","Finance approver"], s_ro:["เฉพาะผู้ดูแลที่แก้ไขได้","Only admins can edit."], s_depts:["แผนก","Departments"], s_defaults:["ค่าเริ่มต้นการเข้าถึง","Access defaults"],
   s_templates:["เทมเพลตโครงการ","Project templates"], s_sections:["หัวข้อ","Sections"], s_company:["บริษัท","Company"], s_company_edit:["แก้ไขชื่อและโลโก้ที่ศูนย์ควบคุม","Edit name and logo in the Command Center"], s_logo:["โลโก้","Logo"],
   tpl_standard:["เทมเพลตทั่วไป","Standard template"], tpl_hackathon:["เทมเพลตแฮ็กกาธอน","Hackathon template"],
@@ -856,6 +857,7 @@ async function viewSettings(root, _id, stale) {
         defaultSel(settings, admin, root, stale, "personal_settings", "personal", [["true", "on"], ["false", "off"]], true))),
     el("div", { class: "card" }, el("h2", { text: t("s_templates") }), el("div", { class: "split" }, tpls.map((tp) => el("div", { class: "card" }, el("h3", { text: t("tpl_" + tp.kind) }),
       el("ul", { class: "small" }, arr(tp, "sections").map((s) => el("li", { text: t(s) === s ? s : t(s) }))))))),
+    el("div", { class: "card" }, el("h2", { text: t("s_legend") }), el("ul", { class: "small" }, ["lg_pending", "lg_awaiting", "lg_owner", "lg_overdue", "lg_done"].map((k) => el("li", { text: t(k) })))),
     el("div", { class: "card" }, el("h2", { text: t("s_company") }), el("div", { class: "li" }, co.logo_url ? el("img", { src: co.logo_url, alt: t("s_logo"), width: "48", height: "48", style: "border-radius:10px;object-fit:cover" }) : el("span", { class: "mark", "aria-hidden": "true", text: ((co.name || (org && org.name) || "S")[0] || "S").toUpperCase() }),
       el("b", { class: "grow", text: co.name || (org && org.name) || "" }), el("a", { class: "btn ghost sm", href: "/center" }, t("s_company_edit")))));
 }

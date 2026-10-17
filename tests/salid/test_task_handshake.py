@@ -28,6 +28,7 @@ from salid import task_handshake as H
 from salid.coo_store import STATE, SQLiteDocStore
 from salid.coo_tools import CooTools, build_coo_tools
 from salid.guild_settings import FEATURES, Features, GuildSettingsUpdate
+from salid.hints import with_hint
 from salid.i18n import t
 from salid.memory_summary import ActionItem
 from salid.profiles import Profile, ProfileRepo, ProfileTools, apply_change
@@ -376,7 +377,12 @@ async def test_not_mine_unassigns_keeps_the_written_name_and_tells_the_giver(hs,
     )
     assert t("hs_status_no", "th") in click.edited[0]["content"]
     ((line, _),) = world.boss.dms
-    assert line == t("hs_giver_no", "th", name="Somchai", title=task.title, id=task.id)
+    assert line == with_hint(
+        t("hs_giver_no", "th", name="Somchai", title=task.title, id=task.id),
+        "reassign",
+        "mention",
+        lang="th",
+    )
     assert saved in hs.tasks.list(GUILD, assignee_id=0)  # counts as unassigned
 
 
@@ -408,7 +414,9 @@ async def test_a_team_nobody_could_pick_asks_the_giver_instead_of_sending_cards(
     big._needs_owner = True
     assert await hs._handshake_offer(GUILD, [big]) == 0
     ((line, _),) = world.boss.dms
-    assert line == t("hs_team_unclear", "th", title="ประชุมใหญ่", id=big.id)
+    assert line == with_hint(
+        t("hs_team_unclear", "th", title="ประชุมใหญ่", id=big.id), "reassign", "mention", lang="th"
+    )
 
 
 async def test_a_second_message_edit_keeps_the_other_cards_of_the_same_message(hs, world):
@@ -663,8 +671,11 @@ async def test_not_mine_behaves_the_same_in_approve_mode(hs, world):
     task = await accepted_waiting(hs, world)
     await hs.handle_task_answer(Click(world.staff), "no", GUILD, task.id)
     assert hs.tasks.get(GUILD, task.id).confirm == "declined"
-    assert world.boss.dms[-1][0] == t(
-        "hs_giver_no", "th", name="Somchai", title=task.title, id=task.id
+    assert world.boss.dms[-1][0] == with_hint(
+        t("hs_giver_no", "th", name="Somchai", title=task.title, id=task.id),
+        "reassign",
+        "mention",
+        lang="th",
     )
 
 

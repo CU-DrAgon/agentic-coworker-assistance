@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 
 from .dm import SENSITIVE_DM_RE
+from .hints import with_hint
 from .i18n import t
 
 KIND = "salid_reminders"
@@ -344,6 +345,9 @@ class ReminderBook:
 
 
 # ----------------------------------------------------------------------------- tools
+TIME_ERRORS = frozenset({"no_time", "bad_time", "bad_every", "bad_until", "bad_weekdays"})
+
+
 @dataclass
 class ReminderCtx:
     guild_id: int
@@ -359,7 +363,10 @@ class ReminderCtx:
 
 
 def _err(ctx: ReminderCtx, e: ReminderError) -> dict:
-    return {"ok": False, "error": e.code, "reason": t(f"rem_err_{e.code}", ctx.lang, **e.fmt)}
+    reason = t(f"rem_err_{e.code}", ctx.lang, **e.fmt)
+    if e.code in TIME_ERRORS:  # the time could not be read: show what works
+        reason = with_hint(reason, "time_formats", lang=ctx.lang)
+    return {"ok": False, "error": e.code, "reason": reason}
 
 
 def _plan(at: str, every: str, weekdays: str, until: str, quiet: bool, now: datetime) -> dict:

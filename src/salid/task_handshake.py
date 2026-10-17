@@ -12,6 +12,7 @@ import re
 import uuid
 from datetime import datetime, timedelta
 
+from .hints import confirm_marker, help_tasks, with_hint
 from .i18n import CATALOG, t
 from .memory_access import is_dm_scope
 from .tasks import Task, match_person, parse_due, split_who
@@ -25,12 +26,14 @@ ANSWERED = (ACCEPTED, DECLINED, AWAITING)
 NOT_A_TASK = "not a task"  # the note of a task its giver dropped
 MAX_ROUNDS = 3  # send-backs before the task stays pending and an executive is told
 TEXT_MAX = 1900
+HINT_ROOM = 320  # characters kept free below a card message for its hint lines
 
 STRINGS = {
     "hs_card": {
         "th": "📋 งานใหม่ จาก #{channel} ({giver}): **{title}** · กำหนด {due} · โปรเจกต์ {project}",
         "en": "📋 New task from #{channel} ({giver}): **{title}** · due {due} · project {project}",
     },
+    "hs_card_id": {"th": " · งาน #{id}", "en": " · task #{id}"},
     "hs_giver_unknown": {"th": "จากบทสนทนา", "en": "from the conversation"},
     "hs_btn_ok": {"th": "✅ รับงาน", "en": "✅ Accept"},
     "hs_btn_edit": {"th": "✏️ แก้ไข", "en": "✏️ Edit"},
@@ -78,8 +81,6 @@ STRINGS = {
         "th": "อ่านวันที่ไม่ออก เลยคงกำหนดเดิมไว้ค่ะ",
         "en": "I could not read that date, so the due date stays as it was.",
     },
-    "hs_pending_marker": {"th": "⏳ รอยืนยัน", "en": "⏳ awaiting confirmation"},
-    "hs_awaiting_marker": {"th": "⏳ รออนุมัติ", "en": "⏳ awaiting approval"},
     "hs_status_wait": {"th": "⏳ รับงานแล้ว รอหัวหน้าอนุมัติ", "en": "⏳ Accepted, waiting for approval"},
     "hs_back_line": {"th": "↩️ หัวหน้าส่งกลับ: {note}", "en": "↩️ Sent back: {note}"},
     "hs_btn_ap": {"th": "✅ อนุมัติ", "en": "✅ Approve"},
@@ -168,7 +169,6 @@ STRINGS = {
     "hs_owner_say_none": {"th": "โอเคค่ะ ไม่จดเป็นงานนะคะ", "en": "Okay, I won't keep it as a task."},
     "hs_owner_say_mine": {"th": "โอเคค่ะ เป็นงานของคุณนะคะ", "en": "Okay, it's yours."},
     "hs_owner_say_other": {"th": "โอเคค่ะ ส่งให้เขาแล้วนะคะ", "en": "Okay, I've passed it on."},
-    "hs_owner_marker": {"th": "⏳ รอระบุผู้รับ", "en": "⏳ owner pending"},
 }
 CATALOG.update(STRINGS)
 
@@ -191,16 +191,20 @@ HANDSHAKE_PROMPT = (
     "เมื่อมีคนบอกว่างานที่สลิดถามถึง (owner_pending) เป็นของเขา / ให้ใคร / ไม่ใช่งาน ให้เรียก answer_task_question(task_id, mine|other|none, name) "
     "แล้วตอบสั้นๆ หนึ่งบรรทัด. When someone says a task Salid asked about (owner_pending) is theirs / for X / not a task, call "
     "answer_task_question(task_id, mine|other|none, name) and reply with one short line.\n"
+    "ถ้า list_tasks / my_projects_and_tasks ส่ง legend มา (มีงานที่มีสัญลักษณ์สถานะ) ให้แสดง legend นั้นครั้งเดียวเป็นบรรทัดสุดท้าย "
+    "และเมื่อผู้ใช้ถามว่าใช้งานยังไง / สัญลักษณ์แปลว่าอะไร / ตอบยังไง ให้ตอบจากคู่มือนี้ (ไม่ต้องเรียกเครื่องมือ): "
+    "If list_tasks / my_projects_and_tasks return a legend (some tasks carry a status marker), show that legend once as the last line; "
+    "when someone asks how to use Salid, what a symbol means or how to answer, answer from this guide (no tool call):\n"
+    + help_tasks("th")
+    + "\n"
+    + help_tasks("en")
+    + "\n"
 )
 
 
 def pending_marker(task: Task, lang: str) -> str:
     """A small marker for lists and reports: "" unless the task still awaits confirmation."""
-    if task.confirm == AWAITING:
-        return t("hs_awaiting_marker", lang)
-    if task.confirm == OWNER_ASKED:
-        return t("hs_owner_marker", lang)
-    return t("hs_pending_marker", lang) if task.confirm == PENDING else ""
+    return confirm_marker(task.confirm, lang)
 
 
 def giver_label(task: Task, lang: str) -> str:
@@ -208,7 +212,7 @@ def giver_label(task: Task, lang: str) -> str:
 
 
 def card_text(task: Task, lang: str, *, channel: str, project: str = "") -> str:
-    return t(
+    line = t(
         "hs_card",
         lang,
         channel=channel or "-",
@@ -217,6 +221,7 @@ def card_text(task: Task, lang: str, *, channel: str, project: str = "") -> str:
         due=task.due or "-",
         project=project or "-",
     )
+    return line + t("hs_card_id", lang, id=task.id)
 
 
 def status_line(task: Task, lang: str, edited: bool = False) -> str:
@@ -228,10 +233,18 @@ def status_line(task: Task, lang: str, edited: bool = False) -> str:
 
 
 def render_message(
-    tasks: list[Task], lang: str, *, channel_of, project_of, edited: frozenset[str] = frozenset()
+    tasks: list[Task],
+    lang: str,
+    *,
+    channel_of,
+    project_of,
+    edited: frozenset[str] = frozenset(),
+    first_time: bool = False,
 ) -> str:
     """The text of a card message: one card per task; a task already answered shows its final
-    status line instead of waiting for buttons. `channel_of(task)` / `project_of(task)` give names."""
+    status line instead of waiting for buttons. `channel_of(task)` / `project_of(task)` give names.
+    While a card still waits, two hint lines close the message: how to answer and what #id means
+    (a person's very first card swaps the id line for a "first time?" pointer to the help)."""
     many = len(tasks) > 1
     blocks = []
     for i, task in enumerate(tasks, 1):
@@ -243,7 +256,11 @@ def render_message(
         if task.confirm in ANSWERED:
             head += "\n" + status_line(task, lang, task.id in edited)
         blocks.append(head)
-    return "\n\n".join(blocks)[:TEXT_MAX]
+    text = "\n\n".join(blocks)
+    if any(x.confirm not in ANSWERED for x in tasks):
+        keys = ("answer_confirm", "first_time" if first_time else "task_id")
+        return with_hint(text[: TEXT_MAX - HINT_ROOM], *keys, lang=lang)
+    return text[:TEXT_MAX]
 
 
 def batches(tasks: list[Task]) -> list[list[Task]]:
@@ -290,7 +307,8 @@ def giver_message(
     """The line for the person who gave the task. kind: ok | edit | no. `group` = (confirmed,
     total) for a task shared by several people."""
     if kind == "no":
-        return t("hs_giver_no", lang, name=name, title=task.title, id=task.id)
+        line = t("hs_giver_no", lang, name=name, title=task.title, id=task.id)
+        return with_hint(line, "reassign", "mention", lang=lang)
     if kind == "edit" and changes:
         line = t("hs_giver_edit", lang, name=name, changes=", ".join(changes), id=task.id)
     else:
@@ -381,7 +399,10 @@ def render_owner_message(tasks: list[Task], lang: str, *, channel_of, names_of) 
         if final:
             head += "\n" + final
         blocks.append(head)
-    return "\n\n".join(blocks)[:TEXT_MAX]
+    text = "\n\n".join(blocks)
+    if any(owner_waiting(x) for x in tasks):
+        return with_hint(text[: TEXT_MAX - HINT_ROOM], "answer_owner", "mention", lang=lang)
+    return text[:TEXT_MAX]
 
 
 # ---------------------------------------------------------------- the owner's answer
@@ -516,9 +537,10 @@ def diff_text(task: Task, lang: str) -> str:
     return "; ".join(out)
 
 
-def boss_card_text(task: Task, name: str, lang: str) -> str:
+def boss_card_text(task: Task, name: str, lang: str, *, hint: bool = True) -> str:
+    """The approval card for the giver; `hint=False` once it is answered (no buttons left)."""
     diff = diff_text(task, lang)
-    return t(
+    text = t(
         "hs_boss_card",
         lang,
         name=name,
@@ -527,6 +549,7 @@ def boss_card_text(task: Task, name: str, lang: str) -> str:
         edits=t("hs_boss_edits", lang, diff=diff) if diff else "",
         id=task.id,
     )
+    return with_hint(text, "answer_boss", lang=lang) if hint else text
 
 
 def effective_mode(org_mode: str, giver_mode: str, personal_ok: bool) -> str:

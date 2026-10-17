@@ -29,6 +29,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .coo_store import DocStore
+from .hints import legend, status_marker
 from .i18n import CATALOG, t
 from .tasks import Task, TaskRepo, is_overdue, parse_due
 
@@ -1404,7 +1405,7 @@ def project_tools(ctx: ProjectsCtx) -> list:
             for x in ctx.tasks.list(ctx.guild_id, status="open")
             if task_mine(x, ctx.asker.email, ctx.asker.discord_user_id)
         ]
-        return {
+        out = {
             "ok": True,
             "projects": [
                 {
@@ -1423,10 +1424,15 @@ def project_tools(ctx: ProjectsCtx) -> list:
                     "due": x.due,
                     "project": names.get(x.project_id, "") if x.project_id else "",
                     "overdue": is_overdue(x, _today(ctx)),
+                    "marker": status_marker(x.confirm, is_overdue(x, _today(ctx)), ctx.lang)
+                    or None,
                 }
                 for x in tasks[:30]
             ],
         }
+        if any(v["marker"] for v in out["tasks"]):
+            out["legend"] = legend(ctx.lang)  # show once, as the last line, when a marker is used
+        return out
 
     return [
         project_create, project_update, project_list, project_show, project_add_task,

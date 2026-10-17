@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 
+from .hints import with_legend
 from .i18n import t
 from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
 from .memory_summary import SummaryDoc
@@ -449,7 +450,7 @@ def render(data: CatchUp, lang: str, zone, *, short: bool = False) -> str:
     )  # fmt: skip
     section("cu_files", [f"• {r['text']} ({r['channel']}) {r['link']}".strip() for r in data.files])
     lines += ["", t("cu_ask_more", lang)]
-    return "\n".join(lines)[:3800]
+    return with_legend("\n".join(lines)[:3800], lang)
 
 
 def _line(r: dict, lang: str) -> str:
