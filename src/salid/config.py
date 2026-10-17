@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     live_voice: str = "Leda"
     # Live turn-taking (automatic activity detection): short greetings are picked up quickly (start
     # sensitivity high), a pause is not an end of turn (end sensitivity low + silence_duration_ms).
-    live_silence_ms: int = 1200
+    live_silence_ms: int = 2000  # a thinking pause ("เอ่อ…") must not end the person's turn
     live_prefix_padding_ms: int = 300
     live_start_sensitivity: str = "high"  # high | low
     live_end_sensitivity: str = "low"  # high | low
@@ -85,7 +85,9 @@ class Settings(BaseSettings):
     # Barge-in: "intentional" (default) = background noise or someone else talking never cuts Salid
     # off; she stops only when told to ("สลิด หยุด", "เดี๋ยวก่อน", "stop", "wait", or her name).
     # "any" = the old behaviour: any detected speech interrupts her (good in quiet rooms only).
-    live_barge_in: str = "intentional"  # intentional | any
+    live_barge_in: str = (
+        "any"  # intentional | any — people may interrupt her freely (owner, 2026-10-18)
+    )
     # Voice meetings stay voice: no "🔊" echoes, per-answer text or join announcement in the text
     # chat (the end-of-meeting summary and replies to messages typed to Salid are always posted).
     meeting_text_echo: bool = False

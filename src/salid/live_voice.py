@@ -276,6 +276,9 @@ FILLER_TOOLS = {
     "answer_privately",
 }  # tools that take seconds: worth a spoken "one moment"
 NATURAL_WINDOW_S = 8.0  # wake_policy natural: a turn this soon after her own words needs no name
+YIELD_ACTIVE_S = 0.5  # a person spoke this recently: she does not start talking over them
+YIELD_QUIET_S = 0.7  # ... she starts once they have been quiet this long
+YIELD_MAX_S = 6.0  # ... and drops the answer if they keep talking this long (half-sentence reply)
 SPEAKER_NOTE_MIN_S = 3.0  # speaker-change notes are at least this far apart
 BURST_GAP_S = 1.0  # a speaker's frames this close together are one stretch of speech
 SPEAKER_KEEP_S = 120.0  # how long speech stretches are remembered
@@ -977,6 +980,9 @@ class LiveVoice:
         # sender state
         self._streaming = False  # audio has been sent and the stream has not been ended yet
         self._last_voice = 0.0
+        self._yielding = False  # holding an answer until the person stops talking
+        self._yield_buf: list[bytes] = []
+        self._yield_task = None
         self._latency_pending = False
         # receiver / output state
         self._source: LiveAudioSource | None = None
@@ -2269,10 +2275,60 @@ class LiveVoice:
         if src is not None and self._filler_until > self._real_audio_at:
             src.clear()  # the real answer is here: cut the rest of the "one moment" clip
         self._filler_until = 0.0
+        # Never talk over a person: if someone is speaking right now, hold the answer until they
+        # have been quiet for YIELD_QUIET_S; if they keep talking, drop this answer (it was for a
+        # half sentence) and let the model answer again when they finish (the owner's rule).
+        if self._yielding or time.monotonic() - self._last_voice < YIELD_ACTIVE_S:
+            self._yield_buf.append(data)
+            if not self._yielding:
+                self._yielding = True
+                self._yield_task = self._spawn(self._yield_until_quiet())
+            return
+        self._feed_player(data)
+
+    def _feed_player(self, data: bytes) -> None:
+        src = self._source
         if src is None or not src.feed(data):  # no source yet, or the last one is spent
             src = self._source = LiveAudioSource()
             src.feed(data)
         self._ensure_playing(src)
+
+    async def _yield_until_quiet(self) -> None:
+        start = time.monotonic()
+        try:
+            while True:
+                await asyncio.sleep(0.05)
+                now = time.monotonic()
+                if self._closing or self.session.ending or self._muted_turn:
+                    self._yield_buf.clear()
+                    return
+                if now - self._last_voice >= YIELD_QUIET_S:
+                    buf, self._yield_buf = self._yield_buf, []
+                    for d in buf:
+                        self._feed_player(d)
+                    return
+                if now - start > YIELD_MAX_S:
+                    self._yield_buf.clear()
+                    self._muted_turn = self._turn_open
+                    logger.info("live: answer dropped: they were still talking")
+                    live = self._live
+                    if live is not None:
+                        with contextlib.suppress(Exception):
+                            await live.send_client_content(
+                                turns=types.Content(
+                                    role="user",
+                                    parts=[
+                                        types.Part(
+                                            text="(They were still talking: wait until they finish, "
+                                            "then answer what they actually asked.)"
+                                        )
+                                    ],
+                                ),
+                                turn_complete=False,
+                            )
+                    return
+        finally:
+            self._yielding = False
 
     async def note_langs(self) -> None:
         """The room's languages changed (somebody joined / left, or the chair switched the mode):
