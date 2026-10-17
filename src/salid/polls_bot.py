@@ -22,6 +22,7 @@ from functools import partial
 
 import discord
 
+from . import audience as aud
 from . import forms as F
 from . import polls as P
 from .dm import SENSITIVE_DM_RE, send_dm
@@ -454,20 +455,23 @@ class PollsMixin:
             return
         lang, failed = form["lang"], []
         for uid in [int(u) for u in form["recipients"]]:
-            body = "\n\n".join(
-                [
-                    t(
-                        "form_invite",
-                        lang,
-                        creator=form["creator_name"],
-                        server=guild.name,
-                        title=form["title"],
-                        n=len(form["questions"]),
-                        deadline=self._local_time(form["deadline"]),
-                    ),
-                    t("form_question", lang, i=1, n=len(form["questions"]),
-                      question=form["questions"][0]),
-                ]
+            body = aud.render(  # company language first, then the recipient's own
+                lambda lg: "\n\n".join(
+                    [
+                        t(
+                            "form_invite",
+                            lg,
+                            creator=form["creator_name"],
+                            server=guild.name,
+                            title=form["title"],
+                            n=len(form["questions"]),
+                            deadline=self._local_time(form["deadline"]),
+                        ),
+                        t("form_question", lg, i=1, n=len(form["questions"]),
+                          question=form["questions"][0]),
+                    ]
+                ),
+                self._deliver_langs(guild.id, uid),
             )  # fmt: skip
             res = await send_dm(guild.get_member(uid), body)
             now = datetime.now(UTC)
@@ -621,17 +625,21 @@ class PollsMixin:
         if not res or not res[0]:
             return
         form = res[0]
-        lang = form["lang"]
-        text = t(
-            "form_reminder", lang, title=form["title"], creator=form["creator_name"],
-            deadline=self._local_time(form["deadline"]),
-        )  # fmt: skip
         q = F.current_question(form, uid)
-        if q:
-            text += "\n\n" + t(
-                "form_question", lang, i=form["recipients"][str(uid)]["idx"] + 1,
-                n=len(form["questions"]), question=q,
+
+        def render(lg: str) -> str:
+            out = t(
+                "form_reminder", lg, title=form["title"], creator=form["creator_name"],
+                deadline=self._local_time(form["deadline"]),
             )  # fmt: skip
+            if q:
+                out += "\n\n" + t(
+                    "form_question", lg, i=form["recipients"][str(uid)]["idx"] + 1,
+                    n=len(form["questions"]), question=q,
+                )  # fmt: skip
+            return out
+
+        text = aud.render(render, self._deliver_langs(guild.id, uid))
         await send_dm(guild.get_member(uid), text)
 
     async def _form_close(self, guild, form_id: str) -> None:
@@ -646,5 +654,11 @@ class PollsMixin:
             return
         form = res[0]
         done, total = F.progress(form)
-        text = t("form_closed", form["lang"], title=form["title"], done=done, total=total)
+        text = aud.tt(
+            "form_closed",
+            self._deliver_langs(guild.id, form["creator_id"]),
+            title=form["title"],
+            done=done,
+            total=total,
+        )
         await send_dm(guild.get_member(form["creator_id"]), text)

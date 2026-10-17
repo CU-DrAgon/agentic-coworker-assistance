@@ -13,6 +13,7 @@ import logging
 
 import discord
 
+from . import audience as aud
 from .company_brain import (
     CompanyCtx,
     CompanyRepo,
@@ -142,14 +143,17 @@ class CompanyMixin:
             view = discord.ui.View(timeout=None)
             view.add_item(PlaybookButton("ok", guild.id, s.id, t("co_btn_ok", lang)))
             view.add_item(PlaybookButton("no", guild.id, s.id, t("co_btn_no", lang)))
-            text = t(
-                "co_suggest_dm",
-                lang,
-                name=s.by_name or str(s.by_user),
-                kind=t(f"co_kind_{s.kind}", lang),
-                text=s.text,
-                detail=f"\n→ {s.detail}" if s.detail else "",
-                link=f"\n{s.source_message_link}" if s.source_message_link else "",
+            text = aud.render(
+                lambda lg: t(
+                    "co_suggest_dm",
+                    lg,
+                    name=s.by_name or str(s.by_user),
+                    kind=t(f"co_kind_{s.kind}", lg),
+                    text=s.text,
+                    detail=f"\n→ {s.detail}" if s.detail else "",
+                    link=f"\n{s.source_message_link}" if s.source_message_link else "",
+                ),
+                self._deliver_langs(guild.id, admin.id),
             )
             if (await self.deliver_to_person(guild, admin, text, view=view)).ok:
                 sent += 1
@@ -177,13 +181,12 @@ class CompanyMixin:
         )
         suggester = guild.get_member(done.by_user)
         if suggester is not None:
-            slang = self._approval_user_lang(gid, done.by_user)
             await self.deliver_to_person(
                 guild,
                 suggester,
-                t(
+                aud.tt(
                     "co_result_dm_ok" if act == "ok" else "co_result_dm_no",
-                    slang,
+                    self._deliver_langs(gid, done.by_user, user.id),
                     text=done.text,
                     who=getattr(user, "display_name", ""),
                 ),

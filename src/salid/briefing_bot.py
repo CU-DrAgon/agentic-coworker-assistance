@@ -19,10 +19,11 @@ import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+from . import audience as aud
 from . import briefings as bf
 from .channel_access import split_message
 from .dm import send_dm
-from .i18n import resolve_lang, t
+from .i18n import resolve_lang
 from .mentions import match_members
 from .profiles import profile_block
 from .scheduling import join_link
@@ -102,19 +103,23 @@ class BriefingMixin:
         if inp.is_empty():
             return 0
         profile = self._profile_of(guild.id, member.id)  # the recipient's own, nobody else's
-        lang = profile.language or self._guild_lang(guild.id)
+        langs = self._deliver_langs(guild.id, member.id)  # company language, then their own
         tone, note = self._tone_for(
             SimpleNamespace(guild=None, channel=None), guild, member, profile
         )  # a DM: the person's own tone, else the server default
-        text = await asyncio.to_thread(
-            bf.build_brief,
-            self.llm,
-            self.s.gemini_model,
-            inp,
-            lang,
-            profile_block(profile),
-            tone_block(tone, resolve_lang(lang), note),
-        )
+        texts = [
+            await asyncio.to_thread(
+                bf.build_brief,
+                self.llm,
+                self.s.gemini_model,
+                inp,
+                lang,
+                profile_block(profile),
+                tone_block(tone, resolve_lang(lang), note),
+            )
+            for lang in langs
+        ]
+        text = "\n\n".join(dict.fromkeys(texts))
         if inp.catchup:  # deterministic and link-complete: appended, never rewritten by the model
             text = f"{text}\n\n{inp.catchup}"
         if inp.notes:  # leave-time and weather lines, built in code from the member's own places
@@ -313,8 +318,8 @@ class BriefingMixin:
                         continue
                     if channel is not None and not self._can_read(channel, member):
                         continue
-                    text = t(
-                        "ask_reminder", self._person_lang(gid, member.id), who=d.get("author_name", ""),
+                    text = aud.tt(
+                        "ask_reminder", self._deliver_langs(gid, member.id), who=d.get("author_name", ""),
                         channel=f"#{d.get('channel_name', '')}", text=d.get("text", ""),
                         link=d.get("jump_url", ""),
                     )  # fmt: skip
@@ -403,8 +408,8 @@ class BriefingMixin:
             )  # fmt: skip
             if not ok:
                 continue
-            text = t(
-                "alert_doc", self._person_lang(gid, uid), kind=kind, summary=summary,
+            text = aud.tt(
+                "alert_doc", self._deliver_langs(gid, uid), kind=kind, summary=summary,
                 channel=f"#{cname}", link=getattr(message, "jump_url", ""),
             )  # fmt: skip
             res = await send_dm(guild.get_member(uid), text)

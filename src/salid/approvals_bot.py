@@ -18,6 +18,7 @@ from datetime import date, datetime
 
 import discord
 
+from . import audience as aud
 from .approvals import (
     Approval,
     ApprovalRepo,
@@ -25,7 +26,7 @@ from .approvals import (
     build_approval_tools,
     fmt_amount,
 )
-from .i18n import resolve_lang, t
+from .i18n import t
 from .secretary import new_id
 
 logger = logging.getLogger(__name__)
@@ -88,8 +89,7 @@ class ApprovalMixin:
         return self.team.enabled(gid, "approvals")
 
     def _approval_user_lang(self, gid: int, uid: int) -> str:
-        lang = self._profile_of(gid, uid).language
-        return resolve_lang(lang) if lang else self._guild_lang(gid)
+        return self._person_lang(gid, uid)  # company language; personal ones via `_deliver_langs`
 
     async def approval_lang(self, approval_id: str) -> str:
         a = await asyncio.to_thread(self.approvals.get, approval_id)
@@ -157,15 +157,18 @@ class ApprovalMixin:
         view = discord.ui.View(timeout=None)
         view.add_item(ApprovalButton("ok", a.id, t("appr_btn_ok", lang)))
         view.add_item(ApprovalButton("no", a.id, t("appr_btn_no", lang)))
-        text = t(
-            "appr_dm",
-            lang,
-            name=a.requester_name or str(a.requester_id),
-            kind=t(f"appr_kind_{a.kind}", lang),
-            title=a.title,
-            details=self._approval_details(a, lang),
-            reason=a.reason,
-            id=a.id,
+        text = aud.render(
+            lambda lg: t(
+                "appr_dm",
+                lg,
+                name=a.requester_name or str(a.requester_id),
+                kind=t(f"appr_kind_{a.kind}", lg),
+                title=a.title,
+                details=self._approval_details(a, lg),
+                reason=a.reason,
+                id=a.id,
+            ),
+            self._deliver_langs(guild.id, a.approver_id),
         )
         return (await self.deliver_to_person(guild, approver, text, view=view)).ok
 
@@ -173,8 +176,12 @@ class ApprovalMixin:
         approver = guild.get_member(a.approver_id)
         if approver is None:
             return False
-        lang = self._approval_user_lang(guild.id, a.approver_id)
-        text = t("appr_cancelled_dm", lang, name=a.requester_name, title=a.title)
+        text = aud.tt(
+            "appr_cancelled_dm",
+            self._deliver_langs(guild.id, a.approver_id),
+            name=a.requester_name,
+            title=a.title,
+        )
         return (await self.deliver_to_person(guild, approver, text)).ok
 
     # ------------------------------------------------------------- the approver's click
@@ -205,14 +212,19 @@ class ApprovalMixin:
         requester = guild.get_member(a.requester_id) if guild else None
         if requester is None:
             return
-        rlang = self._approval_user_lang(a.guild_id, a.requester_id)
         key = "appr_req_approved" if act == "ok" else "appr_req_declined"
-        text = t(
-            key,
-            rlang,
-            title=a.title,
-            who=getattr(interaction.user, "display_name", a.approver_name),
-            note=t("appr_note", rlang, note=decided.decision_note) if decided.decision_note else "",
+        # company language, then the requester's and the approver's (the answer comes back to them)
+        text = aud.render(
+            lambda rlang: t(
+                key,
+                rlang,
+                title=a.title,
+                who=getattr(interaction.user, "display_name", a.approver_name),
+                note=t("appr_note", rlang, note=decided.decision_note)
+                if decided.decision_note
+                else "",
+            ),
+            self._deliver_langs(a.guild_id, a.requester_id, a.approver_id),
         )
         await self.deliver_to_person(guild, requester, text)
 

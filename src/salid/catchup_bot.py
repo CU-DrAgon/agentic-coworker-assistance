@@ -67,8 +67,8 @@ class CatchupMixin:
         data = cu.gather(src, since, now, guessed=guessed)
         if data.is_empty():
             return ""
-        lang = self._profile_of(guild.id, member.id).language or self._guild_lang(guild.id)
-        return cu.render(data, lang, self.s.zone, short=True)
+        # a section of the brief: the company language (the brief's own text carries the personal one)
+        return cu.render(data, self._person_lang(guild.id, member.id), self.s.zone, short=True)
 
     # ------------------------------------------------------------- /ตามทัน /catchup
     def _register_catchup_commands(self) -> None:

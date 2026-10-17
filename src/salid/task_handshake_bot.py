@@ -15,6 +15,7 @@ import logging
 
 import discord
 
+from . import audience as aud
 from . import task_handshake as H
 from .hints import hint as hint_text
 from .hints import with_hint
@@ -271,15 +272,18 @@ class TaskHandshakeMixin:
         giver = guild.get_member(task.assigner_id) if task.assigner_id else None
         if giver is None or getattr(giver, "bot", False):
             return
-        lang = self._person_lang(guild.id, giver.id)
+        langs = self._deliver_langs(guild.id, giver.id)
         await self.deliver_to_person(
             guild,
             giver,
-            with_hint(
-                H.t("hs_team_unclear", lang, title=task.title, id=task.id),
-                "reassign",
-                "mention",
-                lang=lang,
+            aud.render(
+                lambda lang: with_hint(
+                    H.t("hs_team_unclear", lang, title=task.title, id=task.id),
+                    "reassign",
+                    "mention",
+                    lang=lang,
+                ),
+                langs,
             ),
         )
 
@@ -290,7 +294,11 @@ class TaskHandshakeMixin:
         first = await asyncio.to_thread(
             self._first_card, guild.id, member.id, frozenset(x.id for x in batch)
         )
-        text = self._handshake_text(guild, batch, lang, first_time=first)
+        # company language first, then the assignee's own (salid.audience)
+        text = aud.render(
+            lambda lg: self._handshake_text(guild, batch, lg, first_time=first),
+            self._deliver_langs(guild.id, member.id),
+        )
         res = await self.deliver_to_person(
             guild, member, text, view=self._handshake_view(guild.id, batch, lang)
         )
@@ -484,7 +492,12 @@ class TaskHandshakeMixin:
         for act in ("ap", "ae", "sb"):
             view.add_item(TaskButton(act, guild.id, task.id, H.t(f"hs_btn_{act}", lang), row=0))
         res = await self.deliver_to_person(
-            guild, boss, H.boss_card_text(task, name, lang), view=view
+            guild,
+            boss,
+            aud.render(
+                lambda lg: H.boss_card_text(task, name, lg), self._deliver_langs(guild.id, boss.id)
+            ),
+            view=view,
         )
         if not res.ok:
             return False
@@ -503,7 +516,12 @@ class TaskHandshakeMixin:
     async def _handshake_edit_boss_card(self, interaction, guild, task, lang, status_key) -> None:
         who = guild.get_member(task.assignee_id)
         name = getattr(who, "display_name", "") or task.assignee_name
-        text = H.boss_card_text(task, name, lang, hint=False) + "\n" + H.t(status_key, lang)
+        user = getattr(interaction, "user", None)
+        langs = self._deliver_langs(guild.id, user.id) if user is not None else [lang]
+        text = aud.render(
+            lambda lg: H.boss_card_text(task, name, lg, hint=False) + "\n" + H.t(status_key, lg),
+            langs,
+        )
         await self._handshake_edit_message(interaction, text, None, text)
 
     async def _handshake_edit_message(self, interaction, text, view, fallback) -> None:
@@ -519,8 +537,14 @@ class TaskHandshakeMixin:
         member = guild.get_member(task.assignee_id) if task.assignee_id else None
         if member is None or getattr(member, "bot", False):
             return
-        lang = self._person_lang(guild.id, member.id)
-        text = H.t(key, lang, title=task.title, due=task.due or "-", id=task.id, **fmt)
+        text = aud.tt(
+            key,
+            self._deliver_langs(guild.id, member.id),
+            title=task.title,
+            due=task.due or "-",
+            id=task.id,
+            **fmt,
+        )
         await self.deliver_to_person(guild, member, text)
 
     async def handle_task_approve(self, interaction, guild_id: int, task_id: str) -> None:
@@ -610,8 +634,13 @@ class TaskHandshakeMixin:
             return
         for m in sorted(self._members(guild), key=lambda x: x.id):
             if m.id != skip_id and self.is_exec_member(m):
-                lang = self._person_lang(guild.id, m.id)
-                text = H.t("hs_back_cap_exec", lang, title=task.title, id=task.id, n=H.MAX_ROUNDS)
+                text = aud.tt(
+                    "hs_back_cap_exec",
+                    self._deliver_langs(guild.id, m.id),
+                    title=task.title,
+                    id=task.id,
+                    n=H.MAX_ROUNDS,
+                )
                 if (await self.deliver_to_person(guild, m, text)).ok:
                     return
 
@@ -646,7 +675,9 @@ class TaskHandshakeMixin:
         if not any(x.id == task.id for x in rows):
             rows.append(task)
         edited_ids = frozenset({task.id}) if edited else frozenset()
-        text = self._handshake_text(guild, rows, lang, edited_ids)
+        user = getattr(interaction, "user", None)
+        langs = self._deliver_langs(guild.id, user.id) if user is not None else [lang]
+        text = aud.render(lambda lg: self._handshake_text(guild, rows, lg, edited_ids), langs)
         view = self._handshake_view(guild.id, rows, lang)
         await self._handshake_edit_message(
             interaction, text, view, H.status_line(task, lang, edited)
@@ -671,9 +702,14 @@ class TaskHandshakeMixin:
                 ]
             )
             group = (sum(1 for x in peers if x.confirm == H.ACCEPTED), len(peers))
-        lang = self._person_lang(guild.id, giver_id)
+        # the giver's line: company language first, then the giver's own
         await self.deliver_to_person(
-            guild, giver, H.giver_message(kind, task, name, lang, changes, group)
+            guild,
+            giver,
+            aud.render(
+                lambda lg: H.giver_message(kind, task, name, lg, changes, group),
+                self._deliver_langs(guild.id, giver_id),
+            ),
         )
 
     # ------------------------------------------------------------- typed commands
@@ -724,8 +760,15 @@ class TaskHandshakeMixin:
 
     def _owner_text(self, guild, rows: list[Task], lang: str) -> str:
         channel_of, _ = self._handshake_names(guild)
-        return H.render_owner_message(
-            rows, lang, channel_of=channel_of, names_of=self._owner_names_of(guild)
+        giver = (
+            rows[0].assigner_id if rows else 0
+        )  # the question goes to the giver: their languages
+        langs = self._deliver_langs(guild.id, giver) if giver > 0 else [lang]
+        return aud.render(
+            lambda lg: H.render_owner_message(
+                rows, lg, channel_of=channel_of, names_of=self._owner_names_of(guild)
+            ),
+            langs,
         )
 
     @staticmethod

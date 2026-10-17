@@ -690,3 +690,19 @@ def test_meeting_hook_calls_the_offer_for_untagged_lines():
 
     src = inspect.getsource(MeetingManager.handle_segment)
     assert "vote_offer_from_room" in src
+
+
+async def test_ballots_and_tally_use_the_audience_languages_not_the_creation_language(vw):
+    from salid.guild_settings import GuildSettingsUpdate
+    from salid.profiles import Profile
+
+    vw.bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
+    vw.bot.team._cache.clear()
+    vw.bot.profiles.save(GUILD, PEER, Profile(language="th"))
+    await open_vote(vw, voters=["Boss"])  # one voter, English company language
+    v = the_vote(vw)
+    assert vw.bot._vote_langs(v) == ["en"]
+    v["voters"] = [STAFF, PEER]
+    assert vw.bot._vote_langs(v) == ["en", "th"]  # a Thai-preferring voter adds Thai
+    vw.bot.profiles.save(GUILD, PEER, Profile(language="en"))
+    assert vw.bot._vote_langs(v) == ["en"]

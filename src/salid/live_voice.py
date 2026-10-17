@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 from google.genai import types
 
+from . import audience as aud
 from .captions import normalize_language
 from .fillers import POOL_SIZE, ClipCache, FillerWriter, write_line
 from .i18n import EXTRA, lang_name, resolve_lang
@@ -546,6 +547,23 @@ def thai_date_line(now) -> str:
     return f"วันนี้คือ วัน{THAI_DAYS[now.weekday()]}ที่ {now.day} {THAI_MONTHS[now.month - 1]} {now.year}"
 
 
+def _langs_block(langs: list[str] | None, company_only: bool, prompt_lang: str) -> str:
+    """The room's answer languages for the Live instruction: the repeat-in-the-second-language
+    rule, and the one-line mode statement for the first spoken reply (said once)."""
+    if not langs or "auto" in langs:
+        return ""
+    line = aud.mode_line(langs, company_only=company_only)
+    rule = aud.second_language_rule(langs, prompt_lang)
+    if prompt_lang == "th":
+        first = f"ประโยคแรกที่คุณพูดในห้องนี้ ให้บอกโหมดภาษาครั้งเดียวด้วยประโยคนี้ก่อน แล้วค่อยตอบ: {line}\n"
+    else:
+        first = (
+            "The first time you speak in this meeting, say this once before your answer "
+            f"(never again): {line}\n"
+        )
+    return rule.lstrip("\n") + ("\n" if rule else "") + first
+
+
 def build_instruction_en(
     settings: Any,
     language: str = "en",
@@ -555,6 +573,8 @@ def build_instruction_en(
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
     reply_lang: str | None = None,
+    langs: list[str] | None = None,
+    company_only: bool = False,
 ) -> str:
     """The English system instruction (guild language "en"): English persona, no Thai particles.
     `reply_lang`: a second-tier language (zh, ja...) to speak instead of English.
@@ -653,12 +673,19 @@ def build_instruction_en(
         p += (
             f"Language: always speak {lang_name(reply_lang)} ({lang_name(reply_lang, 0)}); "
             "keep names and vendors as they are. Polite, natural register for that language. "
-            "Never use Thai particles.\n"
+            "Never use Thai particles. Do not switch language because someone speaks another one; "
+            "only an explicit request changes it.\n"
         )
     elif language == "auto":
         p += "Language: reply in the language the speaker uses; default to English. Never use Thai particles.\n"
     else:
-        p += "Language: always speak English (keep names and vendors as they are).\n"
+        p += (
+            "Language: always speak English (keep names and vendors as they are). You still "
+            "understand Thai and English, but never switch language because someone speaks "
+            "Thai or another language; only the settings decide, or an explicit request "
+            '("answer in Thai").\n'
+        )
+    p += _langs_block(langs, company_only, "en")
     if note := voice_note(tone_note, "en"):
         p += note + "\n"
     if history:
@@ -683,15 +710,21 @@ def build_instruction(
     lang: str | None = None,
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
+    langs: list[str] | None = None,
+    company_only: bool = False,
 ) -> str:
     """System instruction for the Live session (built per connect so the date is current). English by
     default; the Thai persona and rules when the session's resolved `lang` (or `language`) is th.
     `tone`: the salid.tone preset of the meeting's text channel (persona line, TH and EN)."""
     reply = lang or language
     if reply in EXTRA:
-        return build_instruction_en(settings, language, now, qa, history, tone, tone_note, reply)
+        return build_instruction_en(
+            settings, language, now, qa, history, tone, tone_note, reply, langs, company_only
+        )
     if lang == "en" or language == "en":
-        return build_instruction_en(settings, language, now, qa, history, tone, tone_note)
+        return build_instruction_en(
+            settings, language, now, qa, history, tone, tone_note, None, langs, company_only
+        )
     now = now or settings.now()
     p = (
         f"{thai_date_line(now)}\n"
@@ -757,7 +790,11 @@ def build_instruction(
     elif language == "auto":
         p += "ภาษา: ตอบด้วยภาษาเดียวกับคนที่พูดกับคุณ (ไทยหรืออังกฤษ)\n"
     else:
-        p += "ภาษา: พูดภาษาไทย\n"
+        p += (
+            "ภาษา: พูดภาษาไทย ฟังได้ทั้งไทยและอังกฤษ แต่ห้ามเปลี่ยนภาษาเองเพราะมีคนพูดภาษาอื่น "
+            "เปลี่ยนได้เฉพาะเมื่อมีคนขอชัดเจน\n"
+        )
+    p += _langs_block(langs, company_only, "th")
     if note := voice_note(tone_note, "th"):
         p += note + "\n"
     if history:
@@ -1042,7 +1079,15 @@ class LiveVoice:
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=build_instruction(
-                s, sess.language, s.now(), qa=qa, history=history, lang=sess.lang, **self._tone_kw()
+                s,
+                sess.language,
+                s.now(),
+                qa=qa,
+                history=history,
+                lang=sess.lang,
+                langs=sess.langs or None,
+                company_only=len(sess.langs) == 1 and sess.language_mode == "company_only",
+                **self._tone_kw(),
             ),
             tools=tools,
             speech_config=types.SpeechConfig(
@@ -1775,6 +1820,7 @@ class LiveVoice:
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(job.background.set)
 
+        self._with_langs(kw)
         ans = await asyncio.to_thread(
             ask,
             bot.s,
@@ -2042,6 +2088,31 @@ class LiveVoice:
             src = self._source = LiveAudioSource()
             src.feed(data)
         self._ensure_playing(src)
+
+    async def note_langs(self) -> None:
+        """The room's languages changed (somebody joined / left, or the chair switched the mode):
+        tell the running Live session in one non-spoken context note."""
+        live, langs = self._live, list(getattr(self.session, "langs", None) or [])
+        if live is None or self._closing or not langs or "auto" in langs:
+            return
+        names = ", ".join(lang_name(x) for x in langs)
+        rule = aud.second_language_rule(langs, "en").strip()
+        note = (
+            f"(Answer languages now: {names}. "
+            + (rule if rule else f"Answer only in {lang_name(langs[0])}.")
+            + " Do not announce this change aloud.)"
+        )
+        await live.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=note)]), turn_complete=False
+        )
+
+    def _with_langs(self, kw: dict) -> None:
+        """The room's answer languages (the session's own, incl. the chair's meeting override)."""
+        langs = getattr(self.session, "langs", None) or []
+        if aud.multi(langs):
+            kw["languages"] = list(langs)
+        else:
+            kw.pop("languages", None)
 
     # ---- filler ("one moment") while a slow tool runs
     def _en(self) -> bool:

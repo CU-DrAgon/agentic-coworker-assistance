@@ -903,3 +903,21 @@ def test_task_plan_fields_through_the_api(w):
     )
     call(w, "mem", "PATCH", f"/projects/{a}/tasks/{t['id']}", {"status": "done"})
     assert call(w, "mem", "GET", f"/projects/{a}/tasks").json()["tasks"][0]["pct_done"] == 100
+
+
+def test_settings_expose_the_company_language_as_the_pages_default(w):
+    assert call(w, "other", "GET", "/settings").json()["language"] in ("", "th", "en")
+    w.guilds.set_server_language(GUILD, "th")
+    assert call(w, "other", "GET", "/settings").json()["language"] == "th"
+    w.guilds.set_server_language(GUILD, "en")
+    assert call(w, "other", "GET", "/settings").json()["language"] == "en"
+
+
+def test_the_risk_prompt_uses_the_company_language():
+    from salid import projects as P
+
+    p = P.Project(id="p1", name="Alpha", owner=P.Person(name="Boss"))
+    stats = {"tasks_done": 0, "tasks_total": 0, "tasks_overdue": 0, "tasks_unassigned": 0}
+    assert "Write the risks in Thai." in pm_api._risk_prompt(p, stats, "th")
+    assert "Write the risks in English." in pm_api._risk_prompt(p, stats, "en")
+    assert "language of the project text" in pm_api._risk_prompt(p, stats, "")

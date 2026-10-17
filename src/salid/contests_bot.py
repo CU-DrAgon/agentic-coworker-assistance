@@ -12,9 +12,10 @@ import asyncio
 import logging
 from datetime import date, datetime, time, timedelta
 
+from . import audience as aud
 from . import contests as ct
 from .freetime import FreetimeContext, FreetimeTools, Person, find_slots
-from .i18n import resolve_lang, t
+from .i18n import t
 from .pdf_report import find_fonts
 from .web_read import read_web_call
 
@@ -140,10 +141,10 @@ class ContestsMixin:
                     member = g.get_member(uid)
                     if member is None:
                         continue
-                    lang = resolve_lang(
-                        self._profile_of(g.id, uid).language or self._guild_lang(g.id)
+                    text = aud.render(
+                        lambda lg, r=r, now=now: self._contest_reminder_text(r, now, lg),
+                        self._deliver_langs(g.id, uid),
                     )
-                    text = self._contest_reminder_text(r, now, lang)
                     try:
                         sent += int((await self.deliver_to_person(g, member, text)).ok)
                     except Exception:
@@ -179,9 +180,7 @@ class ContestsMixin:
         if not self._contests_on(guild.id):
             return []
         try:
-            lang = resolve_lang(
-                self._profile_of(guild.id, member.id).language or self._guild_lang(guild.id)
-            )
+            lang = self._person_lang(guild.id, member.id)  # a line of the brief: company language
             rows = ct.brief_entries(self.contests.all(guild.id), member.id, now, self.s.zone)
             out = []
             for c, days, open_n in rows:

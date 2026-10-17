@@ -512,3 +512,25 @@ async def test_finished_reminders_are_pruned_after_a_month(bot, world):
     assert bot.reminder_book.prune(GUILD, at(12) + timedelta(days=29)) == 0
     assert bot.reminder_book.prune(GUILD, at(12) + timedelta(days=31)) == 1
     assert bot.reminder_book.get(GUILD, "R-0001") is None
+
+
+async def test_a_reminder_to_a_thai_preferring_person_on_an_english_server_has_both_blocks(
+    bot, world
+):
+    from salid.guild_settings import GuildSettingsUpdate
+    from salid.profiles import Profile
+
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
+    bot.team._cache.clear()
+    bot.profiles.save(GUILD, STAFF, Profile(language="th"))
+    staff = world.g.members[STAFF]
+    agent_tools(bot, world, staff)["set_reminder"]("send the report", at="+10m")
+    assert await tick_at(bot, at(12, 10)) == 1
+    text = staff.dms[0][0]
+    en, th = text.split("\n\n", 1)  # the company language first, then their own
+    assert en.startswith("⏰ Reminder:") and th.startswith("⏰ เตือนค่ะ:")
+    staff.dms.clear()
+    bot.profiles.save(GUILD, STAFF, Profile(language="en"))  # same as the company: one block
+    agent_tools(bot, world, staff)["set_reminder"]("again", at="+10m")
+    assert await tick_at(bot, at(12, 20)) == 1
+    assert "\n\n" not in staff.dms[0][0] and staff.dms[0][0].startswith("⏰ Reminder:")

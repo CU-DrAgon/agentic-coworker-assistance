@@ -22,6 +22,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     tone_note            str <= 200 chars, owner's extra wording note appended to every tone
     task_confirm_mode    notify (default) | approve: who signs off a task heard in chat
     personal_settings    bool (default true): members may keep their own language / tone / task mode
+    language_mode        audience (default: company language + the personal languages of the people
+                         involved) | company_only (an executive forced one language), see salid.audience
     receipt_home_channel_id  str main receipt channel ("" = auto-pick), see salid.receipt_forward
     receipt_forward      bool copy receipts posted in other channels to the home channel (default true)
     digest_channel_id    str ("" = no daily digest)
@@ -267,7 +269,13 @@ class GuildSettingsUpdate(BaseModel):
     tone_note: str = ""
     task_confirm_mode: str = "notify"  # notify | approve, see salid.task_handshake
     personal_settings: bool = True  # members may keep their own language / tone / task mode
+    language_mode: str = "audience"  # audience (company + personal languages) | company_only
     memory_retention_days: int = Field(default_factory=default_retention_days)
+
+    @field_validator("language_mode", mode="before")
+    @classmethod
+    def _language_mode(cls, v):
+        return v if v in ("audience", "company_only") else "audience"
 
     @field_validator("memory_retention_days", mode="before")
     @classmethod
@@ -591,11 +599,9 @@ class GuildStore:
                 langs.pop(cid, None)
             else:
                 langs[cid] = language
+            # (a channel command no longer answers the main-language question: an unchosen server
+            # stays unchosen until the question is answered, see salid.audience)
             data: dict = {"channel_languages": langs}
-            if mark_chosen and language is not None and not language_chosen_in(doc):
-                # a channel command answers the join question: keep following the words people
-                # write elsewhere (auto) and never ask again
-                data.update(language_chosen=True, default_language="auto")
             if doc is None:
                 txn.set(ref, data)
             else:
@@ -646,6 +652,12 @@ class GuildStore:
     def set_personal_settings(self, guild_id: int, allowed: bool) -> None:
         self._ref(guild_id).set({"personal_settings": bool(allowed)}, merge=True)
 
+    def set_language_mode(self, guild_id: int, mode: str) -> None:
+        """audience | company_only: whether personal languages are added to Salid's answers."""
+        if mode not in ("audience", "company_only"):
+            raise ValueError(f"unknown language mode {mode!r}")
+        self._ref(guild_id).set({"language_mode": mode}, merge=True)
+
     def set_tone_note(self, guild_id: int, note: str) -> None:
         """Set (or, with "", clear) the guild's wording note. Validated like the hub field."""
         note = clean_note(note, MAX_NOTE + 1)
@@ -675,7 +687,8 @@ class GuildStore:
                 # overrides saved before previous_default_language existed were saved under Thai
                 prev_default = d.get("previous_default_language") or ("th" if previous else "")
                 if previous and prev_default == language:
-                    data["channel_languages"] = previous
+                    # `auto` overrides (follow the words) are not restored: the company language rules
+                    data["channel_languages"] = {k: v for k, v in previous.items() if v != "auto"}
                     data["previous_channel_languages"] = {}
                     data["previous_default_language"] = ""
                 else:
@@ -999,9 +1012,12 @@ class BotGuildSettings:
     def channel_language(self, guild_id: int, channel_id: int) -> str:
         """The channel's reply-language setting: th, en or auto (override, else guild default)."""
         g = self.current(guild_id)
+        langs = g.channel_languages
+        if g.language_chosen:  # `auto` overrides are ignored once the company language is chosen
+            langs = {k: v for k, v in langs.items() if v != "auto"}
         return resolve_language(
             channel_id,
-            channel_languages=g.channel_languages,
+            channel_languages=langs,
             default_language=g.language_setting,
         )
 
@@ -1057,6 +1073,16 @@ class BotGuildSettings:
     def set_personal_settings(self, guild_id: int, allowed: bool) -> None:
         try:
             self.store.set_personal_settings(guild_id, allowed)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def language_mode(self, guild_id: int) -> str:
+        """audience (company + personal languages) or company_only (the executive's switch)."""
+        return self.current(guild_id).language_mode
+
+    def set_language_mode(self, guild_id: int, mode: str) -> None:
+        try:
+            self.store.set_language_mode(guild_id, mode)
         finally:
             self._cache.pop(guild_id, None)
 

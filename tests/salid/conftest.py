@@ -211,3 +211,12 @@ def _heard_follows_transcribe_pcm(monkeypatch):
         return mt.Heard(mt.transcribe_pcm(client, model, pcm), True)
 
     monkeypatch.setattr(mt, "transcribe_heard", heard)
+
+
+@pytest.fixture(autouse=True)
+def _no_mode_notices(monkeypatch):
+    """The answering-mode statements (salid.audience) are tested in test_audience.py; the other
+    suites compare exact reply texts, so they run with the statements off."""
+    from salid import audience
+
+    monkeypatch.setattr(audience, "MODE_NOTICES", False)

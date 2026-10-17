@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 
 import discord
 
+from . import audience as aud
 from . import votes as V
 from .dm import SENSITIVE_DM_RE, send_dm
 from .hints import with_hint
@@ -304,6 +305,11 @@ class VotesMixin:
             "anonymous": anonymous,
         }
 
+    def _vote_langs(self, vote: dict) -> list[str]:
+        """Company language, then the personal languages of the voters (at most three)."""
+        langs = self._deliver_langs(vote["guild_id"], *vote.get("voters", ()))
+        return langs
+
     # ------------------------------------------------------------- delivery
     async def _vote_deliver(self, guild, vote_id: str, people, text_ch, session) -> None:
         """Post the tally message, then one ballot per voter. Never raises."""
@@ -312,17 +318,23 @@ class VotesMixin:
             if vote is None:
                 return
             tz = self._vote_tz()
-            tally = await text_ch.send(V.tally_text(vote, vote["lang"], tz))
+            vlangs = self._vote_langs(vote)  # the audience NOW, not the creation-time language
+            tally = await text_ch.send(aud.render(lambda lg: V.tally_text(vote, lg, tz), vlangs))
             unreached: list[str] = []
             delivered: dict[str, dict] = {}
             for m in people:
-                ulang = self._person_lang(guild.id, m.id, vote["question"])
                 key = "vote_ballot" if vote["room"] else "vote_ballot_chat"
-                body = t(
-                    key, ulang, question=vote["question"], room=vote["room"],
-                    opener=vote["opener_name"], time=V.hhmm(vote["closes_at"], tz),
+                body = aud.render(
+                    lambda ulang, key=key: with_hint(
+                        t(
+                            key, ulang, question=vote["question"], room=vote["room"],
+                            opener=vote["opener_name"], time=V.hhmm(vote["closes_at"], tz),
+                        ),
+                        "vote_how",
+                        lang=ulang,
+                    ),
+                    self._deliver_langs(guild.id, m.id, text=vote["question"]),
                 )  # fmt: skip
-                body = with_hint(body, "vote_how", lang=ulang)
                 res = await send_dm(m, body, view=ballot_view(vote))
                 sent = getattr(res, "message", None)
                 if res.ok and sent is not None:
@@ -341,7 +353,7 @@ class VotesMixin:
             if unreached:
                 with contextlib.suppress(Exception):
                     await text_ch.send(
-                        t("vote_unreached", vote["lang"], names=", ".join(unreached[:10]))
+                        aud.tt("vote_unreached", vlangs, names=", ".join(unreached[:10]))
                     )
         except Exception:
             logger.exception("vote delivery failed")
@@ -351,8 +363,9 @@ class VotesMixin:
         if ch is None or not vote.get("tally_message_id"):
             return
         with contextlib.suppress(Exception):
+            tz = self._vote_tz()
             await ch.get_partial_message(vote["tally_message_id"]).edit(
-                content=V.tally_text(vote, vote["lang"], self._vote_tz())
+                content=aud.render(lambda lg: V.tally_text(vote, lg, tz), self._vote_langs(vote))
             )
 
     # ------------------------------------------------------------- button presses
@@ -360,7 +373,9 @@ class VotesMixin:
         user = interaction.user
         vote = await asyncio.to_thread(self.vote_repo.get, vote_id)
         if vote is None:
-            await interaction.response.send_message(t("vote_press_unknown", "th"), ephemeral=True)
+            await interaction.response.send_message(
+                aud.tt("vote_press_unknown", ["en", "th"]), ephemeral=True
+            )
             return
         gid = vote["guild_id"]
         lang = self._person_lang(gid, user.id)
@@ -402,7 +417,8 @@ class VotesMixin:
         self._open_votes.pop(vote_id, None)
         lang = vote["lang"]
         ch = self._vote_channel(guild, vote)
-        text = V.result_text(vote, self._vote_names(guild, vote), lang)
+        names = self._vote_names(guild, vote)
+        text = aud.render(lambda lg: V.result_text(vote, names, lg), self._vote_langs(vote))
         sent = None
         if ch is not None:
             with contextlib.suppress(Exception):
@@ -424,18 +440,20 @@ class VotesMixin:
     async def _vote_close_ballots(self, vote: dict) -> None:
         for uid, ref in vote.get("delivered", {}).items():
             with contextlib.suppress(Exception):
-                lang = self._person_lang(vote["guild_id"], int(uid))
+                langs = self._deliver_langs(vote["guild_id"], int(uid))
                 b = vote["ballots"].get(uid)
                 choice = (
-                    t("vote_you_chose", lang, option=vote["options"][b["option"]])
+                    aud.tt("vote_you_chose", langs, option=vote["options"][b["option"]])
                     if b
-                    else t("vote_you_skipped", lang)
+                    else aud.tt("vote_you_skipped", langs)
                 )
                 ch = self.get_channel(ref["channel_id"]) or await self.fetch_channel(
                     ref["channel_id"]
                 )
                 await ch.get_partial_message(ref["message_id"]).edit(
-                    content=t("vote_ballot_closed", lang, question=vote["question"], choice=choice),
+                    content=aud.tt(
+                        "vote_ballot_closed", langs[:1], question=vote["question"], choice=choice
+                    ),
                     view=None,
                 )
 
@@ -494,7 +512,10 @@ class VotesMixin:
             "closes_at": V.hhmm(rec["closes_at"], self._vote_tz()),
         }
         if not V.is_open(rec):
-            out["result"] = V.result_text(rec, self._vote_names(guild, rec), rec["lang"])
+            names = self._vote_names(guild, rec)
+            out["result"] = aud.render(
+                lambda lg: V.result_text(rec, names, lg), self._vote_langs(rec)
+            )
         return out
 
     # ------------------------------------------------------------- offers from untagged talk
@@ -577,7 +598,7 @@ class VotesMixin:
 
     async def handle_vote_offer(self, interaction, act: str, offer_id: str) -> None:
         offer = await asyncio.to_thread(self.offer_repo.get, offer_id)
-        lang = (offer or {}).get("lang", "en")
+        lang = self._person_lang(offer["guild_id"], interaction.user.id) if offer else "en"
         if offer is None or offer["status"] != "pending":
             await interaction.response.send_message(t("vote_offer_gone", lang), ephemeral=True)
             return

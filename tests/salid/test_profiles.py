@@ -242,6 +242,9 @@ async def test_explicit_channel_language_beats_profile_in_answer(bot, world, mon
     m = Msg(world.b, chan, member(world.b, STAFF), "ยอดเท่าไร", mention=True)
     await bot._answer(m, world.b, m.author)
     assert seen[0]["language"] == "th"
+    assert seen[0]["languages"] == ["th", "en"]  # company first, their own language added
     bot.team.set_channel_language(gid, chan.id, "auto")
     await bot._answer(m, world.b, m.author)
-    assert seen[1]["language"] == "en"
+    # once the company language is chosen an `auto` override is ignored and the profile never
+    # replaces it
+    assert seen[1]["language"] == "th" and seen[1]["languages"] == ["th", "en"]

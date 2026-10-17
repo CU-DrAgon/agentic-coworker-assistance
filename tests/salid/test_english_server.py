@@ -46,11 +46,12 @@ def test_store_switch_clears_overrides_and_switching_back_restores(bot):
     assert store.get(GUILD).previous_channel_languages == {"10": "auto", "11": "th"}
     bot.team.set_server_language(GUILD, "th", True)
     g = store.get(GUILD)
-    assert g.default_language == "th" and g.channel_languages == {"10": "auto", "11": "th"}
+    # restoring drops the old `auto` overrides: the company language rules (salid.audience)
+    assert g.default_language == "th" and g.channel_languages == {"11": "th"}
     assert g.previous_channel_languages == {}
     bot.team.set_server_language(GUILD, "en", False)  # default only
     g = store.get(GUILD)
-    assert g.default_language == "en" and g.channel_languages == {"10": "auto", "11": "th"}
+    assert g.default_language == "en" and g.channel_languages == {"11": "th"}
     with pytest.raises(ValueError):
         bot.team.set_server_language(GUILD, "auto")
 

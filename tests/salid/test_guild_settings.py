@@ -116,7 +116,7 @@ def test_document_layout(gstore):
         "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
         "channel_languages", "memory_retention_days",
         "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
-        "channel_tones", "default_tone", "tone_note", "task_confirm_mode", "personal_settings",
+        "channel_tones", "default_tone", "tone_note", "task_confirm_mode", "personal_settings", "language_mode",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
     # the form only echoed "auto" for a server that never chose a language: nothing was chosen
@@ -323,8 +323,10 @@ def test_bot_cache_sees_a_language_change_at_once_and_resolves_override_then_def
     gstore.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "a@x.com")
     team._cache.clear()
     assert team.channel_language(GUILD, 5) == "en"
-    team.set_channel_language(GUILD, 5, "auto")
-    assert team.channel_language(GUILD, 5) == "auto"  # override, no waiting for the TTL
+    team.set_channel_language(GUILD, 5, "th")
+    assert team.channel_language(GUILD, 5) == "th"  # override, no waiting for the TTL
     assert team.channel_language(GUILD, 6) == "en"  # other channels follow the default
+    team.set_channel_language(GUILD, 5, "auto")
+    assert team.channel_language(GUILD, 5) == "en"  # an `auto` override is ignored once chosen
     team.set_channel_language(GUILD, 5, None)
     assert team.channel_language(GUILD, 5) == "en"

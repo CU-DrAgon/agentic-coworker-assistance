@@ -321,10 +321,13 @@ class ProfileMixin:
         return p
 
     def _person_lang(self, guild_id: int, user_id: int, text: str | None = None) -> str:
-        """th / en for a private message to one person: their own language if set, else the
-        guild default (`auto` then follows `text`)."""
-        own = self._profile_of(guild_id, user_id).language
-        return resolve_lang(own or self.team.current(guild_id).language_setting, text)
+        """The primary language of a private message to one person: the COMPANY language (a
+        personal language is added next to it through `_person_langs`, never instead of it). An
+        unchosen server keeps the old path: their own language, else `auto` following `text`."""
+        setting = self.team.current(guild_id).language_setting
+        if setting == "auto":
+            setting = self._profile_of(guild_id, user_id).language or "auto"
+        return resolve_lang(setting, text)
 
     def _profile_actions(self, gid: int, uid: int) -> dict:
         """ChatActions fields, bound to this guild and this speaker."""

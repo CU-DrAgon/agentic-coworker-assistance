@@ -10,9 +10,11 @@ from datetime import UTC, datetime
 
 import discord
 
+from . import audience as aud
+from .audience_bot import NOTICE_KIND
 from .dm import DMResult, send_dm
 from .hints import with_hint
-from .i18n import base_lang, resolve_lang, t
+from .i18n import base_lang, t
 from .permissions import guild_missing, permission_message
 from .private_chat import (
     BACKFILL_PACE_S,
@@ -41,8 +43,11 @@ class PrivateChatMixin:
         self._pc_sleep = asyncio.sleep  # injectable for tests
 
     def _pc_lang(self, gid: int, uid: int) -> str:
-        lang = self._profile_of(gid, uid).language
-        return resolve_lang(lang) if lang else self._guild_lang(gid)
+        # the company language; the personal one is added next to it by `_pc_langs`
+        return self._person_lang(gid, uid)
+
+    def _pc_langs(self, gid: int, uid: int) -> list[str]:
+        return self._deliver_langs(gid, uid)
 
     # ------------------------------------------------------------- lookup
     async def _pc_owner(self, gid: int, channel_id: int) -> int | None:
@@ -103,29 +108,44 @@ class PrivateChatMixin:
         await asyncio.to_thread(self.private_chats.put, guild.id, member.id, ch.id)
         self._pc_owners[ch.id] = member.id
         try:
+            # no language override: the company language rules and the person's own language is
+            # added next to it (salid.audience); an `auto` override would follow the words instead
             await asyncio.to_thread(self.team.set_channel_mode, guild.id, ch.id, "chat")
-            pref = self._profile_of(guild.id, member.id).language
-            await asyncio.to_thread(
-                self.team.set_channel_language, guild.id, ch.id, pref or "auto", mark_chosen=False
-            )
         except Exception:
             logger.warning("could not save the private channel settings", exc_info=True)
         with contextlib.suppress(discord.HTTPException):
+            langs = self._pc_langs(guild.id, member.id)
+            welcome = with_hint(
+                aud.tt("pc_welcome", langs, mention=member.mention), "welcome_help", lang=lang
+            )
+            chosen = self._person_langs(guild.id, member.id) != ["auto"]
+            if aud.MODE_NOTICES and chosen:  # the answering mode, once, + how to change it
+                company_only = self._audience_mode(guild.id) == "company_only"
+                welcome += "\n" + aud.mode_line_with_hint(langs, company_only=company_only)
+                with contextlib.suppress(Exception):  # the welcome IS today's mode statement
+                    self.docs.put(
+                        NOTICE_KIND,
+                        guild.id,
+                        str(ch.id),
+                        {"day": self.s.now().date().isoformat()},
+                    )
             await ch.send(
-                with_hint(t("pc_welcome", lang, mention=member.mention), "welcome_help", lang=lang),
+                welcome,
                 allowed_mentions=discord.AllowedMentions(users=[member]),
             )
         return ch, True, ""
 
     async def _private_request(self, message, guild, member) -> None:
-        lang = self._pc_lang(guild.id, member.id)
         ch, created, err = await self.ensure_private_channel(guild, member)
         if ch is None:
             await message.reply(err, mention_author=False)
             return
         key = "pc_created" if created else "pc_exists"
         await message.reply(
-            t(key, lang, channel=f"<#{ch.id}>", server=guild.name), mention_author=False
+            aud.tt(
+                key, self._pc_langs(guild.id, member.id), channel=f"<#{ch.id}>", server=guild.name
+            ),
+            mention_author=False,
         )
 
     async def _private_delete(self, message, guild, member) -> bool:
@@ -287,10 +307,12 @@ class PrivateChatMixin:
         """/ห้องส่วนตัว /private-chat: make (or show) the caller's private channel."""
         guild, member = interaction.guild, interaction.user
         await interaction.response.defer(ephemeral=True)
-        lang = self._pc_lang(guild.id, member.id)
         ch, created, err = await self.ensure_private_channel(guild, member)
-        text = err or t(
-            "pc_created" if created else "pc_exists", lang, channel=f"<#{ch.id}>", server=guild.name
+        text = err or aud.tt(
+            "pc_created" if created else "pc_exists",
+            self._pc_langs(guild.id, member.id),
+            channel=f"<#{ch.id}>",
+            server=guild.name,
         )
         await interaction.followup.send(text, ephemeral=True)
 
