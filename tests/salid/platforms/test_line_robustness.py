@@ -58,6 +58,10 @@ async def test_push_quota_exhausted_is_logged_clearly_and_stops(fx, caplog):
     assert len(err) == 1 and "429" in err[0].getMessage() and "NOT delivered" in err[0].getMessage()
     assert "quota" in err[0].getMessage()
     assert len(api.push_keys) == 1  # the second batch was not even tried
+    # the raw LINE ids never reach the logs: only the derived tenant / room ids
+    assert "Ualice" not in caplog.text and BOT not in caplog.text
+    assert str(ids.room_id("line", BOT, "Ualice")) in err[0].getMessage()
+    assert str(ids.tenant_id("line", BOT)) in err[0].getMessage()
 
 
 async def test_a_rate_limited_reply_is_not_turned_into_a_paid_push(fx, caplog):

@@ -4,8 +4,10 @@
   token is part of every API URL, so URLs are never logged: the httpx / httpcore loggers are
   pinned to WARNING and every failure is re-raised as `TelegramError` (method and status code
   only, never the URL or the response text).
-* `Poller`: `deleteWebhook` once, then `getUpdates` with a long timeout. The offset only advances
-  after an update was handed over, so a failed poll is retried (with backoff) without losing any.
+* `Poller`: `deleteWebhook` once, then `getUpdates` with a long timeout. A batch is handled
+  concurrently (album grouping needs that) and awaited; the offset only advances past updates
+  whose handler finished without a transient error, so a failed poll or handler is retried
+  (with backoff) without losing any. Handlers are idempotent per `update_id`.
 * `TelegramAdapter`: one update -> `Incoming` (tenant = the bot itself, room = chat id, thread =
   forum topic id, also in private chats with topics), `edited_message` -> `Assistant.on_edit`.
   `/cmd@thisbot` commands address the bot, `/help` is answered without the model, an album
@@ -26,10 +28,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import hashlib
 import logging
 import re
 import time
-from collections import deque
+from collections import OrderedDict, deque
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -60,6 +63,13 @@ SEND_GAP_S = 1.0  # at most about one message a second to one chat
 GROUP_PER_MINUTE = 20  # and 20 a minute to one group
 ALBUM_DEBOUNCE_S = 1.5  # wait for the other photos of an album
 ALBUM_MAX_WAIT_S = 10.0
+BATCH_TIMEOUT_S = 180.0  # one stuck handler must not block polling for ever
+MAX_HANDLER_RETRIES = 3  # a transient handler failure is redelivered this many times at most
+DONE_KEEP = 2000  # update_ids remembered as handled (redeliveries are skipped)
+MAX_LOCKS = 2000  # per-chat send locks kept (idle ones are evicted)
+MAX_WINDOWS = 2000  # per-group rate windows kept
+MAX_GONE = 10_000  # chats remembered as removed / blocked
+GONE_TTL_S = 30 * 86400  # a removed chat is forgotten after a month (it is retried then)
 COMMANDS = [
     {"command": "start", "description": "เริ่มใช้งาน Salid / Start Salid"},
     {"command": "help", "description": "วิธีใช้ / How to use Salid"},
@@ -105,6 +115,47 @@ class TelegramError(Exception):
     def __init__(self, method: str, code: int | None, retry_after: float | None = None):
         super().__init__(f"telegram {method} failed ({code})")
         self.method, self.code, self.retry_after = method, code, retry_after
+
+
+def _ref(chat_id: int) -> str:
+    """A short, stable digest of a chat id for logs: the raw id never reaches them."""
+    return hashlib.sha256(str(chat_id).encode()).hexdigest()[:10]
+
+
+def is_transient(e: BaseException) -> bool:
+    """A failure worth redelivering the update for: a network error, a 429 or a 5xx."""
+    if isinstance(e, TelegramError):
+        return e.code is None or e.code == 429 or e.code >= 500
+    return isinstance(e, (TimeoutError, OSError))
+
+
+class _Gone:
+    """Chats that removed / blocked the bot: a bounded (cap + TTL) set."""
+
+    def __init__(self, clock) -> None:
+        self._clock = clock
+        self._at: OrderedDict[int, float] = OrderedDict()
+
+    def add(self, chat_id: int) -> None:
+        self._at[chat_id] = self._clock()
+        self._at.move_to_end(chat_id)
+        while len(self._at) > MAX_GONE:
+            self._at.popitem(last=False)
+
+    def discard(self, chat_id: int) -> None:
+        self._at.pop(chat_id, None)
+
+    def __contains__(self, chat_id: object) -> bool:
+        at = self._at.get(chat_id)  # type: ignore[arg-type]
+        if at is None:
+            return False
+        if self._clock() - at > GONE_TTL_S:
+            del self._at[chat_id]  # type: ignore[arg-type]
+            return False
+        return True
+
+    def __len__(self) -> int:
+        return len(self._at)
 
 
 class Api(Protocol):
@@ -230,10 +281,10 @@ class TelegramPort:
     def __init__(self, api: Api, *, clock=time.monotonic, sleep=asyncio.sleep) -> None:
         self.api = api
         self._clock, self._sleep = clock, sleep
-        self._locks: dict[int, asyncio.Lock] = {}
+        self._locks: OrderedDict[int, asyncio.Lock] = OrderedDict()
         self._last: dict[int, float] = {}  # chat -> time of the last send
         self._window: dict[int, deque[float]] = {}  # group -> send times in the last minute
-        self.gone: set[int] = set()  # chats that removed / blocked the bot: never send there
+        self.gone = _Gone(clock)  # chats that removed / blocked the bot: never send there
 
     async def room_view(self, msg: Incoming) -> RoomView:
         return RoomView(None, [])  # a bot cannot list the members of a group
@@ -254,7 +305,7 @@ class TelegramPort:
     def mark_gone(self, chat_id: int) -> None:
         if chat_id not in self.gone:
             logger.warning(
-                "telegram chat %d removed or blocked the bot: not sending there", chat_id
+                "telegram chat %s removed or blocked the bot: not sending there", _ref(chat_id)
             )
         self.gone.add(chat_id)
 
@@ -285,9 +336,30 @@ class TelegramPort:
             window.append(now)
         if len(self._last) > 2000:  # forget chats idle for a minute
             self._last = {c: t for c, t in self._last.items() if now - t < 60}
+        if len(self._window) > MAX_WINDOWS:
+            self._trim_windows(now)
+
+    def _trim_windows(self, now: float) -> None:
+        """Drop the rate windows of groups idle for a minute, then the oldest if still too many."""
+        for c in [c for c, w in self._window.items() if not w or now - w[-1] >= 60]:
+            del self._window[c]
+        while len(self._window) > MAX_WINDOWS:
+            del self._window[next(iter(self._window))]
+
+    def _lock_for(self, chat_id: int) -> asyncio.Lock:
+        lock = self._locks.get(chat_id)
+        if lock is None:
+            lock = self._locks[chat_id] = asyncio.Lock()
+        self._locks.move_to_end(chat_id)
+        if len(self._locks) > MAX_LOCKS:  # evict the least recently used idle locks only
+            for c in [c for c, lk in self._locks.items() if c != chat_id and not lk.locked()]:
+                if len(self._locks) <= MAX_LOCKS:
+                    break
+                del self._locks[c]
+        return lock
 
     async def _send(self, chat_id: int, params: dict) -> dict:
-        lock = self._locks.setdefault(chat_id, asyncio.Lock())
+        lock = self._lock_for(chat_id)
         async with lock:
             await self._pace(chat_id)
             try:
@@ -341,7 +413,9 @@ class TelegramPort:
         chat_id = int(msg.room)
         sent: list[str] = []
         if chat_id in self.gone:
-            logger.warning("telegram reply not sent: chat %d removed or blocked the bot", chat_id)
+            logger.warning(
+                "telegram reply not sent: chat %s removed or blocked the bot", _ref(chat_id)
+            )
             return sent
         for i, text in enumerate(texts):
             params: dict = {"chat_id": chat_id, "text": text}
@@ -430,10 +504,14 @@ class TelegramAdapter:
         self._sleep = sleep
         self._albums: dict[tuple[int, str], list[Incoming]] = {}
 
+    async def process(self, update: dict) -> None:
+        """One update. Raises when handling failed (the poller decides whether to redeliver)."""
+        await self._update(update)
+
     async def on_update(self, update: dict) -> None:
         """One update. Never raises."""
         try:
-            await self._update(update)
+            await self.process(update)
         except Exception as e:
             logger.error("telegram update failed (%s)", safe_exc(e))
 
@@ -620,8 +698,13 @@ class Poller:
         sleep=asyncio.sleep,
         clock=time.time,
         timeout: int = POLL_SECONDS,
+        batch_timeout: float = BATCH_TIMEOUT_S,
     ) -> None:
         self.api, self.adapter, self._sleep, self.timeout = api, adapter, sleep, timeout
+        self.batch_timeout = batch_timeout
+        self._done: OrderedDict[int, None] = OrderedDict()  # update_ids handled to the end
+        self._failures: dict[int, int] = {}  # update_id -> transient handler failures so far
+        self._bg: set[asyncio.Task] = set()
         self._clock = clock
         self.offset: int | None = None
         self.backoff = BACKOFF_START
@@ -645,9 +728,33 @@ class Poller:
         except Exception as e:
             logger.warning("telegram setMyCommands failed (%s)", safe_exc(e))
 
+    async def _handle(self, update: dict) -> bool:
+        """True when the update is finished with (handled, or failed for good); False on a
+        transient failure that a redelivery may fix."""
+        uid = int(update["update_id"])
+        if uid in self._done:
+            return True  # redelivered because a neighbour failed: handling it twice would repeat it
+        try:
+            await self.adapter.process(update)
+        except Exception as e:
+            if is_transient(e) and self._failures.get(uid, 0) + 1 < MAX_HANDLER_RETRIES:
+                self._failures[uid] = self._failures.get(uid, 0) + 1
+                logger.warning(
+                    "telegram update handler failed, will be redelivered (%s)", safe_exc(e)
+                )
+                return False
+            logger.error("telegram update failed for good (%s)", safe_exc(e))
+        self._failures.pop(uid, None)
+        self._done[uid] = None
+        while len(self._done) > DONE_KEEP:
+            self._done.popitem(last=False)
+        return True
+
     async def poll_once(self) -> int:
-        """One getUpdates round; returns how many updates were handed to Salid. Raises on an API
-        error (the offset is unchanged, so Telegram re-delivers those updates)."""
+        """One getUpdates round; returns how many updates were fetched. The batch is handled
+        concurrently and awaited (at most `batch_timeout`); the offset moves past the updates
+        that finished, stopping at the first transient handler failure so Telegram re-delivers
+        it. Raises on an API error (the offset is unchanged)."""
         if not self._webhook_cleared:  # a webhook and getUpdates exclude each other
             await self.api.delete_webhook()
             self._webhook_cleared = True
@@ -662,12 +769,28 @@ class Poller:
             )
             self.offset, self._last_update_at = None, now
         updates = await self.api.get_updates(self.offset, self.timeout)
-        for u in updates:
-            self.adapter.a.spawn(self.adapter.on_update(u))
-            self.offset = max(self.offset or 0, int(u["update_id"]) + 1)
         if updates:
+            await self._handle_batch(updates)
             self._last_update_at = self._clock()
         return len(updates)
+
+    async def _handle_batch(self, updates: list[dict]) -> None:
+        tasks = [asyncio.create_task(self._handle(u)) for u in updates]
+        try:
+            _done, pending = await asyncio.wait(tasks, timeout=self.batch_timeout)
+        except asyncio.CancelledError:
+            for t in tasks:
+                t.cancel()
+            raise
+        if pending:  # keep them running, but do not hold the poll for them
+            logger.warning("telegram: %d update handler(s) still running; moving on", len(pending))
+            for t in pending:
+                self._bg.add(t)
+                t.add_done_callback(self._bg.discard)
+        for u, t in zip(updates, tasks, strict=True):
+            if t not in pending and not t.result():
+                break  # redeliver this update (and, with it, the ones after it)
+            self.offset = max(self.offset or 0, int(u["update_id"]) + 1)
 
     async def run(self) -> None:
         await self.startup()

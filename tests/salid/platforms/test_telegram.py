@@ -580,6 +580,122 @@ async def test_a_failed_delete_webhook_is_retried_before_polling(fx):
     assert api.webhook_deleted == 1 and api.offsets == [None]
 
 
+async def test_a_transient_handler_failure_holds_the_offset_and_is_redelivered_once(fx):
+    api, a, port, adapter = fx
+    u1, u2, u3 = (upd(t, update_id=i, mid=i) for i, t in ((5, "one"), (6, "two"), (7, "three")))
+    api.batches = [[u1, u2, u3], [u2, u3], []]
+    real, calls = adapter._update, []
+
+    async def flaky(update):
+        calls.append(update["update_id"])
+        if update["update_id"] == 6 and calls.count(6) == 1:
+            raise TelegramError("sendMessage", 502)
+        await real(update)
+
+    adapter._update = flaky
+    p = Poller(api, adapter)
+    assert await p.poll_once() == 3
+    assert p.offset == 6  # stopped at the failed update: 5 was handled, 6 and 7 come back
+    await p.poll_once()
+    assert api.offsets == [None, 6] and p.offset == 8
+    await p.poll_once()
+    await a.drain()
+    assert calls.count(6) == 2  # redelivered once, then it went through
+    assert calls.count(7) == 1  # 7 had finished: its redelivery was skipped (idempotent)
+    msg = inc(platform="telegram", tenant=BOT_ID, room="-100500")
+    assert sorted(m.text for m in stored(a, msg)) == ["one", "three", "two"]
+
+
+async def test_a_handler_that_keeps_failing_is_given_up_on(fx):
+    api, a, port, adapter = fx
+
+    async def boom(update):
+        raise TelegramError("sendMessage", None)
+
+    adapter._update = boom
+    p = Poller(api, adapter)
+    api.batches = [[upd("x", update_id=3)]] * 5
+    for _ in range(telegram.MAX_HANDLER_RETRIES - 1):
+        await p.poll_once()
+        assert p.offset is None  # held back for a redelivery
+    await p.poll_once()
+    assert p.offset == 4  # then dropped, not a hot loop for ever
+
+
+async def test_a_permanent_handler_error_does_not_block_the_offset(fx):
+    api, a, port, adapter = fx
+
+    async def bug(update):
+        raise ValueError("parse bug")
+
+    adapter._update = bug
+    p = Poller(api, adapter)
+    api.batches = [[upd("x", update_id=3)]]
+    await p.poll_once()
+    assert p.offset == 4
+
+
+async def test_a_stuck_handler_does_not_block_the_poll_beyond_the_batch_bound(fx, caplog):
+    api, a, port, adapter = fx
+    release = asyncio.Event()
+
+    async def stuck(update):
+        await release.wait()
+
+    adapter._update = stuck
+    p = Poller(api, adapter, batch_timeout=0.01)
+    api.batches = [[upd("x", update_id=3)]]
+    with caplog.at_level(logging.WARNING):
+        await p.poll_once()
+    assert p.offset == 4 and "still running" in caplog.text
+    release.set()
+    await asyncio.gather(*p._bg)
+
+
+# ------------------------------------------------------------------ limiter state is bounded
+
+
+async def test_limiter_state_is_bounded(fx, monkeypatch):
+    api, a, port, adapter = fx
+    monkeypatch.setattr(telegram, "MAX_LOCKS", 3)
+    monkeypatch.setattr(telegram, "MAX_WINDOWS", 3)
+    monkeypatch.setattr(telegram, "MAX_GONE", 3)
+    for chat in range(-1, -9, -1):
+        await port._send(chat, {"chat_id": chat, "text": "x"})
+    assert len(port._locks) <= 3 and len(port._window) <= 3
+    assert -8 in port._locks  # the most recent survive
+    # a lock that is held is never evicted
+    held = port._lock_for(-8)
+    await held.acquire()
+    for chat in range(-20, -26, -1):
+        port._lock_for(chat)
+    assert port._locks[-8] is held
+    held.release()
+    for chat in range(1, 8):
+        port.mark_gone(chat)
+    assert len(port.gone) == 3 and 7 in port.gone and 1 not in port.gone
+
+
+async def test_gone_chats_expire(fx):
+    api, a, port, adapter = fx
+    clock = FakeClock()
+    port2 = TelegramPort(api, clock=clock.now, sleep=clock.sleep)
+    port2.mark_gone(42)
+    assert 42 in port2.gone
+    clock.t += telegram.GONE_TTL_S + 1
+    assert 42 not in port2.gone and len(port2.gone) == 0
+
+
+async def test_chat_ids_never_reach_the_logs(fx, caplog):
+    api, a, port, adapter = fx
+    caplog.set_level(logging.DEBUG)
+    port.mark_gone(-100987654321)
+    msg = inc(platform="telegram", tenant=BOT_ID, room="-100987654321")
+    await port.deliver(msg, ["hi"], None)  # skipped: the chat is gone
+    assert "-100987654321" not in caplog.text and "100987654321" not in caplog.text
+    assert caplog.records
+
+
 # ------------------------------------------------------------------ Bot API client, secrets
 
 
