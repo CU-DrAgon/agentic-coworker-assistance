@@ -1,6 +1,6 @@
 # Salid on every workspace: one brain, thin platform adapters
 
-Status: agreed direction, not built yet (2026-10-18). Read this before adding a Salid feature.
+Status: agreed direction (2026-10-18). Step 1 (ids) and step 2a (the `Workspace` interface in `salid/workspace.py`, `DiscordWorkspace` in `workspace_discord.py`, `SlackWorkspace` in `platforms/workspace_slack.py`, plus a `FakeWorkspace` for tests) are done; 2b is next: `_agent_kwargs` takes a `Workspace`, one tool group at a time. Read this before adding a Salid feature.
 
 ## Goal
 

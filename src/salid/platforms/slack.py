@@ -128,10 +128,13 @@ class SlackPort:
         return prof.get("display_name") or u.get("real_name") or u.get("name") or uid
 
     async def is_admin(self, msg: Incoming) -> bool:
+        return await self.is_admin_user(msg.user)
+
+    async def is_admin_user(self, uid: str) -> bool:
         """Workspace admin/owner of THIS workspace only. A Slack Connect user from another
         workspace can be an admin there (users.info says so in a shared channel): that must never
         make them an executive here. A bot, a deleted user or a missing team_id fails closed."""
-        u = await self.user(msg.user)
+        u = await self.user(uid)
         if u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
             return False
         return bool(u.get("is_admin") or u.get("is_owner") or u.get("is_primary_owner"))
@@ -231,23 +234,26 @@ class SlackPort:
         return rooms
 
     # ------------------------------------------------------------ core.Port
+    async def room_audience(self, channel: str) -> frozenset[str] | None:
+        """Readers of a channel when Slack lists them exactly, else None (fail closed).
+        Shared (Slack Connect) and unknown-privacy channels are None; conversations.members is
+        the full audience only for private conversations (a public channel is readable by people
+        who have not joined)."""
+        private = self._fresh(self._room_private, channel)
+        shared = self._fresh(self._room_shared, channel)
+        if private is None or shared is None:
+            await self._conversation_info(channel)
+            private = self._fresh(self._room_private, channel)
+            shared = self._fresh(self._room_shared, channel)
+        if shared is not False or not private:  # shared, unknown or public
+            return None
+        return await self.members(channel, fresh=True)
+
     async def room_view(self, msg: Incoming) -> RoomView:
         if msg.is_direct:
             audience: frozenset[str] | None = frozenset({msg.user})
         else:
-            private = self._fresh(self._room_private, msg.room)
-            shared = self._fresh(self._room_shared, msg.room)
-            if private is None or shared is None:
-                await self._conversation_info(msg.room)
-                private = self._fresh(self._room_private, msg.room)
-                shared = self._fresh(self._room_shared, msg.room)
-            if shared is not False:  # shared, or unknown: fail closed
-                return RoomView(None, [])
-            # conversations.members is the full audience only for private conversations. Public
-            # channels are readable by people who have not joined, so their audience is unknown.
-            if not private:
-                return RoomView(None, [])
-            audience = await self.members(msg.room, fresh=True)
+            audience = await self.room_audience(msg.room)
         if audience is None:
             return RoomView(None, [])
         mine = await self._convs(user=msg.user)  # the asker's conversations, read live
