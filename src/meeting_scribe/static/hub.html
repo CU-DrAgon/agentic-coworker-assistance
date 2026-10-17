@@ -255,6 +255,7 @@
           <label><span data-i18n="langmode_l"></span> <select class="field" id="language-mode"><option value="audience" data-i18n="langmode_audience"></option><option value="company_only" data-i18n="langmode_only"></option></select><small data-i18n="langmode_s"></small></label>
  },
           <label><input type="checkbox" id="captions-default"> <span data-i18n="captions_default_l"></span><small data-i18n="captions_default_s"></small></label>
+          <label><span data-i18n="voice_talk_l"></span> <select class="field" id="voice-talk"><option value="may_talk" data-i18n="voice_talk_may"></option><option value="listen_only" data-i18n="voice_talk_listen"></option></select><small data-i18n="voice_talk_s"></small></label>
           <fieldset id="task-mode" style="border:0;padding:0;margin:0 0 8px">
             <legend data-i18n="task_mode_l"></legend>
             <label><input type="radio" name="task-confirm" value="notify" checked> <span data-i18n="task_mode_notify_l"></span><small data-i18n="task_mode_notify_s"></small></label>
@@ -684,6 +685,22 @@
  "captions_default_s": {
   "th": "ปิดไว้ = เหมือนเดิม ไม่แสดงข้อความ ผู้ร่วมประชุมสั่งเปิด/ซ่อนเฉพาะประชุมนั้นได้",
   "en": "Off = as before, nothing is shown. People in a meeting can still turn captions on or off for that meeting."
+ },
+ "voice_talk_l": {
+  "th": "เสียงของสลิดในห้องประชุม",
+  "en": "Salid's voice in meetings"
+ },
+ "voice_talk_may": {
+  "th": "🔊 พูดได้เมื่อถูกเรียก",
+  "en": "🔊 May talk when called"
+ },
+ "voice_talk_listen": {
+  "th": "🔇 ฟังและจดอย่างเดียว",
+  "en": "🔇 Listen and take notes only"
+ },
+ "voice_talk_s": {
+  "th": "ฟังและจดอย่างเดียว = สลิดไม่พูดในห้องเลย ถามได้ทางข้อความ ผู้จัดประชุมหรือผู้บริหารสั่งเปลี่ยนเฉพาะประชุมนั้นได้",
+  "en": "Listen only = Salid never speaks in the room; people ask in text. The chair or an executive can change it for one meeting."
  },
  "task_mode_l": {
   "th": "โหมดมอบหมายงาน",
@@ -1995,6 +2012,7 @@ function fillSettings(s) {
   $("personal-settings").checked = s.personal_settings !== false;
   $("language-mode").value = s.language_mode === "company_only" ? "company_only" : "audience";
   $("captions-default").checked = s.captions_default === "on";
+  $("voice-talk").value = s.voice_talk === "listen_only" ? "listen_only" : "may_talk";
   for (const r of document.querySelectorAll('input[name="task-confirm"]')) r.checked = r.value === (s.task_confirm_mode || "notify");
   $("digest-time").value = s.digest_time || "18:00";
   $("followup-time").value = s.followup_time || "10:00";
@@ -2086,6 +2104,7 @@ async function save() {
     personal_settings: $("personal-settings").checked,
     language_mode: $("language-mode").value === "company_only" ? "company_only" : "audience",
     captions_default: $("captions-default").checked ? "on" : "off",
+    voice_talk: $("voice-talk").value === "listen_only" ? "listen_only" : "may_talk",
     task_confirm_mode: (document.querySelector('input[name="task-confirm"]:checked') || {}).value || "notify",
     digest_time: $("digest-time").value || "18:00",
     followup_time: $("followup-time").value || "10:00",

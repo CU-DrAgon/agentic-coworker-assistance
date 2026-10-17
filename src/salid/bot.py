@@ -108,7 +108,12 @@ from .maps_bot import MapsMixin
 from .markets_bot import MarketsMixin
 from .media import media_candidates
 from .media_bot import MediaMixin
-from .meeting import MeetingManager, parse_meeting_command
+from .meeting import (
+    MeetingManager,
+    parse_meeting_command,
+    parse_voice_talk_command,
+    parse_voice_talk_default_command,
+)
 from .meeting_doc_bot import MeetingDocMixin
 from .memory import (
     MemoryScheduler,
@@ -910,6 +915,8 @@ class SecretaryBot(
         if called and await self._task_mode_command(message):
             return
         if called and await self._captions_default_command(message):
+            return
+        if called and await self._voice_talk_command(message):
             return
         if called and await self._help_command(message):
             return
@@ -2372,6 +2379,40 @@ class SecretaryBot(
             return {"status": "on" if on else "off"}
 
         return captions_tools(session_of, self.meetings.set_captions, set_default)
+
+    async def _voice_talk_command(self, message) -> bool:
+        """Salid's voice in meetings, typed by a human (never an agent tool): org default
+        ("listen only by default", executives) or this meeting ("listen only" / "you may talk" in
+        the meeting's chat, the chair or an executive)."""
+        if message.guild is None:
+            return False
+        text, gid, user = self._command_text(message), message.guild.id, message.author
+        if (mode := parse_voice_talk_default_command(text)) is not None:
+            lang = self._person_lang(gid, user.id, message.content or "")
+            if not self._may_configure(user):
+                await message.reply(t("voice_talk_default_denied", lang), mention_author=False)
+                return True
+            await asyncio.to_thread(self.team.set_voice_talk, gid, mode)
+            key = "voice_talk_default_listen" if mode == "listen_only" else "voice_talk_default_may"
+            await message.reply(t(key, lang), mention_author=False)
+            return True
+        if (mode := parse_voice_talk_command(text)) is None:
+            return False
+        s = self.meetings.session_for_channel(message.channel.id) or next(
+            (
+                x
+                for x in self.meetings.sessions_in_guild(gid)
+                if getattr(x.fallback_channel, "id", None) == message.channel.id
+            ),
+            None,
+        )
+        if s is None:
+            return False
+        if not self.meetings.may_switch_talk(s, user):
+            await message.reply(t("voice_talk_denied", s.lang), mention_author=False)
+        else:
+            await self.meetings.set_voice_talk(s, mode)
+        return True
 
     async def _captions_default_command(self, message) -> bool:
         """ "แสดงคำบรรยายทุกประชุม" / "captions on by default" (and the hide forms): admins and

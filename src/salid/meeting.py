@@ -138,6 +138,51 @@ def parse_meeting_command(text: str) -> str | None:
     return None
 
 
+_TALK_TRAIL = re.compile(r"[\s,.!?~ๆ]*(?:ครับผม|ครับ|ค่ะ|คะ|นะครับ|นะคะ|นะ|หน่อย|เลย|please|pls)$", re.I)
+_LISTEN_ONLY_RE = re.compile(r"(?:ฟัง(?:และจด)?อย่างเดียว|listen(?:ing)?\s+only)", re.I)
+_MAY_TALK_RE = re.compile(
+    r"(?:พูดได้(?:แล้ว)?|(?:you\s+)?(?:may|can)\s+(?:talk|speak)(?:\s+now)?|talk\s+mode)", re.I
+)
+_LISTEN_DEFAULT_RE = re.compile(
+    r"^(?:ประชุมทุกครั้ง\s?ฟัง(?:และจด)?อย่างเดียว|listen(?:ing)?\s+only\s+(?:by\s+default"
+    r"|in\s+(?:every|all)\s+meetings?))$",
+    re.I,
+)
+_TALK_DEFAULT_RE = re.compile(
+    r"^(?:พูดได้ทุก\s?ประชุม|(?:may|can)\s+(?:talk|speak)\s+(?:by\s+default"
+    r"|in\s+(?:every|all)\s+meetings?))$",
+    re.I,
+)
+
+
+def _talk_core(text: str) -> str:
+    s = (text or "").strip().strip(" \t\n/,.:;!?-–—…")
+    if not s or len(s) > 50:
+        return ""
+    while (m := _POLITE_PREFIX.match(s)) and m.end() > 0:
+        s = s[m.end() :]
+    return _TALK_TRAIL.sub("", s).strip()
+
+
+def parse_voice_talk_command(text: str) -> str | None:
+    """This meeting's voice switch: "listen_only" ("สลิด ฟังอย่างเดียว", "Salid, listen only") or
+    "may_talk" ("พูดได้แล้ว", "you may talk", "talk mode"); None for anything else. The whole
+    short utterance must be the command (name and politeness stripped)."""
+    s = _talk_core(text)
+    if _LISTEN_ONLY_RE.fullmatch(s):
+        return "listen_only"
+    return "may_talk" if _MAY_TALK_RE.fullmatch(s) else None
+
+
+def parse_voice_talk_default_command(text: str) -> str | None:
+    """The org default: "ประชุมทุกครั้งฟังอย่างเดียว" / "listen only by default" -> "listen_only",
+    "พูดได้ทุกประชุม" / "may talk by default" -> "may_talk"; else None."""
+    s = _talk_core(text)
+    if _LISTEN_DEFAULT_RE.match(s):
+        return "listen_only"
+    return "may_talk" if _TALK_DEFAULT_RE.match(s) else None
+
+
 # ------------------------------------------------------------------ wake word
 # The wake word regex lives in naming.py (shared with the text-channel name detection).
 _LEAD_FILLER = re.compile(r"^[\s,.:;!?\-–—…ๆ]*(?:(?:ครับ|ค่ะ|คะ|นะ|จ๊ะ|จ้ะ|เอ่อ|อ่า|ว่า)\s*)*")
@@ -766,6 +811,7 @@ class MeetingSession:
     language_mode: str = ""
     langs: list[str] = field(default_factory=list)
     mode_spoken: bool = False  # the answering mode was said aloud once
+    voice_talk: str = ""  # "" = the org default | "may_talk" | "listen_only" (human switch only)
     captions_defaulted: bool = (
         False  # the server default was applied (or the resume record says so)
     )
@@ -1259,7 +1305,7 @@ class MeetingManager:
 
     async def _say_text(self, s: MeetingSession, text: str) -> None:
         """Say a short fixed line in the voice channel (TTS). Failures are logged, never raised."""
-        if not self.bot.s.voice_reply or s.ending or not _connected(s.vc):
+        if not self.bot.s.voice_reply or s.ending or not _connected(s.vc) or self._listen_only(s):
             return
         try:
             pcm = self._ack_pcm.get(f"{s.lang}:{text}")
@@ -1441,6 +1487,8 @@ class MeetingManager:
             hello += " " + t("captions_suffix", session.lang)
         if aud.MODE_NOTICES:
             hello += "\n" + mode_text
+        if self._listen_only(session):
+            hello += "\n" + t("voice_talk_listen", session.lang)
         await self._post_state(session, hello)
         await self._attend_start(session, self._humans(channel))
         logger.info(
@@ -1688,6 +1736,7 @@ class MeetingManager:
             "first_grace": s.first_grace,
             "minutes_channel_id": s.minutes_channel_id,
             "recording": s.recording,
+            "voice_talk": s.voice_talk,
             "captions_hidden": s.captions_defaulted and not s.captions.on,
             "transcript_from": s.transcript_from.isoformat(timespec="seconds")
             if s.transcript_from
@@ -1807,6 +1856,7 @@ class MeetingManager:
         )  # fmt: skip
         session.starter_id = int(rec.get("starter_id") or 0)
         session.language_mode = rec.get("language_mode") or ""
+        session.voice_talk = rec.get("voice_talk") or ""
         session.langs = self._room_langs(session)
         for m in humans:
             session.attendee_ids.add(m.id)
@@ -1882,12 +1932,54 @@ class MeetingManager:
         finally:
             s.reconnecting = False
 
+    def talk_mode(self, s: MeetingSession) -> str:
+        """may_talk | listen_only: the meeting's own switch, else the org default."""
+        own = getattr(s, "voice_talk", "")
+        if own in ("may_talk", "listen_only"):
+            return own
+        try:
+            return self.bot.team.voice_talk(s.guild_id)
+        except Exception:
+            return "may_talk"
+
+    def _listen_only(self, s: MeetingSession) -> bool:
+        return self.talk_mode(s) == "listen_only"
+
+    async def set_voice_talk(self, s: MeetingSession, mode: str) -> None:
+        """The human switch (the caller checked who may). listen_only closes the Live session now
+        and keeps the notes and ASR running; may_talk starts it again like a meeting start."""
+        if s.ending or mode not in ("may_talk", "listen_only"):
+            return
+        s.voice_talk = mode
+        if mode == "listen_only":
+            live, s.live, s.voice_mode = s.live, None, "classic"
+            s.speaking = False
+            if live is not None:
+                with contextlib.suppress(Exception):
+                    live.stop_playback()
+                with contextlib.suppress(Exception):
+                    await live.close()
+            _stop_playback(s.vc)
+        elif s.live is None:
+            self._start_live(s)
+        await self._post(s, t(f"voice_talk_{'listen' if mode == 'listen_only' else 'may'}", s.lang))
+        await self._persist(s, s.starter_id)
+
+    def may_switch_talk(self, s: MeetingSession, member) -> bool:
+        """The chair (whoever invited Salid) or an executive."""
+        uid = getattr(member, "id", None)
+        return bool(uid) and (
+            getattr(s, "starter_id", 0) == uid or bool(self.bot.is_exec_member(member))
+        )
+
     def _start_live(self, session: MeetingSession) -> None:
         """Live voice mode: connect a Gemini Live session now (it takes ~2 s) so the first question
         is answered fast. If it cannot connect the meeting falls back to classic wake words."""
         s = self.bot.s
         if not s.voice_reply or getattr(s, "voice_mode", "classic") != "live":
             return
+        if self._listen_only(session):
+            return  # notes only: no Live session at all
         from .live_voice import LiveVoice
 
         session.voice_mode = "live"
@@ -2041,6 +2133,12 @@ class MeetingManager:
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
         if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
             s.captions.add(name, text)  # human speech only: never Salid's own words or notes
+        if (vt := parse_voice_talk_command(text)) and not self._is_echo(s, seg):
+            if self.may_switch_talk(s, member):
+                await self.set_voice_talk(s, vt)
+            else:
+                await self._post(s, t("voice_talk_denied", s.lang))
+            return
         if self.is_hush(text) and not self._is_echo(s, seg):
             self._hush(s)  # silence is the acknowledgement: no reply, no note, no vote offer
             return
@@ -2420,6 +2518,7 @@ class MeetingManager:
         from .qa import ask
 
         bot = self.bot
+        muted = self._listen_only(s)  # notes only: the answer is typed, never spoken
         s.introduced = True  # somebody is talking to Salid
         if member is None or not bot.team.enabled(s.guild_id, "qa"):
             return
@@ -2455,17 +2554,17 @@ class MeetingManager:
                 if aud.multi(getattr(s, "langs", None) or [])
                 else None,
                 memory=memory,
-                spoken=True,
+                spoken=not muted,
                 **bot._web_kw(s.guild_id),
             )
             is_exec = bot.is_exec_member(member)
             bot._log_answer(
                 s.guild_id, s.voice_channel.id, is_exec, ans, t0, t_ctx, time.monotonic()
             )
-            if getattr(bot.s, "meeting_text_echo", False):  # meetings stay voice by default
+            if muted or getattr(bot.s, "meeting_text_echo", False):  # voice meetings stay voice
                 for i, part in enumerate(chunks(ans.text, 1800)):
                     await self._post(s, f"{member.mention} {part}" if i == 0 else part)
-        if bot.s.voice_reply and not s.ending and _connected(s.vc):
+        if bot.s.voice_reply and not muted and not s.ending and _connected(s.vc):
             # In the background: playback takes seconds and must not hold a transcription worker.
             s.tasks = [t for t in s.tasks if not t.done()]
             s.tasks.append(asyncio.create_task(self.speak(s, ans.text, question)))
@@ -2502,7 +2601,7 @@ class MeetingManager:
         written for the question (cheap model + TTS, raced against `voice_ack_timeout_s`); when it is
         not ready in time a cached hand-written line plays instead (never one of the last 3 said in
         this meeting) and the generated one is dropped: one acknowledgement only."""
-        if not self.bot.s.voice_reply or s.ending or s.speaking:
+        if not self.bot.s.voice_reply or s.ending or s.speaking or self._listen_only(s):
             return
         lang = s.lang if s.lang in ACK_TEXT or s.lang in EXTRA else "en"
         particle = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
@@ -2581,7 +2680,13 @@ class MeetingManager:
         """Say a short spoken version of `text` in the voice channel. The written answer is
         already posted, so any failure here is logged and swallowed."""
         bot = self.bot
-        if not bot.s.voice_reply or s.ending or s.speech_pending or not _connected(s.vc):
+        if (
+            not bot.s.voice_reply
+            or s.ending
+            or s.speech_pending
+            or not _connected(s.vc)
+            or self._listen_only(s)
+        ):
             return
         # Claim the pipeline before its first await. Two transcription workers can answer at once;
         # only one should pay for shortening and TTS when Discord can play only one source.
@@ -2645,7 +2750,13 @@ class MeetingManager:
         overlap or reorder. Sets the echo-guard flags."""
         async with s.play_lock:
             vc = s.vc
-            if s.ending or not self.bot.s.voice_reply or not _connected(vc) or vc.is_playing():
+            if (
+                s.ending
+                or not self.bot.s.voice_reply
+                or not _connected(vc)
+                or vc.is_playing()
+                or self._listen_only(s)
+            ):
                 return
             loop = asyncio.get_running_loop()
             done: asyncio.Future = loop.create_future()

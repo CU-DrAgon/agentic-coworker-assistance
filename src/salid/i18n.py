@@ -1374,6 +1374,30 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "เฉพาะแอดมินหรือผู้บริหารที่ตั้งค่าคำบรรยายของทุกประชุมได้ค่ะ",
         "en": "Only admins and executives can change the captions default for every meeting.",
     },
+    "voice_talk_listen": {
+        "th": "🔇 ฟังและจดอย่างเดียว (สลิดจะไม่พูด ถามได้ทางข้อความ)",
+        "en": "🔇 Listening only: Salid will not speak; ask in text",
+    },
+    "voice_talk_may": {
+        "th": "🔊 สลิดพูดได้เมื่อถูกเรียก",
+        "en": "🔊 Salid may talk when called",
+    },
+    "voice_talk_denied": {
+        "th": "เฉพาะผู้จัดประชุมหรือผู้บริหารที่สลับโหมดเสียงของประชุมนี้ได้ค่ะ",
+        "en": "Only the person who started this meeting or an executive can change Salid's voice here.",
+    },
+    "voice_talk_default_listen": {
+        "th": "ได้ค่ะ ประชุมครั้งต่อไปสลิดจะฟังและจดอย่างเดียว ไม่พูด (สั่ง “สลิด พูดได้” เฉพาะรอบได้)",
+        "en": "Done: in meetings from now on Salid listens and takes notes only (say “Salid, you may talk” in one meeting to change it).",
+    },
+    "voice_talk_default_may": {
+        "th": "ได้ค่ะ ประชุมครั้งต่อไปสลิดพูดได้เมื่อถูกเรียก",
+        "en": "Done: in meetings from now on Salid may talk when called.",
+    },
+    "voice_talk_default_denied": {
+        "th": "เฉพาะแอดมินหรือผู้บริหารที่ตั้งค่าเสียงของสลิดในทุกประชุมได้ค่ะ",
+        "en": "Only admins and executives can change Salid's voice default for every meeting.",
+    },
     "meet_rejoined": {
         "th": "สลิดกลับเข้ามาจดประชุมต่อแล้วค่ะ (หลุดไปครู่หนึ่ง)",
         "en": "Salid is back and taking notes again (it dropped out for a moment).",

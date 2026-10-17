@@ -22,6 +22,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     tone_note            str <= 200 chars, owner's extra wording note appended to every tone
     task_confirm_mode    notify (default) | approve: who signs off a task heard in chat
     captions_default     off (default) | on: live captions in every voice meeting's chat from the start
+    voice_talk           may_talk (default) | listen_only: Salid's voice in meetings (human switch only)
     personal_settings    bool (default true): members may keep their own language / tone / task mode
     language_mode        audience (default: company language + the personal languages of the people
                          involved) | company_only (an executive forced one language), see salid.audience
@@ -135,6 +136,10 @@ TASK_CONFIRM_MODES = (
     "notify",
     "approve",
 )  # task handshake: the doer confirms | the giver signs off
+VOICE_TALKS = (
+    "may_talk",
+    "listen_only",
+)  # Salid's voice in meetings: talks when called | notes only
 CAPTIONS_DEFAULTS = ("off", "on")  # meeting captions: hidden as before | shown from the start
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -277,6 +282,7 @@ class GuildSettingsUpdate(BaseModel):
     personal_settings: bool = True  # members may keep their own language / tone / task mode
     language_mode: str = "audience"  # audience (company + personal languages) | company_only
     captions_default: str = "off"  # off | on, see salid.captions
+    voice_talk: str = "may_talk"  # may_talk | listen_only, see salid.meeting
     memory_retention_days: int = Field(default_factory=default_retention_days)
 
     @field_validator("language_mode", mode="before")
@@ -332,6 +338,11 @@ class GuildSettingsUpdate(BaseModel):
     @classmethod
     def _task_confirm_mode(cls, v):
         return v if v in TASK_CONFIRM_MODES else "notify"
+
+    @field_validator("voice_talk", mode="before")
+    @classmethod
+    def _voice_talk(cls, v):
+        return v if v in VOICE_TALKS else "may_talk"
 
     @field_validator("captions_default", mode="before")
     @classmethod
@@ -672,6 +683,10 @@ class GuildStore:
 
     def set_captions_default(self, guild_id: int, on: bool) -> None:
         self._ref(guild_id).set({"captions_default": "on" if on else "off"}, merge=True)
+
+    def set_voice_talk(self, guild_id: int, mode: str) -> None:
+        mode = mode if mode in VOICE_TALKS else "may_talk"
+        self._ref(guild_id).set({"voice_talk": mode}, merge=True)
 
     def set_tone_note(self, guild_id: int, note: str) -> None:
         """Set (or, with "", clear) the guild's wording note. Validated like the hub field."""
@@ -1088,6 +1103,16 @@ class BotGuildSettings:
     def set_captions_default(self, guild_id: int, on: bool) -> None:
         try:
             self.store.set_captions_default(guild_id, on)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def voice_talk(self, guild_id: int) -> str:
+        """may_talk | listen_only: whether Salid may speak in this server's voice meetings."""
+        return self.current(guild_id).voice_talk
+
+    def set_voice_talk(self, guild_id: int, mode: str) -> None:
+        try:
+            self.store.set_voice_talk(guild_id, mode)
         finally:
             self._cache.pop(guild_id, None)
 
