@@ -68,6 +68,7 @@ def test_missing_document_means_defaults(gstore):
         meeting_transcript_doc=True,
         attendance_log=True,
         promo=True,
+        concept=True,
         decks=True,
         quotations=True,
         votes=True,

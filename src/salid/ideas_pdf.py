@@ -172,6 +172,23 @@ class _DocPdf(_Pdf):
                     row.cell(self._txt(c))
         self.ln(2)
 
+    def image_page(self, data: bytes, caption: str, heading: str) -> None:
+        """One page: the section heading, the image fitted to the page, the caption below."""
+        from PIL import Image
+
+        self.add_page(orientation="P")
+        self.h2(heading)
+        with Image.open(io.BytesIO(data)) as im:
+            iw, ih = im.size
+        width = self.w - self.l_margin - self.r_margin
+        height = self.h - self.get_y() - self.b_margin - 24  # room for the caption
+        scale = min(width / iw, height / ih)
+        w, h = iw * scale, ih * scale
+        y = self.get_y() + 2
+        self.image(io.BytesIO(data), x=self.l_margin + (width - w) / 2, y=y, w=w, h=h)
+        self.set_y(y + h + 3)
+        self.ml(caption, 10, 5.5)
+
     # ---- the 9-box canvas
     def _box(self, x: float, y: float, w: float, h: float, title: str, bullets: list[str]) -> None:
         self.set_draw_color(120)
@@ -264,9 +281,12 @@ def markdown_pdf(
     canvas: str | None = None,
     byline: str = "",
     demote: int = 0,
+    images: list[tuple[bytes, str]] | None = None,
+    images_title: str = "",
 ) -> bytes:
     """PDF of a Markdown document. `canvas`: Markdown holding a BMC; its nine-box page is
-    inserted first. `demote`: shift the headings of the body down (a section inside a document)."""
+    inserted first. `demote`: shift the headings of the body down (a section inside a document).
+    `images`: [(JPEG/PNG bytes, caption)] added after the body, one per page."""
     pdf = _DocPdf(fonts, org, lang, generated_at)
     if canvas:
         blocks, heads = canvas_blocks(canvas, lang)
@@ -278,6 +298,11 @@ def markdown_pdf(
     if byline:
         pdf.p(byline, size=9)
     pdf.write_markdown(body, demote=demote)
+    for data, caption in images or []:  # concept images: one per page, caption below
+        try:
+            pdf.image_page(data, plain(caption), images_title)
+        except Exception:  # an unreadable image never loses the document
+            continue
     return bytes(pdf.output())
 
 

@@ -32,6 +32,7 @@ COMPANY = "salid_company"  # per guild playbook, key "playbook" (salid.company_b
 CONTESTS = "salid_contests"  # competitions / hackathons / grants, key = contest id (salid.contests)
 QUOTES = "salid_quotes"  # quotations, key = base number QT-YYYY-NNNN + counters (salid.quotation)
 IDEAS = "salid_ideas"  # idea / project documents, key `{owner_id}_{slug}` (salid.ideas)
+IDEA_IMAGES = "salid_idea_images"  # concept images (base64 JPEG) of an idea, key `{idea key}_{sha}`
 
 
 class DocStore(Protocol):
