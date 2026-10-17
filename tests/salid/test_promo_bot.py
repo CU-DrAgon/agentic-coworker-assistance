@@ -95,13 +95,19 @@ async def test_the_daily_kit_cap_survives_a_restart(bot, world):
     assert bot.llm.models.calls == [] and out["kits_left_today"] == 0
 
 
-async def test_explicit_spoken_flag_keeps_the_kit_out_of_a_voice_answer(bot, world):
+async def test_a_remembered_kit_can_still_be_revised_by_voice(bot, world):
+    """Voice passes files=[] on purpose (origin/main): the spoken flag does not hide the kit."""
     m = world.staff
-    msg = TMsg(world.g, world.pub, m, "ทำโพสต์")
-    assert bot._promo_tools(msg, world.g, m, [img_input()], spoken=True) == []
+    bot.promo_memory.put(
+        (GUILD, world.pub.id, m.id),
+        promo.prepare_photo(png_bytes((900, 900))),
+        promo.merge_spec(None, headline="h", scene="cafe"),
+    )
+    room = bot.room_message(world.g, m, world.pub, room={m.id})
     kw = dict(setting="th", lang="th", question="x", memory=None, profile=None)
-    voice = bot._agent_kwargs(msg, world.g, m, False, files=[img_input()], spoken=True, **kw)
-    assert "make_promo_kit" not in names(voice.get("extra_tools", []))
+    voice = bot._agent_kwargs(room, world.g, m, False, files=[], spoken=True, **kw)
+    assert "make_promo_kit" in names(voice["extra_tools"])
+    assert bot._promo_tools(room, world.g, m, None) == []  # no file list at all: still none
 
 
 def test_promo_flag_defaults_on_and_capability_line():

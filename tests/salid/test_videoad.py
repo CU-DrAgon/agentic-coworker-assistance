@@ -1257,7 +1257,7 @@ def test_a_refused_hero_gives_its_seconds_and_cost_back(tmp_path, fake_pipeline,
 
     def refused(client, settings, still, scene, handle, out, *, media_client=None):
         calls.append(handle.cost_usd)
-        raise videoad.HeroRefused("PermissionDenied")
+        raise videoad.HeroRefused("PermissionDeniedError", definite=True)
 
     monkeypatch.setattr(videoad, "_hero_clip", refused)
     d = MemDocs()
@@ -1272,7 +1272,7 @@ def test_a_refused_hero_alone_does_not_keep_the_ad_of_a_failed_job(
     tmp_path, fake_pipeline, monkeypatch
 ):
     def refused(*a, **kw):
-        raise videoad.HeroRefused("PermissionDenied")
+        raise videoad.HeroRefused("PermissionDeniedError", definite=True)
 
     def broken(*a, **kw):
         raise RuntimeError("over budget")
@@ -1284,6 +1284,45 @@ def test_a_refused_hero_alone_does_not_keep_the_ad_of_a_failed_job(
     with pytest.raises(RuntimeError):
         run(tmp_path, usage=videoad.MediaUsage(d), settings=S_HERO, hero_shots=1)
     assert d.get("salid_media_usage", 1, "2026-10") == {"ads": 0, "hero_seconds": 0}
+
+
+def test_an_uncertain_hero_refusal_stays_charged_but_stops_the_heroes(
+    tmp_path, fake_pipeline, monkeypatch
+):
+    calls = []
+
+    def unsure(client, settings, still, scene, handle, out, *, media_client=None):
+        calls.append(1)
+        raise videoad.HeroRefused("ReadTimeout")  # the service may have accepted it
+
+    monkeypatch.setattr(videoad, "_hero_clip", unsure)
+    d = MemDocs()
+    res = run(tmp_path, usage=videoad.MediaUsage(d), settings=S_HERO, hero_shots=2)
+    assert calls == [1]  # no second hero request
+    assert d.get("salid_media_usage", 1, "2026-10") == {"ads": 1, "hero_seconds": 5}
+    assert res.cost_usd == pytest.approx(2 * videoad.STILL_USD + 5 * videoad.HERO_USD_PER_S)
+
+
+def test_the_ad_is_taken_before_the_storyboard_step_is_reported(tmp_path, fake_pipeline):
+    d, seen = MemDocs(), []
+    h = videoad.VideoHandle(progress=lambda step, _d: seen.append((step, ads_used(d))))
+    run(tmp_path, handle=h, usage=videoad.MediaUsage(d))
+    assert seen[0] == ("storyboard", 1)  # a "storyboard" record always has its ad taken
+
+
+def test_a_shutdown_leaves_the_refund_to_the_sweep(tmp_path, fake_pipeline):
+    h = videoad.VideoHandle()
+
+    def stop(step, _d):  # the bot shuts down while the storyboard is planned
+        if step == "storyboard":
+            h.shutdown.set()
+            h.cancelled.set()
+
+    h.progress = stop
+    d = MemDocs()
+    with pytest.raises(videoad.Cancelled):
+        run(tmp_path, handle=h, usage=videoad.MediaUsage(d))
+    assert ads_used(d) == 1  # the record stays for the next start's sweep, which decides
 
 
 def test_give_back_never_goes_below_zero(docs):

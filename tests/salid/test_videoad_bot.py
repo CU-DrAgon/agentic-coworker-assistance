@@ -291,7 +291,7 @@ async def test_a_started_job_posts_progress_and_delivers_the_mp4(on, world, runn
     states = []
     put = on.docs.put
     on.docs.put = lambda kind, gid, key, doc: (
-        states.append(doc["state"]) if kind == "salid_video_jobs" else None,
+        states.append(doc["state"]) if kind == "salid_video_jobs" and key != "_active" else None,
         put(kind, gid, key, doc),
     )
     photo = FileInput(0, "p.png", "image/png", data=png_bytes((900, 900)))
@@ -738,6 +738,7 @@ async def test_shutdown_stops_the_thread_before_its_temp_dir_goes(on, world, run
         await job.task
     assert seen == [True]
     assert records(on)[0]["state"] == "queued"  # left for the next start's sweep
+    assert runner.calls[0].handle.shutdown.is_set()  # so the runner leaves any refund to it
 
 
 # ------------------------------------------------------------------ restart
@@ -911,8 +912,10 @@ async def test_a_job_is_indexed_while_it_runs_and_leaves_the_index_when_it_ends(
 
 @pytest.mark.parametrize(
     "state, cost, refunded",
-    [("storyboard", 0.0, True), ("render", 0.1008, False), ("queued", 0.0, False)],
-)
+    [("storyboard", 0.0, True), ("storyboard", 0.05, False), ("queued", 0.0, False),
+     ("stills", 0.0, False), ("hero", 0.0, False), ("audio", 0.0, False),
+     ("render", 0.0, False), ("render", 0.1008, False)],
+)  # fmt: skip
 async def test_the_sweep_gives_the_ad_back_only_when_nothing_was_billed(
     bot, world, state, cost, refunded
 ):
@@ -923,7 +926,40 @@ async def test_the_sweep_gives_the_ad_back_only_when_nothing_was_billed(
     await bot._sweep_video_jobs()
     assert bot.docs.get("salid_video_jobs", GUILD, "j")["state"] == "failed"
     ads = bot.docs.get("salid_media_usage", GUILD, "2026-10")["ads"]
-    assert ads == (2 if refunded else 3)  # a queued job may not have taken its ad yet
+    # only "storyboard" starts before any paid call; a record's cost lags its step, and a
+    # queued job may not have taken its ad yet
+    assert ads == (2 if refunded else 3)
+
+
+async def test_an_ended_job_leaves_the_index_even_if_its_final_record_fails(on, world, runner):
+    real = on.docs.put
+
+    def put(kind, gid, key, doc):
+        if kind == "salid_video_jobs" and doc.get("state") in videoad_bot.FINAL:
+            raise RuntimeError("store down")
+        return real(kind, gid, key, doc)
+
+    on.docs.put = put
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert active(on) == {}  # it ended in this process: no sweep should touch it
+
+
+async def test_a_job_whose_index_entry_cannot_be_written_never_starts(on, world, runner):
+    real = on.docs.put
+
+    def put(kind, gid, key, doc):
+        if key == "_active":
+            raise RuntimeError("store down")
+        return real(kind, gid, key, doc)
+
+    on.docs.put = put
+    tool, _ = tool_for(on, world)
+    out = tool(brief="a")
+    assert out["status"] == "error"
+    await settle(on)
+    assert runner.calls == [] and on._video_jobs == {} and records(on) == []
 
 
 async def test_on_ready_sweeps_left_over_jobs(bot, world, monkeypatch):

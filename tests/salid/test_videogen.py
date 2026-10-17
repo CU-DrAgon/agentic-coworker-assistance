@@ -677,9 +677,12 @@ def test_a_refused_start_skips_the_other_heroes_without_their_seconds(
     monkeypatch.setattr(videoad, "_hero_clip", REAL_HERO)
     starts = []
 
+    class PermissionDeniedError(Exception):  # the Interactions API's 403
+        status_code = 403
+
     def refuse(client, model, still_png, prompt_en, seconds, **kw):
         starts.append(seconds)
-        raise RuntimeError("403 PERMISSION_DENIED for this project")
+        raise PermissionDeniedError("403 PERMISSION_DENIED for this project")
 
     monkeypatch.setattr(videoad.videogen, "start_hero", refuse)
     usage = videoad.MediaUsage(d := MemDocs())
@@ -692,6 +695,44 @@ def test_a_refused_start_skips_the_other_heroes_without_their_seconds(
     clips = pipeline.assembled[0]["clips"]
     assert clips[:2] == [tmp_path / "clip0.mp4", tmp_path / "clip1.mp4"]
     assert "PERMISSION_DENIED" not in caplog.text and "video hero refused" in caplog.text
+
+
+class Unavailable(Exception):  # a 5xx from the service
+    status_code = 503
+
+
+class NoId(FakeInteractions):  # the create came back without an interaction id
+    def create(self, **kw):
+        self.created.append(kw)
+        return gi.Interaction(status="in_progress")
+
+
+@pytest.mark.parametrize(
+    "error", [httpx.ReadTimeout("t"), Unavailable("busy"), "no id"], ids=["timeout", "5xx", "no id"]
+)
+def test_an_uncertain_create_failure_keeps_its_seconds_and_stops_asking(
+    tmp_path, pipeline, monkeypatch, error
+):
+    """The service may have accepted (and will bill) the clip: its seconds stay charged, and no
+    further hero clip is asked for."""
+    monkeypatch.setattr(videoad, "_hero_clip", REAL_HERO)
+    starts = []
+    client = NoId() if error == "no id" else None
+    real_start = videogen.start_hero
+
+    def start(c, model, still_png, prompt_en, seconds, **kw):
+        starts.append(seconds)
+        if client is not None:
+            return real_start(c, model, still_png, prompt_en, seconds, **kw)
+        raise error
+
+    monkeypatch.setattr(videoad.videogen, "start_hero", start)
+    usage = videoad.MediaUsage(d := MemDocs())
+    h = videoad.VideoHandle()
+    res = run_ad(tmp_path, hero_shots=2, usage=usage, handle=h, media_client=client)
+    assert starts == [5] and res.path.exists()
+    assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 5
+    assert h.cost_usd == pytest.approx(2 * videoad.STILL_USD + 5 * videoad.HERO_USD_PER_S)
 
 
 def test_paid_creates_go_to_the_media_client_and_polls_to_the_main_one(

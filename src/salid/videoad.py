@@ -941,8 +941,27 @@ class MonthLimit(RuntimeError):
 
 
 class HeroRefused(RuntimeError):
-    """The video service refused to start a hero clip (any error from the create call): the
-    runner asks for no more hero clips in this ad. The message is the error's type name."""
+    """The create call of a hero clip failed (any error): the runner asks for no more hero
+    clips in this ad. `definite`: the service refused it with a 4xx (not 408 / 409, which may
+    follow an accepted job), so it was never accepted nor billed and its seconds go back; a
+    timeout, a 5xx or a missing interaction id may hide an accepted (billed) clip, so those stay
+    charged. The message is the error's type name."""
+
+    def __init__(self, message: str = "", *, definite: bool = False):
+        super().__init__(message)
+        self.definite = definite
+
+
+_MAYBE_ACCEPTED = (408, 409)  # 4xx statuses that may come after the service accepted the job
+
+
+def _refused(e: BaseException) -> bool:
+    """True if `e` is a definite 4xx refusal of a create call (`videogen.error_status`,
+    `videogen.permission_denied`)."""
+    code, _ = videogen.error_status(e)
+    if videogen.permission_denied(e):
+        return True
+    return code is not None and 400 <= code < 500 and code not in _MAYBE_ACCEPTED
 
 
 def _noop(step: str, detail: str) -> None:
@@ -952,12 +971,14 @@ def _noop(step: str, detail: str) -> None:
 @dataclass
 class VideoHandle:
     """Shared between the bot and the job thread: `cancelled` stops the job before its next
-    step; `progress(step, detail)` is called when a step starts (detail: counts only), and
-    again with "hero" whenever `hero_id` changes; `cost_usd` is the job's cost estimate so far
-    and `hero_id` the Omni interaction id of the hero clip being made ("" when none), both for
-    the job record (a restart cancels a pending hero clip from it)."""
+    step; `shutdown` (set with `cancelled` when the bot stops) leaves the ad's refund to the next
+    start's sweep, which sees the record; `progress(step, detail)` is called when a step starts
+    (detail: counts only), and again with "hero" whenever `hero_id` changes; `cost_usd` is the
+    job's cost estimate so far and `hero_id` the Omni interaction id of the hero clip being made
+    ("" when none), both for the job record (a restart cancels a pending hero clip from it)."""
 
     cancelled: threading.Event = field(default_factory=threading.Event)
+    shutdown: threading.Event = field(default_factory=threading.Event)
     progress: Callable[[str, str], None] = _noop
     cost_usd: float = 0.0
     hero_id: str = ""
@@ -1118,7 +1139,7 @@ def _hero_clip(
             videogen.hero_seconds(scene.seconds),
         )
     except Exception as e:  # never the message: it may carry account details
-        raise HeroRefused(type(e).__name__) from e
+        raise HeroRefused(type(e).__name__, definite=_refused(e)) from e
     handle.hero_id = iid  # in the job record while Omni works (a restart cancels it)
     _report(handle, "hero", "pending")
     try:
@@ -1209,8 +1230,8 @@ def run_video_ad(
     (`settings.gemini_model`, sees `req.photos`), stills (`settings.image_model`, 9:16 2K) and
     their motion clips, hero clips (only with `settings.video_hero_model`; the seconds requested,
     `videogen.hero_seconds`, taken from the month's budget before each call; given back, with
-    their cost, only when the service refuses the create (HeroRefused), kept when a clip it
-    accepted fails later),
+    their cost, only when the service definitely refuses the create (a 4xx `HeroRefused`), kept
+    after a timeout, a 5xx or a missing id and when a clip it accepted fails later),
     narration with `say` (any failure -> captions only), music (only when asked for and
     `settings.video_music_model` is set, via `_music_track`; one `music_clips` taken from the
     month's budget first, capped at `settings.video_ads_per_month`), captions (`label=False`:
@@ -1242,7 +1263,9 @@ def run_video_ad(
             bill=bill,
         )
     except Exception:
-        if bill.usd <= 0:  # nothing paid was made: the month's ad goes back
+        # nothing paid was made: the month's ad goes back, unless the bot is stopping (its
+        # record stays for the next start's sweep, which gives it back: never twice)
+        if bill.usd <= 0 and not handle.shutdown.is_set():
             usage.give_back(req.guild_id, month, "ads", 1)
             logger.info("video ad given back (nothing billed): guild=%s", req.guild_id)
         raise
@@ -1354,11 +1377,11 @@ def _video_steps(
                 )
             except Cancelled:
                 raise
-            except HeroRefused as e:  # the next request would be refused too: spend no more
-                # never accepted, so never billed: its seconds and their cost go back
-                usage.give_back(gid, month, "hero_seconds", secs)
-                hero_cost -= secs * HERO_USD_PER_S
-                spend(-secs * HERO_USD_PER_S)
+            except HeroRefused as e:  # the next request would fail too: spend no more
+                if e.definite:  # a 4xx: never accepted, so never billed: the seconds go back
+                    usage.give_back(gid, month, "hero_seconds", secs)
+                    hero_cost -= secs * HERO_USD_PER_S
+                    spend(-secs * HERO_USD_PER_S)
                 logger.warning("video hero refused (%s): no more hero clips in this ad", e)
                 break
             except Exception as e:  # the scene keeps its motion clip

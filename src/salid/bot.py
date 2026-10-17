@@ -2149,8 +2149,9 @@ class SecretaryBot(
         COO and settings tools, tag candidates, profile, web, language. The ONE place chat and
         voice build their agent, so they cannot drift apart. `message` is a Discord message, or
         a room stand-in (`room_message`) for a voice meeting; `asker` acts for the requester.
-        `spoken`: a voice answer (voice callers pass True); the media tools stay out of it, and
-        also when `imagegen_bot.looks_spoken` says so (voice code that does not pass it)."""
+        `spoken`: a voice answer (voice callers pass True); create_image and create_video_ad
+        stay out of it, and also when `imagegen_bot.looks_spoken` says so (voice code that does
+        not pass it). make_promo_kit is gated on `files is None` only (voice revisions)."""
         secretary = (
             None
             if interjection
@@ -2194,12 +2195,8 @@ class SecretaryBot(
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
-            # make_promo_kit: chat only (`spoken`, or no files), with a photo or a remembered kit
-            *(
-                []
-                if interjection
-                else self._promo_tools(message, guild, asker, files, spoken=spoken)
-            ),
+            # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
+            *([] if interjection else self._promo_tools(message, guild, asker, files)),
             # create_image: chat only, with or without a photo; never in a voice room (`spoken`,
             # else files None or a `room_message` stand-in: imagegen_bot.looks_spoken)
             *(

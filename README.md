@@ -449,8 +449,8 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   (`salid_video_jobs`: state, times, cost estimate, failure reason; never the brief, storyboard or media) and
   monthly usage (`salid_media_usage`, key `YYYY-MM`) live in the DocStore, with one index of the running jobs
   (`salid_video_jobs`, guild 0, key `_active`) so the start-up check reads only those; jobs cut off by a restart are
-  marked failed (a hero clip one left running, its record's `hero_id`, is cancelled; the ad is given back when the
-  record shows nothing billed) and the requester is asked to try again. Logs: one line per step (guild, step, ms, cost estimate).
+  marked failed (a hero clip one left running, its record's `hero_id`, is cancelled; the ad is given back only when
+  the job stopped while planning its storyboard, before any paid call) and the requester is asked to try again. Logs: one line per step (guild, step, ms, cost estimate).
 - **Video ad add-ons: hero clips and music** (`src/salid/videogen.py`, both **off** while their settings are empty,
   which is the default; with both empty an ad is exactly the slideshow above). Both go through the google-genai
   Interactions API and are **unverified on this project**: nobody with project access has run them yet.
@@ -467,7 +467,7 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
     their slow-zoom clips without spending their seconds. The clip is cover-cropped to 1080x1920 30 fps (never stretched), its last frame held to
     the scene's length, and its sound dropped. The seconds requested (the scene rounded up, 4 to 6) are taken from
     `SALID_VIDEO_HERO_SECONDS_PER_MONTH` (60 per guild) before each call and given back only when the service
-    refuses the request; blocked, failed, timed out or over the budget, the scene keeps its slow-zoom clip.
+    definitely refuses the request (a 4xx other than 408 / 409; a timeout or 5xx stays charged); blocked, failed, timed out or over the budget, the scene keeps its slow-zoom clip.
   - *Music* (`SALID_VIDEO_MUSIC_MODEL`, e.g. `lyria-3-clip-preview`; only when the request asks for music): one
     instrumental Lyria clip per ad from a fixed English prompt, counted as `music_clips` in `salid_media_usage`
     before the call (cap `SALID_VIDEO_ADS_PER_MONTH`), turned into a 48 kHz stereo WAV cut to the ad with fades and

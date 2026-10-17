@@ -23,9 +23,11 @@
   `{job id: guild id}`), changed under the slot lock when a job is reserved and when it ends;
   `_sweep_video_jobs`: on the first `on_ready`, it reads only that index and the jobs in it:
   jobs a restart cut off are marked failed, a hero clip they left running is cancelled (best
-  effort), their ad is given back when the record shows nothing billed (`cost_usd` 0, past
-  `queued`), their requester is told to ask again, and their ids leave the index (records are
-  never deleted).
+  effort), their ad is given back when the record shows nothing billed (state `storyboard`,
+  `cost_usd` 0; a stopping bot sets `VideoHandle.shutdown`, so the runner never gives it back
+  too), their requester is told to ask again, and their ids leave the index (records are never
+  deleted). An ended job always leaves the index; a job whose index entry cannot be written
+  does not start.
 
 Jobs and their slots live in this process (one bot process, like `memory_index` and `recent`).
 """
@@ -263,7 +265,10 @@ class VideoAdMixin:
             if gid in self._video_jobs or len(self._video_jobs) >= self.s.video_max_jobs:
                 return {"status": "busy", "say": t("video_busy", lang)}
             self._video_jobs[gid] = job
-            self._video_index(job.job_id, gid)  # in the index before its first record
+            # in the index before its first record; a job the sweep could not find never runs
+            if not self._video_index(job.job_id, gid):
+                del self._video_jobs[gid]
+                return {"status": "error", "error": "the video could not be started"}
         try:  # nothing between the reservation and here can raise
             loop.call_soon_threadsafe(self._launch_video, job, message, req)
         except RuntimeError:  # the event loop is closing
@@ -302,6 +307,7 @@ class VideoAdMixin:
         try:
             await self._video_steps(job, message, req)
         except asyncio.CancelledError:  # shutdown: the thread stops before its next step
+            job.handle.shutdown.set()  # the next start's sweep decides about the ad
             job.handle.cancelled.set()
             raise
         except Exception:
@@ -355,7 +361,9 @@ class VideoAdMixin:
                 )
             except asyncio.CancelledError:
                 # shutdown: tell the thread before its temp dir is removed (it stops before its
-                # next step instead of writing into a deleted directory)
+                # next step instead of writing into a deleted directory); the record stays, so
+                # the runner leaves the ad's refund to the next start's sweep
+                job.handle.shutdown.set()
                 job.handle.cancelled.set()
                 raise
             except Cancelled:
@@ -432,8 +440,9 @@ class VideoAdMixin:
             job.edit_task.cancel()
         if job.view is not None:
             job.view.stop()
-        if await self._video_record(job, state, reason=reason):  # ended: out of the index
-            await asyncio.to_thread(self._video_unindex, job.job_id)
+        await self._video_record(job, state, reason=reason)
+        # it ended in this process: out of the index even if the record could not be written
+        await asyncio.to_thread(self._video_unindex, job.job_id)
         if job.msg is not None:
             try:
                 await job.msg.edit(content=text, view=None)
@@ -527,22 +536,24 @@ class VideoAdMixin:
         return await asyncio.to_thread(self._video_save, job, state, reason=reason)
 
     # ------------------------------------------------------------- active-jobs index
-    def _video_index(self, job_id: str, guild_id: int | None) -> None:
+    def _video_index(self, job_id: str, guild_id: int | None) -> bool:
         """Add `job_id` (of `guild_id`) to the active-jobs index, or remove it (None): one
         read-modify-write of the one index document. The caller holds `_video_lock`, so two
-        changes never lose each other. Never raises (a job runs without its entry; an entry
-        left behind is dropped by the next start's sweep)."""
+        changes never lose each other. Never raises: False when it could not be written (a job
+        is not started then; an entry left behind is dropped by the next start's sweep)."""
         try:
             doc = self._video_active()
             if guild_id is None:
                 if job_id not in doc:
-                    return
+                    return True
                 del doc[job_id]
             else:
                 doc[job_id] = guild_id
             self.docs.put(JOBS, INDEX_GUILD, INDEX_KEY, doc)
+            return True
         except Exception:
             logger.warning("video job index not updated", exc_info=True)
+            return False
 
     def _video_unindex(self, job_id: str) -> None:
         """Remove an ended job from the index, under the slot lock (blocking)."""
@@ -639,15 +650,17 @@ class VideoAdMixin:
 
     @staticmethod
     def _video_refundable(doc: dict) -> str:
-        """The month whose ad a cut-off job gives back, or "": only when its record shows no
-        paid media (`cost_usd` 0) and the job was past `queued` (the runner takes the ad right
-        before reporting "storyboard"; a queued job may not have taken it)."""
+        """The month whose ad a cut-off job gives back, or "": only when it stopped in the
+        `storyboard` step with `cost_usd` 0. The runner takes the ad right before reporting
+        "storyboard", the one step that starts before any paid call; later records can show 0
+        while stills, a hero clip or music were already billed (the cost is written at each
+        step's start), and a `queued` job may not have taken its ad yet."""
         try:
             cost = float(doc["cost_usd"])
         except (KeyError, TypeError, ValueError):
             return ""
         month = str(doc.get("created_at") or "")[:7]
-        if cost != 0 or doc.get("state") == "queued" or not _MONTH.fullmatch(month):
+        if cost != 0 or doc.get("state") != "storyboard" or not _MONTH.fullmatch(month):
             return ""
         return month
 

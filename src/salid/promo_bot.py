@@ -1,9 +1,10 @@
 """Discord glue of promo post kits (logic in `promo.py`).
 
 `PromoMixin` gives `SecretaryBot` the `make_promo_kit` agent tool (`_promo_tools`, appended to
-`extra_tools` by `_agent_kwargs`). It is offered only for chat answers (never a voice answer:
-`spoken`, and older voice code passes no files) that carry a usable photo or have a remembered
-kit for the same person in the same channel, so ordinary chats pay nothing for its description.
+`extra_tools` by `_agent_kwargs`). It is offered for answers that carry a usable photo or have
+a remembered kit for the same person in the same channel, so ordinary chats pay nothing for its
+description. Gated on `files is None` only: voice passes `files=[]` on purpose, so a remembered
+kit can be revised by voice.
 Guild, channel and author are bound here, never model input. The daily cap is counted in the
 DocStore (`imagegen_bot.StoredDailyBudget`, kind `salid_media_usage`, key = the day, field
 `promo_kits`), so a restart keeps it; the revision memory lives in this process (one bot
@@ -35,12 +36,12 @@ class PromoMixin:
         )
         self.promo_memory = PromoMemory()
 
-    def _promo_tools(self, message, guild, asker, files, *, spoken: bool = False) -> list:
-        """`make_promo_kit` for this message, or [] (flag off, no Thai shaping, voice, or no photo
-        and no remembered kit). Never raises."""
+    def _promo_tools(self, message, guild, asker, files) -> list:
+        """`make_promo_kit` for this message, or [] (flag off, no Thai shaping, no file list, or
+        no photo and no remembered kit). Never raises."""
         global _warned
         try:
-            if spoken or files is None or not self.team.enabled(guild.id, "promo"):
+            if files is None or not self.team.enabled(guild.id, "promo"):
                 return []
             if not cards.thai_ready():
                 if not _warned:
