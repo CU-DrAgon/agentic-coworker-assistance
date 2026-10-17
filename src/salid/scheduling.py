@@ -538,7 +538,31 @@ class MeetingService:
         existing = self.store.meeting_by_event(guild.id, event.id)
         if existing is not None:
             return existing
+        # Salid's own events arrive here from the gateway BEFORE her record (with the event id)
+        # is saved, which used to create a second "discord" record: skip events she created, and
+        # any event that already has a record with the same title and start (owner, 2026-10-18).
+        me = getattr(guild, "me", None)
+        creator_id = getattr(event, "creator_id", None) or getattr(
+            getattr(event, "creator", None), "id", None
+        )
+        if me is not None and creator_id and int(creator_id) == int(me.id):
+            return None
         start = event.start_time
+        try:
+            same = [
+                m
+                for m in self.store.list_meetings(
+                    guild.id,
+                    (start - timedelta(minutes=1)).astimezone(UTC).isoformat(timespec="seconds"),
+                    (start + timedelta(minutes=1)).astimezone(UTC).isoformat(timespec="seconds"),
+                    statuses=("scheduled", "started"),
+                )
+                if (m.get("title") or "").strip() == (event.name or "").strip()
+            ]
+        except Exception:
+            same = []
+        if same:
+            return same[0]
         end = event.end_time or (start + timedelta(hours=1))
         chan = getattr(event, "channel", None)
         loc = getattr(event, "location", None) or ""
