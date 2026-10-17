@@ -8,17 +8,21 @@ told. `task_handshake_bot.py` binds this to Discord; the card state lives on the
 
 from __future__ import annotations
 
+import re
+import uuid
 from datetime import datetime, timedelta
 
 from .i18n import CATALOG, t
 from .memory_access import is_dm_scope
-from .tasks import Task, parse_due
+from .tasks import Task, match_person, parse_due, split_who
 
 MAX_CARDS = 5  # one message holds 5 rows of buttons (Discord: 25 components, 3 used per card)
 NUDGE_AFTER = timedelta(hours=24)
 PENDING, ACCEPTED, DECLINED = "pending", "accepted", "declined"
 AWAITING = "awaiting_approval"  # approve mode: the assignee accepted, the giver must sign off
+OWNER_ASKED = "owner_asked"  # nobody is assigned: the giver was asked who takes it
 ANSWERED = (ACCEPTED, DECLINED, AWAITING)
+NOT_A_TASK = "not a task"  # the note of a task its giver dropped
 MAX_ROUNDS = 3  # send-backs before the task stays pending and an executive is told
 TEXT_MAX = 1900
 
@@ -131,6 +135,40 @@ STRINGS = {
         "th": "เฉพาะแอดมินหรือผู้บริหารที่ตั้งโหมดของเซิร์ฟเวอร์ได้ค่ะ (ตั้งของตัวเองได้ด้วย “โหมดมอบหมายงานของฉัน …”)",
         "en": "Only admins and executives can change the server's task mode (yours: “my task mode approve / notify”).",
     },
+    "hs_owner_card": {
+        "th": "❓ งานนี้ให้ใครทำ — จาก #{channel}: **{title}** · กำหนด {due}",
+        "en": "❓ Who takes this task? — from #{channel}: **{title}** · due {due}",
+    },
+    "hs_btn_om": {"th": "🙋 ของฉันเอง", "en": "🙋 Mine"},
+    "hs_btn_oo": {"th": "👤 ให้คนอื่น", "en": "👤 Someone else"},
+    "hs_btn_on": {"th": "❌ ไม่ใช่งาน", "en": "❌ Not a task"},
+    "hs_owner_mine": {"th": "✅ งานของคุณ · งาน #{id}", "en": "✅ Yours · task #{id}"},
+    "hs_owner_other": {
+        "th": "👤 ส่งให้ {name} แล้ว · งาน #{id}",
+        "en": "👤 Sent to {name} · task #{id}",
+    },
+    "hs_owner_none": {
+        "th": "🚫 ไม่ใช่งาน ปิดแล้ว · งาน #{id}",
+        "en": "🚫 Not a task, closed · task #{id}",
+    },
+    "hs_owner_modal": {"th": "ให้ใครทำ", "en": "Who takes it"},
+    "hs_owner_field": {"th": "ชื่อหรือ @ ", "en": "Name or @mention"},
+    "hs_owner_unknown": {
+        "th": "ไม่พบ “{name}” ลองพิมพ์ @ชื่อ ค่ะ",
+        "en": "I could not find “{name}”, try @name.",
+    },
+    "hs_owner_not_giver": {
+        "th": "เฉพาะคนที่มอบงานนี้ (หรือผู้บริหาร) ตอบได้ค่ะ",
+        "en": "Only the person who gave this task (or an executive) can answer.",
+    },
+    "hs_owner_which": {
+        "th": "งานไหนคะ ตอบพร้อมรหัสงาน เช่น “งาน #รหัส ของฉัน”:",
+        "en": "Which task? Reply with its id, for example “task #id mine”:",
+    },
+    "hs_owner_say_none": {"th": "โอเคค่ะ ไม่จดเป็นงานนะคะ", "en": "Okay, I won't keep it as a task."},
+    "hs_owner_say_mine": {"th": "โอเคค่ะ เป็นงานของคุณนะคะ", "en": "Okay, it's yours."},
+    "hs_owner_say_other": {"th": "โอเคค่ะ ส่งให้เขาแล้วนะคะ", "en": "Okay, I've passed it on."},
+    "hs_owner_marker": {"th": "⏳ รอระบุผู้รับ", "en": "⏳ owner pending"},
 }
 CATALOG.update(STRINGS)
 
@@ -145,7 +183,14 @@ HANDSHAKE_PROMPT = (
     "งานที่ได้ยินในแชตจะถูกส่งให้ผู้รับผิดชอบกดยืนยัน (รับงาน/แก้ไข/ไม่ใช่ของฉัน) และคนมอบงานจะได้รับแจ้ง "
     "ถ้ามีคนบอกว่าไม่ใช่ของเขา ให้ย้ายงานด้วย update_task(task_id, assignee=ชื่อ) แล้วสลิดส่งการ์ดให้คนใหม่เอง. "
     "Tasks heard in chat are sent to the assignee to confirm (accept / edit / not mine) and the giver is "
-    "told; reassign with update_task(task_id, assignee=name) and Salid sends the new person the card.\n"
+    "told; reassign with update_task(task_id, assignee=name) and Salid sends the new person the card. "
+    "ถ้าสลิดไม่แน่ใจว่าใครรับงานที่ได้ยินในแชต สลิดจะถามคนพูดเป็นการส่วนตัวว่างานนี้ให้ใคร (ของฉัน / ให้คนอื่น / ไม่ใช่งาน); "
+    'ถ้าคนพูดตอบในแชตว่า “งาน #id ของฉัน” ให้เรียก update_task(task_id, assignee="me"). '
+    "When Salid is unsure who takes a task heard in chat, she asks the speaker privately (mine / someone else / not a task); "
+    'if the speaker answers in chat "task #id is mine", call update_task(task_id, assignee="me"). '
+    "เมื่อมีคนบอกว่างานที่สลิดถามถึง (owner_pending) เป็นของเขา / ให้ใคร / ไม่ใช่งาน ให้เรียก answer_task_question(task_id, mine|other|none, name) "
+    "แล้วตอบสั้นๆ หนึ่งบรรทัด. When someone says a task Salid asked about (owner_pending) is theirs / for X / not a task, call "
+    "answer_task_question(task_id, mine|other|none, name) and reply with one short line.\n"
 )
 
 
@@ -153,6 +198,8 @@ def pending_marker(task: Task, lang: str) -> str:
     """A small marker for lists and reports: "" unless the task still awaits confirmation."""
     if task.confirm == AWAITING:
         return t("hs_awaiting_marker", lang)
+    if task.confirm == OWNER_ASKED:
+        return t("hs_owner_marker", lang)
     return t("hs_pending_marker", lang) if task.confirm == PENDING else ""
 
 
@@ -257,6 +304,17 @@ def nudge_due(task: Task, now: datetime) -> bool:
     """A task that has waited for its answer for more than 24 hours."""
     if task.confirm not in (PENDING, AWAITING) or task.status != "open" or not task.assignee_id:
         return False
+    return _waited(task, now)
+
+
+def owner_nudge_due(task: Task, now: datetime) -> bool:
+    """An owner question the giver has not answered for more than 24 hours."""
+    if task.confirm != OWNER_ASKED or task.status != "open" or task.assignee_id:
+        return False
+    return _waited(task, now)
+
+
+def _waited(task: Task, now: datetime) -> bool:
     try:
         since = datetime.fromisoformat(task.confirm_at)
     except ValueError:
@@ -274,6 +332,169 @@ def offerable(task: Task) -> bool:
         and not is_dm_scope(task.source_channel_id)
         and not task.confirm
     )
+
+
+def ownerless(task: Task) -> bool:
+    """A fresh task from a team channel that nobody takes and whose giver is known: the giver is
+    asked who it goes to (a named team nobody could pick has its own message)."""
+    return (
+        task.assignee_id == 0
+        and task.assigner_id > 0
+        and task.created_from != "dm"
+        and not is_dm_scope(task.source_channel_id)
+        and not task.confirm
+        and task.status != "done"
+    )
+
+
+def owner_waiting(task: Task) -> bool:
+    """Still waiting for the giver's answer (also while the card is being sent)."""
+    return task.status == "open" and not task.assignee_id and task.confirm in ("", OWNER_ASKED)
+
+
+def owner_status(task: Task, lang: str, names: str = "") -> str:
+    """The final line of an owner card, from the task's state ("" while it still waits)."""
+    if owner_waiting(task):
+        return ""
+    if task.status == "done" and task.note == NOT_A_TASK:
+        return t("hs_owner_none", lang, id=task.id)
+    if task.assignee_id and task.assignee_id == task.assigner_id:
+        return t("hs_owner_mine", lang, id=task.id)
+    return t("hs_owner_other", lang, name=names or task.assignee_name or "-", id=task.id)
+
+
+def render_owner_message(tasks: list[Task], lang: str, *, channel_of, names_of) -> str:
+    """The owner question: one block per task, with its final line once answered."""
+    many = len(tasks) > 1
+    blocks = []
+    for i, task in enumerate(tasks, 1):
+        head = t(
+            "hs_owner_card",
+            lang,
+            channel=channel_of(task) or "-",
+            title=task.title,
+            due=task.due or "-",
+        )
+        if many:
+            head = f"{i}. {head}"
+        final = owner_status(task, lang, names_of(task))
+        if final:
+            head += "\n" + final
+        blocks.append(head)
+    return "\n\n".join(blocks)[:TEXT_MAX]
+
+
+# ---------------------------------------------------------------- the owner's answer
+_PARTICLES = r"(?:ครับ|ค่ะ|คะ|นะครับ|นะคะ|นะ|จ้า|จ้ะ|เลย|please|pls|thanks)"
+_NONE = re.compile(
+    r"ไม่ใช่งาน|ไม่ต้องจด|ไม่ต้องสั่ง|ไม่ต้องเป็นงาน|ลบทิ้ง|ลบออก|ไม่เอางาน|"
+    r"\bnot a task\b|\bnot task\b|\bignore (?:that|it|this)\b|\bdrop (?:it|that|this)\b|"
+    r"\bnever ?mind\b|\bforget (?:it|that)\b|\bdelete (?:it|that)\b|\bno task\b"
+)
+_MINE = re.compile(
+    r"(?:ของ|เป็นของ)(?:ฉัน|ผม|เรา|หนู|ดิฉัน|ตัวเอง)(?:เอง)?|(?:ฉัน|ผม|เรา|หนู|ดิฉัน)(?:ทำ)?เอง|"
+    r"mine|it'?s mine|this is mine|me|i(?:'ll| will) (?:do|take) (?:it|this)|i'll do it|my own"
+)
+_OTHER = (
+    re.compile(r"(?:(?:อันนี้|งานนี้|งาน)\s*)?(?:เป็น)?ให้\s*(.+?)(?:\s*ทำ|\s*รับ)?"),
+    re.compile(r"(?:it'?s |this is |give it |assign it |assign this |hand it )?(?:for|to)\s+(.+?)"),
+    re.compile(r"(?:ของ|เป็นของ)\s*(.+?)"),
+    re.compile(r"(<@!?\d+>.*)"),
+)
+_REF = re.compile(r"^(?:งาน|task)\s*#?[0-9a-z_-]{4,40}\s*", re.I)
+_LEAD = re.compile(r"^(?:อ๋อ|อ่อ|อ๋า|โอเค|ok(?:ay)?|ah|oh|well|เออ|ครับ|ค่ะ)\s*[,.!]*\s*", re.I)
+
+
+def parse_owner_answer(text: str) -> tuple[str, str] | None:
+    """("mine", "") | ("other", name) | ("none", "") from a short reply to the owner question
+    ("ไม่ใช่งาน", "ของฉัน", "ให้บี", "not a task", "it's for Bee"); None = not an answer."""
+    s = (text or "").strip().casefold()
+    s = s.strip(" \t\n.,!?:;~-…")
+    if not s or len(s) > 90:
+        return None
+    s = _REF.sub("", s).strip(" ,.:;")
+    if _NONE.search(s):
+        return "none", ""
+    for _ in range(3):  # greetings in front, particles behind
+        s2 = _LEAD.sub("", s, count=1)
+        s2 = re.sub(r"\s*" + _PARTICLES + r"\s*$", "", s2).strip(" ,.!?:;~")
+        if s2 == s:
+            break
+        s = s2
+    if s in ("ไม่ใช่", "ไม่", "no", "nope", "nah") or s.startswith("ไม่ใช่ "):
+        return "none", ""
+    if _MINE.fullmatch(s):
+        return "mine", ""
+    for rx in _OTHER:
+        m = rx.fullmatch(s)
+        if m:
+            name = m[1].strip(" ,.")
+            if name and len(name) <= 40 and not _MINE.fullmatch(name):
+                return "other", name
+    return None
+
+
+class OwnerResult:
+    """What `apply_owner_answer` did: the tasks it changed or made, the ones now needing the
+    normal assignee card, and the name it could not resolve (nothing changed then)."""
+
+    def __init__(self) -> None:
+        self.tasks: list[Task] = []
+        self.offer: list[Task] = []
+        self.unresolved = ""
+
+
+def apply_owner_answer(repo, task: Task, kind: str, name: str, people: dict, now: str):
+    """Blocking. kind mine | other | none. Several names: one task per person (shared group_id),
+    the original becomes the first person's."""
+    out = OwnerResult()
+    if kind == "none":
+        task.status, task.note, task.confirm, task.confirm_at, task.done_at = (
+            "done",
+            NOT_A_TASK,
+            DECLINED,
+            now,
+            "",
+        )
+        out.tasks = [repo.save(task)]
+        return out
+    if kind == "mine":
+        ids = [task.assigner_id]
+    else:
+        parts = split_who(name)
+        ids = []
+        for part in parts:
+            uid = match_person(part, people)
+            if not uid:
+                out.unresolved = part
+                return out
+            if uid not in ids:
+                ids.append(uid)
+        if not ids:
+            out.unresolved = name.strip()
+            return out
+    group = uuid.uuid4().hex[:8] if len(ids) > 1 else task.group_id
+    for i, uid in enumerate(ids):
+        row = (
+            task
+            if i == 0
+            else task.model_copy(update={"id": uuid.uuid4().hex[:8], "owner_message": ""})
+        )
+        row.assignee_id = uid
+        row.assignee_name = people.get(uid) or (
+            task.assigner_name if uid == task.assigner_id else ""
+        )
+        row.group_id = group
+        row.confirm_at = now
+        if uid == task.assigner_id:
+            row.confirm = ACCEPTED  # taking it yourself needs no confirmation
+        else:
+            row.confirm, row.confirm_at = "", ""
+            row.handshake_message = ""
+        out.tasks.append(repo.save(row))
+        if not row.confirm:
+            out.offer.append(row)
+    return out
 
 
 # ---------------------------------------------------------------- approve mode

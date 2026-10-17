@@ -25,7 +25,7 @@ NUDGE_CHECK_S = 600.0
 
 class TaskButton(
     discord.ui.DynamicItem[discord.ui.Button],
-    template=r"salid:task:(?P<act>ok|edit|no|ap|ae|sb):(?P<gid>\d{1,25}):(?P<id>[0-9A-Za-z_-]{4,40})",
+    template=r"salid:task:(?P<act>ok|edit|no|ap|ae|sb|om|oo|on):(?P<gid>\d{1,25}):(?P<id>[0-9A-Za-z_-]{4,40})",
 ):
     """Accept / Edit / Not mine on a task card. The custom id carries the guild and the task id."""
 
@@ -39,6 +39,9 @@ class TaskButton(
             "ap": discord.ButtonStyle.success,
             "ae": discord.ButtonStyle.primary,
             "sb": discord.ButtonStyle.secondary,
+            "om": discord.ButtonStyle.success,
+            "oo": discord.ButtonStyle.primary,
+            "on": discord.ButtonStyle.danger,
         }[act]
         super().__init__(
             discord.ui.Button(
@@ -56,7 +59,11 @@ class TaskButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         bot = interaction.client
-        if self.act in ("edit", "ae", "sb"):
+        if self.act == "oo":
+            await bot.handle_owner_modal_open(interaction, self.guild_id, self.task_id)
+        elif self.act in ("om", "on"):
+            await bot.handle_owner_answer(interaction, self.act, self.guild_id, self.task_id)
+        elif self.act in ("edit", "ae", "sb"):
             await bot.handle_task_modal_open(interaction, self.act, self.guild_id, self.task_id)
         elif self.act == "ap":
             await bot.handle_task_approve(interaction, self.guild_id, self.task_id)
@@ -116,6 +123,21 @@ class TaskBackModal(discord.ui.Modal):
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await interaction.client.handle_task_sendback_submit(
             interaction, self.guild_id, self.task_id, str(self.f_note.value)
+        )
+
+
+class OwnerModal(discord.ui.Modal):
+    """Who the task goes to: a name or an @mention (several names make one task each)."""
+
+    def __init__(self, guild_id: int, task: Task, lang: str) -> None:
+        super().__init__(title=H.t("hs_owner_modal", lang)[:45])
+        self.guild_id, self.task_id = guild_id, task.id
+        self.f_who = discord.ui.TextInput(label=H.t("hs_owner_field", lang)[:45], max_length=100)
+        self.add_item(self.f_who)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.client.handle_owner_answer(
+            interaction, "oo", self.guild_id, self.task_id, str(self.f_who.value)
         )
 
 
@@ -199,11 +221,16 @@ class TaskHandshakeMixin:
             return 0
         sent = 0
         by_person: dict[int, list[Task]] = {}
+        ownerless: list[Task] = []
         for task in tasks:
             if H.offerable(task):
                 by_person.setdefault(task.assignee_id, []).append(task)
             elif getattr(task, "_needs_owner", False):
                 await self._handshake_ask_owner(guild, task)
+            elif H.ownerless(task):
+                ownerless.append(task)
+        if ownerless:
+            sent += await self._owner_ask(guild, ownerless)
         for uid, items in by_person.items():
             member = guild.get_member(uid)
             if member is None or getattr(member, "bot", False):
@@ -648,6 +675,227 @@ class TaskHandshakeMixin:
         await message.reply(H.t(f"hs_mode_set_{mode}", lang), mention_author=False)
         return True
 
+    # ------------------------------------------------------------- who takes this task?
+    def _owner_names_of(self, guild):
+        def names(task: Task) -> str:
+            if not task.group_id:
+                return task.assignee_name
+            peers = [
+                x for x in self.tasks.list(guild.id, status=None) if x.group_id == task.group_id
+            ]
+            return ", ".join(dict.fromkeys(x.assignee_name for x in peers if x.assignee_name))
+
+        return names
+
+    def _owner_text(self, guild, rows: list[Task], lang: str) -> str:
+        channel_of, _ = self._handshake_names(guild)
+        return H.render_owner_message(
+            rows, lang, channel_of=channel_of, names_of=self._owner_names_of(guild)
+        )
+
+    @staticmethod
+    def _owner_view(guild_id: int, rows: list[Task], lang: str):
+        waiting = [(i, x) for i, x in enumerate(rows) if H.owner_waiting(x)]
+        if not waiting:
+            return None
+        view = discord.ui.View(timeout=None)
+        many = len(rows) > 1
+        for i, x in waiting:
+            pre = f"{i + 1}. " if many else ""
+            for act in ("om", "oo", "on"):
+                label = (pre + H.t(f"hs_btn_{act}", lang))[:80]
+                view.add_item(TaskButton(act, guild_id, x.id, label, row=i))
+        return view
+
+    async def _owner_ask(self, guild, task_list: list[Task]) -> int:
+        """Ask each giver, in ONE message per 5 tasks, who the unassigned tasks go to."""
+        by_giver: dict[int, list[Task]] = {}
+        for task in task_list:
+            by_giver.setdefault(task.assigner_id, []).append(task)
+        sent = 0
+        for uid, items in by_giver.items():
+            member = guild.get_member(uid)
+            if member is None or getattr(member, "bot", False):
+                continue
+            for batch in H.batches(items):
+                try:
+                    sent += int(await self._owner_send(guild, member, batch))
+                except Exception:
+                    logger.warning("owner question not sent", exc_info=True)
+        return sent
+
+    async def _owner_send(self, guild, member, batch: list[Task], *, nudge: bool = False):
+        lang = self._person_lang(guild.id, member.id)
+        res = await self.deliver_to_person(
+            guild,
+            member,
+            self._owner_text(guild, batch, lang),
+            view=self._owner_view(guild.id, batch, lang),
+        )
+        if not res.ok:
+            return False
+        msg = res.message
+        ch = getattr(getattr(msg, "channel", None), "id", 0)
+        now = self._now_iso()
+
+        def stamp() -> None:
+            for i, task in enumerate(batch):
+                fresh = self.tasks.get(guild.id, task.id) or task
+                if fresh.confirm not in ("", H.OWNER_ASKED):
+                    continue
+                if not nudge:
+                    fresh.confirm, fresh.confirm_at = H.OWNER_ASKED, now
+                fresh.owner_message = f"{ch}:{getattr(msg, 'id', 0)}:{i}"
+                self.tasks.save(fresh)
+
+        await asyncio.to_thread(stamp)
+        return True
+
+    def _owner_rows(self, guild, task: Task) -> list[Task]:
+        """The tasks shown on the same owner card as `task`, in card order."""
+        ref = task.owner_message
+        if not ref:
+            return [task]
+        key = ref.rsplit(":", 1)[0]
+        rows = [
+            x
+            for x in self.tasks.list(guild.id, status=None)
+            if x.owner_message.rsplit(":", 1)[0] == key
+        ]
+        rows.sort(key=lambda x: parse_ref(x.owner_message)[2])
+        if not any(x.id == task.id for x in rows):
+            rows.append(task)
+        return rows
+
+    async def _owner_check(self, interaction, guild_id: int, task_id: str):
+        guild = self._guild(guild_id)
+        task = await asyncio.to_thread(self.tasks.get, guild_id, task_id)
+        lang = self._person_lang(guild_id, interaction.user.id)
+        if guild is None or task is None:
+            await interaction.response.send_message(H.t("hs_gone", lang), ephemeral=True)
+            return None
+        if interaction.user.id != task.assigner_id and not self._handshake_is_exec(
+            guild, interaction.user
+        ):
+            await interaction.response.send_message(H.t("hs_owner_not_giver", lang), ephemeral=True)
+            return None
+        if task.confirm != H.OWNER_ASKED:
+            await interaction.response.send_message(H.t("hs_handled", lang), ephemeral=True)
+            return None
+        return guild, task, lang
+
+    async def handle_owner_modal_open(self, interaction, guild_id: int, task_id: str) -> None:
+        got = await self._owner_check(interaction, guild_id, task_id)
+        if got is None:
+            return
+        _, task, lang = got
+        await interaction.response.send_modal(OwnerModal(guild_id, task, lang))
+
+    async def handle_owner_answer(
+        self, interaction, act: str, guild_id: int, task_id: str, name: str = ""
+    ) -> None:
+        got = await self._owner_check(interaction, guild_id, task_id)
+        if got is None:
+            return
+        guild, task, lang = got
+        kind = {"om": "mine", "on": "none", "oo": "other"}[act]
+        res = await self._owner_resolve(guild, task, kind, name)
+        if res.unresolved:
+            await interaction.response.send_message(
+                H.t("hs_owner_unknown", lang, name=res.unresolved), ephemeral=True
+            )
+            return
+        rows = await asyncio.to_thread(self._owner_rows, guild, res.tasks[0])
+        await self._handshake_edit_message(
+            interaction,
+            self._owner_text(guild, rows, lang),
+            self._owner_view(guild.id, rows, lang),
+            H.owner_status(res.tasks[0], lang, res.tasks[0].assignee_name),
+        )
+        await self._owner_followup(guild, res)
+
+    async def _owner_resolve(self, guild, task: Task, kind: str, name: str = ""):
+        people = self._people(guild)
+        now = self._now_iso()
+        return await asyncio.to_thread(
+            H.apply_owner_answer, self.tasks, task, kind, name, people, now
+        )
+
+    async def _owner_followup(self, guild, res) -> None:
+        """After an answer: the people who now own a task get the normal card."""
+        if res.offer:
+            await self._handshake_offer(guild.id, res.offer)
+
+    async def _owner_edit_by_ref(self, guild, task: Task) -> None:
+        """Edit the question card of `task` without an interaction (an answer given in words or
+        through a tool). Best effort."""
+        ch_id, msg_id, _ = parse_ref(task.owner_message)
+        if not ch_id.isdigit() or not msg_id.isdigit():
+            return
+        try:
+            rows = await asyncio.to_thread(self._owner_rows, guild, task)
+            lang = self._person_lang(guild.id, task.assigner_id)
+            ch = self.get_channel(int(ch_id)) or await self.fetch_channel(int(ch_id))
+            msg = await ch.fetch_message(int(msg_id))
+            await msg.edit(
+                content=self._owner_text(guild, rows, lang),
+                view=self._owner_view(guild.id, rows, lang),
+            )
+        except Exception:
+            logger.warning("could not edit the owner card", exc_info=True)
+
+    def _owner_tools_done(self, guild_id: int, result_tasks: list[Task], offer: list[Task]) -> None:
+        """Hook for the answer_task_question tool (any thread): edit the card, send the cards."""
+
+        async def go() -> None:
+            guild = self._guild(guild_id)
+            if guild is None:
+                return
+            await self._owner_edit_by_ref(guild, result_tasks[0])
+            if offer:
+                await self._handshake_offer(guild_id, offer)
+
+        self._handshake_schedule(go())
+
+    async def _owner_answer_command(self, message, guild, member) -> bool:
+        """The giver answers the owner question in words (private channel / DM): "ไม่ใช่งาน",
+        "ของฉัน", "ให้บี", "not a task". True when the message was such an answer."""
+        if not self._handshake_on(guild.id):
+            return False
+        pending = [
+            x
+            for x in await asyncio.to_thread(self.tasks.list, guild.id, status="open")
+            if x.confirm == H.OWNER_ASKED and x.assigner_id == member.id
+        ]
+        if not pending:
+            return False
+        text = self._command_text(message)
+        answer = H.parse_owner_answer(text)
+        if answer is None:
+            return False
+        ref = getattr(getattr(message, "reference", None), "message_id", None)
+        cands = [x for x in pending if ref and parse_ref(x.owner_message)[1] == str(ref)] or pending
+        if len(cands) > 1:
+            named = [x for x in cands if x.id.casefold() in (text or "").casefold()]
+            cands = named if len(named) == 1 else cands
+        lang = self._person_lang(guild.id, member.id, message.content or "")
+        if len(cands) > 1:
+            lines = [H.t("hs_owner_which", lang)] + [f"#{x.id} {x.title[:60]}" for x in cands[:5]]
+            await message.reply("\n".join(lines), mention_author=False)
+            return True
+        task = cands[0]
+        kind, name = answer
+        res = await self._owner_resolve(guild, task, kind, name)
+        if res.unresolved:
+            await message.reply(
+                H.t("hs_owner_unknown", lang, name=res.unresolved), mention_author=False
+            )
+            return True
+        await self._owner_edit_by_ref(guild, res.tasks[0])
+        await message.reply(H.t(f"hs_owner_say_{kind}", lang), mention_author=False)
+        await self._owner_followup(guild, res)
+        return True
+
     # ------------------------------------------------------------- reassign / nudge
     def _handshake_reassigned(self, guild_id: int, task: Task) -> None:
         """A tool moved a task to someone else: send the new person the card (any thread)."""
@@ -671,6 +919,15 @@ class TaskHandshakeMixin:
                     continue
                 tasks = await asyncio.to_thread(self.tasks.list, gid, status="open")
                 for task in tasks:
+                    if H.owner_nudge_due(task, now):
+                        giver = guild.get_member(task.assigner_id)
+                        key = f"owner-nudge:{task.id}"
+                        if giver is None or getattr(giver, "bot", False):
+                            continue
+                        if not await asyncio.to_thread(self._claim, gid, key):
+                            continue
+                        sent += int(bool(await self._owner_send(guild, giver, [task], nudge=True)))
+                        continue
                     if not H.nudge_due(task, now):
                         continue
                     boss_side = task.confirm == H.AWAITING

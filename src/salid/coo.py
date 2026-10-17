@@ -298,6 +298,7 @@ class CooMixin:
             my_day=partial(self._my_day, guild, member),
             reassigned=partial(self._handshake_reassigned, guild.id),
             created=partial(self._handshake_new_tasks, guild.id),
+            owner_answered=partial(self._owner_tools_done, guild.id),
             find_project=partial(self._task_project, guild, member, is_exec),
             channel_id=COO_CHANNEL.get(),
         )

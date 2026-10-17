@@ -65,9 +65,10 @@ class Task(BaseModel):
     # task handshake (salid.task_handshake): the assignee confirms, the giver is told
     assigner_id: int = 0  # who gave / asked for the task (0 = unknown)
     assigner_name: str = ""
-    confirm: str = ""  # "" | pending | accepted | declined
+    confirm: str = ""  # "" | pending | accepted | declined | awaiting_approval | owner_asked
     confirm_at: str = ""  # when `confirm` last changed (the 24 h nudge counts from "pending")
     handshake_message: str = ""  # "channel_id:message_id:index" of the card, for editing it
+    owner_message: str = ""  # same, for the "who takes this task?" card sent to the giver
     group_id: str = ""  # tasks made from one action item that named several people
     # approve mode: the giver signs off after the assignee accepts (confirm = awaiting_approval)
     approver_id: int = 0
@@ -152,16 +153,23 @@ def _words(text: str) -> list[str]:
 def guess_assigner(
     messages, people: dict[int, str], assignee_id: int, assignee_name: str, title: str
 ) -> int:
-    """Who asked for a task nobody named a giver for: the author of the newest message in the
-    batch that names the assignee (name or mention) AND shares a word with the title; else 0."""
-    if not assignee_id:
-        return 0
-    name = (assignee_name or people.get(assignee_id) or "").casefold().strip()
-    words = _words(title)
+    """Who asked for a task nobody named a giver for. With an assignee: the author of the newest
+    message in the batch that names them (name or mention) AND shares a word with the title.
+    Without one (0): the author of the newest message that shares at least 2 title words, or one
+    word of 4+ characters; else 0."""
+    name = (
+        (assignee_name or people.get(assignee_id) or "").casefold().strip() if assignee_id else ""
+    )
+    words = list(dict.fromkeys(_words(title)))
     for m in reversed(list(messages)):  # oldest first in, so newest first here
         if getattr(m, "kind", "chat") == "salid" or getattr(m, "author_id", 0) not in people:
             continue
         text = (getattr(m, "text", "") or "").casefold()
+        if not assignee_id:
+            hits = [w for w in words if w in text]
+            if len(hits) >= 2 or any(len(w) >= 4 for w in hits):
+                return m.author_id
+            continue
         named = f"<@{assignee_id}>" in text or f"<@!{assignee_id}>" in text
         named = named or (len(name) >= 2 and name in text)
         if named and any(w in text for w in words):
@@ -288,6 +296,8 @@ class TaskRepo:
                         task.assignee_name,
                         True,
                     )
+                    if old.confirm == "owner_asked":
+                        old.confirm = ""  # a summary named the owner: the question is moot
                 if changed:
                     self.save(old)
                 return old, False
@@ -388,7 +398,7 @@ class TaskTracker:
             batch = []
             for uid in uids or [0]:
                 giver = match_person(by, people)
-                if not by and uid > 0:
+                if not by and uid >= 0:
                     giver = guess_assigner(messages, people, uid, people.get(uid) or who, title)
                 task = Task(
                     guild_id=guild_id,

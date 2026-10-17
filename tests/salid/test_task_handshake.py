@@ -180,7 +180,9 @@ def test_guess_assigner_needs_the_name_and_a_title_word():
         )
         == 0
     )
-    assert guess_assigner(ms, people, 0, "", "ส่งรายงานยอดขาย") == 0
+    # no assignee at all: the newest author who shares enough of the title
+    assert guess_assigner(ms, people, 0, "", "ส่งรายงานยอดขาย") == BOSS
+    assert guess_assigner(ms, people, 0, "", "คนละเรื่องเลย") == 0
 
 
 @pytest.mark.parametrize(
@@ -274,7 +276,7 @@ async def test_a_card_is_sent_once_per_new_task_with_persistent_buttons(hs, worl
 
 
 async def test_no_card_for_unresolved_assignees_dm_scope_or_when_the_flag_is_off(hs, world):
-    nobody = new_task(hs, "ไม่มีเจ้าของ", assignee=0)
+    nobody = new_task(hs, "ไม่มีเจ้าของ", assignee=0, assigner=0)
     dm = Task(
         guild_id=GUILD, assignee_id=STAFF, title="โน้ต", source_channel_id=-STAFF, created_from="dm"
     )

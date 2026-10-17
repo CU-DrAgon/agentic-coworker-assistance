@@ -26,6 +26,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         # coordinator
         "update_task",
         "add_task",
+        "answer_task_question",
         "request_disclosure",
         # feature branches (approvals, broadcast, freetime, polls/forms, captions)
         "request_approval",

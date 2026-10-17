@@ -1248,6 +1248,8 @@ class SecretaryBot(
             return
         if await self._task_mode_command(message, guild, member):  # their own task mode
             return
+        if await self._owner_answer_command(message, guild, member):  # "who takes this task?"
+            return
         await asyncio.to_thread(self.team.current, guild.id)
         ack = await self.scheduler.handle_dm_reply(
             message.author.id, message.content, guild_id=guild.id

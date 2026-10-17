@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from datetime import date
+from datetime import UTC, date, datetime
 
+from . import task_handshake as H
 from .memory_access import Scope
 from .tasks import (
     STATUSES,
@@ -23,6 +24,8 @@ from .tasks import (
 )
 
 MAX_TASKS = 40
+ME_WORDS = ("me", "mine", "myself", "i", "my own", "ฉัน", "ผม", "เรา", "หนู", "ของฉัน", "ของผม",
+            "ตัวเอง", "ฉันเอง", "ผมเอง")  # fmt: skip
 
 
 class CooTools:
@@ -41,6 +44,7 @@ class CooTools:
         my_day: Callable[[date], dict] | None = None,
         reassigned: Callable[[Task], None] | None = None,
         created: Callable[[list[Task]], None] | None = None,
+        owner_answered: Callable[[list[Task], list[Task]], None] | None = None,
         find_project: Callable[[str], tuple[str, str]] | None = None,
         channel_id: int = 0,
     ):
@@ -48,6 +52,7 @@ class CooTools:
         self.tasks, self.people, self.today, self.memory = tasks, people, today, memory
         self._request, self._my_day = request_disclosure, my_day
         self._reassigned = reassigned
+        self._owner_answered = owner_answered
         self._created, self._find_project, self.channel_id = created, find_project, channel_id
 
     def _view(self, t: Task) -> dict:
@@ -62,6 +67,7 @@ class CooTools:
             "note": t.note or None,
             "confirm": t.confirm or None,
             "awaiting_confirmation": t.confirm == "pending",
+            "owner_pending": t.confirm == "owner_asked",
             "assigned_by": t.assigner_name or None,
             "group": t.group_id or None,
         }
@@ -181,6 +187,8 @@ class CooTools:
         if not (self.is_exec or (task.assigner_id and task.assigner_id == self.asker_id)):
             return {"error": "not allowed: only the person who gave the task or an executive"}
         uid = match_person(assignee, self.people)
+        if (assignee or "").strip().casefold().strip(".!") in ME_WORDS:
+            uid = self.asker_id
         if not uid:
             return {"error": f"cannot tell who {assignee!r} is; use the member's name or @mention"}
         if uid == task.assignee_id and task.confirm != "declined":
@@ -198,6 +206,30 @@ class CooTools:
         if task.confirm == "" and self._reassigned is not None:
             self._reassigned(task)
         return {"updated": self._view(task)}
+
+    def answer_task_question(self, task_id: str, answer: str, name: str = "") -> dict:
+        """The giver's answer to "who takes this task?": mine | other (+ name) | none (not a
+        task). Only the giver or an executive; the task must still be waiting for it."""
+        task = self.tasks.get(self.guild_id, (task_id or "").lstrip("#").strip())
+        if task is None:
+            return {"error": "no such task"}
+        if not (self.is_exec or (task.assigner_id and task.assigner_id == self.asker_id)):
+            return {"error": "not allowed: only the person who gave the task or an executive"}
+        if task.confirm != H.OWNER_ASKED:
+            return {"error": "this task is not waiting for an owner"}
+        if answer not in ("mine", "other", "none"):
+            return {"error": "answer must be mine, other or none"}
+        if answer == "other" and not (name or "").strip():
+            return {"error": "give the name of the person it goes to"}
+        now = datetime.now(UTC).isoformat(timespec="seconds")
+        res = H.apply_owner_answer(self.tasks, task, answer, name, self.people, now)
+        if res.unresolved:
+            return {
+                "error": f"cannot tell who {res.unresolved!r} is; use the member's name or @mention"
+            }
+        if self._owner_answered is not None:
+            self._owner_answered(res.tasks, res.offer)
+        return {"updated": [self._view(x) for x in res.tasks]}
 
     def request_disclosure(self, topic: str) -> dict:
         if self._request is None or self.memory is None or not self.memory.hidden:
@@ -273,6 +305,20 @@ def build_coo_tools(c: CooTools, calls: list | None = None) -> list:
         a = dict(task_id=task_id, status=status, note=note, assignee=assignee)
         return safe("update_task", a, lambda: c.update_task(**a))
 
+    def answer_task_question(task_id: str, answer: str, name: str = "") -> dict:
+        """Answer "who takes this task?" for a task Salid asked the asker about (it shows
+        owner_pending in list_tasks). Use when they say it is theirs (answer=mine), is for
+        someone (answer=other, name=that person) or is not a task / should be dropped
+        (answer=none). Only the person who gave the task or an executive.
+
+        Args:
+            task_id: the task id.
+            answer: mine, other or none.
+            name: member name or @mention, only with answer=other.
+        """
+        a = dict(task_id=task_id, answer=answer, name=name)
+        return safe("answer_task_question", a, lambda: c.answer_task_question(**a))
+
     def request_disclosure(topic: str) -> dict:
         """Ask the owner of withheld information for permission to share it with the asker. Only
         call it after a memory tool reported withheld records AND the asker said yes to asking.
@@ -295,4 +341,4 @@ def build_coo_tools(c: CooTools, calls: list | None = None) -> list:
         a = dict(day=date)
         return safe("my_day", a, lambda: c.my_day(**a))
 
-    return [list_tasks, add_task, update_task, request_disclosure, my_day]
+    return [list_tasks, add_task, update_task, answer_task_question, request_disclosure, my_day]

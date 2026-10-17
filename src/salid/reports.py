@@ -161,7 +161,8 @@ def collect_company(
         uid = task.assignee_id
         if not uid:
             if task.status == "open":
-                unassigned.append(_cut(task.title, 100))
+                mark = " [รอระบุผู้รับ / owner pending]" if task.confirm == "owner_asked" else ""
+                unassigned.append(_cut(task.title, 100) + mark)
             continue
         p = person(uid) if uid in people else None
         if p is None:
