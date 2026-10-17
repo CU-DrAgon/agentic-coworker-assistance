@@ -987,15 +987,28 @@ class ImageTooLarge(ValueError):
     """The image header declares more than MAX_DECODE_PIXELS; refused before decoding."""
 
 
+MAX_FRAME_SIDE = 1536  # the first frame is sent at most this big (the model downsamples anyway)
+
+
 def _gif_first_frame(data: bytes) -> bytes:
+    """The first frame as PNG, at most MAX_FRAME_SIDE px. Only real GIFs are decoded (the mime
+    comes from the file name), and the canvas size is checked from the header first."""
     from PIL import Image
 
-    with Image.open(io.BytesIO(data)) as im:
+    too_large = f"image larger than {MAX_DECODE_PIXELS // 1_000_000} megapixels"
+    try:
+        im = Image.open(io.BytesIO(data), formats=["GIF"])
+    except Image.DecompressionBombError as e:  # Pillow's own limit, far above ours
+        raise ImageTooLarge(too_large) from e
+    with im:
         if im.width * im.height > MAX_DECODE_PIXELS:  # a tiny file can declare a huge canvas
-            raise ImageTooLarge(f"image larger than {MAX_DECODE_PIXELS // 1_000_000} megapixels")
+            raise ImageTooLarge(too_large)
         im.seek(0)
+        im.thumbnail((2 * MAX_FRAME_SIDE, 2 * MAX_FRAME_SIDE))  # palette: a cheap first cut
+        frame = im.convert("RGBA")
+        frame.thumbnail((MAX_FRAME_SIDE, MAX_FRAME_SIDE), Image.Resampling.LANCZOS)
         out = io.BytesIO()
-        im.convert("RGBA").save(out, format="PNG")
+        frame.save(out, format="PNG")
         return out.getvalue()
 
 
@@ -1004,6 +1017,7 @@ def file_parts(files: list[FileInput]) -> tuple[list[types.Part], list[FileInput
     file as inline bytes (text files as text). Returns (parts, files that could not be read)."""
     parts: list[types.Part] = []
     bad: list[FileInput] = []
+    total = 0  # inline bytes: select_files counted the originals, a converted GIF can grow
     for f in files:
         label = f.label or f"[ไฟล์ #{f.index}: {f.filename}]"
         try:
@@ -1014,6 +1028,11 @@ def file_parts(files: list[FileInput]) -> tuple[list[types.Part], list[FileInput
             data, mime = f.data, f.mime or ""
             if mime == "image/gif":
                 data, mime = _gif_first_frame(data), "image/png"
+                if total + len(data) > MAX_TOTAL_BYTES:
+                    raise ImageTooLarge(
+                        f"total size over {MAX_TOTAL_BYTES // 1024 // 1024} MB after conversion"
+                    )
+            total += len(data)
             parts.append(types.Part(text=label))
             parts.append(types.Part.from_bytes(data=data, mime_type=mime))
         except Exception as e:

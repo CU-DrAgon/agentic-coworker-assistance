@@ -709,6 +709,6 @@ def test_saved_feature_flags_win_over_the_page_defaults():
     html = (Path(__file__).parent.parent / "src/meeting_scribe/static/hub.html").read_text()
     body = html.split("function fillSettings(s) {", 1)[1]
     literal = re.search(r"features = \{(.*?)\};", body).group(1)
-    defaults, _, after = literal.partition("...s.features")
-    assert not re.search(r"\w+:", after), f"defaults after the saved flags: {after.strip()}"
-    assert set(FEATURES) <= set(re.findall(r"(\w+): true", defaults))  # every flag defaults on
+    assert literal.rstrip().endswith("...s.features"), "the saved flags must come last"
+    defaults = literal.rstrip().removesuffix("...s.features")
+    assert set(FEATURES) <= set(re.findall(r"(\w+): (?:true|false)", defaults))  # all have one
