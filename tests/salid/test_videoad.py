@@ -1,11 +1,14 @@
 import io
+import re
 import shutil
 import threading
 import time
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from conftest import FixedClockSettings
 from PIL import Image, ImageChops
 from promo_helpers import (
     fake_client,
@@ -20,6 +23,7 @@ from promo_helpers import (
 from pydantic import ValidationError
 
 from salid import cards, promo, videoad
+from salid.coo_store import FirestoreDocStore, SQLiteDocStore
 
 FONTS = cards.card_fonts()
 needs_ffmpeg = pytest.mark.skipif(
@@ -716,3 +720,349 @@ def test_assemble_needs_one_length_and_caption_per_clip(tmp_path):
         videoad.assemble(
             [tmp_path / "a.mp4"], [2.0, 2.0], [], None, tmp_path / "o.mp4", budget_mib=9
         )
+
+
+# ------------------------------------------------------------------ the job
+S = FixedClockSettings()
+S_HERO = FixedClockSettings(video_hero_model="omni-test")
+SILENCE = b"\x00\x00" * 2400
+REAL_NARRATION = videoad.narration_wav
+BRIEF = "ลาเต้เย็นสูตรลับ ลด 20% ทุกวันศุกร์"
+
+
+def MemDocs():
+    return SQLiteDocStore(":memory:")
+
+
+@pytest.fixture(params=["sqlite", "firestore"])
+def docs(request):
+    if request.param == "sqlite":
+        return MemDocs()
+    from fake_firestore import FakeFirestore
+
+    return FirestoreDocStore(client=FakeFirestore())
+
+
+def req(**kw):
+    base = dict(
+        guild_id=1,
+        user_id=7,
+        brief=BRIEF,
+        seconds=20,
+        photos=[],
+        hero_shots=0,
+        voice=True,
+        music=None,
+        lang="th",
+    )
+    return videoad.VideoRequest(**{**base, **kw})
+
+
+@pytest.fixture
+def fake_pipeline(monkeypatch):
+    """The paid and slow parts of the job replaced by recorders: a 4 x 5 s storyboard (its first
+    `hero_shots` scenes are hero scenes), 2 billed stills, empty clips, a narration file and an
+    MP4 of a few bytes. `hero_ok` makes the hero hook succeed."""
+    fp = SimpleNamespace(
+        hero_calls=0, hero_ok=False, on_stills=None, plans=[], stills=[], motion=[],
+        narrations=[], assembled=[], labels=[], plan_error=None,
+    )  # fmt: skip
+
+    def plan(client, model, *, brief, seconds, photos, hero_shots, lang):
+        fp.plans.append(dict(model=model, brief=brief, seconds=seconds, photos=photos,
+                             hero_shots=hero_shots, lang=lang))  # fmt: skip
+        if fp.plan_error is not None:
+            raise fp.plan_error
+        board = sb(5, 5, 5, 5)
+        for i in range(hero_shots):
+            board.scenes[i].source = "hero"
+        return board
+
+    def stills(client, model, scenes, photos, accent, fonts):
+        fp.stills.append(dict(model=model, n=len(scenes), photos=photos, accent=accent))
+        if fp.on_stills is not None:
+            fp.on_stills()
+        return [Image.new("RGB", (108, 192), (90, 90, 90)) for _ in scenes], 2
+
+    def motion(still, seconds, index, out):
+        assert still.exists()
+        fp.motion.append((seconds, index))
+        out.write_bytes(b"clip")
+
+    def narration(say, lines, total_s, out):
+        fp.narrations.append((lines, total_s))
+        say(lines[0][2])
+        out.write_bytes(b"wav")
+        return True
+
+    def assemble(clips, seconds, captions, audio, out, *, budget_mib, music=None, fonts=None):
+        fp.assembled.append(dict(clips=clips, seconds=seconds, captions=captions, audio=audio,
+                                 budget=budget_mib, music=music))  # fmt: skip
+        assert all(c.exists() for c in [*clips, *captions])
+        out.write_bytes(b"mp4")
+        return out
+
+    def hero(client, settings, still, scene, handle, out):
+        fp.hero_calls += 1
+        if fp.hero_ok:
+            out.write_bytes(b"hero")
+        return fp.hero_ok
+
+    real_caption = videoad.caption_png
+
+    def caption(text, fonts, *, label=True):
+        fp.labels.append(label)
+        return real_caption(text, fonts, label=label)
+
+    for name, fn in [("plan_storyboard", plan), ("scene_stills", stills), ("motion_clip", motion),
+                     ("narration_wav", narration), ("assemble", assemble), ("_hero_clip", hero),
+                     ("caption_png", caption)]:  # fmt: skip
+        monkeypatch.setattr(videoad, name, fn)
+    return fp
+
+
+def run(tmp_path, *, handle=None, usage=None, settings=S, say=lambda t: SILENCE, **kw):
+    return videoad.run_video_ad(
+        req(**kw),
+        client=None,
+        settings=settings,
+        say=say,
+        workdir=tmp_path,
+        budget_mib=19,
+        handle=handle or videoad.VideoHandle(),
+        usage=usage or videoad.MediaUsage(MemDocs()),
+        month="2026-10",
+    )
+
+
+def test_month_usage_refuses_without_writing(docs):
+    u = videoad.MediaUsage(docs)
+    assert u.take(1, "2026-10", "ads", 1, 2) and u.take(1, "2026-10", "ads", 1, 2)
+    assert (
+        not u.take(1, "2026-10", "ads", 1, 2)
+        and docs.get("salid_media_usage", 1, "2026-10")["ads"] == 2
+    )
+    assert u.take(1, "2026-11", "ads", 1, 2) and u.take(2, "2026-10", "ads", 1, 2)
+
+
+def test_month_usage_peek_reads_without_writing(docs):
+    u = videoad.MediaUsage(docs)
+    assert u.used(1, "2026-10", "ads") == 0 and docs.get("salid_media_usage", 1, "2026-10") is None
+    assert u.take(1, "2026-10", "hero_seconds", 5, 60) and u.take(1, "2026-10", "ads", 1, 10)
+    assert u.used(1, "2026-10", "hero_seconds") == 5 and u.used(1, "2026-10", "ads") == 1
+    assert not u.take(1, "2026-10", "hero_seconds", 56, 60)  # 61 > 60
+    assert u.used(1, "2026-10", "hero_seconds") == 5
+
+
+def test_month_usage_take_is_atomic_across_threads():
+    u = videoad.MediaUsage(MemDocs())
+    got = []
+    threads = [
+        threading.Thread(target=lambda: got.append(u.take(1, "2026-10", "ads", 1, 5)))
+        for _ in range(20)
+    ]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert got.count(True) == 5 and u.used(1, "2026-10", "ads") == 5
+
+
+def test_find_items_returns_each_docs_key(docs):
+    docs.put("salid_video_jobs", 1, "j2", {"state": "done"})
+    docs.put("salid_video_jobs", 1, "j1", {"state": "stills"})
+    docs.put("salid_video_jobs", 2, "j3", {"state": "stills"})
+    items = docs.find_items("salid_video_jobs", 1, where=lambda d: d["state"] != "done")
+    assert [(k, d["state"]) for k, d in items] == [("j1", "stills")]
+    assert [k for k, _ in docs.find_items("salid_video_jobs", 1)] == ["j1", "j2"]
+
+
+def test_runner_happy_path_reports_each_step(tmp_path, fake_pipeline):
+    seen = []
+    res = videoad.run_video_ad(
+        req(),
+        client=None,
+        settings=S,
+        say=lambda t: SILENCE,
+        workdir=tmp_path,
+        budget_mib=19,
+        handle=videoad.VideoHandle(progress=lambda s, d: seen.append(s)),
+        usage=videoad.MediaUsage(MemDocs()),
+        month="2026-10",
+    )
+    assert [s for s in seen] == ["storyboard", "stills", "audio", "render"] and res.path.exists()
+
+
+def test_runner_wires_every_step(tmp_path, fake_pipeline):
+    usage = videoad.MediaUsage(d := MemDocs())
+    photos_in = [png_bytes((900, 900))]
+    res = run(tmp_path, usage=usage, photos=photos_in, accent="gold", music=tmp_path / "m.m4a")
+    assert res.path == tmp_path / "ad-20261014-1200.mp4" and res.path.read_bytes() == b"mp4"
+    assert d.get("salid_media_usage", 1, "2026-10") == {"ads": 1}
+    assert res.cost_usd == pytest.approx(2 * videoad.STILL_USD)
+    assert set(res.steps_ms) == {"storyboard", "stills", "audio", "render"}
+    [plan] = fake_pipeline.plans
+    assert plan["model"] == S.gemini_model and plan["photos"] == photos_in
+    assert plan["brief"] == BRIEF and plan["seconds"] == 20 and plan["hero_shots"] == 0
+    [stills] = fake_pipeline.stills
+    assert stills["model"] == S.image_model and stills["photos"] == photos_in
+    assert stills["accent"] == "gold" and fake_pipeline.motion == [(5, i) for i in range(4)]
+    [(lines, total)] = fake_pipeline.narrations
+    assert [(a, b) for a, b, _ in lines] == [(0, 5), (5, 5), (10, 5), (15, 5)] and total == 20
+    [asm] = fake_pipeline.assembled
+    assert asm["seconds"] == [5, 5, 5, 5] and len(asm["clips"]) == len(asm["captions"]) == 4
+    assert asm["audio"] is not None and asm["budget"] == 19 and asm["music"] == tmp_path / "m.m4a"
+    assert fake_pipeline.labels == [False] * 4  # assemble adds the one AI label itself
+
+
+def test_cancel_during_stills_stops_paid_steps(tmp_path, fake_pipeline):  # Review Focus 4
+    h = videoad.VideoHandle()
+    fake_pipeline.on_stills = h.cancelled.set
+    with pytest.raises(videoad.Cancelled):
+        videoad.run_video_ad(
+            req(hero_shots=1),
+            client=None,
+            settings=S_HERO,
+            say=lambda t: SILENCE,
+            workdir=tmp_path,
+            budget_mib=19,
+            handle=h,
+            usage=(u := videoad.MediaUsage(d := MemDocs())),  # noqa: F841 (brief's test as is)
+            month="2026-10",
+        )
+    assert fake_pipeline.hero_calls == 0 and d.get("salid_media_usage", 1, "2026-10") == {"ads": 1}
+
+
+def test_cancel_during_stills_skips_the_motion_clips(tmp_path, fake_pipeline):
+    h = videoad.VideoHandle()
+    fake_pipeline.on_stills = h.cancelled.set
+    with pytest.raises(videoad.Cancelled):
+        run(tmp_path, handle=h)
+    assert fake_pipeline.motion == [] and fake_pipeline.assembled == []
+
+
+def test_cancel_before_the_start_takes_nothing(tmp_path, fake_pipeline):
+    h = videoad.VideoHandle()
+    h.cancelled.set()
+    with pytest.raises(videoad.Cancelled):
+        run(tmp_path, handle=h, usage=videoad.MediaUsage(d := MemDocs()))
+    assert fake_pipeline.plans == [] and d.get("salid_media_usage", 1, "2026-10") is None
+
+
+def test_hero_is_skipped_while_the_model_setting_is_empty(tmp_path, fake_pipeline):
+    videoad.run_video_ad(
+        req(hero_shots=2),
+        client=None,
+        settings=S,
+        say=lambda t: SILENCE,
+        workdir=tmp_path,
+        budget_mib=19,
+        handle=videoad.VideoHandle(),
+        usage=videoad.MediaUsage(MemDocs()),
+        month="2026-10",
+    )
+    assert fake_pipeline.hero_calls == 0
+
+
+def test_hero_seconds_are_taken_before_each_hero_call(tmp_path, fake_pipeline):
+    fake_pipeline.hero_ok = True
+    seen = []
+    usage = videoad.MediaUsage(d := MemDocs())
+    h = videoad.VideoHandle(progress=lambda s, _d: seen.append(s))
+    res = run(tmp_path, handle=h, usage=usage, settings=S_HERO, hero_shots=2)
+    assert fake_pipeline.plans[0]["hero_shots"] == 2 and fake_pipeline.hero_calls == 2
+    assert seen == ["storyboard", "stills", "hero", "audio", "render"]
+    assert d.get("salid_media_usage", 1, "2026-10") == {"ads": 1, "hero_seconds": 10}
+    assert res.cost_usd == pytest.approx(2 * videoad.STILL_USD + 10 * videoad.HERO_USD_PER_S)
+    clips = fake_pipeline.assembled[0]["clips"]
+    assert [c.read_bytes() for c in clips] == [b"hero", b"hero", b"clip", b"clip"]
+
+
+def test_a_failed_hero_keeps_the_motion_clip_and_its_seconds_stay_taken(tmp_path, fake_pipeline):
+    usage = videoad.MediaUsage(d := MemDocs())
+    run(tmp_path, usage=usage, settings=S_HERO, hero_shots=1)
+    assert fake_pipeline.hero_calls == 1
+    assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 5  # no refund
+    assert fake_pipeline.assembled[0]["clips"][0].read_bytes() == b"clip"
+
+
+def test_hero_month_budget_used_up_means_no_hero_call(tmp_path, fake_pipeline):
+    d = MemDocs()
+    d.put("salid_media_usage", 1, "2026-10", {"hero_seconds": 58})
+    run(tmp_path, usage=videoad.MediaUsage(d), settings=S_HERO, hero_shots=1)
+    assert fake_pipeline.hero_calls == 0
+    assert d.get("salid_media_usage", 1, "2026-10") == {"hero_seconds": 58, "ads": 1}
+
+
+def test_hero_hook_is_off_until_task_7():
+    scene = sb(5, 5, 5, 5).scenes[0]
+    assert videoad._hero_clip(None, S_HERO, Path("x.png"), scene, None, Path("o")) is False
+
+
+def say_fails(text):
+    raise RuntimeError("tts down")
+
+
+def ffmpeg_fails(say, lines, total_s, out):
+    raise RuntimeError("ffmpeg failed: no encoder")
+
+
+@pytest.mark.parametrize(
+    "say, narration",
+    [(say_fails, REAL_NARRATION), (lambda t: SILENCE, ffmpeg_fails)],
+    ids=["say raises", "ffmpeg raises"],
+)
+def test_narration_failure_still_makes_the_video_with_captions_only(
+    tmp_path, fake_pipeline, monkeypatch, say, narration
+):
+    monkeypatch.setattr(videoad, "narration_wav", narration)
+    res = run(tmp_path, say=say)
+    assert res.path.exists() and fake_pipeline.assembled[0]["audio"] is None
+
+
+def test_no_voice_means_no_audio_step(tmp_path, fake_pipeline):
+    seen = []
+    run(tmp_path, voice=False, handle=videoad.VideoHandle(progress=lambda s, d: seen.append(s)))
+    assert "audio" not in seen and fake_pipeline.narrations == []
+    assert fake_pipeline.assembled[0]["audio"] is None
+
+
+def test_the_month_limit_is_checked_again_inside_the_job(tmp_path, fake_pipeline):
+    d = MemDocs()
+    d.put("salid_media_usage", 1, "2026-10", {"ads": S.video_ads_per_month})
+    with pytest.raises(RuntimeError, match="month limit"):
+        run(tmp_path, usage=videoad.MediaUsage(d))
+    assert fake_pipeline.plans == []
+
+
+def test_storyboard_and_render_errors_propagate(tmp_path, fake_pipeline, monkeypatch):
+    fake_pipeline.plan_error = videoad.StoryboardError("no usable storyboard")
+    with pytest.raises(videoad.StoryboardError):
+        run(tmp_path)
+
+    def broken(*a, **kw):
+        raise RuntimeError("over budget")
+
+    fake_pipeline.plan_error = None
+    monkeypatch.setattr(videoad, "assemble", broken)
+    with pytest.raises(RuntimeError, match="over budget"):
+        run(tmp_path)
+
+
+def test_a_failing_progress_callback_does_not_fail_the_job(tmp_path, fake_pipeline):
+    def boom(step, detail):
+        raise ValueError("ui gone")
+
+    assert run(tmp_path, handle=videoad.VideoHandle(progress=boom)).path.exists()
+
+
+def test_steps_are_logged_without_the_brief_or_captions(tmp_path, fake_pipeline, caplog):
+    caplog.set_level("INFO", logger="salid.videoad")
+    run(tmp_path)
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("video guild=")]
+    assert [ln.split()[2] for ln in lines] == [
+        "step=storyboard", "step=stills", "step=audio", "step=render"
+    ]  # fmt: skip
+    assert all(re.fullmatch(r"video guild=1 step=\w+ ms=\d+ cost=\d+\.\d\d", ln) for ln in lines)
+    assert lines[1].endswith(f"cost={2 * videoad.STILL_USD:.2f}")
+    assert BRIEF not in caplog.text and "ลาเต้" not in caplog.text and "หอมกรุ่น" not in caplog.text

@@ -104,5 +104,14 @@ async def test_upload_budget_follows_the_servers_limit(bot, world, monkeypatch):
     assert [c.max_bytes for c in seen] == [9 * 2**20, 9 * 2**20, imagegen.OUTBOX_MAX_BYTES]
 
 
+async def test_a_dm_uses_the_dm_upload_limit_not_the_servers(bot, world, monkeypatch):
+    m = world.staff
+    world.g.filesize_limit = 100 * 2**20  # the server the DM is about is boosted
+    seen = []
+    monkeypatch.setattr("salid.imagegen_bot.image_tools", lambda ctx: seen.append(ctx) or [])
+    bot._image_tools(TMsg(None, world.pub, m, "x"), world.g, m, [])  # a DM: message.guild None
+    assert [c.max_bytes for c in seen] == [9 * 2**20]
+
+
 def test_images_flag_defaults_on():
     assert "images" in FEATURES and Features().images is True

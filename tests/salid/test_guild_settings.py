@@ -68,6 +68,7 @@ def test_missing_document_means_defaults(gstore):
         meeting_transcript_doc=True,
         promo=True,
         images=True,
+        video_ads=False,
         decks=True,
     )
     assert g.receipt_channel_ids == [] and g.digest_time == "18:00" and g.active

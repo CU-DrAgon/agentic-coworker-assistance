@@ -55,9 +55,11 @@ class ImageMixin:
                     guild_budget=self.image_budget,
                     user_budget=self.image_user_budget,
                     fonts=cards.card_fonts(),
-                    # the server's upload limit (discord.py: 10 MiB unless boosted) minus 1 MiB
+                    # the upload limit where the reply goes (discord.py: 10 MiB unless boosted;
+                    # a DM about this server has no boost) minus 1 MiB
                     max_bytes=min(
-                        OUTBOX_MAX_BYTES, int(getattr(guild, "filesize_limit", 10 * 2**20)) - 2**20
+                        OUTBOX_MAX_BYTES,
+                        int(getattr(message.guild, "filesize_limit", 10 * 2**20)) - 2**20,
                     ),
                 )
             )

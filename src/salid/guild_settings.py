@@ -5,8 +5,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, promo, images, decks}: bool, all
-                         default true
+                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, promo, images, video_ads, decks}: bool, all
+                         default true except video_ads (paid video generation: off until an admin turns it on)
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -102,6 +102,7 @@ FEATURES = (
     "meeting_transcript_doc",
     "promo",
     "images",
+    "video_ads",
     "decks",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
@@ -177,6 +178,7 @@ class Features(BaseModel):
     meeting_transcript_doc: bool = True  # minutes PDF with who-said-what at meeting end + tool
     promo: bool = True  # promo post kits from product photos (AI scene + typeset text)
     images: bool = True  # create_image: images from a description (Nano Banana + typeset text)
+    video_ads: bool = False  # create_video_ad: finished MP4 ads (paid per ad; admins turn it on)
     decks: bool = True  # the chat agent may build .pptx slide decks (salid.deck)
 
 

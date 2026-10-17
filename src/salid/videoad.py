@@ -22,6 +22,11 @@ clips, overlays the captions per scene and one AI label for the whole video, mix
 and optional music, and encodes an H.264 / AAC MP4 under `budget_mib` (from the guild's upload
 limit), re-encoding smaller when the first try is over it.
 
+Part 4, the job: `run_video_ad` runs every step for one `VideoRequest` in a work directory
+(blocking; the bot runs it in a worker thread, see `videoad_bot`), checking the `VideoHandle`
+for a cancel before each step and taking the guild's monthly usage (`MediaUsage`) before each
+paid step. Generated hero motion shots go through the `_hero_clip` hook (off for now).
+
 Never logs the brief, prompts, captions or narration.
 """
 
@@ -30,12 +35,17 @@ from __future__ import annotations
 import array
 import io
 import logging
+import math
 import re
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
 
@@ -812,3 +822,239 @@ def assemble(
             )
     out.unlink(missing_ok=True)
     raise RuntimeError(f"video ad still over its {budget_mib:g} MiB budget after re-encoding")
+
+
+# ------------------------------------------------------------------ the job
+STEPS = ("storyboard", "stills", "hero", "audio", "render")
+USAGE = "salid_media_usage"  # DocStore kind: per guild, key "YYYY-MM": ads, hero_seconds, ...
+# Cost estimates for logs and job records (USD), not billing: verify against the console.
+STILL_USD = 0.0504  # one 2K Nano Banana 2.1 image
+HERO_USD_PER_S = 0.15  # one second of Omni image-to-video (estimate to verify)
+_USAGE_LOCK = threading.Lock()  # one bot process: read-check-write of the month's usage
+
+
+class Cancelled(Exception):
+    """The job was cancelled; raised by `check` before the next step, so no new paid call
+    starts (a step already running finishes)."""
+
+
+class MonthLimit(RuntimeError):
+    """The guild's video ads for this month are used up (the tool's peek raced another job)."""
+
+
+def _noop(step: str, detail: str) -> None:
+    return None
+
+
+@dataclass
+class VideoHandle:
+    """Shared between the bot and the job thread: `cancelled` stops the job before its next
+    step; `progress(step, detail)` is called when a step starts (detail: counts only);
+    `cost_usd` is the job's cost estimate so far (for the job record)."""
+
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    progress: Callable[[str, str], None] = _noop
+    cost_usd: float = 0.0
+
+
+def check(handle: VideoHandle) -> None:
+    """Raise Cancelled when the job was cancelled."""
+    if handle.cancelled.is_set():
+        raise Cancelled()
+
+
+class MediaUsage:
+    """Monthly media usage per guild in DocStore kind `salid_media_usage`, key "YYYY-MM", one
+    number per field (`ads`, `hero_seconds`, `music_clips`), taken before each paid step and
+    never refunded."""
+
+    def __init__(self, docs):
+        self.docs = docs
+
+    def used(self, guild_id: int, month: str, field: str) -> float:
+        doc = self.docs.get(USAGE, guild_id, month) or {}
+        return float(doc.get(field) or 0)
+
+    def take(self, guild_id: int, month: str, field: str, amount: float, cap: float) -> bool:
+        """Add `amount` to `field` unless that would pass `cap`; False (nothing written) then."""
+        with _USAGE_LOCK:
+            doc = dict(self.docs.get(USAGE, guild_id, month) or {})
+            doc.pop("guild_id", None)  # Firestore adds it on write
+            total = float(doc.get(field) or 0) + amount
+            if total > cap:
+                return False
+            doc[field] = int(total) if total.is_integer() else total
+            self.docs.put(USAGE, guild_id, month, doc)
+            return True
+
+
+@dataclass
+class VideoRequest:
+    guild_id: int
+    user_id: int
+    brief: str
+    seconds: int
+    photos: list[bytes]  # shop photos, in attachment order (photo:N)
+    hero_shots: int
+    voice: bool
+    music: Path | None  # a music track to mix under the voice (None = no music)
+    lang: str
+    accent: str = "red"
+
+
+@dataclass
+class VideoResult:
+    path: Path
+    storyboard: Storyboard
+    cost_usd: float
+    steps_ms: dict[str, int]
+
+
+def _hero_clip(client, settings, still: Path, scene: Scene, handle: VideoHandle, out: Path) -> bool:
+    """A generated motion clip of `scene` from its `still`, written to `out`; False when there is
+    none (the scene keeps its motion clip). Called only for hero scenes and only when
+    `settings.video_hero_model` is set. Not available yet: always False."""
+    return False
+
+
+def _report(handle: VideoHandle, step: str, detail: str = "") -> None:
+    try:
+        handle.progress(step, detail)
+    except Exception as e:  # a broken progress display never fails the ad
+        logger.warning("video progress callback failed: %s", type(e).__name__)
+
+
+def _stamp(settings) -> str:
+    now = getattr(settings, "now", None)
+    return (now() if callable(now) else datetime.now()).strftime("%Y%m%d-%H%M")
+
+
+def run_video_ad(
+    req: VideoRequest,
+    *,
+    client,
+    settings,
+    say: Callable[[str], bytes],
+    workdir: Path,
+    budget_mib: float,
+    handle: VideoHandle,
+    usage: MediaUsage,
+    month: str,
+) -> VideoResult:
+    """Make the whole ad in `workdir` (blocking; the bot runs it in a worker thread).
+
+    The month's ad is taken once at the start (MonthLimit when used up). Then storyboard
+    (`settings.gemini_model`, sees `req.photos`), stills (`settings.image_model`, 9:16 2K) and
+    their motion clips, hero clips (only with `settings.video_hero_model`; hero seconds taken
+    from the month's budget before each call, never refunded), narration with `say` (any failure
+    -> captions only), captions (`label=False`: `assemble` adds the one AI label) and the final
+    `ad-YYYYMMDD-HHMM.mp4` under `budget_mib`. `check(handle)` runs before every step and every
+    hero call. Raises Cancelled, StoryboardError or RuntimeError. Logs one line per step (guild,
+    step, ms, cost estimate), never the brief, captions or narration."""
+    gid = req.guild_id
+    steps_ms: dict[str, int] = {}
+    cost = 0.0
+
+    def done(step: str, t0: float, step_cost: float = 0.0) -> None:
+        nonlocal cost
+        cost += step_cost
+        handle.cost_usd = cost
+        steps_ms[step] = int((time.monotonic() - t0) * 1000)
+        logger.info("video guild=%s step=%s ms=%d cost=%.2f", gid, step, steps_ms[step], step_cost)
+
+    check(handle)
+    if not usage.take(gid, month, "ads", 1, settings.video_ads_per_month):
+        raise MonthLimit("month limit")
+    heroes_allowed = req.hero_shots if settings.video_hero_model else 0
+
+    _report(handle, "storyboard")
+    t0 = time.monotonic()
+    board = plan_storyboard(
+        client,
+        settings.gemini_model,
+        brief=req.brief,
+        seconds=req.seconds,
+        photos=req.photos,
+        hero_shots=heroes_allowed,
+        lang=req.lang,
+    )
+    scenes = board.scenes
+    seconds = [s.seconds for s in scenes]
+    done("storyboard", t0)
+
+    check(handle)
+    _report(handle, "stills", f"{len(scenes)} scenes")
+    t0 = time.monotonic()
+    fonts = cards.card_fonts()
+    images, billed = scene_stills(
+        client, settings.image_model, scenes, req.photos, req.accent, fonts
+    )
+    stills, clips = [], []
+    for i, (scene, img) in enumerate(zip(scenes, images, strict=True)):
+        check(handle)  # motion clips cost nothing but take a while on one vCPU
+        still, clip = workdir / f"still{i}.png", workdir / f"clip{i}.mp4"
+        img.save(still)
+        motion_clip(still, scene.seconds, i, clip)
+        stills.append(still)
+        clips.append(clip)
+    done("stills", t0, billed * STILL_USD)
+
+    heroes = [i for i, s in enumerate(scenes) if s.source == "hero"][:heroes_allowed]
+    if heroes:
+        check(handle)
+        _report(handle, "hero", f"{len(heroes)} shots")
+        t0 = time.monotonic()
+        hero_cost = 0.0
+        for i in heroes:
+            check(handle)
+            secs = math.ceil(scenes[i].seconds)  # a hero clip covers its whole scene
+            if not usage.take(
+                gid, month, "hero_seconds", secs, settings.video_hero_seconds_per_month
+            ):
+                logger.info("video guild=%s hero seconds for this month are used up", gid)
+                continue  # this scene keeps its motion clip; a shorter one may still fit
+            hero_cost += secs * HERO_USD_PER_S
+            handle.cost_usd = cost + hero_cost
+            out = workdir / f"hero{i}.mp4"
+            try:
+                made = _hero_clip(client, settings, stills[i], scenes[i], handle, out)
+            except Cancelled:
+                raise
+            except Exception as e:  # the scene keeps its motion clip
+                logger.warning("video hero clip failed: %s", type(e).__name__)
+                made = False
+            if made:
+                clips[i] = out
+        done("hero", t0, hero_cost)
+
+    audio = None
+    if req.voice:
+        check(handle)
+        _report(handle, "audio")
+        t0 = time.monotonic()
+        lines, start = [], 0.0
+        for s in scenes:
+            lines.append((start, s.seconds, s.voice_th))
+            start += s.seconds
+        wav = workdir / "voice.wav"
+        try:
+            audio = wav if narration_wav(say, lines, sum(seconds), wav) else None
+        except Exception as e:  # narration failure -> captions only
+            logger.warning("video narration failed: %s", type(e).__name__)
+            audio = None
+        done("audio", t0)
+
+    check(handle)
+    _report(handle, "render")
+    t0 = time.monotonic()
+    captions = []
+    for i, scene in enumerate(scenes):
+        cap = workdir / f"caption{i}.png"
+        caption_png(scene.caption_th, fonts, label=False)[0].save(cap)
+        captions.append(cap)
+    out = workdir / f"ad-{_stamp(settings)}.mp4"
+    assemble(
+        clips, seconds, captions, audio, out, budget_mib=budget_mib, music=req.music, fonts=fonts
+    )
+    done("render", t0)
+    return VideoResult(path=out, storyboard=board, cost_usd=cost, steps_ms=steps_ms)

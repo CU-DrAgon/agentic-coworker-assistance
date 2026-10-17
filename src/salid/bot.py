@@ -165,6 +165,7 @@ from .summary import (
 )
 from .translate_bot import TranslateMixin
 from .travel_bot import TravelMixin
+from .videoad_bot import VideoAdMixin
 from .voice_pool import VoicePool
 from .wiki_bot import WikiMixin
 
@@ -347,6 +348,7 @@ class SecretaryBot(
     ProfileMixin,
     DeliverMixin,
     ImageMixin,
+    VideoAdMixin,
     PromoMixin,
     MediaMixin,
     discord.Client,
@@ -500,6 +502,7 @@ class SecretaryBot(
         dm_module.ROUTER = self._private_route
         dm_module.SENT_HOOK = self._dm_sent_hook  # every Salid DM is tagged with its company
         self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
+        self._init_video_ads()  # create_video_ad jobs, after self.docs (salid.videoad_bot)
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
@@ -545,6 +548,7 @@ class SecretaryBot(
         self._start_import()
         await self.meetings.resume_all()  # rejoin meetings a restart cut off
         self.meetings.scan_all()  # people already in voice channels: join by importance
+        await self._sweep_video_jobs()  # video ads a restart cut off: failed, requester told
 
     async def on_resumed(self):
         self.recent.reset()  # a gateway outage may have dropped events
@@ -2191,6 +2195,8 @@ class SecretaryBot(
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
             # create_image: chat only (voice passes no files), with or without a photo
             *([] if interjection else self._image_tools(message, guild, asker, files)),
+            # create_video_ad: chat only, flag video_ads (default off); a background job
+            *([] if interjection else self._video_tools(message, guild, asker, files)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]
