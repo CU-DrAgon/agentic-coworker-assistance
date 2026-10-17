@@ -19,6 +19,7 @@ from typing import Any
 
 from google.genai import types
 
+from . import attendance as att
 from .i18n import t
 from .ideas_pdf import markdown_docx, markdown_pdf
 from .llm import generate
@@ -175,6 +176,7 @@ class MeetingInfo:
     ended_at: datetime | None = None
     attendees: list[str] = field(default_factory=list)
     summary: str = ""
+    attendance: list[att.Presence] = field(default_factory=list)  # who was in the room, when
 
 
 def file_stem(started_at: datetime | None) -> str:
@@ -220,6 +222,23 @@ def render_markdown(
     if info.attendees:
         meta.append(f"- **{t('mdoc_attendees', lang)}:** {', '.join(info.attendees)}")
     out += meta + [""]
+    if info.attendance:
+        out += [
+            f"## {t('mdoc_attendance', lang)}",
+            "",
+            f"| {t('mdoc_col_person', lang)} | {t('mdoc_col_present', lang)} "
+            f"| {t('mdoc_col_total', lang)} |",
+            "|---|---|---|",
+            *[
+                f"| {att.label(p.name, lang)} | "
+                + ", ".join(f"{att.hm(a)}–{att.hm(b)}" for a, b in p.spans)
+                + f" | {p.minutes} |"
+                for p in info.attendance
+            ],
+            "",
+            t("attend_total", lang, n=len(info.attendance)),
+            "",
+        ]
     if info.summary.strip():
         out += [_summary_sections(info.summary), ""]
     if include_transcript:

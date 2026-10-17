@@ -120,6 +120,72 @@ def t(key: str, lang: str = "th", **fmt) -> str:
 
 
 CATALOG: dict[str, dict[str, str]] = {
+    # ---------------------------------------------------------------- quotations
+    "co_kind_profile": {"th": "ข้อมูลหัวบริษัท", "en": "company details"},
+    "quote_title": {"th": "ใบเสนอราคา", "en": "QUOTATION"},
+    "quote_no": {"th": "เลขที่", "en": "No."},
+    "quote_rev": {"th": "ฉบับแก้ไขครั้งที่ {n}", "en": "Revision {n}"},
+    "quote_date": {"th": "วันที่", "en": "Date"},
+    "quote_valid_until": {"th": "ยืนราคาถึงวันที่", "en": "Valid until"},
+    "quote_prepared_by": {"th": "ผู้จัดทำ", "en": "Prepared by"},
+    "quote_customer": {"th": "เสนอต่อ", "en": "To"},
+    "quote_attn": {"th": "ผู้ติดต่อ", "en": "Attn"},
+    "quote_tax_id": {"th": "เลขประจำตัวผู้เสียภาษี", "en": "Tax ID"},
+    "quote_phone": {"th": "โทร", "en": "Tel"},
+    "quote_email": {"th": "อีเมล", "en": "Email"},
+    "quote_web": {"th": "เว็บไซต์", "en": "Web"},
+    "quote_col_no": {"th": "ลำดับ", "en": "No."},
+    "quote_col_desc": {"th": "รายการ", "en": "Description"},
+    "quote_col_qty": {"th": "จำนวน", "en": "Qty"},
+    "quote_col_unit": {"th": "หน่วย", "en": "Unit"},
+    "quote_col_price": {"th": "ราคาต่อหน่วย", "en": "Unit price"},
+    "quote_col_disc": {"th": "ส่วนลด", "en": "Discount"},
+    "quote_col_amount": {"th": "จำนวนเงิน", "en": "Amount"},
+    "quote_subtotal": {"th": "รวมเป็นเงิน", "en": "Subtotal"},
+    "quote_discount": {"th": "ส่วนลด", "en": "Discount"},
+    "quote_discount_pct": {"th": "ส่วนลด {pct}%", "en": "Discount {pct}%"},
+    "quote_after_discount": {"th": "ราคาหลังหักส่วนลด", "en": "After discount"},
+    "quote_before_vat": {"th": "ราคาก่อนภาษีมูลค่าเพิ่ม", "en": "Amount before VAT"},
+    "quote_vat": {"th": "ภาษีมูลค่าเพิ่ม {rate}%", "en": "VAT {rate}%"},
+    "quote_vat_incl": {
+        "th": "ภาษีมูลค่าเพิ่ม {rate}% (รวมอยู่ในราคาแล้ว)",
+        "en": "VAT {rate}% (included in the prices)",
+    },
+    "quote_no_vat": {"th": "ไม่คิดภาษีมูลค่าเพิ่ม", "en": "VAT not applied"},
+    "quote_total": {"th": "จำนวนเงินรวมทั้งสิ้น", "en": "Grand total"},
+    "quote_words": {"th": "ตัวอักษร", "en": "In words"},
+    "quote_terms": {"th": "เงื่อนไข", "en": "Terms"},
+    "quote_payment": {"th": "การชำระเงิน", "en": "Payment"},
+    "quote_default_payment": {
+        "th": "ชำระภายใน 30 วันหลังรับใบแจ้งหนี้",
+        "en": "Payment within 30 days of receiving the invoice",
+    },
+    "quote_validity": {
+        "th": "ยืนราคา {days} วัน (ถึง {until})",
+        "en": "Prices valid for {days} days (until {until})",
+    },
+    "quote_notes": {"th": "หมายเหตุ", "en": "Notes"},
+    "quote_bank": {"th": "บัญชีรับชำระเงิน", "en": "Bank account"},
+    "quote_accepted_by": {"th": "ผู้สั่งซื้อ (ลงนามยืนยัน)", "en": "Customer acceptance"},
+    "quote_signed_by": {"th": "ผู้เสนอราคา", "en": "Authorised signatory"},
+    "quote_date_line": {"th": "วันที่ ____ / ____ / ________", "en": "Date ____ / ____ / ________"},
+    "quote_missing": {"th": "[ยังไม่ได้ระบุ: {field}]", "en": "[not set: {field}]"},
+    "quote_f_legal_name": {"th": "ชื่อบริษัท", "en": "company name"},
+    "quote_f_address": {"th": "ที่อยู่", "en": "address"},
+    "quote_f_tax_id": {"th": "เลขประจำตัวผู้เสียภาษี", "en": "tax ID"},
+    "quote_f_signer_name": {"th": "ชื่อผู้ลงนาม", "en": "signer name"},
+    "quote_refusal": {
+        "th": "การออกใบเสนอราคาในนามบริษัททำได้เฉพาะผู้บริหาร{roles}ค่ะ สิทธิ์นี้มาจากบทบาทใน Discord ที่แอดมินของเซิร์ฟเวอร์กำหนด สลิดให้หรือเปลี่ยนสิทธิ์ให้ใครเองไม่ได้นะคะ ถ้าต้องการออกใบเสนอราคา ขอให้ผู้บริหารเป็นคนสั่ง หรือให้แอดมินเพิ่มบทบาทให้ค่ะ",
+        "en": "Only executives{roles} can issue quotations in the company's name. That right comes from Discord roles set by the server admins; Salid cannot grant or change anyone's rights. Ask an executive to issue it, or an admin to add the role.",
+    },
+    "quote_refusal_roles": {
+        "th": " และสมาชิกที่มีบทบาท {roles}",
+        "en": " and members with the role {roles}",
+    },
+    "quote_teach_hint": {
+        "th": "สอนสลิดได้เลย เช่น “ที่อยู่บริษัทคือ …” “เลขผู้เสียภาษี …” “ผู้ลงนามคือ … ตำแหน่ง …”",
+        "en": "Just tell Salid, e.g. “the company address is …”, “our tax ID is …”, “the signer is … , title …”",
+    },
     # ---------------------------------------------------------------- company learning
     "co_btn_ok": {"th": "อนุมัติ", "en": "Approve"},
     "co_btn_no": {"th": "ไม่อนุมัติ", "en": "Decline"},
@@ -760,6 +826,43 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ขออภัยค่ะ ตรวจสอบให้ไม่ได้ตอนนี้ เครื่องมือค้นข้อมูลขัดข้องค่ะ",
         "en": "Sorry, I can't check that right now. The lookup tool is not working.",
     },
+    "voice_working_text": {
+        "th": "⏳ กำลังหาข้อมูล: {question}",
+        "en": "⏳ Looking into it: {question}",
+    },
+    "voice_handoff_text": {
+        "th": "⏳ ส่งไปทำพื้นหลังแล้ว: {question} (จะแจ้งเมื่อเสร็จ)",
+        "en": "⏳ Sent to the background: {question} (I'll tell you when it's done)",
+    },
+    "voice_still_working_text": {
+        "th": "⏳ ยังทำอยู่ค่ะ: {question}",
+        "en": "⏳ Still working on it: {question}",
+    },
+    "voice_bg_1": {
+        "th": "งานนี้ใช้เวลาหน่อยค่ะ สลิดทำให้อยู่ เดี๋ยวได้แล้วจะบอกนะคะ คุยเรื่องอื่นต่อได้เลยค่ะ",
+        "en": "This one takes a little while. I'm on it and I'll tell you when it's ready; keep talking meanwhile.",
+    },
+    "voice_bg_2": {
+        "th": "ขอเวลาทำสักพักนะคะ เสร็จแล้วสลิดจะแจ้งค่ะ ระหว่างนี้คุยเรื่องอื่นได้เลยค่ะ",
+        "en": "Give me a little while. I'll announce it as soon as it's done, so go on with whatever you like.",
+    },
+    "voice_bg_3": {
+        "th": "อันนี้นานหน่อยค่ะ สลิดทำอยู่เบื้องหลังนะคะ ได้ผลแล้วจะบอกค่ะ",
+        "en": "That will take some time. I'm working on it in the background and will say when I have it.",
+    },
+    "voice_still_working": {
+        "th": "ยังทำอยู่ค่ะ",
+        "en": "Still working on it.",
+    },
+    "voice_jobs_full": {
+        "th": "ขอให้งานก่อนหน้าเสร็จก่อนนะคะ",
+        "en": "Let me finish the earlier jobs first.",
+    },
+    "voice_files_echo": {"th": "📎 ไฟล์ที่ขอไว้ค่ะ", "en": "📎 The files you asked for."},
+    "voice_files_say": {
+        "th": "ส่งไฟล์ไว้ในแชตแล้วนะคะ",
+        "en": "I put the file in the chat.",
+    },
     "ack_longer_1": {
         "th": "ขออภัยค่ะ รอบนี้นานกว่าปกตินะคะ ยังหาอยู่ค่ะ",
         "en": "Sorry, this is taking longer than usual. Still on it.",
@@ -851,6 +954,22 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "📝 Meeting summary ({reason})\n",
     },
     "meet_participant": {"th": "ผู้ร่วมประชุม {n}", "en": "Participant {n}"},
+    # Attendance log (who entered / left the voice room, and when)
+    "attend_joined": {
+        "th": "{icon} {time} {names} เข้าห้องประชุม",
+        "en": "{icon} {time} {names} joined the meeting",
+    },
+    "attend_left": {
+        "th": "{icon} {time} {names} ออกจากห้องประชุม",
+        "en": "{icon} {time} {names} left the meeting",
+    },
+    "attend_header": {"th": "👥 ผู้เข้าร่วม", "en": "👥 Attendees"},
+    "attend_total": {"th": "ทั้งหมด {n} คน", "en": "Total: {n}"},
+    "attend_minutes": {"th": "{n} นาที", "en": "{n} min"},
+    "attend_lt_minute": {"th": "ไม่ถึง 1 นาที", "en": "under 1 min"},
+    "mdoc_attendance": {"th": "ผู้เข้าร่วม", "en": "Attendance"},
+    "mdoc_col_present": {"th": "ช่วงเวลาในห้อง", "en": "Time in the room"},
+    "mdoc_col_total": {"th": "รวม (นาที)", "en": "Total (min)"},
     "mdoc_title": {"th": "รายงานการประชุม", "en": "Meeting minutes"},
     "mdoc_room": {"th": "ห้องประชุม", "en": "Meeting room"},
     "mdoc_date": {"th": "วันที่", "en": "Date"},
@@ -1762,4 +1881,70 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "งานใหญ่ใช้เวลานานเกิน {seconds} วินาที จึงยกเลิก",
         "en": "The big task ran longer than {seconds} seconds, so it was cancelled",
     },
+    # ---------------------------------------------------------------- meeting votes (votes.py)
+    "vote_ballot": {
+        "th": "🗳️ มติ: {question} — จากการประชุม {room}, ปิดโหวต {time}",
+        "en": "🗳️ Vote: {question} — from the meeting in {room}, closes {time}",
+    },
+    "vote_ballot_chat": {
+        "th": "🗳️ มติ: {question} — ขอโดย {opener}, ปิดโหวต {time}",
+        "en": "🗳️ Vote: {question} — asked by {opener}, closes {time}",
+    },
+    "vote_chosen": {
+        "th": "🗳️ {question}\n✅ คุณเลือก: {option} (เปลี่ยนได้จนถึง {time})",
+        "en": "🗳️ {question}\n✅ You chose: {option} (you can change it until {time})",
+    },
+    "vote_you_chose": {"th": "คุณเลือก: {option}", "en": "You chose: {option}"},
+    "vote_you_skipped": {"th": "คุณไม่ได้ลงคะแนน", "en": "You did not vote"},
+    "vote_ballot_closed": {
+        "th": "🔒 ปิดโหวตแล้ว: {question} — {choice}",
+        "en": "🔒 Voting closed: {question} — {choice}",
+    },
+    "vote_press_closed": {"th": "โหวตนี้ปิดแล้วค่ะ", "en": "This vote is closed."},
+    "vote_press_not_voter": {
+        "th": "คุณไม่ได้อยู่ในรายชื่อผู้ลงคะแนนของมตินี้ค่ะ",
+        "en": "You are not on the voter list for this vote.",
+    },
+    "vote_press_unknown": {"th": "ไม่พบมตินี้แล้วค่ะ", "en": "That vote no longer exists."},
+    "vote_tally": {
+        "th": "🗳️ มติ: {question} — โหวตแล้ว {done}/{total} ({counts}) ปิด {time}",
+        "en": "🗳️ Vote: {question} — {done}/{total} voted ({counts}) closes {time}",
+    },
+    "vote_tally_closed": {
+        "th": "🔒 มติ: {question} — ปิดแล้ว โหวต {done}/{total} ({counts})",
+        "en": "🔒 Vote: {question} — closed, {done}/{total} voted ({counts})",
+    },
+    "vote_result": {
+        "th": "{icon}มติ: {question} → {counts} ({verdict}, เสียงข้างมากของผู้ลงคะแนน)",
+        "en": "{icon}Vote: {question} → {counts} ({verdict}, simple majority of ballots cast)",
+    },
+    "vote_v_pass": {"th": "ผ่าน", "en": "passed"},
+    "vote_v_fail": {"th": "ไม่ผ่าน", "en": "rejected"},
+    "vote_v_tie": {"th": "ไม่ได้ข้อสรุป", "en": "no conclusion"},
+    "vote_v_none": {"th": "ไม่มีผู้ลงคะแนน", "en": "nobody voted"},
+    "vote_v_win": {"th": "{option} ชนะ", "en": "{option} wins"},
+    "vote_anon_tag": {"th": "[ไม่เปิดเผยชื่อ]", "en": "[anonymous]"},
+    "vote_names": {"th": "{option}: {names}", "en": "{option}: {names}"},
+    "vote_nonvoters": {"th": "ไม่ได้ลงคะแนน: {names}", "en": "Did not vote: {names}"},
+    "vote_cue": {
+        "th": "(ปิดโหวตแล้ว — แจ้งผลสั้น ๆ โดยพูดตามนี้ ห้ามเรียบเรียงใหม่: {line})",
+        "en": "(The vote has closed. Announce the result briefly, say it as given, do not rephrase: {line})",
+    },
+    "vote_unreached": {
+        "th": "ส่งปุ่มโหวตให้ไม่ถึง: {names} ค่ะ",
+        "en": "Could not reach: {names}.",
+    },
+    "vote_minutes_header": {"th": "🗳️ มติที่ลงคะแนน", "en": "🗳️ Votes taken"},
+    "vote_offer": {
+        "th": "🗳️ ให้สลิดเปิดโหวตเรื่อง “{question}” ไหมคะ ({options})",
+        "en": "🗳️ Shall I open a vote on “{question}”? ({options})",
+    },
+    "vote_offer_open": {"th": "เปิดโหวต", "en": "Open vote"},
+    "vote_offer_no": {"th": "ไม่ต้อง", "en": "No need"},
+    "vote_offer_opened": {
+        "th": "🗳️ เปิดโหวตเรื่อง “{question}” แล้วค่ะ ส่งปุ่มไปที่ห้องส่วนตัวของแต่ละคน",
+        "en": "🗳️ Vote on “{question}” is open. Buttons went to everyone's private channel.",
+    },
+    "vote_offer_declined": {"th": "ได้ค่ะ ไม่เปิดโหวต", "en": "Okay, no vote."},
+    "vote_offer_gone": {"th": "ข้อเสนอนี้หมดอายุแล้วค่ะ", "en": "That offer is no longer valid."},
 }

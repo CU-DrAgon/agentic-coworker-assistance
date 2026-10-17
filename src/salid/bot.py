@@ -147,6 +147,7 @@ from .private_chat_bot import PrivateChatMixin
 from .profiles import ProfileMixin, effective_language, profile_block
 from .promo_bot import PromoMixin
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
+from .quotation_bot import QuotationMixin
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .recent import RecentMessages
 from .scheduling import DiscordCalendar, MeetingService
@@ -165,6 +166,7 @@ from .summary import (
 from .translate_bot import TranslateMixin
 from .travel_bot import TravelMixin
 from .voice_pool import VoicePool
+from .votes_bot import VoteButton, VoteOfferButton, VotesMixin
 from .wiki_bot import WikiMixin
 
 logger = logging.getLogger(__name__)
@@ -325,6 +327,7 @@ class SecretaryBot(
     TranslateMixin,
     FreetimeMixin,
     PollsMixin,
+    VotesMixin,
     CatchupMixin,
     WikiMixin,
     ApprovalMixin,
@@ -337,6 +340,7 @@ class SecretaryBot(
     TravelMixin,
     MarketsMixin,
     IdeasMixin,
+    QuotationMixin,
     MeetingDocMixin,
     CompanyMixin,
     ContestsMixin,
@@ -485,6 +489,7 @@ class SecretaryBot(
         self._viewers: dict[tuple[int, int], tuple[float, frozenset[int]]] = {}  # (guild, channel)
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
         self._polls_init()  # polls and DM forms (salid.polls_bot)
+        self._votes_init()  # meeting votes with button ballots (salid.votes_bot)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
         self._profile_init()  # personal preferences (salid.profiles)
         self._translate_init()  # translation + auto-translate (salid.translate_bot)
@@ -500,6 +505,7 @@ class SecretaryBot(
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
+        self._quotation_init()  # quotations (salid.quotation_bot)
         self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
         self._contests_init()  # hackathons / grants / tenders (salid.contests_bot)
         self._bizfin_init()  # finance calculators, benchmark, security (salid.bizfin_bot)
@@ -523,6 +529,7 @@ class SecretaryBot(
         self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
         self.add_dynamic_items(ApprovalButton)  # same for approval requests
         self.add_dynamic_items(PlaybookButton)  # company-playbook suggestions for admins
+        self.add_dynamic_items(VoteButton, VoteOfferButton)  # vote ballots + offers
         self.add_dynamic_items(SwitchButton)
         self.add_dynamic_items(CompanyButton)  # the "which company?" DM buttons
         await self.tree.set_translator(SalidTranslator())
@@ -840,6 +847,8 @@ class SecretaryBot(
                 await self._intake(message, quiet=mode == "listen")
             return
         called = mentioned or (self._starts_with_name(message))
+        if not called and mode in ("listen", "join"):
+            self.vote_offer_soon(message)  # a small vote offer from untagged talk (salid.votes_bot)
         if called and await self._meeting_command(message):
             return
         if called and await self._snooze_command(message):
@@ -2172,6 +2181,7 @@ class SecretaryBot(
                 if interjection
                 else self._poll_form_tools(message, guild, asker, is_exec, lang, new_id())
             ),
+            *([] if interjection else self._vote_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._catchup_tools(guild, asker, memory)),
             *([] if interjection else self._meeting_doc_tools(message, guild, asker, lang, loop)),
             *([] if interjection else self._wiki_tools(guild, asker, is_exec, memory, lang)),
@@ -2181,10 +2191,11 @@ class SecretaryBot(
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
-            # make_promo_kit: chat only (voice passes no files), with a photo or a remembered kit
+            # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
@@ -2949,6 +2960,7 @@ class SecretaryBot(
         await self._scheduler_due()
         await self._coo_due()
         await self._polls_forms_due()
+        await self._votes_due()
         await self._pc_sweep()
         await self._travel_due()
         await self._markets_due()

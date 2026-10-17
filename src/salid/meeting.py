@@ -37,6 +37,7 @@ from pydantic import BaseModel
 
 from meeting_scribe.audio import to_flac
 
+from . import attendance as att
 from . import meeting_doc as md
 from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
@@ -72,6 +73,7 @@ MAX_SEGMENT_S = 20.0
 MIN_SEGMENT_S = 0.4  # shorter segments are dropped (coughs, clicks); 0.6 lost short greetings
 PAD_GAP_S = 0.15  # shorter gaps inside a segment are filled with silence to keep timing
 MIN_RMS = 120  # int16 RMS below this is treated as silence/noise and not sent to the model
+LOUD_RMS = 1500  # a segment this loud is a voice (real speech here measured 1200-7500)
 TRANSCRIPT_KEEP_S = 3 * 3600
 TRANSCRIPT_MAX_LINES = 6000
 MEETING_MAX_S = 6 * 3600
@@ -93,6 +95,9 @@ SPEAK_TIMEOUT_PAD_S = 10.0
 ACK_TEXT = {"th": "ได้เลยค่ะ แป๊บนึงนะคะ", "en": "Sure, one sec!"}
 
 END_REASONS = ("command", "declined", "empty", "timeout", "disconnected", "shutdown", "preempted")
+JOIN_FAIL_LIMIT = 3  # failed joins for one channel ...
+JOIN_FAIL_WINDOW_S = 120.0  # ... within this window stop auto-join for ...
+JOIN_BACKOFF_S = 300.0  # ... this long (a manual join still works)
 BLOCK_AFTER_FAILURE_S = 300.0  # no auto-rejoin this soon after a timeout / lost connection
 
 # ------------------------------------------------------------------ text triggers
@@ -321,6 +326,73 @@ def voiced_fraction(pcm: bytes, min_rms: float = 250.0, frame_bytes: int = 3840)
     return sum(1 for f in frames if rms(f) >= min_rms) / len(frames)
 
 
+@dataclass(frozen=True)
+class SpeechStats:
+    """Energy statistics over 20 ms frames: what separates speech from stationary noise and clicks."""
+
+    duration_s: float
+    rms: float  # whole-segment loudness
+    voiced_s: float  # voiced frames x 0.02
+    voiced_fraction: float
+    cv: float  # stdev / mean of the frame RMS (speech rises and falls; hiss and hum do not)
+
+
+def stats_from_frame_rms(values: list[float], min_rms: float = 250.0) -> SpeechStats:
+    """`SpeechStats` from per-frame RMS values (20 ms each)."""
+    n = len(values)
+    if not n:
+        return SpeechStats(0.0, 0.0, 0.0, 0.0, 0.0)
+    mean = sum(values) / n
+    voiced = sum(1 for v in values if v >= min_rms)
+    cv = (sum((v - mean) ** 2 for v in values) / n) ** 0.5 / mean if mean > 0 else 0.0
+    return SpeechStats(
+        n * 0.02,
+        (sum(v * v for v in values) / n) ** 0.5,
+        voiced * 0.02,
+        voiced / n,
+        cv,
+    )
+
+
+def speech_stats(pcm: bytes, min_rms: float = 250.0, frame_bytes: int = 3840) -> SpeechStats:
+    """One pass over the 20 ms frames (48 kHz stereo s16le) of a segment."""
+    values = [
+        rms(pcm[i : i + frame_bytes]) for i in range(0, len(pcm) - frame_bytes + 1, frame_bytes)
+    ]
+    return stats_from_frame_rms(values, min_rms)
+
+
+def looks_like_speech(stats: SpeechStats, settings) -> tuple[bool, str]:
+    """The name-hit energy gate: (ok, reason). Voiced seconds, voiced fraction, frame-RMS
+    variation and overall loudness; a real bare "สลิด" (~0.5 s) passes, a click, a burst of noise
+    or stationary hiss / hum does not."""
+    floor = float(getattr(settings, "name_min_rms", 250.0))
+    # a short but LOUD call ("สลิด!" said sharply): clearly a voice, even with few voiced frames
+    if (
+        stats.rms >= float(getattr(settings, "name_loud_rms", LOUD_RMS))
+        and stats.voiced_s >= 0.15
+        and stats.cv >= float(getattr(settings, "name_min_cv", 0.25))
+    ):
+        return True, ""
+    if stats.voiced_s < float(getattr(settings, "name_min_voiced_seconds", 0.35)):
+        return False, "too little voiced audio"
+    if stats.voiced_fraction < 0.3:
+        return False, "low voiced fraction"
+    if stats.cv < float(getattr(settings, "name_min_cv", 0.25)):
+        return False, "steady noise"
+    if stats.rms < floor:
+        return False, "too quiet"
+    return True, ""
+
+
+def stats_line(stats: SpeechStats) -> str:
+    """Numbers only (never text) for the log."""
+    return (
+        f"dur={stats.duration_s:.2f} rms={stats.rms:.0f} voiced={stats.voiced_s:.2f} "
+        f"vf={stats.voiced_fraction:.2f} cv={stats.cv:.2f}"
+    )
+
+
 # ------------------------------------------------------------------ transcription / summary
 class _Heard(BaseModel):
     text: str
@@ -533,6 +605,11 @@ class MeetingSession:
     # meeting's own text channel.
     minutes_channel_id: int | None = None
     attendee_ids: set[int] = field(default_factory=set)  # everyone who was in the room or spoke
+    # Attendance log (flag `attendance_log`): who entered / left this voice channel and when;
+    # `att_pending` = events not yet posted to the text chat (see MeetingManager._attend_flush).
+    attendance: list[att.AttendanceEvent] = field(default_factory=list)
+    att_pending: list[att.AttendanceEvent] = field(default_factory=list)
+    att_task: Any = None
     # Recording state: "unknown" (joined by itself, not known to be a meeting), "recording" or
     # "not_recording" (nothing is logged to memory, no summary). See MeetingManager.set_recording.
     recording: str = "recording"
@@ -545,12 +622,14 @@ class MeetingSession:
     first_speech_at: float = 0.0
     introduced: bool = False  # Salid was addressed or has spoken: no need to ask who it is
     notes_posted: list[str] = field(default_factory=list)
+    votes_taken: list[str] = field(default_factory=list)  # result lines of closed votes (minutes)
     last_note_at: float = 0.0
     last_note_pass: datetime | None = None
     note_pass_at: float = 0.0
     engaged: bool = False  # False = listening (speaks only when its name is called)
     engaged_until: float = 0.0
     called_at: float = -1e9  # monotonic time she was last called by name / engaged
+    called_by: int = 0  # user id of whoever called her (their utterances are always addressed)
     unaddressed: int = 0  # consecutive utterances, while engaged, not addressed to Salid
     state_msg: Any = None  # the last state line posted to the text chat (edited on a quick flip)
     state_at: float = -1e9  # monotonic time of that post
@@ -605,6 +684,8 @@ class MeetingManager:
             tuple[int, int], float
         ] = {}  # channel -> no auto-join until (monotonic)
         self._auto_tasks: dict[tuple[int, int], asyncio.Task] = {}
+        self._locks: dict[int, asyncio.Lock] = {}  # one join / resume at a time per guild
+        self._failures: dict[tuple[int, int], list[float]] = {}
         self._bg: set[asyncio.Task] = set()
         self._now = time.monotonic
         self._sleep = asyncio.sleep
@@ -651,10 +732,55 @@ class MeetingManager:
         return hguild, hchan
 
     async def _connect(self, body: VoiceBody, channel):
-        _, hchan = self._body_channel(body, channel.guild, channel)
+        hguild, hchan = self._body_channel(body, channel.guild, channel)
         if hchan is None:
             raise RuntimeError(f"voice body {body.index} cannot see channel {channel.id}")
-        return await hchan.connect(cls=voice_recv.VoiceRecvClient)
+        key = (channel.guild.id, channel.id)
+        old = getattr(hguild, "voice_client", None)
+        if old is not None:
+            here = getattr(getattr(old, "channel", None), "id", None) == hchan.id
+            if _connected(old) and here and key not in self.sessions:
+                logger.info("voice client reused for channel %s", channel.id)
+                return old
+            await self._drop_vc(old, "stale voice client")
+        timeout = float(getattr(self.bot.s, "voice_connect_timeout_seconds", 20.0) or 20.0)
+        try:
+            return await asyncio.wait_for(hchan.connect(cls=voice_recv.VoiceRecvClient), timeout)
+        except Exception as e:
+            logger.warning("voice connect to %s failed (%s)", channel.id, type(e).__name__)
+            # never leave a half-open voice client behind: the next attempt would fail with
+            # "Already connected to a voice channel"
+            leftover = getattr(hguild, "voice_client", None)
+            if leftover is not None:
+                await self._drop_vc(leftover, "failed connect")
+            raise
+
+    @staticmethod
+    async def _drop_vc(vc, why: str) -> None:
+        try:
+            await vc.disconnect(force=True)
+        except Exception:
+            logger.warning("could not disconnect the %s", why, exc_info=True)
+
+    def _join_lock(self, guild_id: int) -> asyncio.Lock:
+        return self._locks.setdefault(guild_id, asyncio.Lock())
+
+    def _note_join_result(self, key: tuple[int, int], ok: bool) -> None:
+        """3 failed joins for one channel within 2 minutes: log once, no auto-join for 5 minutes."""
+        if ok:
+            self._failures.pop(key, None)
+            return
+        now = self._now()
+        recent = [x for x in self._failures.get(key, []) if now - x < JOIN_FAIL_WINDOW_S]
+        recent.append(now)
+        self._failures[key] = recent
+        if len(recent) >= JOIN_FAIL_LIMIT:
+            logger.error(
+                "voice join failed %d times in %d s for channel %s: no auto-join for %d s",
+                len(recent), JOIN_FAIL_WINDOW_S, key[1], JOIN_BACKOFF_S,
+            )  # fmt: skip
+            self._failures.pop(key, None)
+            self._cooldown[key] = now + JOIN_BACKOFF_S
 
     async def _post(self, session: MeetingSession, text: str, files=None):
         """Post to the meeting's text chat (else the fallback channel); the sent message or None."""
@@ -897,6 +1023,22 @@ class MeetingManager:
         await self._post(s, f"📌 {text}")
         return {"status": "posted"}
 
+    def record_vote(self, s: MeetingSession, line: str) -> None:
+        """A closed vote's result line goes into the minutes (summary and minutes document)."""
+        if line and line not in s.votes_taken:
+            s.votes_taken.append(line)
+
+    @staticmethod
+    def votes_block(s: MeetingSession) -> str:
+        if not s.votes_taken:
+            return ""
+        return (
+            "\n\n"
+            + t("vote_minutes_header", s.lang)
+            + "\n"
+            + "\n".join(f"- {x}" for x in s.votes_taken)
+        )
+
     async def _note_pass(self, s: MeetingSession) -> None:
         """Classic mode: the cheap gate reads the transcript since the last pass and posts one
         line per decision / action item."""
@@ -1011,6 +1153,7 @@ class MeetingManager:
         on_end=None,
         meeting_id: str | None = None,
         origin: str | None = None,
+        _locked: bool = False,
     ) -> str:
         guild = member.guild
         if not self.bot.team.enabled(guild.id, "voice_meetings"):
@@ -1023,15 +1166,17 @@ class MeetingManager:
         origin = origin or ("scheduled" if meeting_id else "command")
         if origin == "command":
             self._cooldown.pop(key, None)  # an explicit request always overrides the cooldown
-        existing = self.sessions.get(key)
-        if existing is not None:
-            return t("meet_already", lang, channel=existing.voice_channel.name)
-        if key in self._joining:
-            return t("meet_already", lang, channel=t("meet_joining", lang))
-        # Reserve the channel before the first await so two commands cannot both join it.
-        self._joining.add(key)
+        # One join at a time per guild: a second request waits, then sees the session (or not).
+        lock = self._join_lock(guild.id)
+        held = not _locked
+        if held:
+            await lock.acquire()
         reserved: tuple[int, int] | None = None
         try:
+            existing = self.sessions.get(key)
+            if existing is not None:
+                return t("meet_already", lang, channel=existing.voice_channel.name)
+            self._joining.add(key)
             body, why = await self._claim_body(guild, channel, origin, bool(meeting_id), lang)
             if body is None:
                 return why
@@ -1049,7 +1194,9 @@ class MeetingManager:
                 vc = await self._connect(body, channel)
             except Exception:
                 logger.exception("could not join voice channel %s", channel.id)
+                self._note_join_result(key, False)
                 return t("meet_connect_failed", lang)
+            self._note_join_result(key, True)
             if empty_grace is None:
                 empty_grace = float(getattr(self.bot.s, "leave_empty_seconds", 30.0))
             loop = asyncio.get_running_loop()
@@ -1068,6 +1215,8 @@ class MeetingManager:
             self._joining.discard(key)
             if reserved is not None:
                 self._reserved.discard(reserved)
+            if held:
+                lock.release()
         try:
             vc.listen(MeetingSink(session))
         except Exception:
@@ -1086,6 +1235,7 @@ class MeetingManager:
             session.attendee_ids.add(m.id)
         await self._notice(session, t(announce, session.lang))
         await self._post_state(session, t("voice_state_join", session.lang))
+        await self._attend_start(session, self._humans(channel))
         logger.info(
             "meeting started in guild %s channel %s on voice body %d (%s)",
             guild.id, channel.id, body.index, origin,
@@ -1131,6 +1281,12 @@ class MeetingManager:
             s = self.sessions.get((entered.guild.id, entered.id))
             if s is not None:  # a new arrival may greet Salid without the name
                 s.attendee_ids.add(member.id)
+                self._attend_note(s, member, "joined")
+        gone = getattr(before, "channel", None)
+        if gone is not None and gone != entered:  # left or moved out (mute / deafen: no change)
+            s = self.sessions.get((gone.guild.id, gone.id))
+            if s is not None:
+                self._attend_note(s, member, "left")
         left = getattr(before, "channel", None)
         if left is not None and not self._humans(left):
             self._cooldown.pop((left.guild.id, left.id), None)  # a new gathering: a new chance
@@ -1138,6 +1294,81 @@ class MeetingManager:
             c for c in (getattr(before, "channel", None), getattr(after, "channel", None)) if c
         }:
             self.kick(ch)
+
+    # ---- attendance log (who entered / left the room, and when)
+    def _attend_on(self, s: MeetingSession) -> bool:
+        try:
+            return bool(self.bot.team.enabled(s.guild_id, "attendance_log"))
+        except Exception:
+            return False
+
+    def _attend_name(self, s: MeetingSession, member) -> str:
+        """Salid nickname (profile) else display name; "@" is defused so a name never pings."""
+        try:
+            nick = self.bot._profile_of(s.guild_id, member.id).nickname
+        except Exception:
+            nick = ""
+        name = str(nick or getattr(member, "display_name", "") or "")
+        return name.replace("@", "@\u200b")
+
+    def _attend_event(self, s: MeetingSession, member, kind: str) -> att.AttendanceEvent:
+        return att.AttendanceEvent(
+            member.id, self._attend_name(s, member), kind, self.bot.s.now(), self._now()
+        )
+
+    def _attend_seed(self, s: MeetingSession, members) -> list[att.AttendanceEvent]:
+        """Everyone already in the room count as "joined" at the start time (no chat post)."""
+        if not self._attend_on(s):
+            return []
+        out = []
+        for m in members:
+            ev = self._attend_event(s, m, "joined")
+            if att.record(s.attendance, ev)[0]:
+                out.append(ev)
+        return out
+
+    async def _attend_start(self, s: MeetingSession, members) -> None:
+        events = self._attend_seed(s, members)
+        if events:
+            await self._attend_post(s, events)
+
+    def _attend_note(self, s: MeetingSession, member, kind: str) -> None:
+        """One enter / leave of this voice channel by a person. A leave is held back for
+        `att.REJOIN_S` so a reconnect is neither logged nor posted; events within `att.BATCH_S`
+        share one chat message."""
+        if s.ending or getattr(member, "bot", False) or not self._attend_on(s):
+            return
+        added, retracted = att.record(s.attendance, self._attend_event(s, member, kind))
+        if retracted is not None and retracted in s.att_pending:
+            s.att_pending.remove(retracted)
+        if added:
+            s.att_pending.append(s.attendance[-1])
+            if s.att_task is None or s.att_task.done():
+                s.att_task = asyncio.create_task(self._attend_flush(s))
+                s.tasks.append(s.att_task)
+
+    @staticmethod
+    def _attend_delay(ev: att.AttendanceEvent) -> float:
+        return att.REJOIN_S if ev.kind == "left" else 0.0
+
+    async def _attend_flush(self, s: MeetingSession) -> None:
+        while s.att_pending and not s.ending:
+            wake = min(e.mono + self._attend_delay(e) for e in s.att_pending)
+            await self._sleep(max(0.0, wake - self._now()) + att.BATCH_S)
+            now = self._now()
+            ready = [e for e in s.att_pending if e.mono + self._attend_delay(e) <= now]
+            s.att_pending = [e for e in s.att_pending if e not in ready]
+            if ready and not s.ending:
+                await self._attend_post(s, ready)
+
+    async def _attend_post(self, s: MeetingSession, events: list[att.AttendanceEvent]) -> None:
+        if getattr(self.bot.s, "voice_state_posts", True) and not s.ending:
+            await self._post(s, att.chat_lines(events, s.lang))
+
+    def _attendance_people(self, s: MeetingSession, ended: datetime) -> list[att.Presence]:
+        if not self._attend_on(s):
+            return []
+        return att.presences(s.attendance, ended)
 
     def kick(self, ch) -> None:
         """Start (or keep) the auto-join attempt for one channel. Rapid duplicate events for the
@@ -1183,15 +1414,19 @@ class MeetingManager:
         starter = SimpleNamespace(
             id=0, guild=guild, voice=SimpleNamespace(channel=ch), display_name="Salid"
         )
-        await self.join(
-            starter,
-            lang=lang
-            if lang in ("th", "en")
-            else resolve_lang(self.bot.team.current(guild.id).default_language),
-            announce="meet_announce_auto",
-            first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
-            origin="auto",
-        )
+        async with self._join_lock(guild.id):
+            if not self._auto_wanted(ch):  # the resume path / another join got there first
+                return
+            await self.join(
+                starter,
+                lang=lang
+                if lang in ("th", "en")
+                else resolve_lang(self.bot.team.current(guild.id).default_language),
+                announce="meet_announce_auto",
+                first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
+                origin="auto",
+                _locked=True,
+            )
 
     def _voice_channels(self, guild) -> list:
         return [*getattr(guild, "voice_channels", ()), *getattr(guild, "stage_channels", ())]
@@ -1303,8 +1538,15 @@ class MeetingManager:
             await self._unpersist((gid, int(rec["voice_channel_id"])))
             return
         key = (gid, channel.id)
-        if key in self.sessions or key in self._joining:
+        if key in self.sessions:
             return
+        async with self._join_lock(gid):
+            if key in self.sessions:  # a join got in first
+                return
+            await self._resume_locked(rec, guild, channel)
+
+    async def _resume_locked(self, rec: dict, guild, channel) -> None:
+        gid, key = guild.id, (guild.id, channel.id)
         started_at = datetime.fromisoformat(rec["started_at"])
         text_ch = guild.get_channel(rec["text_channel_id"]) if rec.get("text_channel_id") else None
         humans = self._humans(channel)
@@ -1328,8 +1570,10 @@ class MeetingManager:
             self._reserved.add((gid, body.index))
             try:
                 vc = await self._connect(body, channel)
+                self._note_join_result(key, True)
             except Exception:
                 logger.exception("could not rejoin voice channel %s", channel.id)
+                self._note_join_result(key, False)
             finally:
                 self._joining.discard(key)
                 self._reserved.discard((gid, body.index))
@@ -1351,6 +1595,7 @@ class MeetingManager:
         )  # fmt: skip
         for m in humans:
             session.attendee_ids.add(m.id)
+        self._attend_seed(session, humans)  # after a restart: counted from now, nothing posted
         try:
             for at, speaker, text in await asyncio.to_thread(
                 self._logged_lines, guild, channel, session.transcript_from or started_at
@@ -1432,7 +1677,7 @@ class MeetingManager:
             self.bot,
             session,
             post=lambda text: self._notice(session, text),
-            echo=lambda text: self._post(session, text),
+            echo=lambda text, files=None: self._post(session, text, files),
             on_failed=lambda: self._live_failed(session),
         )
         session.live.start()
@@ -1572,10 +1817,11 @@ class MeetingManager:
         if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
             s.captions.add(name, text)  # human speech only: never Salid's own words or notes
         said = parse_wake(text)
-        if said is not None and not self._real_call(seg, text, said):
-            logger.info("meeting %s: name hit rejected: no voiced audio", s.guild_id)
+        if said is not None and not self._real_call(s, seg, text, said):
             said = None  # noise the transcriber turned into a greeting: not a call
         called = said is not None
+        if not called and s.recording != "not_recording" and not self._is_echo(s, seg):
+            self._spawn(s, self.bot.vote_offer_from_room(s, name, text))  # text offer only
         if called and parse_meeting_command(said) == "leave":
             self._spawn(s, self._leave_politely(s))  # "สลิด ออกประชุม"
             return
@@ -1595,9 +1841,9 @@ class MeetingManager:
                 self._spawn(s, self._say_text(s, self._sp(s, "meet_dismiss_ack")))
             return
         if called:
-            self._set_engaged(s, True, name=name if member is not None else "")
+            self._set_engaged(s, True, name=name if member is not None else "", by=seg.user_id)
         elif s.engaged and not self._is_echo(s, seg):
-            self._engaged_utterance(s, text, now)
+            self._engaged_utterance(s, text, now, seg.user_id)
         if s.voice_mode == "live":
             if called and s.live is not None:
                 # Deterministic: the name was said, so Salid must answer. If the Live model has
@@ -1636,18 +1882,23 @@ class MeetingManager:
             s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
         await self.answer(s, member, name, question)
 
-    def _real_call(self, seg: Segment, text: str, said: str) -> bool:
+    def _real_call(self, s, seg: Segment, text: str, said: str) -> bool:
         """A bare greeting / name call (the shape noise is hallucinated into) counts only when the
-        audio behind it is real speech: long enough and with enough voiced frames."""
+        audio behind it looks like speech (`looks_like_speech`). Logs the numbers, never the text."""
         if not (is_greeting(said or text) or len(text.strip()) <= 20):
             return True  # a real sentence: the energy floor in `enqueue` was enough
         sets = self.bot.s
-        if float(getattr(sets, "name_min_voiced_seconds", 0.4)) <= 0:
+        if float(getattr(sets, "name_min_voiced_seconds", 0.35)) <= 0:
             return True  # energy gate off
-        return (
-            seg.duration_s >= 0.8
-            and voiced_fraction(seg.pcm, float(getattr(sets, "name_min_rms", 250.0))) >= 0.3
+        stats = speech_stats(seg.pcm, float(getattr(sets, "name_min_rms", 250.0)))
+        ok, reason = looks_like_speech(stats, sets)
+        logger.info(
+            "meeting %s: name hit %s %s",
+            s.guild_id,
+            "accepted" if ok else f"rejected: {reason}",
+            stats_line(stats),
         )
+        return ok
 
     # ---- listening / engaged
     _DISMISS_RE = re.compile(
@@ -1675,13 +1926,13 @@ class MeetingManager:
         return bool(cls._DISMISS_RE.search(text))
 
     def _engage_s(self) -> float:
-        return float(getattr(self.bot.s, "engaged_timeout_seconds", 30.0))
+        return float(getattr(self.bot.s, "engaged_timeout_seconds", 45.0))
 
     # Not addressed to Salid: the heuristics are deliberately simple and live here in code.
     # While engaged, an utterance counts as addressed to her when it (a) says her name (handled
     # by the caller), (b) comes within REPLY_WINDOW_S of her own voice (an answer to her), or
     # (c) looks like a question or a request (`_ASK_RE`) within QUESTION_WINDOW_S of her last
-    # words. Two utterances in a row that are none of these end the conversation silently.
+    # words. Three utterances in a row that are none of these end the conversation silently.
     _ASK_RE = re.compile(
         r"\?|ไหม|มั้ย|หรือเปล่า|หรือไม่|เหรอ|หรอ|อะไร|ทำไม|ยังไง|อย่างไร|เท่าไร|เท่าไหร่|เมื่อไร"
         r"|เมื่อไหร่|ใคร|ที่ไหน|ช่วย|ขอ|หน่อย|(?<![a-z])(?:what|who|when|where|why|how|which|can\s+you"
@@ -1690,7 +1941,7 @@ class MeetingManager:
     )
     REPLY_WINDOW_S = 6.0
     QUESTION_WINDOW_S = 20.0
-    UNADDRESSED_LIMIT = 2
+    UNADDRESSED_LIMIT = 3
 
     def _addressed(self, s: MeetingSession, text: str, now: float) -> bool:
         """Is this utterance (heard while engaged, no name in it) meant for Salid?"""
@@ -1701,8 +1952,10 @@ class MeetingManager:
             return True
         return gap <= self.QUESTION_WINDOW_S and bool(self._ASK_RE.search(text or ""))
 
-    def _engaged_utterance(self, s: MeetingSession, text: str, now: float) -> None:
-        if self._addressed(s, text, now):
+    def _engaged_utterance(
+        self, s: MeetingSession, text: str, now: float, user_id: int = 0
+    ) -> None:
+        if (user_id and user_id == s.called_by) or self._addressed(s, text, now):
             s.unaddressed = 0
             s.engaged_until = now + self._engage_s()  # talking with Salid keeps it engaged
             return
@@ -1710,13 +1963,15 @@ class MeetingManager:
         if s.unaddressed >= self.UNADDRESSED_LIMIT:
             self._set_engaged(s, False)  # people talk among themselves: back to listening
 
-    def _set_engaged(self, s: MeetingSession, on: bool, name: str = "") -> None:
+    def _set_engaged(self, s: MeetingSession, on: bool, name: str = "", by: int = 0) -> None:
         """listening <-> engaged. The Live model is told the state so it stays silent when
         listening, and the change is shown in the meeting's text chat. `name`: who called her."""
         s.engaged_until = time.monotonic() + self._engage_s() if on else 0.0
         s.unaddressed = 0
         if on:
             s.called_at = time.monotonic()
+            if by:
+                s.called_by = by
         if s.engaged == on:
             return
         s.engaged = on
@@ -2147,6 +2402,7 @@ class MeetingManager:
                 ended_at=ended,
                 attendees=self._attendee_names(s),
                 summary=s.summary_text,
+                attendance=self._attendance_people(s, ended),
             )
             lang = s.lang
             markdown = md.render_markdown(info, md.group_turns(lines), lang)
@@ -2203,8 +2459,9 @@ class MeetingManager:
 
         if reason == "declined" or s.recording == "not_recording":
             return
+        votes = self.votes_block(s)
         if not len(s.transcript):
-            await self._post_minutes(s, t("meet_no_transcript", s.lang))
+            await self._post_minutes(s, t("meet_no_transcript", s.lang) + votes)
             return
         try:
             body = await asyncio.to_thread(
@@ -2222,9 +2479,12 @@ class MeetingManager:
             return
         why = t(f"end_{reason}", s.lang) if reason in END_REASONS else reason
         header = t("meet_summary_header", s.lang, reason=why)
+        body += votes
         s.summary_text = body
-        doc = await self._minutes_doc_file(s, self.bot.s.now())
-        for i, part in enumerate(chunks(header + body, 1900)):
+        ended = self.bot.s.now()
+        doc = await self._minutes_doc_file(s, ended)
+        block = att.minutes_block(self._attendance_people(s, ended), s.lang)
+        for i, part in enumerate(chunks(header + block + body, 1900)):
             sent = await self._post_minutes(s, part, files=[doc] if i == 0 and doc else None)
             if i == 0 and sent is not None:
                 s.summary_url = getattr(sent, "jump_url", "") or ""

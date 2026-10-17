@@ -34,6 +34,8 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "post_message",
         "set_availability",
         "create_poll",
+        "call_vote",  # votes: the opener is the speaker
+        "close_vote",
         "start_form",
         "set_captions",
         "set_captions_tool",
@@ -64,6 +66,9 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "idea_export",
         "idea_share",
         "business_framework",
+        # quotations are issued in the company's name by the person who asked (their role decides)
+        "make_quotation",
+        "revise_quotation",
         "teach_company",
         "propose_lesson",
         "forget_company_item",

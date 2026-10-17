@@ -293,8 +293,12 @@ def test_settings_defaults_round_trip_and_layout(client):
         bizfin=True,
         link_guard=True,
         meeting_transcript_doc=True,
+        attendance_log=True,
         promo=True,
         decks=True,
+        quotations=True,
+        votes=True,
+        vote_offers=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]

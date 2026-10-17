@@ -5,7 +5,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, promo, decks}: bool, all
+                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, decks, votes, vote_offers}: bool, all
                          default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
@@ -100,8 +100,12 @@ FEATURES = (
     "bizfin",
     "link_guard",
     "meeting_transcript_doc",
+    "attendance_log",
     "promo",
     "decks",
+    "quotations",
+    "votes",
+    "vote_offers",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -174,8 +178,16 @@ class Features(BaseModel):
     bizfin: bool = True  # finance calculators (break-even, pricing, NPV/IRR...), market benchmark, security/slip checks
     link_guard: bool = True  # warns once under a message with a clearly dangerous link
     meeting_transcript_doc: bool = True  # minutes PDF with who-said-what at meeting end + tool
+    attendance_log: bool = (
+        True  # who entered / left the voice meeting and when (chat lines + minutes)
+    )
     promo: bool = True  # promo post kits from product photos (AI scene + typeset text)
     decks: bool = True  # the chat agent may build .pptx slide decks (salid.deck)
+    quotations: bool = True  # quotations as PDF + Word with running numbers (salid.quotation)
+    votes: bool = (
+        True  # call_vote & co: button ballots in each voter's private channel (salid.votes)
+    )
+    vote_offers: bool = True  # offer a vote from untagged talk (needs `votes`)
 
 
 class Channel(BaseModel):
@@ -288,6 +300,9 @@ class GuildSettings(GuildSettingsUpdate):
     admin_emails: list[str] = Field(default_factory=list)
     # Role names (besides executives and Manage Server) allowed to send email; edited in Firestore.
     email_senders: list[str] = Field(default_factory=list)
+    # Role names (besides executives) allowed to issue quotations in the company's name; edited in
+    # Firestore (not in the hub form yet, so a hub save never touches it).
+    quote_roles: list[str] = Field(default_factory=list)
     guild_name: str = ""
     icon_url: str = ""
     channels: list[Channel] = Field(default_factory=list)
@@ -744,6 +759,9 @@ class BotGuildSettings:
     def report_channel_id(self, guild_id: int) -> int | None:
         v = self.current(guild_id).report_channel_id
         return int(v) if v else None
+
+    def quote_roles(self, guild_id: int) -> set[str]:
+        return set(self.current(guild_id).quote_roles)
 
     def exec_role_names(self, guild_id: int, env_names: set[str]) -> set[str]:
         g = self.current(guild_id)
