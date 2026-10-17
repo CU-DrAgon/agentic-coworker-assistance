@@ -111,6 +111,11 @@ since licensing and orgs already depend on it, and the platform adapters call it
 test data, and make one Slack app the bot (Socket Mode internal app per workspace now; HTTP
 Events + OAuth when it goes to the Marketplace, see `docs/platforms/slack.md`).
 
+**Done (step 1):** `platforms.ids` now delegates to `orgs` (`workspace_memory_id` for tenants,
+`namespaced_id` for rooms, users and the bot author, `message_namespaced_id` for messages, which
+hashes workspace + channel + `ts` because the memory key has no channel), and the Slack connector
+calls the same functions, so the tenant/room/user/message helpers are shared.
+
 ## Build order
 
 1. Unify the workspace id scheme (above).

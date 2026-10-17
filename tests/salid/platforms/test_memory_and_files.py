@@ -73,8 +73,9 @@ async def test_tenants_do_not_share_memory(s, tmp_path):
     two = await run(a, port, text="other", message="2.0", tenant="T2")
     assert [m.text for m in stored(a, one)] == ["secret of workspace one"]
     assert [m.text for m in stored(a, two)] == ["other"]
-    # the same channel id in two workspaces is two different rooms
-    assert rid_of(one) != rid_of(two) and gid_of(one) != gid_of(two)
+    # the same channel id in two workspaces: platform channel ids are global, so the room id is the
+    # same, but the tenant (guild) differs and every store filters by it
+    assert gid_of(one) != gid_of(two)
 
 
 # ------------------------------------------------------------------ scope (pure)
