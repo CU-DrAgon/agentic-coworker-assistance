@@ -120,10 +120,8 @@ class Settings(BaseSettings):
     engaged_bare_timeout_seconds: float = (
         300.0  # "Salid?" … thinking for minutes is fine, she waits
     )
-    # "Be quiet" / "เงียบก่อน": Salid says nothing and does not wake on a bare name until someone
-    # says her name with words again, like a person would. 0 = no timer (default); a positive value
-    # ends the silence after that many seconds instead (SALID_HUSH_HOLD_SECONDS).
-    hush_hold_seconds: float = 0.0
+    # "Be quiet" / "เงียบก่อน" (anyone): Salid says nothing and does not wake on a bare name until
+    # someone says her name with words again, like a person would. No timer.
     # Every listening <-> engaged change (and the join) is shown as one short line in the meeting's
     # text chat; a flip back within 15 s edits the previous line instead of posting a new one.
     voice_state_posts: bool = True

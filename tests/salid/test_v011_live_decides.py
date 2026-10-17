@@ -1,6 +1,7 @@
 # ruff: noqa: F811, F401
 """v0.11: the Live model decides wake / stay / end. Code keeps a few hard rules: the name for the
-mouth gate, the 10 s bare-name timeout, the 90 s cap, the hush command, a two-names backup.
+mouth gate, the bare-name wait, the engaged window (`engaged_timeout_seconds`, renewed by the caller's talk and
+by her answers), the hush command (no timer), a two-names backup.
 Offline: fake Live session and fake transcriber."""
 
 import time
@@ -34,8 +35,9 @@ async def test_end_conversation_tool_goes_back_to_listening_with_the_reason(lv):
 
 def test_end_reason_maps_to_a_line_and_defaults_to_ended():
     assert mt.MeetingManager._END_WHY[0][1].search("thanked")
-    assert mt.MeetingManager._END_WHY[1][1].search("went back to each other")
+    assert mt.MeetingManager._END_WHY[1][1].search("said that's all")
     assert mt.MeetingManager._END_WHY[2][1].search("told to be quiet")
+    assert not any(k == "each_other" for k, _ in mt.MeetingManager._END_WHY)
 
 
 async def test_live_mode_ignores_the_dismissal_list_and_the_three_strikes(lv, monkeypatch):
@@ -48,23 +50,57 @@ async def test_live_mode_ignores_the_dismissal_list_and_the_three_strikes(lv, mo
     await lv.mgr.end((1000, 77))
 
 
-async def test_bare_name_engagement_lasts_10_seconds(lv):
+async def test_bare_name_engagement_waits_the_bare_timeout(lv):
     s, live = await lv.join(5)
     lv.mgr._set_engaged(s, True, by=5, bare=True)
-    assert 9.0 < s.engaged_until - time.monotonic() <= 10.0
-    lv.mgr._consent_tick(s, time.monotonic() + 11)
+    assert 299.0 < s.engaged_until - time.monotonic() <= 300.0
+    lv.mgr._consent_tick(s, time.monotonic() + 301)
     assert s.engaged is False
     await lv.mgr.end((1000, 77))
 
 
-async def test_the_cap_is_90_seconds_and_her_own_speech_keeps_it_away(lv):
-    s, live = await lv.join(5)
+async def test_the_window_is_5_minutes_her_answer_and_the_caller_renew_it(lv, monkeypatch):
+    s, live = await lv.join(5, 6)
     lv.mgr._set_engaged(s, True, by=5)
-    assert 89.0 < s.engaged_until - time.monotonic() <= 90.0
+    assert 299.0 < s.engaged_until - time.monotonic() <= 300.0
+    # her own answer renews it
     s.engaged_until = time.monotonic() + 5
     live.push(audio_msg())
-    await until(lambda: s.engaged_until - time.monotonic() > 80)
+    await until(lambda: s.engaged_until - time.monotonic() > 290)
+    # the caller talking within the exchange renews it, however short
+    s.speaking, s.speaking_until, s.speaking_since = False, 0.0, 0.0  # her voice is over
+    s.engaged_until = time.monotonic() + 5
+    say(monkeypatch, Heard("แล้วอีกเรื่องหนึ่ง"))
+    await lv.mgr.handle_segment(s, seg(5))
+    assert s.engaged_until - time.monotonic() > 290
+    # somebody else talking without her name does not
+    s.engaged_until = time.monotonic() + 5
+    await lv.mgr.handle_segment(s, seg(6))
+    assert s.engaged_until - time.monotonic() <= 5
+    # ... but when that person says her name the exchange is renewed (and stays the caller's)
+    say(monkeypatch, Heard("Salid, what time is it?", True))
+    await lv.mgr.handle_segment(s, seg(6))
+    assert s.engaged_until - time.monotonic() > 290 and s.called_by == 5
     await lv.mgr.end((1000, 77))
+
+
+async def test_the_quiet_label_shows_the_real_window(lv):
+    lv.bot.s.voice_state_posts = True
+    lv.bot.s.engaged_timeout_seconds = 150.0
+    s, live = await lv.join(5)
+    lv.mgr._set_engaged(s, True, name="มิว", by=5)
+    lv.mgr._consent_tick(s, time.monotonic() + 151)
+    await until(lambda: any("2.5" in m for m in lv.chan.sent))
+    assert not any("90" in m for m in lv.chan.sent)
+    await lv.mgr.end((1000, 77))
+
+
+def test_the_instruction_states_the_configured_window():
+    s = FixedClockSettings()
+    assert "after 5 minutes" in build_instruction(s, "en")
+    assert "5 นาที" in build_instruction(s, "th")
+    s.engaged_timeout_seconds = 120.0
+    assert "after 2 minutes" in build_instruction(s, "en")
 
 
 async def test_name_twice_within_15_seconds_forces_one_cue(lv, monkeypatch):
