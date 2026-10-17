@@ -6,7 +6,11 @@ ID mapping (documented contract, see `salid.orgs`):
 * workspace "guild id" = `workspace_memory_id("slack", team_id)` (namespaced, >= 2**62);
 * channel id           = `namespaced_id("slack", channel_id, "channel")`;
 * author id            = `namespaced_id("slack", user_id, "user")`;
-* message id           = microseconds of the Slack `ts` (`1700000000.000200` -> 1700000000000200).
+* message id           = `message_namespaced_id("slack", team_id, channel_id, ts)` (the store keys
+  messages by guild + message id with no channel, and a `ts` is only unique per channel, so the
+  hash includes the channel).
+The Salid bot (`salid.platforms.ids`) calls the very same functions, so one Slack workspace is one
+tenant: one ledger, one memory, one licence, whichever integration saw the message.
 Only PUBLIC channel messages (`channel_type == "channel"`) are ingested; private channels, group
 and direct messages are ignored. Each ingested channel is registered under `SLACK_CHANNELS` so the
 web chat can read it.
@@ -24,7 +28,7 @@ from urllib.parse import urlencode
 import httpx
 
 from salid.memory_store import MemoryMessage
-from salid.orgs import namespaced_id, workspace_memory_id
+from salid.orgs import message_namespaced_id, namespaced_id, workspace_memory_id
 
 from .base import Connection, ConnectorConfig, ConnectorError, NotConfigured, http_client
 
@@ -53,11 +57,6 @@ def verify_signature(
     base = b"v0:" + timestamp.encode() + b":" + body
     expected = "v0=" + hmac.new(signing_secret.encode(), base, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
-
-
-def message_id_of(ts: str) -> int:
-    sec, _, frac = ts.partition(".")
-    return int(sec) * 1_000_000 + int((frac + "000000")[:6])
 
 
 class SlackConnector:
@@ -168,7 +167,7 @@ class SlackConnector:
             MemoryMessage(
                 guild_id=wid,
                 channel_id=channel,
-                message_id=message_id_of(ts),
+                message_id=message_namespaced_id("slack", team, str(ev["channel"]), ts),
                 author_id=namespaced_id("slack", str(ev.get("user", "")), "user"),
                 author_name=str(ev.get("user", "")),
                 created_at=at,

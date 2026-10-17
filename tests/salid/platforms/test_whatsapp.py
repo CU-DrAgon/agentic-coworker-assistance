@@ -223,7 +223,6 @@ def test_incoming_fields(fx):
     assert m.room == ALICE and m.user == ALICE and m.user_name == "Alice"
     assert m.is_direct and m.message == "wamid.7" and m.at == NOW and m.thread is None
     assert ids.tenant_id("whatsapp", PHONE_ID) >= ids.DISCORD_CEILING
-    assert ids.platform_of(ids.tenant_id("whatsapp", PHONE_ID)) == "whatsapp"
 
 
 async def test_image_with_caption_downloads_lazily(fx):
@@ -822,11 +821,10 @@ def test_settings_never_print_the_secrets():
 
 def test_whatsapp_tenants_are_their_own_range():
     t = ids.tenant_id("whatsapp", PHONE_ID)
-    assert ids.DISCORD_CEILING <= t < 2**63 and ids.platform_of(t) == "whatsapp"
+    assert ids.DISCORD_CEILING <= t < 2**63
     for other in ("slack", "line", "telegram"):
         assert ids.tenant_id(other, PHONE_ID) != t
-        assert ids.platform_of(ids.tenant_id(other, PHONE_ID)) == other
-    assert ids.platform_of(12345) is None
+    assert not ids.is_platform_tenant(12345)
 
 
 # ------------------------------------------------------------------ smoke

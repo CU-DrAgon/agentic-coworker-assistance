@@ -70,6 +70,19 @@ def namespaced_id(platform: str, external_id: str, kind: str = "channel") -> int
     return NAMESPACE_BASE + (int.from_bytes(digest[:8], "big") % 2**61)
 
 
+def message_namespaced_id(platform: str, tenant_key: str, room_key: str, key: str) -> int:
+    """Stable positive id for a non-Discord message (Slack `ts`, LINE message id, ...).
+
+    The memory store keys messages by (guild_id, message_id) with no channel in the key, and a
+    Slack `ts` is only unique inside one channel, so the id hashes the workspace and the room
+    together with the message key: two channels can never overwrite each other's records.
+    """
+    digest = hashlib.sha256(
+        "\x1f".join((platform, "message", tenant_key, room_key, key)).encode()
+    ).digest()
+    return NAMESPACE_BASE + (int.from_bytes(digest[:8], "big") % 2**61)
+
+
 def workspace_id(platform: str, external_id: str) -> str:
     return "web" if platform == "web" else f"{platform}-{external_id}"
 

@@ -1077,7 +1077,7 @@ def test_slack_events_signature_and_challenge(w):
 
 
 def test_slack_events_ingest_into_namespaced_memory(w):
-    from salid.orgs import namespaced_id, workspace_memory_id
+    from salid.orgs import message_namespaced_id, namespaced_id, workspace_memory_id
 
     w.orgs.attach_workspace(
         "org_t", Workspace(id="slack-T1", platform="slack", external_id="T1", name="Acme")
@@ -1089,7 +1089,8 @@ def test_slack_events_ingest_into_namespaced_memory(w):
     chan = namespaced_id("slack", "C1", "channel")
     rows = w.memory.messages(wid, {chan}, "2025-01-01", "2026-12-31")
     assert len(rows) == 1 and rows[0].text == "ship it" and rows[0].guild_id == wid
-    assert rows[0].message_id == 1760443200000200 and rows[0].channel_id == chan
+    assert rows[0].channel_id == chan
+    assert rows[0].message_id == message_namespaced_id("slack", "T1", "C1", "1760443200.000200")
     # a retry is idempotent
     post_event(w, slack_msg())
     assert len(w.memory.messages(wid, {chan}, "2025-01-01", "2026-12-31")) == 1
