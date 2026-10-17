@@ -233,8 +233,8 @@
           <label><span data-i18n="ask_ids_l"></span> <div class="checks" id="ask-ids"></div><small data-i18n="ask_ids_s"></small></label>
           <label><span data-i18n="digest_id_l"></span> <select class="field" id="digest-id"></select></label>
           <label><span data-i18n="mem_days_l"></span>
-            <select id="mem-days"><option value="7" data-i18n="days_n" data-n="7"></option><option value="30" data-i18n="days_n" data-n="30"></option><option value="90" data-i18n="days_n" data-n="90"></option><option value="180" data-i18n="days_n" data-n="180"></option><option value="365" data-i18n="days_n" data-n="365"></option><option value="custom" data-i18n="custom"></option></select>
-            <input type="number" id="mem-days-custom" min="1" max="3650" step="1" hidden>
+            <select id="mem-days"><option value="0" data-i18n="days_forever"></option><option value="7" data-i18n="days_n" data-n="7"></option><option value="30" data-i18n="days_n" data-n="30"></option><option value="90" data-i18n="days_n" data-n="90"></option><option value="180" data-i18n="days_n" data-n="180"></option><option value="365" data-i18n="days_n" data-n="365"></option><option value="custom" data-i18n="custom"></option></select>
+            <input type="number" id="mem-days-custom" min="0" max="3650" step="1" hidden>
             <small data-i18n="mem_days_s"></small>
             <small id="mem-progress"></small></label>
           <label><span data-i18n="digest_time_l"></span> <input type="time" id="digest-time" value="18:00"><small data-i18n="digest_time_s"></small></label>
@@ -583,9 +583,13 @@
   "th": "กำหนดเอง",
   "en": "Custom"
  },
+ "days_forever": {
+  "th": "เก็บถาวร (ทรัพย์สินของบริษัท) — ค่าเริ่มต้น",
+  "en": "Keep forever (company asset) — default"
+ },
  "mem_days_s": {
-  "th": "1-3650 วัน ใช้กับข้อความเก่าด้วย (ล้างวันละครั้ง) สลิดนำเข้าประวัติข้อความย้อนหลังตามจำนวนวันนี้ด้วย",
-  "en": "1-3650 days. Applies to old messages too (cleaned once a day). Salid also imports past message history for this many days."
+  "th": "ค่าเริ่มต้นคือเก็บถาวร: สิ่งที่พนักงานบอกสลิดเป็นทรัพย์สินของบริษัท อยู่ตราบที่บริษัทใช้บริการ ตั้งจำนวนวัน (1-3650) เฉพาะเมื่อต้องการให้ลบของเก่าอัตโนมัติ (ล้างวันละครั้ง) สลิดนำเข้าประวัติย้อนหลังตามนี้ด้วย",
+  "en": "Default is keep forever: what the staff tell Salid is the company's asset and stays as long as the company uses the service. Set a number of days (1-3650) only if you want old memory deleted automatically (cleaned once a day). Salid also imports past history for that window."
  },
  "mem_progress": {
   "th": "นำเข้าประวัติแล้ว {done}/{total} ห้อง, {messages} ข้อความ, รูป {images}/{cap}",

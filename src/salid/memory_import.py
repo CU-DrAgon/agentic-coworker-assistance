@@ -93,7 +93,8 @@ class MemoryImporter:
     # ------------------------------------------------------------ the run
     async def run_guild(self, gid: int, targets: list[Target]) -> RunResult:
         now = self.now().astimezone(UTC)
-        target_from = now - timedelta(days=self.retention_of(gid))
+        days = int(self.retention_of(gid) or 0)
+        target_from = now - timedelta(days=days if days > 0 else 3650)  # forever: all history
         gstate = self.guild_state(gid)
         gstate.channels_total = len(targets)
         res = RunResult(channels_total=len(targets))

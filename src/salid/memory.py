@@ -434,7 +434,10 @@ class MemoryScheduler:
         """Delete now what is past ONE guild's current retention (it was just shortened) and
         drop its cached index. Other guilds are untouched (the default cutoff is the epoch)."""
         utc = (now or self.now()).astimezone(UTC)
-        cutoffs = {guild_id: utc - timedelta(days=self.retention_of(guild_id))}
+        days = int(self.retention_of(guild_id) or 0)
+        if days <= 0:  # keep forever: nothing to purge
+            return (0, 0)
+        cutoffs = {guild_id: utc - timedelta(days=days)}
         result = self.store.purge(cutoffs, datetime(1970, 1, 1, tzinfo=UTC))
         invalidate = getattr(self.store, "invalidate_guild", None)
         if invalidate is not None:
@@ -450,10 +453,13 @@ class MemoryScheduler:
         self._purged_on = day
         try:
             utc = now.astimezone(UTC)
-            cutoffs = {
-                gid: utc - timedelta(days=self.retention_of(gid)) for gid in self._known_guilds
-            }
-            default = utc - timedelta(days=self.s.memory_retention_days)
+            epoch = datetime(1970, 1, 1, tzinfo=UTC)  # "keep forever" = cutoff at the epoch
+            cutoffs = {}
+            for gid in self._known_guilds:
+                days = int(self.retention_of(gid) or 0)
+                cutoffs[gid] = utc - timedelta(days=days) if days > 0 else epoch
+            dd = int(self.s.memory_retention_days or 0)
+            default = utc - timedelta(days=dd) if dd > 0 else epoch
             m, s = self.store.purge(cutoffs, default)
         except Exception:
             logger.warning("memory purge failed", exc_info=True)

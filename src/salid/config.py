@@ -205,7 +205,9 @@ class Settings(BaseSettings):
     embed_dim: int = 256
     embed_location: str = ""  # empty = gemini_location
     # Organisational memory (salid.memory): raw chat log + per-channel day summaries.
-    memory_retention_days: int = 90
+    memory_retention_days: int = (
+        0  # 0 = keep forever (company asset); a positive value purges older memory
+    )
     memory_update_every: int = 30  # new messages in a channel that trigger a summary update
     memory_quiet_minutes: int = 20  # quiet time after which any new messages are summarised
     memory_messages_collection: str = "salid_messages"

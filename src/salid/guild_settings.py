@@ -151,13 +151,26 @@ _ID = re.compile(r"^\d{1,25}$")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
 
-MIN_RETENTION_DAYS, MAX_RETENTION_DAYS = 1, 3650
+MIN_RETENTION_DAYS, MAX_RETENTION_DAYS = 0, 3650  # 0 = keep forever (company asset)
 
 
 def default_retention_days() -> int:
-    """SALID_MEMORY_RETENTION_DAYS when valid, else 90 (the default for guilds without a value)."""
+    """SALID_MEMORY_RETENTION_DAYS when valid, else 0 = keep forever. What the staff tell Salid is
+    the company's asset: it stays as long as the company uses the service (the owner, 2026-10-18)."""
     v = os.environ.get("SALID_MEMORY_RETENTION_DAYS", "")
-    return int(v) if v.isdigit() and MIN_RETENTION_DAYS <= int(v) <= MAX_RETENTION_DAYS else 90
+    return int(v) if v.isdigit() and MIN_RETENTION_DAYS <= int(v) <= MAX_RETENTION_DAYS else 0
+
+
+FOREVER_DAYS = 3650  # "keep forever" (0) as a lookback window for reads, imports and purges
+
+
+def effective_retention_days(stored: int | None) -> int:
+    """The window every reader / importer / purger uses: a stored 0 (keep forever) = 10 years."""
+    try:
+        n = int(stored or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return n if n > 0 else FOREVER_DAYS
 
 
 def valid_retention_days(v) -> int | None:
@@ -301,7 +314,7 @@ class GuildSettingsUpdate(BaseModel):
     @field_validator("memory_retention_days", mode="before")
     @classmethod
     def _retention(cls, v):
-        """1-3650 days; anything else falls back to the default."""
+        """0 (forever) - 3650 days; anything else falls back to the default."""
         ok = valid_retention_days(v)
         return default_retention_days() if ok is None else ok
 
@@ -1004,7 +1017,7 @@ class BotGuildSettings:
         return hit[1]
 
     def memory_retention_days(self, guild_id: int) -> int:
-        return self.current(guild_id).memory_retention_days
+        return effective_retention_days(self.current(guild_id).memory_retention_days)
 
     def fresh_memory_retention_days(self, guild_id: int, *, fail_closed: bool = False) -> int:
         """Retention read from the store NOW, bypassing the cache. Read paths that hide expired
@@ -1015,9 +1028,9 @@ class BotGuildSettings:
             value = self.store.get(guild_id)
         except Exception:
             logger.warning("could not read retention of guild %s", guild_id, exc_info=True)
-            return MIN_RETENTION_DAYS if fail_closed else self.memory_retention_days(guild_id)
+            return 1 if fail_closed else self.memory_retention_days(guild_id)
         self._cache[guild_id] = (self._clock(), value)
-        return value.memory_retention_days
+        return effective_retention_days(value.memory_retention_days)
 
     def set_memory_retention_days(self, guild_id: int, days: int) -> None:
         """Write one guild's retention (validated) and drop the cache so it applies at once."""
