@@ -2729,6 +2729,29 @@ class MeetingManager:
             bot._log_answer(
                 s.guild_id, s.voice_channel.id, is_exec, ans, t0, t_ctx, time.monotonic()
             )
+            try:  # the company language is the rule: a wrong-script answer is translated
+                from .captions import translate_lines
+                from .i18n import detect_lang
+
+                primary = base_lang(s.lang)
+                room = list(getattr(s, "langs", None) or [primary])
+                got = detect_lang(ans.text or "")
+                if (
+                    primary in ("th", "en")
+                    and got in ("th", "en")
+                    and got != primary
+                    and got not in room
+                ):
+                    logger.warning(
+                        "meeting: answer came in %s on a %s room: translating", got, primary
+                    )
+                    fixed = await asyncio.to_thread(
+                        translate_lines, bot.llm, bot.s.gate_model, [ans.text or ""], primary
+                    )
+                    if fixed and fixed[0].strip():
+                        ans.text = fixed[0]
+            except Exception:
+                logger.debug("meeting: language check skipped", exc_info=True)
             if muted or getattr(bot.s, "meeting_text_echo", False):  # voice meetings stay voice
                 for i, part in enumerate(chunks(ans.text, 1800)):
                     await self._post(s, f"{member.mention} {part}" if i == 0 else part)

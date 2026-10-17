@@ -2243,9 +2243,16 @@ def build_agent(
 SPOKEN_THINKING = "MINIMAL"  # ThinkingLevel for answers that are read aloud in a voice room
 
 
-def spoken_hint(particle: str = "") -> str:
+def spoken_hint(particle: str = "", language: str = "th") -> str:
     """Hint appended to a question whose answer will be spoken. `particle`: the voice's
-    politeness particle (ค่ะ for the female voice; questions use คะ)."""
+    politeness particle (ค่ะ for the female voice; questions use คะ) — Thai only. On any other
+    company language the hint is English and says so (a Thai hint pushed the model into Thai)."""
+    if base_lang(language) != "th":
+        return (
+            "(This answer will be spoken aloud in the voice room: 1-3 short sentences, no lists or "
+            f"markdown. Answer in {lang_name(language, 1)} as the settings say, whatever language the "
+            "question was spoken in; no Thai particles.)"
+        )
     hint = SPOKEN_HINT
     if particle:
         q = "คะ" if particle == "ค่ะ" else particle
@@ -2425,7 +2432,7 @@ async def ask_async(
     if skipped:
         text_in += "\n" + skipped_note(skipped)
     if spoken:
-        text_in += "\n" + spoken_hint(str(getattr(settings, "voice_particle", "") or ""))
+        text_in += "\n" + spoken_hint(str(getattr(settings, "voice_particle", "") or ""), language)
     message = types.Content(role="user", parts=[types.Part(text=text_in), *f_parts])
     rounds, text = 0, ""
     first_call_s = last_call_s = 0.0
