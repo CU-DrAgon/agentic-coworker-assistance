@@ -582,16 +582,9 @@ def _langs_block(langs: list[str] | None, company_only: bool, prompt_lang: str) 
     rule, and the one-line mode statement for the first spoken reply (said once)."""
     if not langs or "auto" in langs:
         return ""
-    line = aud.mode_line(langs, company_only=company_only)
-    rule = aud.second_language_rule(langs, prompt_lang)
-    if prompt_lang == "th":
-        first = f"ประโยคแรกที่คุณพูดในห้องนี้ ให้บอกโหมดภาษาครั้งเดียวด้วยประโยคนี้ก่อน แล้วค่อยตอบ: {line}\n"
-    else:
-        first = (
-            "The first time you speak in this meeting, say this once before your answer "
-            f"(never again): {line}\n"
-        )
-    return rule.lstrip("\n") + ("\n" if rule else "") + first
+    # No spoken announcements of settings ("I'll answer in English…"): the mode is shown as a
+    # text line in the meeting chat only (the owner, 2026-10-18: it sounded like a cheap gadget).
+    return rule.lstrip("\n")
 
 
 def build_instruction_en(

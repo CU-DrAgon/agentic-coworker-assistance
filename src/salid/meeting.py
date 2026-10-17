@@ -2886,7 +2886,9 @@ class MeetingManager:
             particle = str(getattr(bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
             spoken_parts: list[str] = []
             pcm = b""
-            if aud.MODE_NOTICES and not s.mode_spoken and s.langs:
+            if (
+                False and aud.MODE_NOTICES and not s.mode_spoken and s.langs
+            ):  # never spoken: text only
                 s.mode_spoken = True
                 company_only = len(s.langs) == 1 and s.language_mode == "company_only"
                 for r in langs:
