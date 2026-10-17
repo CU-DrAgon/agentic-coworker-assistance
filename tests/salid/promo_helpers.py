@@ -1,6 +1,7 @@
 """Shared helpers for the promo kit tests: images, Gemini responses and a fake client."""
 
 import io
+import json
 
 from conftest import FakeClient
 from google.genai import types
@@ -45,6 +46,10 @@ def image_response(png: bytes, finish=types.FinishReason.STOP) -> types.Generate
 
 def text_response(text: str) -> types.GenerateContentResponse:
     return _response([types.Part(text=text)], types.FinishReason.STOP)
+
+
+def json_response(obj) -> types.GenerateContentResponse:
+    return text_response(json.dumps(obj, ensure_ascii=False))
 
 
 def _raiser(exc: BaseException):
