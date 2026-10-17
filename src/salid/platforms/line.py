@@ -317,8 +317,8 @@ class LinePort:
                         "push rate limit was hit; this part of the answer was NOT delivered "
                         "(tenant=%s room=%s). Replies stay free: check the plan and "
                         "GET /v2/bot/message/quota/consumption.",
-                        msg.tenant,
-                        msg.room,
+                        ids.tenant_id("line", msg.tenant),
+                        ids.room_id("line", msg.tenant, msg.room),
                     )
                     return None
                 if reply_rejected(e) or attempt == 2:

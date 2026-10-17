@@ -84,7 +84,9 @@ uv run python -m salid.platforms
 
 At start Salid calls `deleteWebhook` (a webhook and `getUpdates` exclude each other), then polls with a
 30 s timeout. A failed poll is retried with a 1 s → 60 s backoff and re-reads the same updates, so none
-are lost. Run **one** instance per token: a second poller (or a webhook) gets `409 Conflict`; Salid logs
+are lost. Each batch is handled concurrently (an album needs that) and awaited for up to 180 s; the
+offset only moves past updates whose handler finished, so an update that failed on a network error,
+429 or 5xx is redelivered (at most 3 tries, and updates already handled are skipped). Run **one** instance per token: a second poller (or a webhook) gets `409 Conflict`; Salid logs
 a clear error and keeps retrying with at least 5 s between tries. After a week without any update
 Telegram may number the next `update_id` at random, so after more than 6 idle days Salid logs it and
 resets its offset.
@@ -100,7 +102,7 @@ resets its offset.
 - The tenant of Telegram is the bot (its id from `getMe`), so everyone talking to the same bot shares
   one ledger and one settings document (`salid_guilds/{tenant id}`). Use one bot token per customer.
 - The bot token is part of every Bot API URL. Salid never logs URLs or request lines, but do not paste
-  the token into chats or commit it; rotate it with BotFather's `/token` if it leaks.
+  the token into chats or commit it; chat ids are logged only as a short hash; rotate it with BotFather's `/token` if it leaks.
 - With privacy mode off Salid sees all messages in groups it was added to. It posts a notice when it
   joins; remove it from the group to stop recording.
 
