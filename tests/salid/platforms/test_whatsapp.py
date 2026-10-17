@@ -303,10 +303,59 @@ def test_the_room_is_the_bsuid_even_when_the_phone_number_shows_up_later(fx):
     without = adapter._incoming(bsuid_msg(mid="m1"), {})
     with_phone = adapter._incoming(bsuid_msg(mid="m2", **{"from": ALICE}), {})
     assert without.room == with_phone.room == BSUID  # one chat, one memory
-    assert without.user == BSUID and with_phone.user == ALICE  # the wa_id wins for the user
+    assert without.user == with_phone.user == BSUID  # one person, one identity
     legacy = adapter._incoming(text("old payload", mid="m3"), {})
     assert legacy.room == ALICE  # no from_user_id (pre-BSUID payloads): the wa_id
     assert adapter._incoming({"id": "m4", "type": "text", "text": {"body": "x"}}, {}) is None
+
+
+async def test_the_same_bsuid_with_and_without_a_phone_is_one_user_and_one_room(fx):
+    api, a, port, adapter = fx
+    await adapter.on_payload(payload(bsuid_msg(mid="m1", body="my private receipt")))
+    await adapter.on_payload(payload(bsuid_msg(mid="m2", **{"from": ALICE})))
+    await a.drain()
+    m1 = adapter._incoming(bsuid_msg(mid="m8"), {})
+    m2 = adapter._incoming(bsuid_msg(mid="m9", **{"from": ALICE}), {})
+    assert m1.user == m2.user == m1.room == m2.room == BSUID
+    assert rid_of(m1) == rid_of(m2)
+    assert "my private receipt" in [x.text for x in stored(a, m2)]
+    # the phone number is only the outbound recipient, and only while it is known
+    assert [x["to"] for x in api.sent] == [BSUID, ALICE]
+    await adapter.on_payload(payload(bsuid_msg(mid="m3")))  # the phone vanished again
+    await a.drain()
+    assert api.sent[-1]["to"] == BSUID
+
+
+async def test_a_new_bsuid_on_a_reused_phone_number_is_a_different_user(fx):
+    api, a, port, adapter = fx
+    await adapter.on_payload(
+        payload(bsuid_msg(mid="m1", body="old holder secret", **{"from": ALICE}))
+    )
+    await adapter.on_payload(
+        payload(bsuid_msg(mid="m2", from_user_id=BSUID2, body="new holder", **{"from": ALICE}))
+    )
+    await a.drain()
+    old = adapter._incoming(bsuid_msg(mid="m8", **{"from": ALICE}), {})
+    new = adapter._incoming(bsuid_msg(mid="m9", from_user_id=BSUID2, **{"from": ALICE}), {})
+    assert old.user != new.user and old.room != new.room
+    assert ids.user_id("whatsapp", old.user) != ids.user_id("whatsapp", new.user)
+    assert "old holder secret" not in [x.text for x in stored(a, new)]
+    assert "new holder" not in [x.text for x in stored(a, old)]
+
+
+async def test_executives_by_phone_still_work_when_a_bsuid_is_present(s, tmp_path):
+    ps = PlatformSettings(_env_file=None, whatsapp_exec_numbers=ALICE)
+    a = make_assistant(s, tmp_path, ps=ps)
+    port = WhatsAppPort(FakeApi())
+    adapter = WhatsAppAdapter(a, port, PHONE_ID)
+    with_phone = adapter._incoming(bsuid_msg(mid="m1", **{"from": ALICE}), {})
+    assert with_phone.user == BSUID and await port.is_admin(with_phone)
+    no_phone = adapter._incoming(bsuid_msg(mid="m2"), {})  # phone gone: not an executive
+    assert not await port.is_admin(no_phone)
+    other = adapter._incoming(bsuid_msg(mid="m3", from_user_id=BSUID2, **{"from": BOB}), {})
+    assert not await port.is_admin(other)
+    phone_only = adapter._incoming(text("hi", mid="m4"), {})
+    assert phone_only.user == ALICE and await port.is_admin(phone_only)
 
 
 async def test_bsuid_is_sent_as_recipient_and_a_phone_number_as_to():
