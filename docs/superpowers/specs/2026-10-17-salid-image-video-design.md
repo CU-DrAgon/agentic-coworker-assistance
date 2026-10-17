@@ -196,7 +196,7 @@ message, at most every 5 s, with a Cancel button for the requester or an admin):
 
 - Model safety settings above; our English-only guard; storyboard rules; regulated-category rule
   (food / cosmetics / supplements: no health or cure claims in captions or narration).
-- No editing of real people's photos; reference photos are products or logos (the tool
+- No editing of real people's photos; reference photos are products, logos, food or places (the tool
   description says so; Omni refuses some recognisable people).
 - The "สร้างด้วย AI" label on every video and the AI note in replies; Google's SynthID and C2PA
   are on model outputs (our edits break C2PA, which is documented).

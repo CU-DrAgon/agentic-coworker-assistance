@@ -440,7 +440,7 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   19 MiB; DMs 9 MiB). The MP4 comes back as a reply with the scene list and a suggested caption ending in
   `#สร้างด้วยAI`. Needs ffmpeg and `libfribidi`. Limits: `SALID_VIDEO_ADS_PER_MONTH` (10 per guild, taken when the
   job starts, not refunded), one job per guild and `SALID_VIDEO_MAX_JOBS` (1) across the bot; renders run in
-  their own thread pool of that size, and every ffmpeg run is niced (`nice -n 10`) with 2 encoder threads so the
+  their own thread pool of that size, and every ffmpeg run is niced (`nice -n 10`) and the x264 encodes use 2 threads so the
   bot stays responsive (measure render time on the production image before raising it). Job records
   (`salid_video_jobs`: state, times, cost estimate, failure reason; never the brief, storyboard or media) and
   monthly usage (`salid_media_usage`, key `YYYY-MM`) live in the DocStore; jobs cut off by a restart are marked
