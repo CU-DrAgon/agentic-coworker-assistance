@@ -224,7 +224,10 @@ def card_text(task: Task, lang: str, *, channel: str, project: str = "") -> str:
     )
     if task.step > 0:  # a step of an imported plan (salid.plan_import)
         line += " · " + t("prog_step", lang, n=task.step)
-    return line + t("hs_card_id", lang, id=task.id)
+    line += t("hs_card_id", lang, id=task.id)
+    if not task.due:  # no deadline: say how to add one
+        line = with_hint(line, "nodue", lang=lang).replace("{id}", task.id)
+    return line
 
 
 def status_line(task: Task, lang: str, edited: bool = False) -> str:

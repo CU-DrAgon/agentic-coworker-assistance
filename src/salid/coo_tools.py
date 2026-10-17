@@ -11,7 +11,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from . import task_handshake as H
-from .hints import legend, status_marker
+from .hints import hint, legend, status_marker
 from .memory_access import Scope
 from .tasks import (
     STATUSES,
@@ -170,13 +170,32 @@ class CooTools:
         return out
 
     def update_task(
-        self, task_id: str, status: str = "", note: str = "", assignee: str = ""
+        self, task_id: str, status: str = "", note: str = "", assignee: str = "", due: str = ""
     ) -> dict:
         task = self.tasks.get(self.guild_id, (task_id or "").lstrip("#").strip())
         if task is None:
             return {"error": "no such task"}
-        if not status and not (assignee or "").strip():
-            return {"error": "give a status (done / open) or an assignee"}
+        if not status and not (assignee or "").strip() and not (due or "").strip():
+            return {"error": "give a status (done / open), an assignee or a due date"}
+        if (due or "").strip():
+            if not (
+                self.is_exec
+                or task.assignee_id == self.asker_id
+                or (task.assigner_id and task.assigner_id == self.asker_id)
+            ):
+                return {"error": "not allowed: only the assignee, the giver or an executive"}
+            when = parse_due(due, self.today())
+            if not when:
+                return {
+                    "error": f"cannot read {due!r} as a date",
+                    "hint": hint("due_formats", self.lang),
+                }
+            task.due = when
+            if note:
+                task.note = note[:500]
+            self.tasks.save(task)
+            if not status and not (assignee or "").strip():
+                return {"updated": self._view(task)}
         if status:
             if not (self.is_exec or task.assignee_id == self.asker_id):
                 return {"error": "not allowed: a member may only update their own tasks"}
@@ -296,7 +315,9 @@ def build_coo_tools(c: CooTools, calls: list | None = None) -> list:
         a = dict(title=title, assignee=assignee, due=due, project=project, note=note)
         return safe("add_task", a, lambda: c.add_task(**a))
 
-    def update_task(task_id: str, status: str = "", note: str = "", assignee: str = "") -> dict:
+    def update_task(
+        task_id: str, status: str = "", note: str = "", assignee: str = "", due: str = ""
+    ) -> dict:
         """Mark a task done or reopen it, with a short note (for example what was delivered), or
         hand it to someone else. Members may only update their own tasks; executives may update
         any. Only an executive or the person who gave a task may reassign it; the new assignee
@@ -307,8 +328,10 @@ def build_coo_tools(c: CooTools, calls: list | None = None) -> list:
             status: done or open; empty to leave it as it is.
             note: short note, optional.
             assignee: member name or @mention to hand the task to, optional.
+            due: set the deadline ("friday", "tomorrow", 2026-10-20); the assignee, the giver
+                or an executive may.
         """
-        a = dict(task_id=task_id, status=status, note=note, assignee=assignee)
+        a = dict(task_id=task_id, status=status, note=note, assignee=assignee, due=due)
         return safe("update_task", a, lambda: c.update_task(**a))
 
     def answer_task_question(task_id: str, answer: str, name: str = "") -> dict:

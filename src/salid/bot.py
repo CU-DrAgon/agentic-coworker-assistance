@@ -142,6 +142,7 @@ from .modes import (
     parse_snooze_command,
 )
 from .naming import command_text, mentions_name
+from .nodue_bot import NoDeadlineMixin
 from .pdf_report import find_fonts, font_note
 from .permissions import (
     channel_missing,
@@ -358,6 +359,7 @@ class SecretaryBot(
     ReminderMixin,
     ProjectsMixin,
     TaskHandshakeMixin,
+    NoDeadlineMixin,
     ToneMixin,
     IdeasMixin,
     QuotationMixin,
@@ -3108,6 +3110,7 @@ class SecretaryBot(
         await self._polls_forms_due()
         await self._votes_due()
         await self._reminders_due()
+        await self._nodue_due()
         await self._pc_sweep()
         await self._travel_due()
         await self._markets_due()

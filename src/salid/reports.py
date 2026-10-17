@@ -64,12 +64,23 @@ class CompanyInput:
     people: list[PersonDay]
     unassigned_open: list[str]
     approvals: dict = field(default_factory=dict)  # {pending, stale, approved, declined}
+    no_deadline: list[str] = field(default_factory=list)  # "name: title (#id)", open, assigned
 
 
 def _local_day(iso_ts: str, zone) -> str:
     if not iso_ts:
         return ""
     return datetime.fromisoformat(iso_ts).astimezone(zone).date().isoformat()
+
+
+def no_deadline_section(rows: list[str], lang: str = "en") -> str:
+    """The "no deadline" block of a report: up to 10 lines then "+N more"; "" when none."""
+    if not rows:
+        return ""
+    lines = [t("rep_nodue", lang)] + [f"- {r}" for r in rows[:10]]
+    if len(rows) > 10:
+        lines.append(t("rep_more", lang, n=len(rows) - 10))
+    return "\n".join(lines)
 
 
 def _cut(text: str, n: int) -> str:
@@ -156,9 +167,12 @@ def collect_company(
         if len(p.snippets) < PERSON_SNIPPETS and len(m.text) >= 12:
             p.snippets.append(_cut(m.text, SNIPPET_CHARS))
     unassigned: list[str] = []
+    nodue: list[str] = []
     for task in tasks.list(guild_id, status=None):
         if not task_visible(task, scope):
             continue
+        if task.status == "open" and not task.due and task.assignee_id in people:
+            nodue.append(f"{people[task.assignee_id]}: {_cut(task.title, 100)} (#{task.id})")
         uid = task.assignee_id
         if not uid:
             if task.status == "open":
@@ -192,6 +206,7 @@ def collect_company(
         people=active[:MAX_PEOPLE],
         unassigned_open=unassigned[:10],
         approvals=approvals or {},
+        no_deadline=nodue,
     )
 
 
@@ -292,6 +307,8 @@ def render_plain(inp: CompanyInput, lang: str = "en") -> str:
     risks = [f"{p.name}: {r}" for p in inp.people for r in p.overdue] + inp.unassigned_open
     if risks:
         lines += ["", t("rep_risks", lang)] + [f"- {r}" for r in risks[:10]]
+    if inp.no_deadline:
+        lines += ["", no_deadline_section(inp.no_deadline, lang)]
     return with_legend("\n".join(lines)[: MAX_PLAIN_CHARS - 400], lang)
 
 
@@ -313,7 +330,8 @@ def build_company_report(
         )
         text = (resp.text or "").strip()
         if text:
-            return with_legend(text, lang)
+            extra = no_deadline_section(inp.no_deadline, lang)
+            return with_legend(text + ("\n\n" + extra if extra else ""), lang)
     except Exception:
         logger.warning("report generation failed; sending the plain report", exc_info=True)
     return render_plain(inp, lang)
@@ -406,6 +424,9 @@ def render_personal(data: dict, lang: str = "en") -> str:
                 if m
             ]
             lines.append(f"- #{x['id']} {x['title']}{due}" + "".join(f" {m}" for m in marks))
+        nodue = [f"#{x['id']} {x['title']}" for x in data["tasks_open"] if not x["due"]]
+        if nodue:
+            lines += ["", no_deadline_section(nodue, lang)]
     return with_legend("\n".join(lines), lang)
 
 

@@ -65,6 +65,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "th": "บอกเวลาได้ เช่น “พรุ่งนี้ 9 โมง” · “อีก 2 ชั่วโมง” · “ทุกวันจันทร์ 10:00”",
         "en": "Say the time like “tomorrow 9am” · “in 2 hours” · “every monday 10:00”",
     },
+    "hint_nodue": {
+        "th": "ไม่มีกำหนด: กด ✏️ แก้ไข เพื่อใส่ หรือพิมพ์ “งาน #{id} กำหนด ศุกร์”",
+        "en": "No deadline: press ✏️ Edit to add one, or type “task #{id} due Friday”",
+    },
     "hint_ph_due": {
         "th": "วันนี้ · พรุ่งนี้ · ศุกร์ · 2026-10-20",
         "en": "today · tomorrow · friday · 2026-10-20",
@@ -121,6 +125,7 @@ LINE_HINTS = (
     "answer_boss",
     "reassign",
     "due_formats",
+    "nodue",
     "time_formats",
     "ph_due",
     "ph_who",

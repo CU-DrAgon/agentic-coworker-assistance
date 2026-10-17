@@ -90,6 +90,7 @@ class Task(BaseModel):
     step: int = 0  # position in the plan, 1-2-3 (0 = not a numbered step)
     depends_on: list[str] = Field(default_factory=list)  # ids of the tasks that come before
     pct_done: int = 0  # 0-100 (a done task counts as 100)
+    nodue_asked_at: str = ""  # when the assignee was asked once about a missing deadline
     # not stored: a team / several people were named but nobody could be picked (giver is asked)
     _needs_owner: bool = PrivateAttr(default=False)
 
@@ -238,6 +239,40 @@ def due_for_followup(tasks: list[Task], today: date) -> dict[int, list[Task]]:
     for v in out.values():
         v.sort(key=lambda t: (t.due, t.id))
     return out
+
+
+def _local_date(iso: str, zone) -> date | None:
+    try:
+        at = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    return (at if at.tzinfo else at.replace(tzinfo=UTC)).astimezone(zone).date()
+
+
+def working_days_between(start: date, end: date) -> int:
+    """Mon-Fri days after `start` up to and including `end`."""
+    return sum(
+        1 for i in range(1, max((end - start).days, 0) + 1) if (start + timedelta(i)).weekday() < 5
+    )
+
+
+def no_deadline_due(tasks: list[Task], today: date, zone, working_days: int = 3) -> list[Task]:
+    """Open tasks with an assignee and no due date, never asked about it, that were created (or
+    accepted, when later) at least `working_days` working days (Mon-Fri in `zone`) ago."""
+    out = []
+    for t in tasks:
+        if t.status != "open" or not t.assignee_id or t.due or t.nodue_asked_at:
+            continue
+        if t.confirm == "declined":
+            continue
+        start = max(
+            (d for d in (_local_date(t.created_at, zone),
+                         _local_date(t.confirm_at, zone) if t.confirm == "accepted" else None) if d),
+            default=None,
+        )  # fmt: skip
+        if start and working_days_between(start, today) >= working_days:
+            out.append(t)
+    return sorted(out, key=lambda t: (t.created_at, t.id))
 
 
 # ---------------------------------------------------------------- repository

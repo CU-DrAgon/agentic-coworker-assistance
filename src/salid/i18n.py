@@ -1953,6 +1953,8 @@ CATALOG: dict[str, dict[str, str]] = {
     "rep_opened": {"th": "เปิดใหม่: ", "en": "opened: "},
     "rep_done": {"th": "✅ เสร็จ: ", "en": "✅ done: "},
     "rep_overdue": {"th": "⚠️ เลยกำหนด: ", "en": "⚠️ overdue: "},
+    "rep_nodue": {"th": "🗓️ **งานไม่มีกำหนด**", "en": "🗓️ **No deadline**"},
+    "rep_more": {"th": "…และอีก {n} งาน", "en": "+{n} more"},
     "rep_risks": {"th": "**ความเสี่ยง / สิ่งที่ควรตาม**", "en": "**Risks / to follow up**"},
     "pr_title": {"th": "**วันนี้ของคุณ ({day})**", "en": "**Your day ({day})**"},
     "pr_where": {"th": "คุณเขียนใน: {where}", "en": "You wrote in: {where}"},
