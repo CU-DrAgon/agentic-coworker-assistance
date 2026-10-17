@@ -123,7 +123,13 @@ def format_captions(lines: list[tuple[str, str]]) -> list[str]:
     messages: list[str] = []
     cur = ""
     for speaker, text in turns:
-        row = f"**{speaker}:** {text}"[:MAX_MESSAGE_CHARS]
+        # A caption is clearly not a typed message: a quote block with a microphone, one
+        # "> " per line (the translation line included).
+        body = text[: MAX_MESSAGE_CHARS - 40]
+        row = "\n".join(
+            ("> 🎙️ **" + speaker + ":** " + ln) if i == 0 else ("> " + ln)
+            for i, ln in enumerate(body.split("\n"))
+        )
         if cur and len(cur) + len(row) + 1 > MAX_MESSAGE_CHARS:
             messages.append(cur)
             cur = ""
