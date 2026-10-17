@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from .hints import confirm_marker, help_tasks, with_hint
 from .i18n import CATALOG, t
 from .memory_access import is_dm_scope
+from .progress import STRINGS as _PROGRESS_STRINGS  # noqa: F401  (registers the catalog keys)
 from .tasks import Task, match_person, parse_due, split_who
 
 MAX_CARDS = 5  # one message holds 5 rows of buttons (Discord: 25 components, 3 used per card)
@@ -221,6 +222,8 @@ def card_text(task: Task, lang: str, *, channel: str, project: str = "") -> str:
         due=task.due or "-",
         project=project or "-",
     )
+    if task.step > 0:  # a step of an imported plan (salid.plan_import)
+        line += " · " + t("prog_step", lang, n=task.step)
     return line + t("hs_card_id", lang, id=task.id)
 
 

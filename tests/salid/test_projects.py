@@ -775,3 +775,149 @@ def bot_org(bot):
         org.id, Workspace(id=f"discord-{GUILD}", platform="discord", external_id=str(GUILD))
     )
     return store.get(org.id)
+
+
+# ------------------------------------------------------------------ progress, pictures, plan tools
+def test_project_list_cards_and_my_tasks_carry_the_progress_line_and_the_picture_hint(docs):
+    tl, ctx = tools(docs)
+    pid = tl["project_create"]("Alpha", "tech", deadline="2026-10-30")["id"]
+    tl["project_add_task"]("alpha", "one", due="2026-10-20")
+    shown = tl["project_list"]()
+    assert shown["picture_hint"] == "call project_picture for a chart"
+    assert "Real progress 0%" in shown["projects"][0]["progress"]
+    assert tl["project_show"]("alpha")["picture_hint"] == "call project_picture for a chart"
+    mine = tl["my_projects_and_tasks"]()
+    assert mine["picture_hint"] == "call project_picture for a chart"
+    assert mine["projects"][0]["progress"].startswith("Real progress")
+    assert pid == shown["projects"][0]["id"]
+    th = tools(docs, lang="th")[0]["project_list"]()["projects"][0]["progress"]
+    assert th.startswith("ความคืบหน้าจริง")
+
+
+def picture_tools(docs, **kw):
+    tl, ctx = tools(docs, **kw)
+    from salid.progress_bot import progress_tools
+
+    return {**tl, **{f.__name__: f for f in progress_tools(ctx)}}, ctx
+
+
+def seed(ctx, docs):
+    a = ctx.repo.create(
+        GUILD,
+        P.apply_template(proj(name="Alpha", deadline="2026-10-20", created_at="")),
+    )
+    b = ctx.repo.create(
+        GUILD, P.apply_template(proj(name="Beta", owner=PEAT, deadline="2026-12-20"))
+    )
+    hidden = ctx.repo.create(
+        GUILD, P.apply_template(proj(name="Secret", owner=PEAT, visibility="members"))
+    )
+    done = ctx.repo.create(GUILD, P.apply_template(proj(name="Old", status="completed")))
+    for pid, title, who, due in (
+        (a.id, "late one", TOEY, "2026-10-12"), (a.id, "soon", TOEY, "2026-10-16"),
+        (b.id, "peat task", PEAT, "2026-11-01"), (hidden.id, "secret task", TOEY, "2026-11-02"),
+    ):  # fmt: skip
+        ctx.tasks.save(P.make_task(GUILD, pid, title, assignee=who, due=due))
+    return a, b, hidden, done
+
+
+PNG = b"\x89PNG\r\n\x1a\n"
+
+
+def test_project_picture_auto_routes_by_the_arguments(docs):
+    tl, ctx = picture_tools(docs, admin=False)
+    a, b, hidden, done = seed(ctx, docs)
+    pic = tl["project_picture"]
+    out = pic()  # nothing given: every running project
+    assert out["ok"] and out["attached"] and out["what"] == "portfolio"
+    assert len(out["summary_lines"]) == 2  # Alpha, Beta: not the completed one, not the hidden one
+    assert out["summary_lines"][0].startswith("Alpha: Real progress 0%")  # the worst first
+    assert ctx.outbox[-1][0] == "progress-projects.png" and ctx.outbox[-1][1][:8] == PNG
+    assert (
+        pic(project="beta")["what"] == "project"
+        and ctx.outbox[-1][0] == f"progress-project-{b.id}.png"
+    )
+    who = pic(person="peat")
+    assert who["what"] == "person" and ctx.outbox[-1][0] == "progress-person.png"
+    assert pic(project="alpha", person="peat")["what"] == "person"  # a person wins
+    assert pic(what="portfolio", project="alpha")["what"] == "portfolio"  # explicit wins
+    assert pic(what="project", project="alpha")["what"] == "project"
+    assert tl["project_picture"].outbox is ctx.outbox
+    assert all(png[:8] == PNG for _, png in ctx.outbox)
+
+
+def test_project_picture_scoping_and_errors(docs):
+    tl, ctx = picture_tools(docs, asker=PEAT, people=(TOEY, PEAT, ADMIN))
+    a, b, hidden, done = seed(ctx, docs)
+    # an outsider (not owner, not on the team) cannot open "Secret" at all
+    out = picture_tools(docs, asker=OUT, people=(OUT, TOEY, PEAT))[0]
+    ghost = out["project_picture"](project="secret")
+    assert ghost["ok"] is False and ghost["reason"] == "not_found"
+    nobody = out["project_picture"](person="toey")
+    assert nobody["ok"]  # Toey has work in readable projects
+    assert out["project_picture"](what="sunset")["reason"] == "bad_value"
+    assert out["project_picture"](person="zzz")["reason"] == "owner_not_found"
+    assert tl["project_picture"](project="alp")["ok"]
+    assert tl["project_picture"](project="e")["reason"] == "ambiguous"  # Alpha, Beta, Secret, Old
+    empty_tl, _ = picture_tools(SQLiteDocStore(":memory:"))
+    assert empty_tl["project_picture"]()["reason"] == "empty"
+    assert "No projects yet" in empty_tl["project_picture"]()["say"]
+
+
+def test_person_picture_hides_tasks_of_unreadable_projects(docs):
+    tl, ctx = picture_tools(docs, asker=OUT, people=(OUT, TOEY, PEAT))
+    seed(ctx, docs)
+    out = tl["project_picture"](person="toey")
+    assert out["ok"] and all("Secret" not in line for line in out["summary_lines"])
+
+
+def test_a_picture_failure_is_a_sentence_not_an_exception(docs, monkeypatch):
+    tl, ctx = picture_tools(docs)
+    seed(ctx, docs)
+    import salid.progress_bot as PB
+
+    monkeypatch.setattr(
+        PB, "portfolio_png", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x"))
+    )
+    out = tl["project_picture"]()
+    assert out["ok"] is False and "could not draw" in out["say"] and not ctx.outbox
+
+
+def test_prompt_lines_for_pictures_and_plans_and_voice_names():
+    th = stable_prompt("th", False, projects=True)
+    assert "project_picture" in th and "project_import_plan" in th and "confirm=False" in th
+    assert "two separate facts" in th and "สองเรื่องแยกกัน" in th
+    assert "project_import_plan" in ACTION_TOOL_NAMES and "project_picture" not in ACTION_TOOL_NAMES
+
+
+async def test_picture_and_plan_tools_are_in_the_agent_and_follow_the_flag(bot, world):
+    me = world.g.members[STAFF]
+    names = {"project_picture", "project_import_plan"}
+    got = agent_tools(bot, world, me)
+    assert names <= set(got)
+    assert (
+        got["project_picture"].outbox is got["project_import_plan"].outbox
+    )  # one outbox per request
+    assert not names & set(agent_tools(bot, world, me, interjection=True))
+    set_features(bot, projects=False)
+    assert not names & set(agent_tools(bot, world, me))
+    set_features(bot, projects=True)
+
+
+async def test_files_reach_the_plan_tool_through_the_agent_kwargs(bot, world, monkeypatch):
+    me = world.g.members[STAFF]
+    from salid import plan_import as PI
+
+    seen = []
+
+    def gen(client, model, contents, config, delays=None):
+        seen.append(contents)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(PI, "generate", gen)
+    from salid.qa import FileInput
+
+    f = FileInput(0, "gantt.png", "image/png", data=b"\x89PNG....")
+    got = agent_tools(bot, world, me, files=[f])
+    out = got["project_import_plan"]()
+    assert out["ok"] is False and seen and any(not isinstance(p, str) for p in seen[0])

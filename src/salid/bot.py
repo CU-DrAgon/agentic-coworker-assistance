@@ -897,6 +897,8 @@ class SecretaryBot(
             return
         if called and await self._help_command(message):
             return
+        if called and await self._plan_confirm_command(message):  # "ยืนยัน" a waiting plan import
+            return
         if called and await self._private_command(message, message.guild, message.author):
             return
         # Q&A off and no image describer: images are receipt candidates when Salid is addressed
@@ -1258,6 +1260,8 @@ class SecretaryBot(
         if await self._task_mode_command(message, guild, member):  # their own task mode
             return
         if await self._help_command(message, guild, member):  # "how do I use Salid?"
+            return
+        if await self._plan_confirm_command(message, guild, member):  # "ยืนยัน" a plan import
             return
         if await self._owner_answer_command(message, guild, member):  # "who takes this task?"
             return
@@ -2253,7 +2257,11 @@ class SecretaryBot(
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._reminder_tools(message, guild, asker, is_exec, lang)),
-            *([] if interjection else self._project_tools(message, guild, asker, is_exec, lang)),
+            *(
+                []
+                if interjection
+                else self._project_tools(message, guild, asker, is_exec, lang, files)
+            ),
             *([] if interjection else self._tone_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),

@@ -43,6 +43,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "project_create",  # PM projects: the speaker owns / changes them with their own rights
         "project_update",
         "project_add_task",
+        "project_import_plan",  # a plan typed aloud becomes steps of a project (preview, confirm)
         "my_projects_and_tasks",
         "set_reminder",
         "cancel_reminder",

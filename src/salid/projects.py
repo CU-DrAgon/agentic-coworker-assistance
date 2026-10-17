@@ -22,7 +22,7 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal
 
@@ -31,6 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from .coo_store import DocStore
 from .hints import legend, status_marker
 from .i18n import CATALOG, t
+from .progress import gap_text, progress, progress_line
 from .tasks import Task, TaskRepo, is_overdue, parse_due
 
 logger = logging.getLogger(__name__)
@@ -539,6 +540,7 @@ def project_stats(p: Project, tasks: list[Task], today: date) -> dict:
     (deadline passed and not finished, or >= 1 overdue task, or on hold for over 7 days)."""
     mine = [x for x in tasks if x.project_id == p.id]
     overdue = sum(1 for x in mine if is_overdue(x, today))
+    prog = progress(p, mine, today)
     reasons: list[str] = []
     if p.priority == "high" and p.status not in DONE_STATUSES:
         if p.deadline and p.deadline < today.isoformat():
@@ -556,6 +558,7 @@ def project_stats(p: Project, tasks: list[Task], today: date) -> dict:
         "tasks_unassigned": sum(1 for x in mine if x.status == "open" and _unassigned(x)),
         "milestones_done": sum(1 for m in p.milestones if m.status == "done"),
         "milestones_total": len(p.milestones),
+        "progress": prog.to_dict(tasks=False),
         "needs_review": bool(reasons),
         "review_reasons": reasons,
         "review_reasons_text": [{"key": r, "th": t(r, "th"), "en": t(r, "en")} for r in reasons],
@@ -591,6 +594,10 @@ def task_json(task: Task, project_name: str | None = None) -> dict:
         "note": task.note,
         "url": task.source_link,
         "milestone_id": task.milestone_id,
+        "start": task.start,
+        "step": task.step,
+        "pct_done": 100 if task.status == "done" else task.pct_done,
+        "depends_on": list(task.depends_on),
         "created_from": task.created_from,
         "updated_at": task.updated_at,
         "confirm": task.confirm,
@@ -658,6 +665,25 @@ def project_json(
 CARD_DROP = ("milestones", "risks", "links", "changes", "updates", "overview", "budget")
 
 
+def with_progress_reason(stats: dict, project: Project) -> dict:
+    """The dashboard's at-risk list also takes a running project whose real progress is far behind
+    the time used (state `at_risk`); its reason is shown next to the usual ones."""
+    if stats["needs_review"] or project.status != "in_progress":
+        return stats
+    if stats["progress"]["state"] != "at_risk":
+        return stats
+    key = "pm_review_progress"
+    return {
+        **stats,
+        "review_reasons": [*stats["review_reasons"], key],
+        "review_reasons_text": [
+            *stats["review_reasons_text"],
+            {"key": key, "th": t(key, "th"), "en": t(key, "en")},
+        ],
+        "at_risk_progress": True,
+    }
+
+
 def card_json(p: Project, stats: dict) -> dict:
     doc = p.model_dump(by_alias=True)
     for k in (*CARD_DROP, "deleted"):
@@ -714,6 +740,9 @@ def _person_key(person: Person, members: list[Any]) -> tuple[str, Person, str]:
     return key or f"n:{person.name.casefold()}", person, "other"
 
 
+_STATE_RANK = {"at_risk": 0, "behind": 1, "on_track": 2, "no_deadline": 3, "done": 4}
+
+
 def insights(
     projects: list[Project],
     tasks: list[Task],
@@ -738,6 +767,7 @@ def insights(
         for d in DEPARTMENTS
     }  # fmt: skip
     by_status = {s: 0 for s in STATUSES}
+    by_project: list[dict] = []
     people: dict[str, dict] = {}
 
     def entry(person: Person) -> dict:
@@ -763,6 +793,13 @@ def insights(
         by_status[p.status] += 1
         if p.status in DONE_STATUSES:
             continue
+        pr = progress(p, mine, today)
+        by_project.append(
+            {
+                "project_id": p.id, "name": p.name, "state": pr.state, "done_pct": pr.done_pct,
+                "time_pct": pr.time_pct, "days_left": pr.days_left,
+            }
+        )  # fmt: skip
         entry(p.owner)["projects"].add(p.id)
         for m in p.members:
             entry(m.person)["projects"].add(p.id)
@@ -829,7 +866,13 @@ def insights(
             "currency": (rows[0]["currency"] if rows else "THB"),
         }
     return {
-        "progress": {"by_department": list(by_dept.values()), "by_status": by_status},
+        "progress": {
+            "by_department": list(by_dept.values()),
+            "by_status": by_status,
+            "by_project": sorted(
+                by_project, key=lambda r: (_STATE_RANK.get(r["state"], 9), r["name"])
+            ),
+        },
         "resources": {"people": plist, "by_department_people": by_dept_people},
         "hackathons": hacks,
         "budget": budget,
@@ -1015,6 +1058,13 @@ class ProjectsCtx:
     resolve: Callable[[str], list[Person]]  # members matching a name / @mention
     workspace: str = ""
     on_assigned: Callable[[Task], None] | None = None  # task handshake: card for the assignee
+    on_assigned_many: Callable[[list[Task]], None] | None = None  # the same for a plan import
+    # pictures and plan import (progress_bot.py): the model client, attachments, drafts, files out
+    docs: Any = None
+    llm: Any = None
+    model: str = ""
+    files: list = field(default_factory=list)
+    outbox: list = field(default_factory=list)
 
 
 STRINGS = {
@@ -1029,6 +1079,10 @@ STRINGS = {
     "pm_review_on_hold": {
         "th": "โปรเจกต์ความสำคัญสูง พักไว้เกิน 7 วัน",
         "en": "high priority and on hold for over 7 days",
+    },
+    "pm_review_progress": {
+        "th": "งานช้ากว่าเวลาที่ผ่านไปมาก เสี่ยงไม่ทันกำหนดส่ง",
+        "en": "work is far behind the clock: at risk of missing the deadline",
     },
     "pm_created": {
         "th": "สร้างโปรเจกต์ “{name}” แล้วค่ะ (เจ้าของ {owner}, {department}, ความสำคัญ {priority}, รหัส {id})",
@@ -1127,8 +1181,20 @@ PROJECTS_PROMPT = (
     "ถ้ามีคนบอกว่าสลิดจดอะไรจากแชตผิด (ข้อความขึ้นต้น “บันทึกแล้ว”) ให้แก้ด้วย project_update ตั้งค่ากลับ โดยใส่ reason “correction”. "
     "If someone says Salid recorded something wrong from the chat, set the field back with project_update and reason “correction”. "
     "Projects: create with project_create (name + department are enough), one owner per project, "
-    "big changes (status, owner, deadline, priority) need a reason, no approval step."
+    "big changes (status, owner, deadline, priority) need a reason, no approval step. "
+    "ภาพความคืบหน้า: ถามว่า “ตอนนี้มีโปรเจกต์อะไรรันอยู่ / X ทำอะไรอยู่ / โปรเจกต์ Y ถึงไหนแล้ว” ให้ตอบเป็นบรรทัดเดียวต่อโปรเจกต์ "
+    "(ผลลัพธ์มีฟิลด์ progress ให้แล้ว) และเรียก project_picture แนบภาพ (project_picture(person=X) / (project=Y) / ไม่ใส่อะไรคือทุกโปรเจกต์). "
+    "บอกเสมอเป็นสองเรื่องแยกกัน: งานเสร็จจริงกี่ % และเวลาผ่านไปกี่ % / เหลือกี่วัน อย่ารวมเป็นตัวเลขเดียว. "
+    "ถ้ามีคนส่งแผน Gantt / ตารางงาน (รูป, PDF, Excel, CSV หรือพิมพ์มา) ให้เรียก project_import_plan(confirm=False) ก่อน แสดงตารางตัวอย่างแล้วขอให้ยืนยัน; "
+    "เมื่อเขาตอบ “ยืนยัน” ค่อยเรียกซ้ำด้วย confirm=True (ระบบสร้างโปรเจกต์ ขั้นตอน 1-2-3 กำหนดส่ง และภาพให้เอง). "
+    "When asked what is running, what someone is working on or how a project is going, answer with the progress line per "
+    "project AND call project_picture to attach the chart; always give real progress and time to the deadline as two separate facts. "
+    "When someone sends a Gantt chart or plan (picture, PDF, Excel, CSV or typed), call project_import_plan(confirm=False) first, "
+    "show the preview, and only after they say confirm call it again with confirm=True."
 )
+
+
+PICTURE_HINT = "call project_picture for a chart"
 
 
 def _err(ctx: ProjectsCtx, reason: str, key: str, **fmt: Any) -> dict:
@@ -1312,17 +1378,19 @@ def project_tools(ctx: ProjectsCtx) -> list:
             if status and p.status != status.strip().lower():
                 continue
             st = project_stats(p, tasks, _today(ctx))
+            pr = progress(p, [x for x in tasks if x.project_id == p.id], _today(ctx))
             out.append(
                 {
                     "id": p.id, "name": p.name, "department": p.department, "owner": p.owner.label,
                     "priority": p.priority, "status": p.status, "deadline": p.deadline,
                     "tasks": f"{st['tasks_done']}/{st['tasks_total']}",
                     "needs_review": st["needs_review"],
+                    "progress": progress_line(pr, ctx.lang),
                 }
             )  # fmt: skip
         if not out:
             return {"ok": True, "projects": [], "say": t("pm_none", ctx.lang)}
-        return {"ok": True, "total": len(out), "projects": out[:20]}
+        return {"ok": True, "total": len(out), "projects": out[:20], "picture_hint": PICTURE_HINT}
 
     def project_show(project: str) -> dict:
         """A short markdown summary of one project: overview, next milestones, open risks, task
@@ -1334,6 +1402,7 @@ def project_tools(ctx: ProjectsCtx) -> list:
             "ok": True, "id": p.id,
             "markdown": render_summary(p, ctx.tasks.list(ctx.guild_id, status=None, project_id=p.id),
                                        ctx.lang, _today(ctx)),
+            "picture_hint": PICTURE_HINT,
         }  # fmt: skip
 
     def project_add_task(
@@ -1405,8 +1474,10 @@ def project_tools(ctx: ProjectsCtx) -> list:
             for x in ctx.tasks.list(ctx.guild_id, status="open")
             if task_mine(x, ctx.asker.email, ctx.asker.discord_user_id)
         ]
+        all_tasks = ctx.tasks.list(ctx.guild_id, status=None)
         out = {
             "ok": True,
+            "picture_hint": PICTURE_HINT,
             "projects": [
                 {
                     "id": p.id,
@@ -1414,6 +1485,10 @@ def project_tools(ctx: ProjectsCtx) -> list:
                     "status": p.status,
                     "deadline": p.deadline,
                     "role": "owner" if is_owner(p, ctx.asker) else "member",
+                    "progress": progress_line(
+                        progress(p, [x for x in all_tasks if x.project_id == p.id], _today(ctx)),
+                        ctx.lang,
+                    ),
                 }
                 for p in mine
             ],  # fmt: skip
@@ -1424,6 +1499,8 @@ def project_tools(ctx: ProjectsCtx) -> list:
                     "due": x.due,
                     "project": names.get(x.project_id, "") if x.project_id else "",
                     "overdue": is_overdue(x, _today(ctx)),
+                    "step": x.step or None,
+                    "pct_done": x.pct_done or None,
                     "marker": status_marker(x.confirm, is_overdue(x, _today(ctx)), ctx.lang)
                     or None,
                 }
@@ -1440,6 +1517,11 @@ def project_tools(ctx: ProjectsCtx) -> list:
     ]  # fmt: skip
 
 
+def _is_step(row: Any, tasks: list[Task]) -> bool:
+    """Only tasks of an imported plan (a numbered `step`) are listed as steps."""
+    return any(x.id == row.id and x.step > 0 for x in tasks)
+
+
 def render_summary(p: Project, tasks: list[Task], lang: str, today: date) -> str:
     """Markdown summary of a project, at most 25 lines."""
     st = project_stats(p, tasks, today)
@@ -1448,6 +1530,7 @@ def render_summary(p: Project, tasks: list[Task], lang: str, today: date) -> str
     if p.deadline:
         meta.append(f"{t('pm_lbl_deadline', lang)}: {p.deadline}")
     lines.append(" · ".join(meta))
+    lines.append(progress_line(progress(p, tasks, today), lang))
     if p.target_outcome:
         lines.append(f"{t('pm_lbl_goal', lang)}: {p.target_outcome[:200]}")
     if p.overview.strip():
@@ -1458,6 +1541,16 @@ def render_summary(p: Project, tasks: list[Task], lang: str, today: date) -> str
     if st["tasks_unassigned"]:
         counts += f", {st['tasks_unassigned']} {t('pm_lbl_unassigned', lang)}"
     lines.append(counts)
+    steps = [x for x in progress(p, tasks, today).tasks if x.n and _is_step(x, tasks)]
+    if steps:
+        lines.append(f"{t('prog_lbl_steps', lang)}:")
+        for x in steps[:8]:
+            bits = [f"{x.pct}%"] if x.pct else []
+            if x.done:
+                bits.append("✅")
+            elif x.gap_days is not None:
+                bits.append(gap_text(x.gap_days, lang))
+            lines.append(f"{x.n}. {x.title[:80]}" + (f" ({', '.join(bits)})" if bits else ""))
     nxt = sorted(
         (m for m in p.milestones if m.status != "done"), key=lambda m: (m.due or "9999", m.id)
     )

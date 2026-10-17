@@ -472,6 +472,12 @@ shows the guide at any time (the text lives in `src/salid/hints.py`, `help_tasks
 - สัญลักษณ์สถานะ: ⏳ รอยืนยัน, 🔏 รออนุมัติ, ❓ รอระบุผู้รับ, ⚠️ เลยกำหนด, ✅ เสร็จ
 - ดูงานได้ที่ "งานของฉัน" หรือหน้า `/pm` (หน้าตั้งค่ามีสัญลักษณ์เดียวกัน)
 
+### Project pictures and Gantt import (ภาพความคืบหน้าและนำเข้าแผน Gantt)
+
+**English.** Ask "which projects are running?", "how is project X going?" or "what is Toey working on?" and Salid answers with one line per project and attaches a picture: real progress (work done) and, separately, how much of the time to the deadline is used, how many days are left, and a state colour (on track, behind, at risk). Send a Gantt chart (a picture, PDF, Excel/CSV, or just type the steps) and Salid shows a preview table; reply "confirm" and she creates the project with its phases as milestones and the steps 1-2-3 as tasks with owners, dates, how far each is done and how far each is from its deadline. Sending the same plan again updates the steps instead of duplicating them. Same `projects` switch as the rest of the PM tools; the numbers also show on the `/pm` cards (two bars: "Work done" and "Time").
+
+**ภาษาไทย.** ถามว่า "ตอนนี้มีโปรเจกต์อะไรรันอยู่", "โปรเจกต์ X ถึงไหนแล้ว" หรือ "เตยทำอะไรอยู่" สลิดจะตอบเป็นบรรทัดเดียวต่อโปรเจกต์พร้อมแนบภาพ: งานเสร็จจริงกี่ % แยกจากเวลาที่ผ่านไปกี่ % เหลือกี่วัน และสี (ตามแผน / ช้ากว่าแผน / เสี่ยงไม่ทัน) ส่งแผน Gantt มา (รูป, PDF, Excel/CSV หรือพิมพ์ขั้นตอนมาเลย) สลิดจะแสดงตารางตัวอย่างก่อน ตอบ "ยืนยัน" แล้วสลิดสร้างโปรเจกต์ ช่วงงานเป็นเหตุการณ์สำคัญ และขั้นที่ 1-2-3 เป็นงานพร้อมผู้รับผิดชอบ วันที่ เสร็จไปกี่ % และเหลืออีกกี่วันถึงกำหนด ส่งแผนเดิมซ้ำจะอัปเดตขั้นเดิมไม่สร้างซ้ำ ใช้สวิตช์ `projects` เดียวกับเครื่องมือโปรเจกต์อื่น และตัวเลขขึ้นที่การ์ดในหน้า `/pm` ด้วย (สองแถบ: "งานเสร็จ" กับ "เวลา")
+
 ### Executive assistant / COO mode
 
 Salid acts as the team's executive assistant: it watches what people do on its own (nobody reports to it),

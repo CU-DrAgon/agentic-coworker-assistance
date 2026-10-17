@@ -117,6 +117,9 @@ input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); flex
 .dot.high { background:var(--c4); } .dot.medium { background:var(--c3); } .dot.low { background:var(--c2); }
 .bar { height:10px; border-radius:99px; background:var(--line-soft); overflow:hidden; } .bar > i { display:block; height:100%; background:var(--accent); border-radius:99px; }
 .bar.ok > i { background:var(--c2); } .bar.warn > i { background:var(--c3); }
+.bar.st-on_track > i { background:var(--c2); } .bar.st-behind > i { background:var(--c3); } .bar.st-at_risk > i { background:var(--c4); } .bar.st-done > i { background:var(--c1); } .bar.st-no_deadline > i, .bar.time > i { background:var(--c6); }
+.pbars { display:flex; flex-direction:column; gap:4px; } .pbars .pl { display:flex; align-items:center; gap:8px; font-size:13px; } .pbars .pl > span:first-child { width:64px; flex:none; color:var(--muted); } .pbars .pl .bar { flex:1; } .pbars .pl b { width:40px; text-align:right; font-weight:600; flex:none; }
+.pst-on_track { color:var(--ok-ink); } .pst-behind { color:var(--warn-ink); } .pst-at_risk { color:var(--err-ink); } .pst-done, .pst-no_deadline { color:var(--muted); }
 .pgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:14px; }
 .pcard { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:8px; text-decoration:none; color:var(--ink); min-width:0; }
 .pcard:hover { border-color:var(--accent); }
@@ -230,6 +233,8 @@ const S = /*I18N-START*/{
   /* time */
   left_dh:["เหลือ {d} วัน {h} ชม.","{d} d {h} h left"], left_h:["เหลือ {h} ชม.","{h} h left"], left_m:["เหลือไม่ถึงชั่วโมง","under 1 h left"], overdue_d:["เลยกำหนด {d} วัน","overdue {d} d"], overdue_h:["เลยกำหนดแล้ว","overdue"],
   today:["วันนี้","Today"], tomorrow:["พรุ่งนี้","Tomorrow"], due:["กำหนดส่ง","Due"], no_deadline:["ไม่มีกำหนด","No deadline"],
+  pr_work:["งานเสร็จ","Work done"], pr_time:["เวลา","Time"], pr_none:["ยังไม่มีงานให้วัด","Nothing to measure"], pr_left:["เหลือ {n} วัน","{n} days left"], pr_over:["เลยกำหนด {n} วัน","{n} days overdue"], pr_today:["ครบกำหนดวันนี้","Due today"], pr_step:["ขั้นที่ {n}","Step {n}"],
+  pr_on_track:["ตามแผน","On track"], pr_behind:["ช้ากว่าแผน","Behind plan"], pr_at_risk:["เสี่ยงไม่ทัน","At risk"], pr_done:["เสร็จแล้ว","Done"], pr_no_deadline:["ไม่มีกำหนดส่ง","No deadline"], i_by_project:["ความคืบหน้าแยกตามโครงการ","Progress by project"],
   /* home */
   h_overview:["ภาพรวมบริษัท","Company overview"], c_projects:["โครงการทั้งหมด","Projects"], c_active:["กำลังดำเนินการ","Active"], c_review:["ต้องทบทวน","Needs review"], c_mytasks:["งานของฉันที่ค้างอยู่","My open tasks"],
   h_mytasks:["งานของฉัน","My tasks"], h_urgent:["เร่งด่วน","Urgent"], h_review:["โครงการที่ต้องทบทวน","Projects needing review"], h_deadlines:["กำหนดการใน 14 วัน","Upcoming deadlines (14 days)"],
@@ -322,6 +327,15 @@ const STATUS_CLS = { in_progress: "ok", completed: "ok", on_hold: "warn", cancel
 const statusPill = (s) => el("span", { class: "badge " + (STATUS_CLS[s] || ""), text: t("st_" + s) });
 const bar = (done, total, cls = "") => el("div", { class: "bar " + cls, role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total), "aria-valuenow": String(done) }, el("i", { style: "width:" + (total ? Math.round(100 * done / total) : 0) + "%" }));
 const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+const reasonsText = (s) => ((s && s.review_reasons_text && s.review_reasons_text.length) ? s.review_reasons_text.map((r) => r[lang] || r.en || r.key) : (s && s.review_reasons) || []).join(" · ");
+const daysText = (n) => n == null ? t("pr_no_deadline") : n < 0 ? t("pr_over").replace("{n}", String(-n)) : n === 0 ? t("pr_today") : t("pr_left").replace("{n}", String(n));
+/* two separate bars: real work done, and time used (both with the state colour), plus days left */
+function progressBars(pg) {
+  if (!pg) return null;
+  const row = (label, v, cls) => el("div", { class: "pl" }, el("span", { text: label }), el("div", { class: "bar " + cls, role: "progressbar", "aria-label": label, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(v ?? 0) }, el("i", { style: "width:" + (v ?? 0) + "%" })), el("b", { text: v == null ? "-" : v + "%" }));
+  return el("div", { class: "pbars" }, row(t("pr_work"), pg.done_pct, "st-" + pg.state), row(t("pr_time"), pg.time_pct, "time"),
+    el("div", { class: "small pst-" + pg.state }, el("b", { text: t("pr_" + pg.state) }), pg.state === "done" || pg.state === "no_deadline" ? "" : " · " + daysText(pg.days_left)));
+}
 const empty = (key) => el("div", { class: "empty", text: t(key) });
 const loadingBox = () => el("div", { class: "card", role: "status", "aria-label": t("loading") }, el("div", { class: "skeleton", style: "width:60%" }), el("div", { class: "skeleton" }), el("div", { class: "skeleton", style: "width:80%" }));
 function sel(options, value, onchange, attrs = {}) {
@@ -490,7 +504,7 @@ function taskRow(tk, { onTick, showProject } = {}) {
   const canTick = !!tk.project_id && !!onTick;
   return el("div", { class: "li" + (open ? "" : " done") },
     el("input", { type: "checkbox", checked: !open, disabled: !canTick, "aria-label": tk.title, onchange: (e) => onTick(tk, e.target.checked, e.target) }),
-    el("span", { class: "grow" }, tk.title, showProject && tk.project_name ? el("span", { class: "muted small", text: "  · " + tk.project_name }) : null),
+    el("span", { class: "grow" }, tk.step ? el("b", { class: "muted", text: t("pr_step").replace("{n}", String(tk.step)) + "  " }) : null, tk.title, tk.pct_done > 0 && open ? el("span", { class: "muted small", text: "  " + tk.pct_done + "%" }) : null, showProject && tk.project_name ? el("span", { class: "muted small", text: "  · " + tk.project_name }) : null),
     tk.confirm === "pending" || tk.confirm === "awaiting_approval" ? el("span", { class: "badge warn", text: t(tk.confirm === "pending" ? "tk_pending" : "tk_awaiting") }) : null,
     tk.assignee ? who(tk.assignee) : null, dueBadge(tk.due, open));
 }
@@ -502,7 +516,8 @@ async function tickTask(tk, done, box, redraw) {
 function projectMini(p) {
   return el("a", { class: "pcard review", href: "#/projects/" + encodeURIComponent(p.id) },
     el("div", { class: "nm", text: p.name }), el("div", { class: "meta" }, deptBadge(p.department), prioDot(p.priority), statusPill(p.status), dueBadge(p.deadline)),
-    el("div", { class: "txt-err small", text: (p.stats && p.stats.review_reasons || []).join(" · ") || t("p_needs_review") }));
+    progressBars(p.stats && p.stats.progress),
+    el("div", { class: "txt-err small", text: reasonsText(p.stats) || t("p_needs_review") }));
 }
 async function viewHome(root, _id, stale) {
   const d = await api(PM("/home")); if (stale()) return;
@@ -570,9 +585,9 @@ function projCard(p) {
     el("div", { class: "nm", text: p.name }),
     el("div", { class: "meta" }, deptBadge(p.department), p.kind === "hackathon" ? el("span", { class: "badge warn", text: t("k_hackathon") }) : null, statusPill(p.status), prioDot(p.priority)),
     el("div", { class: "meta" }, who(p.owner), p.deadline ? dueBadge(p.deadline, !["completed", "cancelled"].includes(p.status)) : el("span", { text: t("no_deadline") })),
-    el("div", { class: "small muted", text: t("p_tasks") + " " + (s.tasks_done || 0) + "/" + (s.tasks_total || 0) }), bar(s.tasks_done || 0, s.tasks_total || 0, s.tasks_overdue ? "warn" : ""),
+    el("div", { class: "small muted", text: t("p_tasks") + " " + (s.tasks_done || 0) + "/" + (s.tasks_total || 0) }), progressBars(s.progress),
     h ? el("div", { class: "small" }, t("p_next") + ": ", h.official_deadline ? el("b", { text: fmtDateTime(h.official_deadline) + " · " + countdown(h.official_deadline) }) : "-", h.checklist_total != null ? el("div", { class: "muted", text: t("p_checklist") + " " + pct(h.checklist_done, h.checklist_total) + "%" }) : null) : null,
-    s.needs_review ? el("div", { class: "txt-err small", text: "⚑ " + t("p_needs_review") + ((s.review_reasons || []).length ? ": " + s.review_reasons.join(" · ") : "") }) : null);
+    s.needs_review ? el("div", { class: "txt-err small", text: "⚑ " + t("p_needs_review") + ((s.review_reasons || []).length ? ": " + reasonsText(s) : "") }) : null);
 }
 function projTable(rows) {
   return el("div", { class: "card tblwrap" }, el("table", { class: "tbl stack" },
@@ -634,7 +649,7 @@ function projectHeader(P, canEdit, redraw) {
     const v = e.target.value.trim(); if (!v) { e.target.value = P.name; return; } const prev = P.name; P.name = v;
     const r = await guarded(() => api(PP(P.id), J("PATCH", { name: v })), () => { P.name = prev; e.target.value = prev; }); if (r) toast(t("saved")); } });
   const f = (label, node) => el("label", { class: "f" }, label, node);
-  return [name, el("div", { class: "meta" }, deptBadge(P.department), P.kind === "hackathon" ? el("span", { class: "badge warn", text: t("k_hackathon") }) : null, (P.stats || {}).needs_review ? el("span", { class: "badge err", text: "⚑ " + t("p_needs_review") + ((P.stats.review_reasons || []).length ? ": " + P.stats.review_reasons.join(" · ") : "") }) : null),
+  return [name, el("div", { class: "meta" }, deptBadge(P.department), P.kind === "hackathon" ? el("span", { class: "badge warn", text: t("k_hackathon") }) : null, (P.stats || {}).needs_review ? el("span", { class: "badge err", text: "⚑ " + t("p_needs_review") + ((P.stats.review_reasons || []).length ? ": " + reasonsText(P.stats) : "") }) : null),
     el("div", { class: "row" },
       f(t("f_owner"), personSelect(P.owner, (p) => { if (p && !sameP(p, P.owner)) patch("owner", p); }, { attrs: { disabled: !canEdit } })),
       f(t("f_priority"), sel(["high", "medium", "low"].map((x) => [x, t("pr_" + x)]), P.priority, (v) => { if (v !== P.priority) patch("priority", v); }, { disabled: !canEdit })),
@@ -812,6 +827,7 @@ async function viewInsights(root, _id, stale) {
     el("div", { class: "grid2" },
       el("div", { class: "card" }, el("h2", { text: t("i_progress") }), dep.length ? dep.map((x) => el("div", {}, el("div", { class: "kv li" }, el("b", { class: "grow", text: t("d_" + x.department) === "d_" + x.department ? x.department : t("d_" + x.department) }),
         el("span", { class: "small muted", text: x.projects + " " + t("i_projects") + " · " + x.active + " " + t("c_active") + " · " + t("i_done_total") + " " + x.tasks_done + "/" + x.tasks_total })), bar(x.tasks_done, x.tasks_total))) : empty("i_none")),
+      el("div", { class: "card" }, el("h2", { text: t("i_by_project") }), arr(d.progress && d.progress.by_project).length ? arr(d.progress.by_project).map((x) => el("div", {}, el("b", { text: x.name }), progressBars(x))) : empty("i_none")),
       el("div", { class: "card" }, el("h2", { text: t("i_status") }), bySt.length ? el("div", { class: "donutwrap" }, donut(bySt.map(([k, v]) => [t("st_" + k), v])),
         el("div", { class: "legend" }, bySt.map(([k, v], i) => el("div", {}, el("i", { style: "background:" + COLORS[i % COLORS.length] }), t("st_" + k) + ": " + v)))) : empty("i_none"))),
     el("div", { class: "card tblwrap" }, el("h2", { text: t("i_resources") }), ppl.length ? el("table", { class: "tbl" }, el("thead", {}, el("tr", {}, [t("i_person"), t("i_open_tasks"), t("i_projects"), ""].map((h) => el("th", { text: h })))),
@@ -919,12 +935,12 @@ const DEMO_DATA = /*DEMO-START*/{
      "budget": {"currency": "THB", "planned": 30000, "spent": 12000, "notes": "Cloud credits", "travel": 8000}, "changes": []}
   ],
   "tasks": [
-    {"id": "t1", "project_id": "p-web001", "title": "Fix checkout page bug", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@-2", "status": "open", "note": "", "url": "", "milestone_id": "m2"},
+    {"id": "t1", "project_id": "p-web001", "title": "Fix checkout page bug", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@-2", "status": "open", "note": "", "url": "", "milestone_id": "m2", "start": "@-9", "step": 1, "pct_done": 60},
     {"id": "t2", "project_id": "p-web001", "title": "Write Thai copy", "assignee": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "due": "@3", "status": "open", "note": "", "url": "", "milestone_id": null, "confirm": "pending", "assigner": {"discord_user_id": "111", "name": "Toey"}},
     {"id": "t3", "project_id": "p-web001", "title": "Set up analytics", "assignee": null, "due": "@6", "status": "open", "note": "", "url": "", "milestone_id": null},
     {"id": "t4", "project_id": "p-web001", "title": "Approve final design", "assignee": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "due": "@-12", "status": "done", "note": "", "url": "", "milestone_id": "m1"},
     {"id": "t5", "project_id": "p-crm002", "title": "Interview sales team", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@5", "status": "open", "note": "", "url": "", "milestone_id": "m1"},
-    {"id": "t6", "project_id": "p-hack003", "title": "Record demo video", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@0", "status": "open", "note": "", "url": "", "milestone_id": "m1"},
+    {"id": "t6", "project_id": "p-hack003", "title": "Record demo video", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@0", "status": "open", "note": "", "url": "", "milestone_id": "m1", "start": "@-5", "step": 2, "pct_done": 40},
     {"id": "t7", "project_id": "p-hack003", "title": "Polish pitch deck", "assignee": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "due": "@1", "status": "open", "note": "", "url": "", "milestone_id": null},
     {"id": "t8", "project_id": "", "title": "Renew domain", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@9", "status": "open", "note": "", "url": "", "milestone_id": null}
   ],
@@ -944,12 +960,24 @@ function demoResolve(v) {
   return v;
 }
 let DB = null;
+function demoProgress(p, tk) {
+  const day = 864e5, parse = (s) => Date.parse(s.slice(0, 10) + "T00:00:00Z"), today = parse(todayStr());
+  const done = tk.length ? Math.round(100 * tk.filter((x) => x.status === "done").length / tk.length) : p.milestones.length ? Math.round(100 * p.milestones.filter((m) => m.status === "done").length / p.milestones.length) : null;
+  let time = null, left = null, state = "no_deadline";
+  if (p.deadline) {
+    const dl = parse(p.deadline), st = Math.min(...[p.created_at ? parse(p.created_at) : dl - 30 * day, ...tk.filter((x) => x.start).map((x) => parse(x.start))]);
+    left = Math.round((dl - today) / day); time = dl > st ? Math.max(0, Math.min(100, Math.round(100 * (today - st) / (dl - st)))) : today >= dl ? 100 : 0;
+    const fin = ["completed", "cancelled"].includes(p.status) || done === 100;
+    state = fin ? "done" : left < 0 ? "at_risk" : done != null && done < time - 20 ? (left <= 7 ? "at_risk" : "behind") : "on_track";
+  } else if (["completed", "cancelled"].includes(p.status) || done === 100) state = "done";
+  return { done_pct: done, time_pct: time, days_left: left, state, next_due: null };
+}
 function demoStats(p) {
   const tk = DB.tasks.filter((x) => x.project_id === p.id), od = tk.filter((x) => x.status !== "done" && x.due && x.due < todayStr()).length;
   const review = [];
   if (p.priority === "high" && p.deadline && p.deadline < todayStr() && !["completed", "cancelled"].includes(p.status)) review.push(lang === "th" ? "ความสำคัญสูงและเลยกำหนด" : "high priority and overdue");
   return { tasks_total: tk.length, tasks_done: tk.filter((x) => x.status === "done").length, tasks_overdue: od, tasks_unassigned: tk.filter((x) => x.status !== "done" && !x.assignee).length,
-    milestones_done: p.milestones.filter((m) => m.status === "done").length, milestones_total: p.milestones.length, needs_review: review.length > 0, review_reasons: review };
+    milestones_done: p.milestones.filter((m) => m.status === "done").length, milestones_total: p.milestones.length, needs_review: review.length > 0, review_reasons: review, progress: demoProgress(p, tk) };
 }
 function demoCard(p) {
   const { milestones, risks, links, changes, overview, budget, hackathon, ...rest } = p;
@@ -1001,7 +1029,8 @@ function demoRoute(method, path, qs, body) {
     for (const c of cards) { const k = by[c.department] ||= { department: c.department, projects: 0, active: 0, completed: 0, tasks_done: 0, tasks_total: 0 }; k.projects++; if (c.status === "in_progress") k.active++; if (c.status === "completed") k.completed++; k.tasks_done += c.stats.tasks_done; k.tasks_total += c.stats.tasks_total; }
     const st = {}; for (const c of cards) st[c.status] = (st[c.status] || 0) + 1;
     const ppl = new Map(); for (const x of DB.tasks) if (x.status !== "done" && x.assignee) { const k = personKey(x.assignee), e = ppl.get(k) || { person: x.assignee, open_tasks: 0, projects: [] }; e.open_tasks++; if (x.project_id && !e.projects.includes(x.project_id)) e.projects.push(x.project_id); ppl.set(k, e); }
-    return { progress: { by_department: Object.values(by), by_status: st }, resources: { people: [...ppl.values()], by_department_people: {} },
+    const by_project = cards.filter((c) => !["completed", "cancelled"].includes(c.status)).map((c) => ({ project_id: c.id, name: c.name, ...c.stats.progress }));
+    return { progress: { by_department: Object.values(by), by_status: st, by_project }, resources: { people: [...ppl.values()], by_department_people: {} },
       hackathons: cards.filter((c) => c.hackathon).map((c) => ({ project_id: c.id, name: c.name, competition: demoProject(c.id).hackathon.competition, next_deadline: c.hackathon.official_deadline, checklist_done: c.hackathon.checklist_done, checklist_total: c.hackathon.checklist_total, submission_status: c.hackathon.submission_status })),
       budget: { by_project: visible.filter((p) => p.budget).map((p) => ({ project_id: p.id, name: p.name, planned: p.budget.planned, spent: p.budget.spent })), total_planned: visible.reduce((a, p) => a + p.budget.planned, 0), total_spent: visible.reduce((a, p) => a + p.budget.spent, 0), currency: "THB" } };
   }

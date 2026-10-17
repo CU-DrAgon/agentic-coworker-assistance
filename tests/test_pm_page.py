@@ -102,3 +102,40 @@ def test_script_is_valid_js_and_every_label_has_th_and_en(tmp_path):
     out = subprocess.run(["node", str(probe)], check=True, capture_output=True, text=True).stdout
     res = json.loads(out)
     assert res["bad"] == [] and res["n"] > 150
+
+
+def test_cards_show_two_separate_bars_work_done_and_time_with_the_state_colour():
+    src = html()
+    card = between(src, "function projCard(p) {", "function projTable(rows)")
+    assert "progressBars(s.progress)" in card
+    mini = between(src, "function projectMini(p) {", "async function viewHome")
+    assert "progressBars(p.stats && p.stats.progress)" in mini  # Home: the at-risk cards too
+    bars = src[src.index("function progressBars(pg) {") :][:1200]
+    assert 't("pr_work")' in bars and 't("pr_time")' in bars and '"st-" + pg.state' in bars
+    assert '"time"' in bars and "daysText(pg.days_left)" in bars
+    for state in ("on_track", "behind", "at_risk", "done", "no_deadline"):
+        assert f".bar.st-{state}" in src and f"pr_{state}:" in src
+    assert '"งานเสร็จ","Work done"' in src and '"เวลา","Time"' in src
+    assert "by_project" in src and "i_by_project" in src  # the insights page lists them too
+
+
+def test_task_rows_show_step_and_percentage_when_present():
+    src = html()
+    row = between(src, "function taskRow(tk", "async function tickTask")
+    assert 'tk.step ? el("b"' in row and 't("pr_step")' in row and "tk.pct_done > 0" in row
+    data = json.loads(between(src, "/*DEMO-START*/", "/*DEMO-END*/"))
+    stepped = [t for t in data["tasks"] if t.get("step")]
+    assert len(stepped) >= 2 and all(t["pct_done"] > 0 and t["start"] for t in stepped)
+
+
+def test_demo_data_computes_progress_for_cards_and_insights():
+    src = html()
+    assert "function demoProgress(p, tk)" in src
+    assert "progress: demoProgress(p, tk)" in src  # demoStats
+    assert "by_project" in src[src.index('sub === "/insights"') :][:2500]
+
+
+def test_review_reasons_are_shown_as_words_not_keys():
+    src = html()
+    assert "const reasonsText" in src and "review_reasons_text" in src
+    assert ".review_reasons.join" not in src

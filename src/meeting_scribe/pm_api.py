@@ -271,7 +271,8 @@ def home(pm: Pm = Depends(pm_ctx)) -> dict:
     for ws, p in pairs:
         st = stats_of(pm, p, by_ws[ws.id])
         active += p.status == "in_progress"
-        if st["needs_review"]:
+        st = P.with_progress_reason(st, p)
+        if st["needs_review"] or st.get("at_risk_progress"):
             at_risk.append(P.card_json(p, st))
     return {
         "me": pm.me.model_dump(),
@@ -434,6 +435,9 @@ class TaskCreate(BaseModel):
     due: str = ""
     milestone_id: str = ""
     note: str = ""
+    start: str = ""
+    step: int = Field(default=0, ge=0, le=999)
+    pct_done: int = Field(default=0, ge=0, le=100)
 
 
 class TaskPatch(BaseModel):
@@ -444,6 +448,9 @@ class TaskPatch(BaseModel):
     status: Literal["open", "done"] | None = None
     note: str | None = None
     milestone_id: str | None = None
+    start: str | None = None
+    step: int | None = Field(default=None, ge=0, le=999)
+    pct_done: int | None = Field(default=None, ge=0, le=100)
 
 
 def check_milestone(p: P.Project, mid: str) -> None:
@@ -472,6 +479,8 @@ def add_task(project_id: str, body: TaskCreate, pm: Pm = Depends(pm_ctx)) -> dic
             milestone_id=body.milestone_id,
             note=body.note,
         )
+        task.start = P._date_ok(body.start, "start")
+        task.step, task.pct_done = body.step, body.pct_done
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
     return P.task_json(pm.tasks.save(task))
@@ -497,6 +506,15 @@ def patch_task(project_id: str, task_id: str, body: TaskPatch, pm: Pm = Depends(
             task.due = P._date_ok(data["due"] or "", "due")
         except ValueError as e:
             raise HTTPException(422, str(e)) from e
+    if "start" in data:
+        try:
+            task.start = P._date_ok(data["start"] or "", "start")
+        except ValueError as e:
+            raise HTTPException(422, str(e)) from e
+    if data.get("step") is not None:
+        task.step = data["step"]
+    if data.get("pct_done") is not None:
+        task.pct_done = data["pct_done"]
     if "note" in data:
         task.note = (data["note"] or "")[:500]
     if "milestone_id" in data:

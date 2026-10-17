@@ -353,6 +353,10 @@ def test_task_create_and_patch_permissions(w):
         "note",
         "url",
         "milestone_id",
+        "start",
+        "step",
+        "pct_done",
+        "depends_on",
         "created_from",
         "updated_at",
         "confirm",
@@ -837,3 +841,65 @@ def test_task_mode_and_personal_settings_are_admin_only_and_reach_the_guild(w):
     assert call(w, "other", "GET", "/settings").json()["defaults"]["task_confirm_mode"] == "notify"
     bad = {"defaults": {"task_confirm_mode": "dictator"}}
     assert call(w, "adm", "PATCH", "/settings", bad).status_code == 422
+
+
+# ------------------------------------------------------------------ progress vs time, plan fields
+def test_stats_carry_progress_on_cards_and_in_the_full_project(w):
+    a = make(w, name="Alpha", deadline="2026-10-24", status="in_progress")["id"]
+    call(w, "mem", "POST", f"/projects/{a}/tasks", {"title": "x", "due": "2026-10-20"})
+    done = call(w, "mem", "POST", f"/projects/{a}/tasks", {"title": "y"}).json()
+    call(w, "mem", "PATCH", f"/projects/{a}/tasks/{done['id']}", {"status": "done"})
+    card = call(w, "mem", "GET", "/projects").json()["projects"][0]
+    pg = card["stats"]["progress"]
+    assert pg["done_pct"] == 50 and pg["days_left"] == 10 and pg["state"] == "on_track"
+    assert pg["time_pct"] == 0 and pg["next_due"]["title"] == "x"
+    assert "tasks" not in pg  # per-task rows stay out of the cards
+    full = call(w, "mem", "GET", f"/projects/{a}").json()
+    assert full["stats"]["progress"] == pg
+    none = make(w, name="Open")  # no deadline, no tasks
+    nd = call(w, "mem", "GET", f"/projects/{none['id']}").json()["stats"]["progress"]
+    assert nd["state"] == "no_deadline" and nd["done_pct"] is None and nd["days_left"] is None
+
+
+def test_home_lists_a_running_project_that_is_far_behind_with_its_reason(w):
+    late = make(w, name="Late", deadline="2026-10-10", status="in_progress")["id"]
+    make(w, name="Fine", deadline="2026-12-10", status="in_progress")
+    h = call(w, "mem", "GET", "/home").json()
+    assert [p["id"] for p in h["at_risk"]] == [late] and h["counts"]["needs_review"] == 1
+    st = h["at_risk"][0]["stats"]
+    assert st["progress"]["state"] == "at_risk" and st["needs_review"] is False
+    assert st["review_reasons"] == ["pm_review_progress"]
+    assert st["review_reasons_text"][0]["en"].startswith("work is far behind")
+    planned = make(w, name="Idea", deadline="2026-10-01", status="planned")["id"]
+    assert planned not in [p["id"] for p in call(w, "mem", "GET", "/home").json()["at_risk"]]
+
+
+def test_insights_progress_by_project(w):
+    make(w, name="Late", deadline="2026-10-10", status="in_progress")
+    make(w, name="Fine", deadline="2026-12-10", status="in_progress")
+    rows = call(w, "mem", "GET", "/insights").json()["progress"]["by_project"]
+    assert [(r["name"], r["state"]) for r in rows] == [("Late", "at_risk"), ("Fine", "on_track")]
+    assert set(rows[0]) == {"project_id", "name", "state", "done_pct", "time_pct", "days_left"}
+
+
+def test_task_plan_fields_through_the_api(w):
+    a = make(w)["id"]
+    r = call(
+        w, "mem", "POST", f"/projects/{a}/tasks",
+        {"title": "Step", "due": "2026-10-20", "start": "2026-10-15", "step": 2, "pct_done": 30},
+    )  # fmt: skip
+    t = r.json()
+    assert (t["start"], t["step"], t["pct_done"], t["depends_on"]) == ("2026-10-15", 2, 30, [])
+    p = call(w, "mem", "PATCH", f"/projects/{a}/tasks/{t['id']}", {"pct_done": 80, "step": 3})
+    assert (
+        p.json()["pct_done"] == 80 and p.json()["step"] == 3 and p.json()["start"] == "2026-10-15"
+    )
+    bad = [{"pct_done": 101}, {"pct_done": -1}, {"step": -2}, {"start": "friday"}]
+    for body in bad:
+        assert call(w, "mem", "PATCH", f"/projects/{a}/tasks/{t['id']}", body).status_code == 422
+    assert (
+        call(w, "mem", "POST", f"/projects/{a}/tasks", {"title": "z", "start": "soon"}).status_code
+        == 422
+    )
+    call(w, "mem", "PATCH", f"/projects/{a}/tasks/{t['id']}", {"status": "done"})
+    assert call(w, "mem", "GET", f"/projects/{a}/tasks").json()["tasks"][0]["pct_done"] == 100

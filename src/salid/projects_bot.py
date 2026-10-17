@@ -18,6 +18,7 @@ import discord
 
 from .mentions import match_members
 from .orgs import OrgStore
+from .progress_bot import ProgressMixin, progress_tools
 from .projects import Person, ProjectRepo, ProjectsCtx, project_tools
 from .projects_listen import ProjectListener
 from .tasks import TaskRepo
@@ -27,7 +28,7 @@ logger = logging.getLogger(__name__)
 _RAW_MENTION = re.compile(r"<@[!&]?(\d+)>")
 
 
-class ProjectsMixin:
+class ProjectsMixin(ProgressMixin):
     def _projects_init(self) -> None:
         """Call after `_coo_init` (needs `self.docs`)."""
         self.project_repo = ProjectRepo(self.docs, clock=self.s.now)
@@ -69,49 +70,58 @@ class ProjectsMixin:
 
         loop.call_soon_threadsafe(lambda: asyncio.ensure_future(post()))
 
-    def _project_tools(self, message, guild, asker, is_exec: bool, lang: str) -> list:
+    def _project_ctx(
+        self, message, guild, asker, is_exec: bool, lang: str, files=()
+    ) -> ProjectsCtx | None:
+        """Who is asking and what they may do, for one request. None when the flag is off."""
+        if not self._projects_on(guild.id):
+            return None
+        org = OrgStore(self.docs).org_of_guild(guild.id)
+        emails = {m.discord_user_id: m for m in (org.members if org else []) if m.discord_user_id}
+
+        def person(member) -> Person:
+            known = emails.get(str(member.id))
+            return Person(
+                discord_user_id=str(member.id),
+                email=known.email if known else None,
+                name=getattr(member, "display_name", "") or str(member.id),
+            )
+
+        def resolve(name: str) -> list[Person]:
+            m = _RAW_MENTION.fullmatch(name.strip())
+            if m:
+                who = guild.get_member(int(m.group(1)))
+                return [person(who)] if who is not None and not getattr(who, "bot", False) else []
+            return [person(x) for x in match_members(guild, name)]
+
+        me = person(asker)
+        role = org.role_of(me.email) if (org and me.email) else None
+        return ProjectsCtx(
+            guild_id=guild.id,
+            asker=me,
+            is_admin=bool(is_exec or role in ("owner", "admin")),
+            lang=lang,
+            repo=self.project_repo,
+            tasks=self.project_task_repo,
+            now=self.s.now,
+            resolve=resolve,
+            workspace=f"discord-{guild.id}",
+            on_assigned=lambda task: self._handshake_new_tasks(guild.id, [task]),
+            on_assigned_many=lambda tasks: self._handshake_new_tasks(guild.id, tasks),
+            docs=self.docs,
+            llm=self.llm,
+            model=self.s.gate_model,
+            files=list(files or []),
+        )
+
+    def _project_tools(self, message, guild, asker, is_exec: bool, lang: str, files=()) -> list:
         """The project tools for one request (chat or voice). [] when the flag is off; never
         raises."""
         try:
-            if not self._projects_on(guild.id):
+            ctx = self._project_ctx(message, guild, asker, is_exec, lang, files)
+            if ctx is None:
                 return []
-            org = OrgStore(self.docs).org_of_guild(guild.id)
-            emails = {
-                m.discord_user_id: m for m in (org.members if org else []) if m.discord_user_id
-            }
-
-            def person(member) -> Person:
-                known = emails.get(str(member.id))
-                return Person(
-                    discord_user_id=str(member.id),
-                    email=known.email if known else None,
-                    name=getattr(member, "display_name", "") or str(member.id),
-                )
-
-            def resolve(name: str) -> list[Person]:
-                m = _RAW_MENTION.fullmatch(name.strip())
-                if m:
-                    who = guild.get_member(int(m.group(1)))
-                    return (
-                        [person(who)] if who is not None and not getattr(who, "bot", False) else []
-                    )
-                return [person(x) for x in match_members(guild, name)]
-
-            me = person(asker)
-            role = org.role_of(me.email) if (org and me.email) else None
-            ctx = ProjectsCtx(
-                guild_id=guild.id,
-                asker=me,
-                is_admin=bool(is_exec or role in ("owner", "admin")),
-                lang=lang,
-                repo=self.project_repo,
-                tasks=self.project_task_repo,
-                now=self.s.now,
-                resolve=resolve,
-                workspace=f"discord-{guild.id}",
-                on_assigned=lambda task: self._handshake_new_tasks(guild.id, [task]),
-            )
-            return project_tools(ctx)
+            return [*project_tools(ctx), *progress_tools(ctx)]
         except Exception:
             logger.warning("project tools unavailable", exc_info=True)
             return []

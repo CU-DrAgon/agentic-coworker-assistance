@@ -76,6 +76,11 @@ class Task(BaseModel):
     approval_rounds: int = 0  # how many times it was sent back
     edit_from: str = ""  # JSON {title, due, note} before the assignee's edits (before -> after)
     send_back_note: str = ""
+    # plan (Gantt) fields, see salid.plan_import / salid.progress
+    start: str = ""  # planned start YYYY-MM-DD or ""
+    step: int = 0  # position in the plan, 1-2-3 (0 = not a numbered step)
+    depends_on: list[str] = Field(default_factory=list)  # ids of the tasks that come before
+    pct_done: int = 0  # 0-100 (a done task counts as 100)
     # not stored: a team / several people were named but nobody could be picked (giver is asked)
     _needs_owner: bool = PrivateAttr(default=False)
 
