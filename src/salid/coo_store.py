@@ -30,6 +30,7 @@ PRIVATE_CHATS = "salid_private_chats"  # per (guild, user) private Salid channel
 PROFILES = "salid_profiles"  # per (guild, user) personal preferences (salid.profiles)
 COMPANY = "salid_company"  # per guild playbook, key "playbook" (salid.company_brain)
 CONTESTS = "salid_contests"  # competitions / hackathons / grants, key = contest id (salid.contests)
+QUOTES = "salid_quotes"  # quotations, key = base number QT-YYYY-NNNN + counters (salid.quotation)
 IDEAS = "salid_ideas"  # idea / project documents, key `{owner_id}_{slug}` (salid.ideas)
 
 

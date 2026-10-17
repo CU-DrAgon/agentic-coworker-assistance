@@ -84,6 +84,7 @@ Discord bot "สลิด" (display name Salid), **multi-tenant**: tenant key = 
 | `wiki.py` / `wiki_bot.py` | Company knowledge base (feature flag `wiki`, needs `memory`): pages in DocStore `salid_wiki` (last 5 versions, source channels + authors per channel, never touched by memory retention), agent tools `wiki_write` `wiki_get` `wiki_search` `wiki_list` `wiki_delete` `wiki_publish`; a page is visible only if the reader can read ALL source channels (or outranks the authors used from the ones they cannot); `WikiMixin` posts to the remembered knowledge channel (forum or text) after confirmation and only where the audience can read every source |
 | `search.py` / `web_search.py` / `research.py` / `search_bot.py` | Information search (flag `search`): `search_everything` (chat, files, wiki, receipts for executives, tasks, meetings, places, in parallel through the scoped tool objects of `_agent_kwargs`; merge/rank/dedupe; Thai<->English query expansion with the cheap model + glossary), `web_search` (Google-grounded answer with numbered citations, Bangkok date in the request) and `deep_research` (background plan -> parallel web_search -> cited report + PDF, one per guild at a time, `SALID_RESEARCH_DAILY_CAP` per day, cancelled with `cancel_deep_task`); the last two need `web` |
 | `orgs.py` / `licensing.py` / `sharing.py` / `library.py` / `connectors/` + `meeting_scribe/center.py` | Command center backend (`/center`, `/api/center/*`): orgs, members, workspaces (Discord / Slack / ClickUp / web), ShareLinks (public items only, chat memory never crosses), license gate (`Licensing.is_licensed`, 5 min cache, grandfathering of existing guilds to a trial until 2026-12-31, `SALID_LICENSE_ENFORCE`; `BotGuildSettings.license_gate` turns every feature off for an unlicensed guild, on_message / voice / DMs / slash commands are gated in bot.py except `/ตั้งค่า`), documents library + web uploads, web chat via `qa.ask`, Slack events / ClickUp import. Store: `OrgStore` on the DocStore. API contract: see the feature brief. |
+| `votes.py` / `votes_bot.py` | Meeting votes (flags `votes`, `vote_offers`): `call_vote` `close_vote` `vote_status` agent tools (in `_agent_kwargs`; `call_vote` / `close_vote` are voice action tools). Each voter gets one button ballot (`VoteButton` DynamicItem) in their private channel via `send_dm`; one tally message in the meeting chat edited per ballot (counts only); closes when all voted / deadline (`_votes_due` tick) / on request; result line posted, added to the minutes (`MeetingManager.record_vote`) and announced in voice via `LiveVoice.announce_cue`. Majority of ballots cast, tie = no conclusion. Offers from untagged talk: `looks_like_vote_call` + cheap gate, one text offer per channel per 10 min, `VoteOfferButton`. DocStore kinds `salid_votes`, `salid_vote_offers`. |
 | `memory.py` | Team memory layers 1-2: `MemoryService` (record / edit / delete), `MemoryScheduler` (batched day-summary updates, daily purge by each guild's retention, vector backfill), `vectorize` / `vectors_usable` (embeddings of summary items, unchanged items reuse their vector) |
 | `memory_store.py` / `firestore_memory.py` | `MemoryStore` protocol (every read takes `guild_id` + allowed channels), SQLite and Firestore stores for the raw log, `DaySummary` (with optional `vec_model` / `vec_hashes` / `vecs`) and import state; Firestore uses equality filters only (no composite index), per-day reads in parallel |
 | `memory_summary.py` | Cheap-model day summary (`update_summary`), `summary_items` (the searchable lines), `render_summary` |
@@ -165,11 +166,14 @@ curl -s localhost:8080/health
 ```
 
 Requires Python 3.12 (uv installs it), ffmpeg, and ADC for anything that touches GCP.
-Salid PDF tests (`tests/salid/test_secretary.py`) need a Thai TrueType font: `pdf_report.find_fonts`
-only knows the Linux paths that `Dockerfile.salid` installs (`fonts-thai-tlwg`). On macOS run them with
-`SALID_PDF_FONT=/System/Library/Fonts/Supplemental/Ayuthaya.ttf` (built in); without it 6 PDF tests fail
-with "no TrueType font found for PDFs". Promo-kit text needs the system `libfribidi`
-(`brew install fribidi`, and `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` when uv runs pytest).
+Salid PDF tests (`tests/salid/test_secretary.py`) need a Thai TrueType font. `pdf_report.find_fonts`
+tries `SALID_PDF_FONT`, then `src/salid/fonts/Sarabun-{Regular,Bold}.ttf` (not committed; dropping them
+there works on any OS), then Linux paths (TLWG from `Dockerfile.salid`, google-sarabun, noto, freefont).
+On macOS without either, 6 PDF tests fail with `UnicodeEncodeError: 'latin-1' codec` (the fallback is
+fpdf's Latin font); run them with `SALID_PDF_FONT=/System/Library/Fonts/Supplemental/Ayuthaya.ttf`
+(built in). Homebrew libraries need `DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib` set where uv runs
+pytest (`uv run env DYLD_FALLBACK_LIBRARY_PATH=... pytest`): `libopus` (`brew install opus`; the
+`test_meeting.py` sink tests) and `libfribidi` (`brew install fribidi`; promo-kit Thai text).
 
 ## Known limitations — do not "fix" without asking
 

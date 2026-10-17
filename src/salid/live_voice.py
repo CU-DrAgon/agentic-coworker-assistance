@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import difflib
+import io
 import logging
 import random
 import re
+import secrets
 import threading
 import time
 from array import array
@@ -35,16 +38,20 @@ import discord
 from google.genai import types
 
 from .captions import normalize_language
-from .fillers import POOL_SIZE, ClipCache, FillerWriter, within, write_line
+from .fillers import POOL_SIZE, ClipCache, FillerWriter, write_line
 from .i18n import resolve_lang
 from .i18n import t as catalog
 from .meeting import (
     SPEAK_COOLDOWN_S,
+    SpeechStats,
     _connected,
     _stop_playback,
+    looks_like_speech,
     parse_meeting_command,
     parse_wake,
     rms,
+    stats_from_frame_rms,
+    stats_line,
 )
 from .mentions import tag_candidates
 from .qa import THAI_DAYS
@@ -203,12 +210,22 @@ def answer_privately(question: str) -> dict:
     return {}
 
 
+def status_question(question: str) -> str:
+    """The question as quoted in a typed status line: one line, at most `STATUS_Q_CHARS`."""
+    q = " ".join(str(question).split())
+    return q if len(q) <= STATUS_Q_CHARS else q[: STATUS_Q_CHARS - 1].rstrip() + "…"
+
+
 def ask_salid(question: str) -> dict:
     """Ask the full Salid text assistant when the question needs TEAM information or current web
     info: what was said or decided in meetings/chats, tasks and owners, files, receipts and
-    spending, schedules, or fresh news. Do NOT call it for general knowledge, opinions, small talk
-    or explanations you can give yourself. Returns {"answer": ...} to say as it is, or an error
-    with {"say": ...} to read as it is.
+    spending, schedules, or fresh news, or when someone asks Salid to DO something (create a
+    document, deck, poll, event, send something). Do NOT call it for general knowledge, opinions,
+    small talk or explanations you can give yourself. Returns {"answer": ...} to say as it is;
+    or {"status": "working", "job": ...}: the job runs in the background and a note is already in
+    the text chat, so say nothing about it (at most “ค่ะ” / “Okay”), do not wait, go on with the
+    conversation (the result is sent later as a bracketed message); or an error with
+    {"say": ...} to read as it is. A "working" answer that has a "say" line: say that line.
 
     Args:
         question: the question, complete and self-contained (names, dates, the topic).
@@ -223,23 +240,20 @@ GATED_TOOLS = frozenset(
 )
 NOBODY_ASKED = {"error": "nobody asked: stay silent"}
 FRAME_S = 0.02  # one frame from `feed`
+ASK_EVIDENCE_S = 6.0  # a tool call arrives 1-2 s after the utterance: look this far back
+ASK_MIN_VOICED_S = 0.2  # the model heard a question: only noise is excluded by this check
 HEARD_GAP_S = 3.0  # input-transcript text after this much quiet starts a new utterance
 NAME_DEDUPE_S = 10.0  # a classic name hit this soon after a Live-transcript hit is the same call
-# Hand-written fallback pools (i18n ack_voice_* / ack_again_*): a line written for the question is
+# Hand-written fallback pool (i18n ack_voice_*): a line written for the question is
 # used when it is ready in time (`Settings.voice_ack_timeout_s`), otherwise one of these.
 FILLERS = {
     lang: [catalog(f"ack_voice_{n}", lang) for n in range(1, POOL_SIZE + 1)]
     for lang in ("th", "en")
 }
-FILLER_AGAIN = {
-    lang: [catalog(f"ack_again_{n}", lang) for n in range(1, POOL_SIZE + 1)]
-    for lang in ("th", "en")
-}
-PRERENDER_FIRST, PRERENDER_AGAIN = 4, 2  # clips synthesized ahead per language (bounded TTS cost)
-FILLER_SLOW = {
-    lang: [catalog(f"ack_longer_{n}", lang) for n in (1, 2)] for lang in ("th", "en")
-}  # "it is taking longer than usual"
-SLOW_FACT = {"th": "ใช้เวลานานกว่าปกติ", "en": "it is taking longer than usual"}
+PRERENDER_FIRST = 4  # clips synthesized ahead per language (bounded TTS cost)
+# Status lines ("still working", "sent to the background", "vote sent") are typed in the meeting chat,
+# not spoken: voice is for real communication with the people.
+STATUS_Q_CHARS = 80  # the question quoted in a status line
 FILLER_MEMORY = 3  # the last lines said in this session are not picked again
 FILLER_TOOLS = {
     "ask_salid",
@@ -270,31 +284,31 @@ ROOM_NOTE_EN = (
     "use send_dm to “me”.)"
 )
 ASK_TIMEOUT_S = 150.0  # default of `Settings.live_ask_timeout_seconds`
-SLOW_ANSWER_S = 40.0  # default of `Settings.live_slow_answer_seconds`
-# Tools that make no sense out loud (they produce a file / a long document, or take minutes), so the
-# spoken brain never gets them. Everything else in the chat agent is available by voice (parity test).
-VOICE_TOOL_SKIP = frozenset(
+STALE_TURN_S = (
+    15.0  # a model turn / tool answer older than this no longer blocks a result announcement
+)
+# The spoken brain has exactly the chat tools (parity test). Work whose first tool call is one of
+# these takes tens of seconds (documents, decks, kits, research, PDFs), so the job goes to the
+# background at once instead of making the Live model wait for `live_foreground_seconds`.
+BACKGROUND_TOOLS = frozenset(
     {
-        "idea_export",  # PDF / docx / md of an idea
-        "business_framework",  # long framework + PDF
-        "contest_pitch",  # pitch scripts
-        "contest_plan",  # plan, optionally PDF
-        "deep_research",  # background research, PDF report
-        "meeting_document",  # minutes document file
-        "financial_projection",  # spreadsheet / PDF
+        "deep_research",  # background web research + PDF report
+        "make_promo_kit",  # image edit + three post images
+        "create_deck",  # slide deck (.pptx)
         "market_benchmark",  # 20-60 s web benchmark + PDF
+        "business_framework",  # long framework + PDF
+        "idea_export",  # PDF / docx / md of an idea
+        "make_quotation",  # quotation PDF + docx
+        "revise_quotation",  # new revision of a quotation, PDF + docx
+        "financial_projection",  # spreadsheet / PDF
+        "meeting_document",  # minutes document file
+        "contest_plan",  # plan, optionally PDF
+        "contest_pitch",  # pitch scripts
         "wiki_write",  # writes a long page
         "wiki_publish",  # posts a page to a channel
     }
 )
-
-
-def voice_tools(kw: dict) -> dict:
-    """`bot._agent_kwargs(...)` for the spoken brain: without the `VOICE_TOOL_SKIP` tools."""
-    tools = [
-        f for f in kw.get("extra_tools") or [] if getattr(f, "__name__", "") not in VOICE_TOOL_SKIP
-    ]
-    return {**kw, "extra_tools": tools} if "extra_tools" in kw else kw
+ANNOUNCE_AUTH_S = 30.0  # the announcement turn may be heard for this long after the cue is sent
 
 
 # TODO(web timeout): grounded web search has a fixed 20 s timeout (llm.GROUNDED_TIMEOUT_S); there is
@@ -336,6 +350,23 @@ STATE_ENGAGED_EN = (
 )
 FORCE_CUE_EN = "(Someone called your name: reply at once, in context.)"
 HEARD_EN = " What they said: “{heard}”"
+RESULT_CUE = (
+    "(ผลงานที่ขอไว้เสร็จแล้ว งาน {job} คำถาม: {question} ผลลัพธ์: {answer} — "
+    "เริ่มด้วยประโยคสั้น ๆ เช่น “ได้ผลเรื่อง … แล้วค่ะ:” แล้วพูดผลลัพธ์ตามนี้ ห้ามเรียบเรียงใหม่)"
+)
+RESULT_CUE_EN = (
+    "(The requested job is done. Job {job}, question: {question}. Result: {answer} — "
+    "open with one short line such as “Here is the result on …:” and say the result as given; "
+    "do not rephrase it.)"
+)
+FAILED_CUE = (
+    "(งานที่ขอไว้ งาน {job} คำถาม: {question} ทำไม่สำเร็จ — แจ้งสั้น ๆ ว่าทำให้ไม่ได้ "
+    "โดยพูดตามนี้ ห้ามเรียบเรียงใหม่: {answer})"
+)
+FAILED_CUE_EN = (
+    "(The requested job failed. Job {job}, question: {question}. Tell them briefly that it "
+    "could not be done, saying this as given and not rephrased: {answer})"
+)
 NO_ROOM_EN = "Nobody is in the voice channel right now."
 QA_OFF_EN = "The team Q&A feature is turned off."
 
@@ -571,8 +602,16 @@ def build_instruction_en(
             "the system says it for you. Call the tool at once without speaking, then answer when you "
             "have the result.\n"
             "- If a tool result has an error and a “say” field, read “say” as it is (for example “Sorry, "
-            "I can't check that right now. The lookup tool is not working.”); never invent an answer. If "
-            "a result says it was superseded, say nothing: a newer question is being answered.\n"
+            "I can't check that right now. The lookup tool is not working.”); never invent an answer.\n"
+            "- ask_salid is also how you DO things (documents, decks, polls, events, messages): it has "
+            "every tool the text assistant has.\n"
+            "- ask_salid may answer at once, or reply status=working: the job runs in the background and "
+            "the system has already typed a note in the text chat, so say nothing about it (at most "
+            "“Okay” if someone is clearly waiting for an answer), do not wait, and go on with the "
+            "conversation (other questions are fine; the job keeps running). If status=working comes "
+            "with a “say” line (the same job asked again), say that short line as it is. When the "
+            "system later sends “(The requested job is done ...)”, announce it briefly and say the "
+            "result as given. If a file was made, the answer says it was put in the text chat.\n"
         )
     else:
         p += (
@@ -655,8 +694,14 @@ def build_instruction(
             "- ห้ามพูดคำเติมเองก่อนหรือระหว่างเรียก ask_salid (เช่น “แป๊บนึงนะคะ”) ระบบพูดให้แล้ว ให้เรียกเครื่องมือทันทีโดยไม่พูดอะไร "
             "แล้วค่อยตอบเมื่อได้ผลลัพธ์\n"
             "- ถ้าผลลัพธ์ของเครื่องมือมี error และ say ให้อ่าน say ตามที่เป็น (เช่น “ขออภัยค่ะ ตรวจสอบให้ไม่ได้ตอนนี้ "
-            "เครื่องมือค้นข้อมูลขัดข้องค่ะ”) ห้ามแต่งคำตอบเอง ถ้าผลลัพธ์บอกว่า superseded ให้เงียบ "
-            "เพราะกำลังตอบคำถามที่ใหม่กว่า\n"
+            "เครื่องมือค้นข้อมูลขัดข้องค่ะ”) ห้ามแต่งคำตอบเอง\n"
+            "- ask_salid ใช้ลงมือทำงานได้ด้วย (เอกสาร สไลด์ โพล นัดหมาย ส่งข้อความ) เพราะมีเครื่องมือครบเท่าผู้ช่วยในแชท\n"
+            "- ask_salid อาจตอบทันที หรือตอบ status=working: งานทำอยู่เบื้องหลังและระบบพิมพ์โน้ตในแชตให้แล้ว "
+            "ดังนั้นไม่ต้องพูดถึงมัน (อย่างมากพูดแค่ “ค่ะ” ถ้ามีคนรอคำตอบอยู่ชัด ๆ) ไม่ต้องรอ "
+            "แล้วคุยเรื่องอื่นต่อได้เลย (ถามเรื่องอื่นเพิ่มได้ งานยังทำอยู่) ถ้า status=working มี “say” มาด้วย "
+            "(ถามงานเดิมซ้ำ) ให้พูดประโยคสั้น ๆ นั้นตามที่เป็น เมื่อระบบส่ง "
+            "“(ผลงานที่ขอไว้เสร็จแล้ว ...)” มาภายหลัง ให้ประกาศสั้น ๆ แล้วพูดผลลัพธ์ตามที่ได้ ห้ามเรียบเรียงใหม่ "
+            "ถ้ามีไฟล์ คำตอบจะบอกว่าส่งไว้ในแชตแล้ว\n"
         )
     else:
         p += "ตอนนี้คุณดูข้อมูลของทีมไม่ได้ ถ้ามีคนถามเรื่องข้อมูลทีม เงิน หรือใบเสร็จให้บอกตรง ๆ ว่าตอนนี้ดูไม่ได้ ส่วนความรู้ทั่วไปตอบเองได้\n"
@@ -684,12 +729,22 @@ def same_question(a: str, b: str) -> bool:
     return a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
 
 
-class _Brain:
-    """One running ask_salid: its normalised question and the task that answers it."""
+class _Job:
+    """One ask_salid job: it runs to the end whatever the room does. `background`: a known-long tool
+    was called (hand it off at once); `detached`: the Live model was told "working" (the result is
+    announced when it finishes)."""
 
     def __init__(self, question: str):
+        self.id = secrets.token_hex(2)
         self.question = question
         self.task: asyncio.Task | None = None
+        self.background = asyncio.Event()
+        self.detached = False
+        self.done = False
+        self.result: dict | None = None
+
+
+_JOB: contextvars.ContextVar[_Job | None] = contextvars.ContextVar("salid_voice_job", default=None)
 
 
 # ------------------------------------------------------------------ the live session
@@ -711,7 +766,7 @@ class LiveVoice:
         there even when `post`, the optional chatter, is off); default: `post`."""
         self.bot, self.session, self.post = bot, session, post
         self.echo = echo or post
-        self._brain: _Brain | None = None  # the ask_salid being answered (one at a time)
+        self._jobs: dict[str, _Job] = {}  # ask_salid jobs still running (`live_max_jobs`)
         self._connect = connect or self._open_default
         self.on_failed = on_failed
         self.mixer = Mixer()
@@ -733,13 +788,16 @@ class LiveVoice:
         self._awaiting_answer = False  # a tool call was answered: its spoken answer comes next
         self._muted_turn = False  # someone said "stop": drop the rest of this model turn
         self._turn_open = False  # the server is still sending the current model turn
+        self._turn_open_since = 0.0  # monotonic: when the current model turn began
+        self._awaiting_since = 0.0  # monotonic: when a tool call started waiting for its answer
         self._partners: set[int] = set()  # who Salid is answering (talking over her stops her)
         self._talkover: dict[int, list[float]] = {}  # partner id -> [start, last] loud speech
         self._heard_while_speaking = ""
         self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
         self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
-        self._voiced: list[float] = []  # arrival times of recent voiced frames
+        self._last_engaged_at = -1e9  # monotonic: engaged last (grace window for the gates)
+        self._frames: list[tuple[float, float]] = []  # (arrival time, RMS) of the last 3 s
         self._rejected_logged = False
         # mouth gate (see `_gate_audio`)
         self._held: list[
@@ -748,6 +806,7 @@ class LiveVoice:
         self._held_since = 0.0  # monotonic time the first held chunk arrived
         self._turn_ok = False  # this model turn is authorised to be heard
         self._answer_auth = False  # the last tool call was made while engaged
+        self._announce_until = 0.0  # monotonic: a job result was cued, its audio is authorised
         self._muted_logged = False  # the "muted" line was logged for this turn
         self._gated_turn = False  # this turn had audio the gate held or dropped
         # name heard in the Live input transcript (fast path)
@@ -759,7 +818,6 @@ class LiveVoice:
         # filler clips ("one moment") for slow tools
         self._filler_pcm: dict[str, bytes] = {}
         self._filler_used: list[str] = []  # the last lines said (generated or fallback)
-        self._again_used: set[str] = set()  # "still on it" lines already said this session
         self._filler_until = 0.0  # monotonic: filler audio may still sit in the playback buffer
         self._filler_task: asyncio.Task | None = None
         self._filler_question = ""
@@ -810,14 +868,15 @@ class LiveVoice:
             now = time.monotonic()
             self._track_speaker(user_id, now)
             self._check_talkover(user_id, pcm, now)
-            floor = float(getattr(getattr(self.bot, "s", None), "name_min_rms", 250.0))
-            if rms(pcm) >= floor:
-                self._voiced.append(now)  # a voiced 20 ms frame (see `_voiced_s`)
+            self._frames.append((now, rms(pcm)))  # see `_speech_stats`
+            if len(self._frames) > 400:  # ~8 s of frames: keep the ring short
+                self._frames = [f for f in self._frames if now - f[0] <= ASK_EVIDENCE_S]
 
-    def _voiced_s(self, now: float) -> float:
-        """Seconds of voiced audio (frames with RMS >= `name_min_rms`) in the last 3 s, any speaker."""
-        self._voiced = [t for t in self._voiced if now - t <= HEARD_GAP_S]
-        return len(self._voiced) * FRAME_S
+    def _speech_stats(self, now: float, window: float = HEARD_GAP_S) -> SpeechStats:
+        """Energy statistics of the frames received in the last `window` s (3 by default), any speaker."""
+        self._frames = [f for f in self._frames if now - f[0] <= ASK_EVIDENCE_S]
+        floor = float(getattr(getattr(self.bot, "s", None), "name_min_rms", 250.0))
+        return stats_from_frame_rms([r for t, r in self._frames if now - t <= window], floor)
 
     def _check_talkover(self, uid: int, pcm: bytes, now: float) -> None:
         """Stop when the person Salid is answering clearly talks over her. Anyone else (a side
@@ -1005,6 +1064,7 @@ class LiveVoice:
         """Tell the model whether it is engaged in a conversation or only listening."""
         self._engaged = engaged
         if engaged:
+            self._last_engaged_at = time.monotonic()
             self._release_held()  # the name arrived while the first words were being held back
         self._spawn(self._send_state())
 
@@ -1065,14 +1125,18 @@ class LiveVoice:
         said = parse_wake(self._heard_buf)  # the same detector as the classic path
         if said is None:
             return
-        need = float(getattr(self.bot.s, "name_min_voiced_seconds", 0.4))
-        if need > 0 and self._voiced_s(now) < need:
-            # noise / an unmuted mic hallucinated into a greeting: not a call (a later part of the
-            # same utterance with real speech can still be one)
-            if not self._rejected_logged:
-                self._rejected_logged = True
-                logger.info("live: name hit rejected: no voiced audio")
-            return
+        if float(getattr(self.bot.s, "name_min_voiced_seconds", 0.35)) > 0:
+            stats = self._speech_stats(now)
+            ok, reason = looks_like_speech(stats, self.bot.s)
+            if not ok:
+                # noise / an unmuted mic hallucinated into a greeting: not a call (a later part of
+                # the same utterance with real speech can still be one)
+                if not self._rejected_logged:
+                    self._rejected_logged = True
+                    logger.info("live: name hit rejected: %s %s", reason, stats_line(stats))
+                return
+            logger.info("live: name hit accepted %s", stats_line(stats))
+        self._last_engaged_at = now
         self._heard_hit = True
         if parse_meeting_command(said) == "leave":
             return  # "สลิด ออกประชุม": the meeting manager leaves; no reply to force
@@ -1084,7 +1148,10 @@ class LiveVoice:
         logger.info("live: name heard in the live transcript")
         who = self.recent_speakers()
         self.bot.meetings._set_engaged(
-            s, True, name=self.speaker_name(who[0]) if len(who) == 1 else ""
+            s,
+            True,
+            name=self.speaker_name(who[0]) if len(who) == 1 else "",
+            by=who[0] if len(who) == 1 else 0,
         )
         self._spawn(
             self._force_reply(
@@ -1235,6 +1302,8 @@ class LiveVoice:
         if sc.interrupted:
             self._interrupt()
         if sc.model_turn is not None:
+            if not self._turn_open:
+                self._turn_open_since = time.monotonic()
             self._turn_open = True
         if sc.model_turn is not None and not self._muted_turn:
             for part in sc.model_turn.parts or []:
@@ -1278,39 +1347,133 @@ class LiveVoice:
             return await self._guarded(name, self._answer_privately, question)
         return await self._one_brain(question)
 
-    # ---- one brain at a time
+    # ---- jobs: ask_salid answers at once or keeps working in the background
     async def _one_brain(self, question: str) -> dict:
-        """ask_salid, one at a time per session. The same question while one is running (the person
-        re-asked while waiting) joins it and gets its result; a different question cancels the
-        running one (its worker thread cannot be killed, but its result is dropped: nothing is
-        posted or spoken) and starts the new one."""
-        cur = self._brain
-        if cur is not None and cur.task is not None and not cur.task.done():
-            if same_question(cur.question, question):
-                logger.info("live: ask_salid joined the running one")
-                return await self._wait_brain(cur)
-            logger.info("live: ask_salid superseded the running one")
-            cur.task.cancel()
-        run = self._brain = _Brain(question)
-        run.task = asyncio.create_task(self._guarded("ask_salid", self._ask_salid, question))
-        self._bg.add(run.task)
-        run.task.add_done_callback(self._bg.discard)
-        return await self._wait_brain(run)
-
-    @staticmethod
-    async def _wait_brain(run: _Brain) -> dict:
-        assert run.task is not None
+        """ask_salid as a job. It answers within `live_foreground_seconds` (quick Q&A stays
+        conversational), or at once with "working" when its first tool call is a known-long one
+        (`BACKGROUND_TOOLS`); otherwise the job runs on and `_announce` tells the room at the next
+        pause. The hand-off is a typed note in the meeting chat, never spoken. The same question
+        while it runs gets "still working" (a note + one short spoken sentence); a different one is a new job
+        (at most `live_max_jobs`). Nothing here cancels a job: not a new question, not barge-in."""
+        sets, lang = self.bot.s, self._filler_lang()
+        running = [j for j in self._jobs.values() if not j.done]
+        for j in running:
+            if same_question(j.question, question):
+                logger.info("live: ask_salid asked again, job %s still running", j.id)
+                self._echo_text("voice_still_working_text", question=status_question(question))
+                return {
+                    "status": "working",
+                    "job": j.id,
+                    "say": catalog("voice_still_working", lang),  # answers the person: spoken
+                }
+        if len(running) >= int(getattr(sets, "live_max_jobs", 3)):
+            logger.info("live: ask_salid refused: %d jobs running", len(running))
+            return {"error": "too many jobs running", "say": catalog("voice_jobs_full", lang)}
+        job = _Job(question)
+        self._jobs[job.id] = job
+        job.task = asyncio.create_task(self._job_main(job))
+        self._bg.add(job.task)
+        job.task.add_done_callback(self._bg.discard)
+        waiter = asyncio.create_task(job.background.wait())
         try:
-            return await asyncio.shield(run.task)
-        except asyncio.CancelledError:
-            me = asyncio.current_task()
-            if run.task.cancelled() and (me is None or not me.cancelling()):
-                return {"superseded": True}  # a newer question took over: say nothing
-            raise
+            await asyncio.wait(
+                {job.task, waiter},
+                timeout=float(getattr(sets, "live_foreground_seconds", 12.0)),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            waiter.cancel()
+        if job.done and job.result is not None:
+            return job.result
+        job.detached = True  # from here the result is announced, not returned
+        logger.info("live: job %s goes to the background", job.id)
+        self._echo_text("voice_handoff_text", question=status_question(question))
+        return {"status": "working", "job": job.id}  # no `say`: the chat note is the status
+
+    async def _job_main(self, job: _Job) -> dict:
+        """Runs the brain with the time limit; a finished background job is announced."""
+        _JOB.set(job)
+        res: dict = {}
+        try:
+            res = await self._guarded("ask_salid", self._ask_salid, job.question)
+        finally:
+            job.result, job.done = res, True
+            self._jobs.pop(job.id, None)
+        if job.detached:
+            self._spawn(self._announce(job))
+        return res
+
+    def _quiet(self, pause: float) -> bool:
+        """Nobody has spoken for `pause` seconds and Salid is neither speaking nor about to."""
+        now = time.monotonic()
+        floor = float(getattr(self.bot.s, "name_min_rms", 250.0))
+        # only voiced frames count as "someone is talking": an open mic sends silence/noise frames
+        last_room = max(
+            self._last_voice, max((t for t, r in self._frames if r >= floor), default=0.0)
+        )
+        # a turn / tool answer the model never finished must not block the announcement forever
+        turn_stuck = self._turn_open and now - self._turn_open_since > STALE_TURN_S
+        answer_stuck = self._awaiting_answer and now - self._awaiting_since > STALE_TURN_S
+        return (
+            now - last_room >= pause
+            and self._live is not None
+            and not self._speaking()
+            and not self._turn_audio
+            and (not self._turn_open or turn_stuck)
+            and (not self._awaiting_answer or answer_stuck)
+            and now >= self._filler_until
+        )
+
+    async def _wait_for_pause(self) -> bool:
+        sets = self.bot.s
+        pause = float(getattr(sets, "live_result_pause_seconds", 1.5))
+        end = time.monotonic() + float(getattr(sets, "live_result_wait_seconds", 90.0))
+        step = max(0.01, min(0.1, pause / 3))
+        while time.monotonic() < end:
+            s = self.session
+            if self._closing or s.ending or s.leaving:
+                return False
+            if self._quiet(pause):
+                return True
+            await asyncio.sleep(step)
+        return False
+
+    async def _announce(self, job: _Job) -> None:
+        """A background job finished: at the next pause tell the Live model to say the result (the
+        full text is already in the chat). No pause within `live_result_wait_seconds`: chat only."""
+        en, res = self._en(), job.result or {}
+        q = " ".join(job.question.split())[:160]
+        if res.get("answer"):
+            cue = (RESULT_CUE_EN if en else RESULT_CUE).format(
+                job=job.id, question=q, answer=str(res["answer"])[:ANSWER_MAX_CHARS]
+            )
+        else:
+            say = str(res.get("say") or catalog("voice_tool_failed_say", self._filler_lang()))
+            cue = (FAILED_CUE_EN if en else FAILED_CUE).format(job=job.id, question=q, answer=say)
+        await self.announce_cue(cue, f"job {job.id}")
+
+    async def announce_cue(self, cue: str, tag: str = "cue") -> None:
+        """Tell the Live model, at the next pause, to say a prepared cue (a job result, a vote
+        result). The room asked for it, so the mouth gate lets that audio by. No pause within
+        `live_result_wait_seconds`: nothing is spoken (the chat has it)."""
+        if not await self._wait_for_pause():
+            logger.info("live: %s not spoken: no pause in time (chat has it)", tag)
+            return
+        live = self._live
+        if live is None or self._closing or self.session.ending:
+            return
+        now = time.monotonic()
+        self._announce_until = now + ANNOUNCE_AUTH_S  # the room asked for this: the gate lets it by
+        self._last_engaged_at = now  # like a name hit: follow-ups work for the grace window
+        logger.info("live: announcing %s", tag)
+        await live.send_client_content(
+            turns=types.Content(role="user", parts=[types.Part(text=cue)]), turn_complete=True
+        )
 
     async def _guarded(self, name: str, fn, question: str) -> dict:
         """Run a brain tool with the time limit. A failure or timeout returns the honest line the
-        model reads as it is (`say`) and is shown in the text chat; nothing is invented."""
+        model reads as it is (`say`) and is shown in the text chat; nothing is invented. An answer
+        is always posted to the text chat, with the files its tools made (never sent to the model)."""
         limit = float(getattr(self.bot.s, "live_ask_timeout_seconds", ASK_TIMEOUT_S))
         try:
             res = await asyncio.wait_for(fn(question), limit)
@@ -1322,12 +1485,41 @@ class LiveVoice:
             logger.warning("live: %s failed: %s", name, type(e).__name__)
             reason = str(e) or type(e).__name__
         else:
-            if name == "ask_salid" and isinstance(res, dict) and res.get("answer"):
-                self._echo_text("voice_answer_echo", text=str(res["answer"]))
+            if name == "ask_salid" and isinstance(res, dict):
+                res = dict(res)
+                files = list(res.pop("files", None) or [])
+                if res.get("answer") or files:
+                    self._echo_answer(str(res.get("answer") or ""), files)
+                if files and res.get("answer"):
+                    res["answer"] = (
+                        f"{res['answer']} {catalog('voice_files_say', self._filler_lang())}"
+                    )
             return res
         lang = self._filler_lang()
         self._echo_text("voice_tool_failed", tool=name, reason=reason[:80])
         return {"error": reason, "say": catalog("voice_tool_failed_say", lang)}
+
+    def _echo_answer(self, text: str, files: list) -> None:
+        """The answer (and the files its tools made) in the meeting's text chat."""
+        lang = self._filler_lang()
+        body = catalog("voice_answer_echo", lang, text=text) if text else ""
+        kw: dict = {}
+        if files:
+            body = f"{body}\n{catalog('voice_files_echo', lang)}".strip()
+            kw["files"] = [
+                discord.File(io.BytesIO(data), filename=name) for name, data in files[:10]
+            ]
+
+        async def send() -> None:
+            try:
+                await self.echo(body, **kw)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("live: could not post to the text chat (%s)", type(e).__name__)
+
+        with contextlib.suppress(RuntimeError):
+            self._spawn(send())
 
     def _echo_text(self, key: str, **fmt: Any) -> None:
         """Post a fixed line to the meeting's text chat; never raises into the Live loop."""
@@ -1395,20 +1587,19 @@ class LiveVoice:
             here = guild.get_channel(s.minutes_channel_id or 0) or s.text_channel
 
             def agent_for(member, is_exec: bool, profile) -> dict:
-                return voice_tools(
-                    bot._agent_kwargs(
-                        bot.room_message(guild, member, here, room={h.id for h in humans}),
-                        guild,
-                        member,
-                        is_exec,
-                        setting=self._qa_setting(),
-                        lang=self._qa_lang(question),
-                        question=question,
-                        memory=memory,
-                        profile=profile,
-                        people=tag_candidates(here),
-                        spoken=True,  # a voice answer: no media tools
-                    )
+                return bot._agent_kwargs(
+                    bot.room_message(guild, member, here, room={h.id for h in humans}),
+                    guild,
+                    member,
+                    is_exec,
+                    setting=self._qa_setting(),
+                    lang=self._qa_lang(question),
+                    question=question,
+                    memory=memory,
+                    profile=profile,
+                    people=tag_candidates(here),
+                    files=[],  # no attachments by voice; a remembered promo kit can be revised
+                    spoken=True,  # a voice answer: no media tools
                 )
 
             kw = agent_for(
@@ -1421,6 +1612,14 @@ class LiveVoice:
                     kw,
                     agent_for(speaker, bot.is_exec_member(speaker), None),
                 )
+        job = _JOB.get()
+        loop = asyncio.get_running_loop()
+
+        def on_tool(name: str) -> None:  # from the agent's thread: a known-long tool = background
+            if job is not None and name in BACKGROUND_TOOLS:
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(job.background.set)
+
         ans = await asyncio.to_thread(
             ask,
             bot.s,
@@ -1432,6 +1631,8 @@ class LiveVoice:
             user_id=user_id,
             history=s.transcript.history(bot.s.now(), window_s=180, max_chars=3000),
             spoken=True,
+            deck=bot.team.enabled(s.guild_id, "decks"),  # as in chat
+            on_tool_call=on_tool,
         )
         # counts only: the question and answer may hold personal data
         logger.info(
@@ -1440,7 +1641,11 @@ class LiveVoice:
             ans.rounds,
             len(ans.text or ""),
         )
-        return {"answer": (ans.text or "")[:ANSWER_MAX_CHARS]}
+        out: dict = {"answer": (ans.text or "")[:ANSWER_MAX_CHARS]}
+        files = list(getattr(ans, "attachments", ()) or ())
+        if files:  # posted to the text chat by `_guarded`, never sent to the Live model
+            out["files"] = files
+        return out
 
     async def _answer_privately(self, question: str) -> dict:
         """A full `ask` as the speaker with their own rights (as if they had DMed Salid), sent to
@@ -1475,6 +1680,7 @@ class LiveVoice:
             memory=memory,
             profile=bot._profile_of(s.guild_id, who.id),
             people=tag_candidates(here),
+            files=[],
             spoken=True,  # asked by voice (answered by DM): no media tools
         )
         ans = await asyncio.to_thread(
@@ -1487,6 +1693,7 @@ class LiveVoice:
             is_exec=is_exec,
             user_id=who.id,
             history=s.transcript.history(bot.s.now(), window_s=180, max_chars=3000),
+            deck=bot.team.enabled(s.guild_id, "decks"),  # as in chat
         )
         res = await send_dm(who, ans.text or "")
         logger.info(
@@ -1497,7 +1704,7 @@ class LiveVoice:
     async def _on_tool_call(self, live: Any, tool_call: Any) -> None:
         """The tools run in the background: the receiver keeps handling audio, transcripts and
         interruptions while the brain works (a re-asked question can then join / replace it)."""
-        engaged = self._gate_open()
+        engaged = self._authorize_tools([fc.name for fc in tool_call.function_calls or []])
         self._answer_auth = engaged  # a spoken answer to a call made while engaged may be heard
         if any(
             self._refusal(fc.name, dict(fc.args or {}), engaged) is None
@@ -1506,13 +1713,55 @@ class LiveVoice:
             # the turn_complete that follows is not the end of the answer (a call refused below
             # produces no answer to wait for)
             self._awaiting_answer = True
+            self._awaiting_since = time.monotonic()
         task = asyncio.create_task(self._run_tool_call(live, tool_call, engaged))
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
 
     def _gate_open(self) -> bool:
-        """Someone called Salid (or the mouth gate is off): she may speak and act."""
-        return not getattr(self.bot.s, "live_mouth_gate", True) or bool(self.session.engaged)
+        """Someone called Salid (or the mouth gate is off) or she was engaged within
+        `live_reengage_grace_seconds` (a lively room drops the state while a question is open)."""
+        if not getattr(self.bot.s, "live_mouth_gate", True) or self.session.engaged:
+            return True
+        grace = float(getattr(self.bot.s, "live_reengage_grace_seconds", 60.0))
+        return time.monotonic() - self._last_engaged_at <= grace
+
+    def _authorize_tools(self, names: list[str]) -> bool:
+        """The gate for a tool call batch. Passing only thanks to the grace re-engages in code (the
+        state line in chat is right). `ask_salid` / `answer_privately` while not engaged is
+        evidence: if the last 3 s of user audio is real speech, someone did ask, so engage."""
+        if self._gate_open():
+            if (
+                not self.session.engaged
+                and getattr(self.bot.s, "live_mouth_gate", True)
+                and any(n != "post_note" for n in names)  # a note alone is not a conversation
+            ):
+                self.bot.meetings._set_engaged(self.session, True)
+            return True
+        if any(n in ("ask_salid", "answer_privately") for n in names):
+            stats = self._speech_stats(time.monotonic(), ASK_EVIDENCE_S)
+            ok, reason = self._ask_evidence(stats)
+            if ok:
+                logger.info(
+                    "live: ask_salid accepted: speech heard, engaging %s", stats_line(stats)
+                )
+                self.bot.meetings._set_engaged(self.session, True)
+                return True
+            logger.info("live: ask_salid refused: %s %s", reason, stats_line(stats))
+        return False
+
+    def _ask_evidence(self, stats: SpeechStats) -> tuple[bool, str]:
+        """Is there speech behind an ask_salid made while listening? The Live model already judged
+        that someone addressed Salid, so this only excludes noise: some voiced audio, speech-like
+        variation, loud enough (no voiced-fraction rule, unlike name hits)."""
+        sets = self.bot.s
+        if stats.voiced_s < ASK_MIN_VOICED_S:
+            return False, "too little voiced audio"
+        if stats.cv < float(getattr(sets, "name_min_cv", 0.25)):
+            return False, "steady noise"
+        if stats.rms < float(getattr(sets, "name_min_rms", 250.0)):
+            return False, "too quiet"
+        return True, ""
 
     @staticmethod
     def _refusal(name: str, args: dict, engaged: bool) -> dict | None:
@@ -1563,7 +1812,12 @@ class LiveVoice:
         if not getattr(self.bot.s, "live_mouth_gate", True):
             self._on_audio(data)
             return
-        if self._turn_ok or self.session.engaged or (self._awaiting_answer and self._answer_auth):
+        if (
+            self._turn_ok
+            or self._gate_open()
+            or (self._awaiting_answer and self._answer_auth)
+            or time.monotonic() < self._announce_until  # a job result the room asked for
+        ):
             self._turn_ok = True
             self._release_held()
             self._on_audio(data)
@@ -1651,19 +1905,15 @@ class LiveVoice:
     def _particle(self) -> str:
         return str(getattr(self.bot.s, "voice_particle", "") or "")
 
-    def _pool(self, kind: str, lang: str) -> list[str]:
+    def _pool(self, lang: str) -> list[str]:
         """The fallback lines of a pool as they are spoken (Thai with the persona particle)."""
-        pool = FILLER_AGAIN[lang] if kind == "again" else FILLERS[lang]
-        return [with_particle(x, self._particle()) for x in pool]
+        return [with_particle(x, self._particle()) for x in FILLERS[lang]]
 
     async def _prerender_fillers(self) -> None:
         """Synthesize a few fallback clips once (Cloud TTS, the classic voice) so one is ready when
         a generated line is not. Bounded: not the whole pool, to save TTS calls."""
         lang = self._filler_lang()
-        picks = [
-            *random.sample(self._pool("first", lang), PRERENDER_FIRST),
-            *random.sample(self._pool("again", lang), PRERENDER_AGAIN),
-        ]
+        picks = random.sample(self._pool(lang), PRERENDER_FIRST)
         for text in picks:
             try:
                 await self._filler_clip(text, lang)
@@ -1694,23 +1944,19 @@ class LiveVoice:
             pcm = self._filler_pcm[key] = await self._render(text, lang, cache=True)
         return pcm
 
-    def _pick_fallback(self, lang: str, kind: str = "first") -> str:
-        """A fallback line: not one of the last 3 said (and, for "again", never one said before in
-        this session), preferring the ones whose clip is already rendered."""
-        pool = self._pool(kind, lang)
+    def _pick_fallback(self, lang: str) -> str:
+        """A fallback line: not one of the last 3 said, preferring the ones whose clip is already
+        rendered."""
+        pool = self._pool(lang)
         avoid = set(self._filler_used[-FILLER_MEMORY:])
-        if kind == "again":
-            avoid |= self._again_used
         fresh = [x for x in pool if x not in avoid] or pool
         ready = [x for x in fresh if f"{lang}:{x}" in self._filler_pcm]
         text = random.choice(ready or fresh)
-        self._remember(text, kind)
+        self._remember(text)
         return text
 
-    def _remember(self, text: str, kind: str) -> None:
+    def _remember(self, text: str) -> None:
         self._filler_used = [*self._filler_used, text][-FILLER_MEMORY:]
-        if kind == "again":
-            self._again_used.add(text)
 
     def _start_filler(self, tool: str, args: dict | None = None) -> asyncio.Task | None:
         """A slow tool starts and Salid has not spoken in this turn: say "one moment" at once.
@@ -1757,26 +2003,16 @@ class LiveVoice:
         return got.text, await self._render(got.text, lang, cache=got.generic)
 
     async def _filler_run(self, question: str = "") -> None:
+        """The spoken "one moment" at once; if the tool is still running after
+        `live_filler_again_seconds`, ONE typed note in the meeting chat (never a second clip)."""
         lang = self._filler_lang()
         writer = self._writer()
         first: asyncio.Task | None = None
-        again: asyncio.Task | None = None
         try:
             started = time.monotonic()
             timeout = float(getattr(self.bot.s, "voice_ack_timeout_s", 3.0))
             if writer.enabled():
                 first = asyncio.create_task(self._generated_clip(question, lang))
-                again = asyncio.create_task(  # ready by the time it is needed
-                    write_line(
-                        writer,
-                        kind="voice",
-                        question=question,
-                        lang=lang,
-                        particle=self._particle() or "ค่ะ",
-                        stage="again",
-                        avoid=self._filler_used,
-                    )
-                )
             made = None
             if first is not None:
                 done, _ = await asyncio.wait({first}, timeout=timeout)
@@ -1786,67 +2022,27 @@ class LiveVoice:
                     first.cancel()  # a late line is dropped: one filler only
             if made is not None:
                 text, pcm = made
-                self._remember(text, "first")
+                self._remember(text)
             else:
                 text = self._pick_fallback(lang)
                 pcm = await self._filler_clip(text, lang)
-            if not await self._play_filler(pcm):
-                return
+            await self._play_filler(pcm)  # False: the model is already talking; the note still goes
             wait = float(getattr(self.bot.s, "live_filler_again_seconds", 8.0))
             await asyncio.sleep(max(0.0, wait - (time.monotonic() - started)))
-            got = await within(again, 0.5)
-            line = got.text if got else None
-            if line and line not in self._again_used and line not in self._filler_used:
-                self._remember(line, "again")
-                pcm = await self._render(line, lang, cache=got.generic)
-            else:
-                pcm = await self._filler_clip(self._pick_fallback(lang, "again"), lang)
-            if not await self._play_filler(pcm):
-                return
-            # Still no answer: one honest line, then silence until it arrives (or the time limit).
-            slow = float(getattr(self.bot.s, "live_slow_answer_seconds", SLOW_ANSWER_S))
-            await asyncio.sleep(max(0.0, slow - (time.monotonic() - started)))
-            await self._play_filler(await self._slow_clip(writer, question, lang))
+            s = self.session
+            if not (self._closing or s.ending or s.leaving):
+                self._echo_text("voice_working_text", question=status_question(question))
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.warning("live: filler failed", exc_info=True)
         finally:
-            for tk in (first, again):
-                if tk is None:
-                    continue
-                if not tk.done():
-                    tk.cancel()
+            if first is not None:
+                if not first.done():
+                    first.cancel()
                 else:
                     with contextlib.suppress(BaseException):
-                        tk.exception()  # a failed line is already logged / ignored
-
-    async def _slow_clip(self, writer: FillerWriter, question: str, lang: str) -> bytes:
-        """ "It is taking longer than usual": a line written with that fact (an "again" line), else
-        one from the fallback pool."""
-        if writer.enabled():
-            timeout = float(getattr(self.bot.s, "voice_ack_timeout_s", 3.0))
-            task = asyncio.create_task(
-                write_line(
-                    writer,
-                    kind="voice",
-                    question=question,
-                    lang=lang,
-                    particle=self._particle() or "ค่ะ",
-                    stage="again",
-                    facts=[SLOW_FACT[lang]],
-                    avoid=self._filler_used,
-                )
-            )
-            got = await within(task, timeout)
-            if got is not None and got.text not in self._filler_used:
-                self._remember(got.text, "again")
-                with contextlib.suppress(Exception):
-                    return await self._render(got.text, lang, cache=False)
-        pool = [with_particle(x, self._particle()) for x in FILLER_SLOW[lang]]
-        text = random.choice([x for x in pool if x not in self._filler_used] or pool)
-        self._remember(text, "first")
-        return await self._filler_clip(text, lang)
+                        first.exception()  # a failed line is already logged / ignored
 
     async def _play_filler(self, pcm: bytes) -> bool:
         """Queue a filler clip on the Live playback path. False when the model started to speak."""
@@ -1914,6 +2110,7 @@ class LiveVoice:
             self._muted_turn = True
             self._awaiting_answer = False  # nothing will be answered out loud
         self._turn_ok = self._gated_turn = self._muted_logged = False
+        self._announce_until = 0.0  # the announcement turn is over
         if self._muted_turn:  # the rest of a turn somebody stopped: never posted or played
             self._muted_turn = False
             self._said.clear()

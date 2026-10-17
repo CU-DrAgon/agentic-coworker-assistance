@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 LINE_CHARS = 700  # per message sent to the model (image descriptions are long)
 MAX_BATCH = 150  # messages per model call; larger backlogs are split into sequential calls
-MAX_OUTPUT_TOKENS = 1800
+MAX_OUTPUT_TOKENS = 4096  # a busy day's Thai summary is ~3k tokens; 1800 cut the JSON short
 RENDER_CHARS = 2500  # cap of one rendered summary handed to the answering model
 
 
@@ -67,7 +67,8 @@ topics (list of {{title, details, people}}), decisions (list of strings), \
 action_items (list of {{who, what, due}}; who = the person's name as written; due only if stated, as YYYY-MM-DD when the date is given or can be worked out from the day above, else as written), \
 numbers (amounts, dates, IDs mentioned that matter, each with its context), open_questions (list of strings). \
 Merge the new messages into the previous summary: keep what is still true, add what is new, \
-update items that changed. Be concise."""
+update items that changed. Be concise and keep the whole summary compact: at most 12 topics, 15 decisions, \
+15 action_items, 15 numbers and 10 open_questions; when a list is full, merge or drop the least important older entries."""
 
 
 def format_lines(messages: Sequence[MemoryMessage], zone: ZoneInfo) -> str:

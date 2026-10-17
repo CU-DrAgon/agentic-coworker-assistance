@@ -36,7 +36,44 @@ from .profiles import clean
 logger = logging.getLogger(__name__)
 
 KEY = "playbook"
-KINDS = ("rule", "persona", "glossary", "sop", "faq", "about", "industry")
+KINDS = ("rule", "persona", "glossary", "sop", "faq", "about", "industry", "profile")
+# Structured company details printed on documents (quotations): the header, bank account, signer.
+PROFILE_FIELDS = (
+    "legal_name",
+    "address",
+    "tax_id",
+    "phone",
+    "email",
+    "website",
+    "logo_url",
+    "bank_account_name",
+    "bank_name",
+    "bank_account_number",
+    "signer_name",
+    "signer_title",
+)
+_PROFILE_ALIASES = {
+    "company_name": "legal_name",
+    "name": "legal_name",
+    "company": "legal_name",
+    "tax": "tax_id",
+    "tax_no": "tax_id",
+    "taxid": "tax_id",
+    "tax_number": "tax_id",
+    "tel": "phone",
+    "telephone": "phone",
+    "mobile": "phone",
+    "site": "website",
+    "url": "website",
+    "logo": "logo_url",
+    "account_name": "bank_account_name",
+    "account_number": "bank_account_number",
+    "bank": "bank_name",
+    "signer": "signer_name",
+    "signatory": "signer_name",
+    "signer_position": "signer_title",
+    "position": "signer_title",
+}
 MAX_TEXT = 300
 MAX_TERM = 60
 MAX_STEPS = 12
@@ -137,6 +174,7 @@ class CompanyPlaybook(BaseModel):
     pending: list[Suggestion] = Field(default_factory=list)
     history: list[str] = Field(default_factory=list)
     nudged_at: str = ""
+    profile: dict[str, str] = Field(default_factory=dict)  # PROFILE_FIELDS -> value
 
     def is_empty(self) -> bool:
         return not (
@@ -148,6 +186,7 @@ class CompanyPlaybook(BaseModel):
             or self.glossary
             or self.sop
             or self.faq
+            or self.profile
         )
 
 
@@ -177,6 +216,28 @@ def _new_id(kind: str) -> str:
     return f"{kind[0]}{secrets.token_hex(3)}"
 
 
+def profile_field(name: str) -> str:
+    """The canonical PROFILE_FIELDS name for what the model or the user called it ("" if none)."""
+    key = re.sub(r"[\s\-]+", "_", str(name or "").strip().casefold())
+    key = _PROFILE_ALIASES.get(key, key)
+    return key if key in PROFILE_FIELDS or key == "bank_account" else ""
+
+
+def profile_values(text: str, detail: str) -> dict[str, str]:
+    """{field: value} from teach_company(kind="profile", text=<field>, detail=<value>). Either order
+    is accepted; `bank_account` takes "account name | bank | number" in the value."""
+    f, value = profile_field(text), clean(detail, 4 * MAX_TEXT)
+    if not f:
+        f, value = profile_field(detail), clean(text, 4 * MAX_TEXT)
+    if not f or not value:
+        return {}
+    if f != "bank_account":
+        return {f: value}
+    parts = [clean(x, MAX_TEXT) for x in re.split(r"\s*[|/]\s*", value)]
+    keys = ("bank_account_name", "bank_name", "bank_account_number")
+    return {k: v for k, v in zip(keys, parts, strict=False) if v}
+
+
 def _split_steps(detail: str) -> list[str]:
     parts = re.split(r"[\n;]+|\s*(?:^|\s)\d{1,2}[.)]\s+", str(detail or ""))
     return [clean(p, MAX_STEP) for p in parts if clean(p, MAX_STEP)][:MAX_STEPS]
@@ -186,7 +247,14 @@ def validate(kind: str, text: str, detail: str = "") -> str:
     """ "" when (kind, text, detail) can be stored, else an error message."""
     if kind not in KINDS:
         return f"unknown kind; use one of {', '.join(KINDS)}"
-    if not clean(text, MAX_TEXT):
+    if kind == "profile":
+        if not profile_values(text, detail):
+            return (
+                "profile needs text = the field and detail = the value; fields: "
+                + ", ".join(PROFILE_FIELDS)
+                + ", bank_account (account name | bank | number)"
+            )
+    elif not clean(text, MAX_TEXT):
         return "text is empty"
     if kind in ("glossary", "faq", "sop") and not clean(detail, 4 * MAX_TEXT):
         return {
@@ -205,6 +273,9 @@ def validate(kind: str, text: str, detail: str = "") -> str:
 
 def apply_item(pb: CompanyPlaybook, kind: str, text: str, detail: str, by: int, at: str) -> str:
     """Store one validated item in `pb`. Returns the new item id ("" for about / industry)."""
+    if kind == "profile":
+        pb.profile.update(profile_values(text, detail))
+        return ""
     text, detail = clean(text, MAX_TEXT), clean(detail, 4 * MAX_TEXT)
     if kind == "about":
         pb.about = text
@@ -494,6 +565,7 @@ def view(pb: CompanyPlaybook, lang: str = "th", admin: bool = False) -> dict:
         "glossary": [{"id": g.id, "term": g.term, "meaning": g.meaning} for g in pb.glossary],
         "sop": [{"id": s.id, "title": s.title, "steps": s.steps} for s in pb.sop],
         "faq": [{"id": f.id, "q": f.q, "a": f.a} for f in pb.faq],
+        "profile": dict(pb.profile),
         "empty": pb.is_empty(),
     }
     if admin:
@@ -523,7 +595,11 @@ def company_tools(ctx: CompanyCtx) -> list[Callable]:
             kind: rule (company rule), persona (tone / how Salid should behave here), glossary
                 (text = the term, detail = its meaning), sop (text = title, detail = the steps one
                 per line), faq (text = question, detail = answer), about (what the company is),
-                industry (kind of business, e.g. "ร้านอาหาร"; picks matching domain packs).
+                industry (kind of business, e.g. "ร้านอาหาร"; picks matching domain packs),
+                profile (company details printed on documents such as quotations: text = the
+                field, detail = the value; fields legal_name, address, tax_id, phone, email,
+                website, logo_url, signer_name, signer_title, bank_account (detail = "account name
+                | bank | number"); e.g. "ที่อยู่บริษัทคือ ..." -> text="address").
             text: the rule / term / title / question / description.
             detail: meaning / steps / answer for glossary, sop, faq; optional for industry.
         """

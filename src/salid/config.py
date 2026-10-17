@@ -110,15 +110,23 @@ class Settings(BaseSettings):
     notes_batch_seconds: float = 60.0  # classic mode: how often the gate looks for decisions
     # Two states: listening (speaks only when its name is called) and engaged (answers every
     # utterance). Engaged falls back to listening after this long without anyone addressing it
-    # (or sooner: two utterances in a row that are not addressed to Salid).
-    engaged_timeout_seconds: float = 30.0
+    # (or sooner: three utterances in a row that are not addressed to Salid).
+    engaged_timeout_seconds: float = 45.0
     # Every listening <-> engaged change (and the join) is shown as one short line in the meeting's
     # text chat; a flip back within 15 s edits the previous line instead of posting a new one.
     voice_state_posts: bool = True
-    # Live ask_salid: hard limit, and when the brain is still working a spoken "it is taking
-    # longer than usual" line (once). The answer is delivered whenever it arrives before the limit.
+    # Live ask_salid: hard limit for one job. `live_slow_answer_seconds` is no longer used (the
+    # background hand-off replaced the "taking longer" line); kept so old env files still load.
     live_ask_timeout_seconds: float = 150.0
     live_slow_answer_seconds: float = 40.0
+    # Live background jobs (v0.9.0): ask_salid answers within `live_foreground_seconds`, else the
+    # job runs on, the room keeps talking, and the result is announced at the next pause
+    # (`live_result_pause_seconds` of no room audio, waited for at most `live_result_wait_seconds`;
+    # it is always posted to the text chat). At most `live_max_jobs` run at once per session.
+    live_foreground_seconds: float = 12.0
+    live_max_jobs: int = 3
+    live_result_pause_seconds: float = 1.5
+    live_result_wait_seconds: float = 90.0
     # Live: the name was heard but the model has not started to answer after this long (counted from
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
     # (VAD silence + thinking); a cue sent earlier replaced a real answer with a generic greeting.
@@ -133,13 +141,18 @@ class Settings(BaseSettings):
     # up in that window. Off = v0.8.0 behaviour.
     live_mouth_gate: bool = True  # SALID_LIVE_MOUTH_GATE
     live_call_grace_seconds: float = 2.5
+    # Engaged this recently counts as engaged for the mouth gate and the tool gate (SALID_LIVE_REENGAGE_GRACE_SECONDS).
+    live_reengage_grace_seconds: float = 60.0
     # A name hit (either detector) counts only if real speech is behind it: noise / an unmuted mic
     # makes the transcriber hallucinate "หวัดดีครับ สลิด". Frames with RMS >= `name_min_rms` are
-    # voiced; the Live path needs `name_min_voiced_seconds` of them in the last 3 s (0 = off), the
-    # classic path (greeting-only utterances) needs >= 0.8 s and 30% voiced frames.
-    name_min_voiced_seconds: float = 0.4  # SALID_NAME_MIN_VOICED_SECONDS
+    # voiced. Both detectors (bare greeting / name only) apply the same speech-likeness rule:
+    # `name_min_voiced_seconds` of voiced audio (0 = gate off), 30% voiced frames, frame-RMS
+    # coefficient of variation >= `name_min_cv` (stationary noise is flat), overall RMS >= floor.
+    name_min_voiced_seconds: float = 0.35  # SALID_NAME_MIN_VOICED_SECONDS
+    name_min_cv: float = 0.25  # SALID_NAME_MIN_CV
     name_min_rms: float = 250.0  # SALID_NAME_MIN_RMS
-    # A spoken "one moment" clip while a slow tool (ask_salid) runs; a second line if still waiting.
+    # A spoken "one moment" clip while a slow tool (ask_salid) runs. If it is still running after
+    # `live_filler_again_seconds` ONE typed note goes to the meeting chat (not spoken).
     live_filler: bool = True
     live_filler_again_seconds: float = 8.0
     # "One moment" lines (chat, Live voice, classic meeting) are written by the cheap model so they
@@ -220,6 +233,7 @@ class Settings(BaseSettings):
     auto_join_min_humans: int = 1
     auto_join_delay_seconds: float = 0.0
     auto_join_cooldown_minutes: int = 10  # no auto-join where someone told Salid to leave
+    voice_connect_timeout_seconds: float = 20.0  # a voice handshake that hangs is abandoned
     # Email (salid.email_out): Gmail sends only when all three are set (refresh token = secret)
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
