@@ -914,7 +914,7 @@ async def test_a_job_is_indexed_while_it_runs_and_leaves_the_index_when_it_ends(
     "state, cost, refunded",
     [("storyboard", 0.0, True), ("storyboard", 0.05, False), ("queued", 0.0, False),
      ("stills", 0.0, False), ("hero", 0.0, False), ("audio", 0.0, False),
-     ("render", 0.0, False), ("render", 0.1008, False)],
+     ("render", 0.0, False), ("render", 0.1008, False), ("returned", 0.0, False)],
 )  # fmt: skip
 async def test_the_sweep_gives_the_ad_back_only_when_nothing_was_billed(
     bot, world, state, cost, refunded
@@ -929,6 +929,38 @@ async def test_the_sweep_gives_the_ad_back_only_when_nothing_was_billed(
     # only "storyboard" starts before any paid call; a record's cost lags its step, and a
     # queued job may not have taken its ad yet
     assert ads == (2 if refunded else 3)
+
+
+async def test_a_runner_refund_then_a_sweep_gives_the_ad_back_once(on, world, monkeypatch):
+    """The real runner gives the ad back (storyboard failed, nothing billed); the bot then stops
+    before the job's final record (simulated: `_video_finish` never runs). The next start's
+    sweep sees "returned", not "storyboard", and gives nothing back again."""
+
+    def plan(*a, **kw):
+        raise videoad.StoryboardError("no usable storyboard")
+
+    async def stopped(*a, **kw):  # the task was cancelled before it could finish
+        return None
+
+    monkeypatch.setattr(videoad, "plan_storyboard", plan)
+    monkeypatch.setattr(on, "_video_finish", stopped)
+    capture_posts(world.pub)
+    on.docs.put("salid_media_usage", GUILD, "2026-10", {"ads": 3})
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    [rec] = records(on)
+    assert (
+        rec["state"] == "returned"
+        and rec["cost_usd"] == 0
+        and list(active(on)) == [on.docs.find_items("salid_video_jobs", GUILD)[0][0]]
+    )
+    assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 3}  # taken, given back
+    await on._sweep_video_jobs()
+    assert records(on)[0]["state"] == "failed" and records(on)[0]["reason"] == "restarted"
+    assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 3}  # not again
+    assert "video_step_returned" not in videoad_bot.CATALOG  # never shown as a step
+    assert all(e[0] != "returned" for p in world.pub.posted for e in p.edits)
 
 
 async def test_an_ended_job_leaves_the_index_even_if_its_final_record_fails(on, world, runner):

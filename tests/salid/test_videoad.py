@@ -1310,6 +1310,17 @@ def test_the_ad_is_taken_before_the_storyboard_step_is_reported(tmp_path, fake_p
     assert seen[0] == ("storyboard", 1)  # a "storyboard" record always has its ad taken
 
 
+def test_the_refund_is_reported_before_it_is_made(tmp_path, fake_pipeline):
+    """The record leaves "storyboard" ("returned") before the ad goes back, so a sweep after a
+    shutdown at that moment never gives it back a second time."""
+    fake_pipeline.plan_error = videoad.StoryboardError("no usable storyboard")
+    d, seen = MemDocs(), []
+    h = videoad.VideoHandle(progress=lambda step, _d: seen.append((step, ads_used(d))))
+    with pytest.raises(videoad.StoryboardError):
+        run(tmp_path, handle=h, usage=videoad.MediaUsage(d))
+    assert seen == [("storyboard", 1), ("returned", 1)] and ads_used(d) == 0
+
+
 def test_a_shutdown_leaves_the_refund_to_the_sweep(tmp_path, fake_pipeline):
     h = videoad.VideoHandle()
 

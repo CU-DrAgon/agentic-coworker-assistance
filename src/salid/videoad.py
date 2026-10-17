@@ -918,6 +918,7 @@ def assemble(
 
 # ------------------------------------------------------------------ the job
 STEPS = ("storyboard", "stills", "hero", "audio", "render")
+RETURNED = "returned"  # reported (and recorded) right before the runner gives the ad back
 USAGE = "salid_media_usage"  # DocStore kind: per guild, key "YYYY-MM": ads, hero_seconds, ...
 # Cost estimates for logs and job records (USD), not billing: verify against the console.
 STILL_USD = 0.0504  # one 2K Nano Banana 2.1 image
@@ -973,7 +974,8 @@ class VideoHandle:
     """Shared between the bot and the job thread: `cancelled` stops the job before its next
     step; `shutdown` (set with `cancelled` when the bot stops) leaves the ad's refund to the next
     start's sweep, which sees the record; `progress(step, detail)` is called when a step starts
-    (detail: counts only), and again with "hero" whenever `hero_id` changes; `cost_usd` is the
+    (detail: counts only), again with "hero" whenever `hero_id` changes, and with RETURNED
+    right before the runner gives the ad back (no step: the record only); `cost_usd` is the
     job's cost estimate so far and `hero_id` the Omni interaction id of the hero clip being made
     ("" when none), both for the job record (a restart cancels a pending hero clip from it)."""
 
@@ -1226,7 +1228,8 @@ def run_video_ad(
 
     The month's ad is taken once at the start (MonthLimit when used up) and given back when the
     job then fails or is cancelled before any paid media was billed (no still, hero clip or music
-    cost). Then storyboard
+    cost; RETURNED is reported first, so the record no longer says "storyboard" and a restart's
+    sweep never gives it back again). Then storyboard
     (`settings.gemini_model`, sees `req.photos`), stills (`settings.image_model`, 9:16 2K) and
     their motion clips, hero clips (only with `settings.video_hero_model`; the seconds requested,
     `videogen.hero_seconds`, taken from the month's budget before each call; given back, with
@@ -1266,6 +1269,9 @@ def run_video_ad(
         # nothing paid was made: the month's ad goes back, unless the bot is stopping (its
         # record stays for the next start's sweep, which gives it back: never twice)
         if bill.usd <= 0 and not handle.shutdown.is_set():
+            # recorded first: the record leaves "storyboard", so a sweep after a stop right
+            # here never gives the ad back again (no step label: the progress message ignores it)
+            _report(handle, RETURNED)
             usage.give_back(req.guild_id, month, "ads", 1)
             logger.info("video ad given back (nothing billed): guild=%s", req.guild_id)
         raise
