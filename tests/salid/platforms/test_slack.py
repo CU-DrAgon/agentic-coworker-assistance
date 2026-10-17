@@ -1,5 +1,9 @@
 """Slack: event translation, replies in threads, scope inputs, import. A fake Web API client."""
 
+import asyncio
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
 import pytest
 from conftest import FixedClockSettings
 from platform_fakes import NOW, Clock, gid_of, inc, make_assistant, rid_of, stored
@@ -542,3 +546,382 @@ async def test_import_respects_the_memory_switch(fx):
     client.history["C1"] = msgs(3)
     assert await slack_import.SlackImporter(a, port, page_sleep=0).run() == 0
     assert NOW  # (clock constant used by sibling tests)
+
+
+# ------------------------------------------------------------------ rate limits and uninstall
+
+
+class HttpError(Exception):
+    """What the SDK raises for an HTTP error: `.response` with a status and headers."""
+
+    def __init__(self, status: int = 429, retry: float | None = None):
+        super().__init__(f"http {status}")
+        headers = {"Retry-After": str(retry)} if retry is not None else {}
+        self.response = SimpleNamespace(status_code=status, headers=headers)
+
+
+class FakeTime:
+    """An injected clock + sleep: sleeping advances the clock and is recorded, never real."""
+
+    def __init__(self):
+        self.clock = Clock()
+        self.sleeps: list[float] = []
+
+    def __call__(self):
+        return self.clock()
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.clock.advance(seconds)
+
+
+def timed_port(client, ft, **kw):
+    return SlackPort(client, TEAM, BOT, clock=ft, sleep=ft.sleep, **kw)
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "app_uninstalled"},
+        {"type": "tokens_revoked", "tokens": {"oauth": ["U1"], "bot": [BOT]}},
+    ],
+)
+async def test_uninstall_or_bot_token_revocation_stops_answers_and_erases_memory(fx, event):
+    client, a, port, adapter = fx
+    deleted = []
+    real = a.memory.delete_guild
+    a.memory.delete_guild = lambda gid: deleted.append(gid) or real(gid)
+    await adapter.on_message(ev(text="budget is 80"), TEAM)
+    await a.drain()
+    assert [m.text for m in stored(a, inc())] == ["budget is 80"]
+
+    await adapter.on_event(event, TEAM)
+
+    assert port.revoked and deleted == [gid_of(inc())]
+    assert stored(a, inc()) == []
+    await adapter.on_message(ev(text=f"<@{BOT}> still there?", ts="2.0"), TEAM)
+    await a.drain()
+    assert not a.ask_fn.calls and not client.posts
+    assert await port.history(inc(), 5) == []  # no Slack read either
+
+
+async def test_tokens_revoked_for_user_tokens_only_does_nothing(fx):
+    client, a, port, adapter = fx
+    deleted = []
+    a.memory.delete_guild = lambda gid: deleted.append(gid)
+    for tokens in ({"oauth": ["U1"]}, {}, None):
+        await adapter.on_event({"type": "tokens_revoked", "tokens": tokens}, TEAM)
+    await adapter.on_event({"type": "app_uninstalled"}, "T-OTHER")  # not this workspace
+    assert not port.revoked and deleted == []
+    await adapter.on_message(ev(text=f"<@{BOT}> hi"), TEAM)
+    assert len(a.ask_fn.calls) == 1
+
+
+# ------------------------------------------------------------------ Slack Connect files
+
+
+async def test_slack_connect_file_stub_is_resolved_with_files_info_then_downloaded(fx):
+    client, a, port, adapter = fx
+    client.files["F1"] = {
+        "id": "F1", "name": "bill.png", "mimetype": "image/png", "size": 5,
+        "url_private_download": "https://files.slack.com/x/bill.png",
+    }  # fmt: skip
+    await adapter.on_message(
+        ev(
+            text=f"<@{BOT}> read this",
+            subtype="file_share",
+            files=[
+                {"id": "F1", "file_access": "check_file_info"},
+                {"id": "F404", "file_access": "check_file_info"},  # cannot be resolved: skipped
+            ],
+        ),
+        TEAM,
+    )
+    assert client.file_calls == ["F1", "F404"]
+    (fi,) = a.ask_fn.calls[0][1]["files"]
+    assert fi.filename == "bill.png" and fi.data == b"filebytes"
+    assert adapter.downloads == ["https://files.slack.com/x/bill.png"]
+
+
+async def test_a_file_that_already_has_its_url_is_not_looked_up(fx):
+    client, a, port, adapter = fx
+    await adapter.on_message(
+        ev(
+            text=f"<@{BOT}> read this",
+            subtype="file_share",
+            files=[{"id": "F1", "name": "a.pdf", "url_private": "https://files.slack.com/a"}],
+        ),
+        TEAM,
+    )
+    assert client.file_calls == []
+
+
+# ------------------------------------------------------------------ room cache refresh
+
+
+async def test_room_name_cache_refreshes_after_a_rename_event(fx):
+    _, a, _, _ = fx
+    for kind, channel in (("channel_rename", "C1"), ("group_rename", "C2")):
+        client = FakeSlack()
+        port = SlackPort(client, TEAM, BOT, clock=Clock())
+        adapter = SlackAdapter(a, port, lambda url: b"")
+        old = client.channels[channel]["name"]
+        assert await port.room_name(channel) == old
+        client.channels[channel]["name"] = "renamed"
+        assert await port.room_name(channel) == old  # cached
+        await adapter.on_event({"type": kind, "channel": {"id": channel, "name": "renamed"}}, TEAM)
+        assert await port.room_name(channel) == "renamed"
+
+
+async def test_room_name_and_privacy_caches_expire_after_the_ttl(fx):
+    _, a, _, _ = fx
+    client, clock = FakeSlack(), Clock()
+    port = SlackPort(client, TEAM, BOT, clock=clock)
+    msg = inc()
+    assert await port.room_name("C1") == "general"
+    assert (await port.room_view(msg)).audience == frozenset({"U1", "U2"})  # private: members
+    client.channels["C1"].update(name="ops", is_private=False)
+    assert await port.room_name("C1") == "general"
+    assert (await port.room_view(msg)).audience == frozenset({"U1", "U2"})
+    clock.advance(slack.ROOM_TTL_S + 1)
+    assert await port.room_name("C1") == "ops"
+    assert (await port.room_view(msg)).audience is None  # now public: audience unknown
+
+
+async def test_a_rename_event_drops_the_privacy_cache_too(fx):
+    _, a, _, _ = fx
+    client = FakeSlack()
+    port = SlackPort(client, TEAM, BOT, clock=Clock())
+    adapter = SlackAdapter(a, port, lambda url: b"")
+    msg = inc()
+    assert (await port.room_view(msg)).audience == frozenset({"U1", "U2"})
+    client.channels["C1"].update(name="ops", is_private=False)
+    await adapter.on_event({"type": "channel_rename", "channel": {"id": "C1"}}, TEAM)
+    assert (await port.room_view(msg)).audience is None
+
+
+# ------------------------------------------------------------------ paced replies
+
+
+def record_post_times(client, ft):
+    times = []
+    original = client.chat_postMessage
+
+    async def post(**kw):
+        times.append(ft())
+        return await original(**kw)
+
+    client.chat_postMessage = post
+    return times
+
+
+async def test_two_chunks_in_one_channel_are_posted_at_least_1_1_seconds_apart():
+    client, ft = FakeSlack(), FakeTime()
+    times = record_post_times(client, ft)
+    port = timed_port(client, ft)
+    await port.deliver(inc(), ["first", "second"], None)
+    assert [p["text"] for p in client.posts] == ["first", "second"]
+    assert times[1] - times[0] >= slack.POST_GAP_S
+    assert ft.sleeps == [pytest.approx(slack.POST_GAP_S)]
+
+
+async def test_other_channels_are_not_delayed_by_a_busy_one():
+    client, ft = FakeSlack(), FakeTime()
+    port = timed_port(client, ft)
+    await port.deliver(inc(room="C1"), ["a"], None)
+    await port.deliver(inc(room="C2"), ["b"], None)
+    assert ft.sleeps == []
+
+
+async def test_a_429_with_retry_after_waits_and_the_next_chunk_is_still_posted():
+    client, ft = FakeSlack(), FakeTime()
+    times = record_post_times(client, ft)
+    port = timed_port(client, ft)
+    real = client.chat_postMessage
+    failures = [HttpError(429, 7)]
+
+    async def flaky(**kw):
+        if failures:
+            raise failures.pop()
+        return await real(**kw)
+
+    client.chat_postMessage = flaky
+    await port.deliver(inc(), ["first", "second"], None)
+    assert [p["text"] for p in client.posts] == ["first", "second"]
+    assert ft.sleeps[0] == 7.0  # the Retry-After, not a guess
+    assert times[1] - times[0] >= slack.POST_GAP_S
+    assert len(ft.sleeps) == 2
+
+
+async def test_a_failing_chunk_does_not_stop_the_later_ones_and_the_failure_is_raised_after():
+    client, ft = FakeSlack(), FakeTime()
+    port = timed_port(client, ft)
+    real = client.chat_postMessage
+
+    async def post(**kw):
+        if kw["text"] == "bad":
+            raise RuntimeError("msg_too_long")
+        return await real(**kw)
+
+    client.chat_postMessage = post
+    with pytest.raises(RuntimeError, match="msg_too_long"):
+        await port.deliver(inc(), ["one", "bad", "three"], None)
+    assert [p["text"] for p in client.posts] == ["one", "three"]
+
+
+async def test_a_429_that_never_clears_gives_up_after_the_tries_and_raises():
+    client, ft = FakeSlack(), FakeTime()
+    port = timed_port(client, ft)
+
+    async def post(**kw):
+        raise HttpError(429, 2)
+
+    client.chat_postMessage = post
+    with pytest.raises(HttpError):
+        await port.deliver(inc(), ["only"], None)
+    assert ft.sleeps.count(2.0) == slack.POST_TRIES - 1
+
+
+# ------------------------------------------------------------------ live history is bounded
+
+
+class SlowHistory:
+    def __init__(self):
+        self.calls = 0
+
+    async def conversations_history(self, **kw):
+        self.calls += 1
+        await asyncio.Event().wait()  # never answers
+
+
+class LimitedHistory:
+    def __init__(self, retry=120):
+        self.calls, self.retry = 0, retry
+
+    async def conversations_history(self, **kw):
+        self.calls += 1
+        raise HttpError(429, self.retry)
+
+
+async def test_a_slow_live_history_call_returns_within_the_timeout_and_falls_back():
+    ft = FakeTime()
+    slow = SlowHistory()
+    port = timed_port(FakeSlack(), ft, history_client=slow, history_timeout=0.01)
+    assert await port.history(inc(), 10) == []
+    assert slow.calls == 1 and ft.sleeps == []
+
+
+async def test_a_429_on_live_history_does_not_sleep_and_blocks_further_reads_for_retry_after():
+    ft = FakeTime()
+    limited = LimitedHistory(retry=120)
+    port = timed_port(FakeSlack(), ft, history_client=limited)
+    assert await port.history(inc(), 10) == []
+    assert limited.calls == 1 and ft.sleeps == []  # the Retry-After is not slept
+    ft.clock.advance(60)
+    assert await port.history(inc(), 10) == []
+    assert limited.calls == 1  # still inside the 120 s window: no call at all
+    ft.clock.advance(61)
+    await port.history(inc(), 10)
+    assert limited.calls == 2 and ft.sleeps == []
+
+
+async def test_an_answer_is_not_held_up_by_a_rate_limited_history_read(fx):
+    _, a, _, _ = fx
+    ft, client = FakeTime(), FakeSlack()
+    port = timed_port(client, ft, history_client=LimitedHistory(retry=300))
+    adapter = SlackAdapter(a, port, lambda url: b"")
+    await adapter.on_message(ev(text=f"<@{BOT}> total?"), TEAM)
+    await a.drain()
+    assert len(a.ask_fn.calls) == 1 and client.posts[0]["text"] == "ok"
+    assert ft.sleeps == []
+
+
+# ------------------------------------------------------------------ import under rate limits
+
+
+def far_future(a):
+    a._now = lambda: datetime(2026, 10, 25, 12, 0, tzinfo=UTC)
+
+
+async def test_import_waits_for_retry_after_and_then_imports_everything(fx):
+    client, a, port, adapter = fx
+    a._now = lambda: datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+    client.history["C1"] = msgs(5)
+    client.errors = [HttpError(429, 7)]
+    ft = FakeTime()
+    imp = slack_import.SlackImporter(a, port, sleep=ft.sleep, page_sleep=0, clock=ft)
+    assert await imp.run() == 5
+    assert 7.0 in ft.sleeps  # the wait Slack asked for
+    assert not imp.capped and not imp.throttle.restricted
+
+
+async def test_exact_15_message_pages_mark_the_restricted_tier_and_slow_the_import(fx):
+    client, a, port, adapter = fx
+    a._now = lambda: datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+    client.history["C1"] = msgs(40)
+    client.max_page = 15  # Slack clamps every page to 15, whatever was asked
+    ft = FakeTime()
+    imp = slack_import.SlackImporter(a, port, sleep=ft.sleep, page_sleep=0, clock=ft)
+    assert await imp.run() == 40
+    assert imp.throttle.restricted
+    limits = [c["limit"] for c in client.history_calls]
+    first_small = limits.index(15)  # earlier (empty) weeks cannot reveal the clamp
+    assert set(limits[:first_small]) == {200} and set(limits[first_small:]) == {15}
+    assert ft.sleeps and all(s >= 60 for s in ft.sleeps)  # one request a minute from then on
+
+
+async def test_a_short_page_is_not_mistaken_for_the_restricted_tier(fx):
+    client, a, port, adapter = fx
+    a._now = lambda: datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
+    client.history["C1"] = msgs(15)  # exactly 15 rows, but no next page: not clamped
+    ft = FakeTime()
+    imp = slack_import.SlackImporter(a, port, sleep=ft.sleep, page_sleep=0, clock=ft)
+    assert await imp.run() == 15
+    assert not imp.throttle.restricted
+
+
+async def test_consecutive_429s_stop_the_run_keeping_progress_and_the_next_run_resumes(
+    fx, monkeypatch
+):
+    client, a, port, adapter = fx
+    far_future(a)
+    monkeypatch.setattr(slack_import, "MAX_429", 3)
+    # two weekly cells with 3 messages each; the importer stores a page of 3 at a time
+    client.history["C1"] = msgs(3, start=1791946000) + msgs(3, start=1792030000)
+    ft = FakeTime()
+    imp = slack_import.SlackImporter(a, port, sleep=ft.sleep, page_sleep=0, clock=ft)
+    imp.importer.page_size = 3
+
+    real = client.conversations_history
+    limited = {"on": True}
+    second_cell = 1792022400  # the week after the first three messages
+
+    async def history(**kw):
+        if limited["on"] and float(kw["oldest"]) >= second_cell:  # 429 forever from there on
+            raise HttpError(429, 5)
+        return await real(**kw)
+
+    client.conversations_history = history
+
+    def stored_texts():
+        return sorted(
+            m.text
+            for m in a.memory_store.messages(
+                ids.tenant_id("slack", TEAM),
+                [ids.room_id("slack", TEAM, "C1")],
+                "2025-01-01",
+                "2026-12-31",
+                limit=100,
+            )
+        )
+
+    assert await imp.run() == 3
+    assert imp.capped  # the loop comes back soon
+    assert len(stored_texts()) == 3  # the first cell is kept
+    waits = [s for s in ft.sleeps if s == 5.0]
+    assert len(waits) == 3  # MAX_429 waits, then it gave up instead of waiting forever
+
+    limited["on"] = False
+    assert await imp.run() == 3  # resumes after the stored cursor
+    assert not imp.capped
+    assert len(stored_texts()) == 6

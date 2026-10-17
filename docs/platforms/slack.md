@@ -75,6 +75,19 @@ settings:
       - message.im
       - message.mpim
       - member_joined_channel
+      - member_left_channel
+      - channel_rename
+      - group_rename
+      - channel_archive
+      - channel_unarchive
+      - channel_deleted
+      - channel_left
+      - group_archive
+      - group_unarchive
+      - group_deleted
+      - group_left
+      - app_uninstalled
+      - tokens_revoked
   interactivity:
     is_enabled: false
   org_deploy_enabled: false
@@ -83,10 +96,22 @@ settings:
 ```
 
 3. **Install App** → **Install to Workspace** → copy the **Bot User OAuth Token** (`xoxb-…`).
-4. **Basic Information** → **App-Level Tokens** → **Generate Token** with the scope
-   `connections:write` → copy it (`xapp-…`).
-5. Optional: **App Home** → turn on **Messages Tab** and *Allow users to send Slash commands and
-   messages from the messages tab*, so people can DM Salid.
+4. **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes**, add the scope
+   `connections:write`, generate and copy it (`xapp-…`). The manifest cannot create this token; it
+   is always a manual step. Socket Mode needs it, the bot token alone is not enough.
+5. **Direct messages**: the manifest turns on **App Home → Messages Tab** and *Allow users to send
+   Slash commands and messages from the messages tab*. If either is off, a DM shows "Sending
+   messages to this app has been turned off". Check both under **App Home** if people cannot DM
+   Salid.
+
+**After any change to scopes or events, reinstall the app** (**Install App → Reinstall to
+Workspace**). Until you do, Slack keeps the old token and the old subscriptions. Do **not** turn on
+**token rotation**: Salid keeps one long-lived bot token, and a rotating token would expire after
+12 hours and stop it.
+
+Event notes: `app_uninstalled` and `tokens_revoked` tell Salid the workspace removed it (see
+Privacy). The channel events (`channel_rename`, archive, delete, `member_left_channel`, ...) only
+refresh cached names and member lists sooner; without them the caches expire after 10 minutes.
 
 Scope notes: `users:read` gives names and the admin/owner flag; `*:read` scopes let Salid list the
 conversations it is in and who is in them (for memory scope). `reactions:write` is not needed.
@@ -128,7 +153,57 @@ channel by setting its mode to `off` (it then records and answers nothing).
 ## Limits worth knowing
 
 - One bot token is one workspace. For several workspaces run another process per workspace (each
-  with its own tokens), or build OAuth distribution later.
+  with its own tokens).
 - Salid reads history only in conversations it is a member of. It never reads people's DMs with
   each other.
-- Slack rate limits apply; Salid retries once or twice when Slack asks it to wait.
+- Replies are posted at most about once a second per channel. When Slack answers 429, Salid waits
+  the `Retry-After` it is given (up to a minute), tries up to five times, and still posts the
+  remaining chunks if one fails.
+- Before answering, Salid reads the recent thread or channel from Slack for up to 3 seconds. If
+  that is slow or rate limited it uses the messages it already saw live, and it does not read again
+  until the `Retry-After` has passed. An answer is never delayed by it.
+
+## Slack's 2025 rate-limit change
+
+Since 2025-05-29, `conversations.history` and `conversations.replies` are limited to **1 request per
+minute and 15 messages per request** for **commercially distributed apps that are not in the Slack
+Marketplace** and were created on or after that date. **Internal customer-built apps** (installed
+in your own workspace, not distributed) keep the normal Tier 3 limit (about 50 requests per
+minute, up to 1000 messages per request).
+
+That is why Salid is an **internal, per-workspace app**: you create it in your own workspace and
+install it there, as in this guide. Do not enable public distribution for it. Distributing the same
+app from a non-Marketplace listing would put its history import on the slow tier.
+
+If the import detects the restricted tier (pages stop at exactly 15 messages, or Slack keeps asking
+for waits of 30 s or more) it logs one warning, imports slowly in the background and keeps going.
+Answers are not affected, because they only use the live events plus a short live read. The import
+resumes where it stopped after a restart or after a run that was rate limited. Importing one
+workspace's retention window can take hours on the restricted tier.
+
+## Phase 2: a distributed app
+
+Not built yet. Serving many workspaces with one install link needs: OAuth install with a token
+store per workspace, the **HTTP Events API** (a public HTTPS request URL with signature
+verification) instead of Socket Mode, and a **Slack Marketplace** listing, which also lifts the
+history rate limit for a distributed app. Marketplace rules require deleting a workspace's data
+within **14 business days** of uninstall. Salid already does the erasing part: on `app_uninstalled`
+(or `tokens_revoked` for the bot token) it stops answering that workspace at once and deletes its
+remembered messages, summaries and embeddings.
+
+## Privacy
+
+- Salid remembers messages of the channels it is a member of (and its own replies), with the
+  author's display name and Slack user id, for the retention period of the workspace (90 days by
+  default). Set a channel's mode to `off` to keep it out. Private channels and group DMs are
+  remembered only if someone invited Salid there.
+- 1:1 DMs between people are never visible to Salid. A DM to Salid itself is handled like a message
+  to a bot: answered, and remembered for the retention period.
+- Memory is read back only with the access rule described above (the asker and every reader of the
+  answering room must be able to read the source channel).
+- Logs carry ids, counts and timings only. Message text, file contents and tokens are never logged.
+  Tokens stay in `.env` or the secret manager and are handed only to Slack's SDK; files are
+  downloaded only from Slack's file hosts.
+- On `app_uninstalled` or a revoked bot token the workspace's memory is erased and Salid stops
+  answering. Receipts already in the ledger are kept: delete them from the ledger store if you
+  need them gone too.
