@@ -146,17 +146,17 @@ class Settings(BaseSettings):
     # Live: the name was heard but the model has not started to answer after this long (counted from
     # the end of the utterance): force a turn. The model's own first audio takes 2.3-4.7 s there
     # (VAD silence + thinking); a cue sent earlier replaced a real answer with a generic greeting.
-    live_force_reply_seconds: float = 5.0
+    live_force_reply_seconds: float = 2.0
     # The name seen in the Live session's own input transcript (fast path, no classic transcription
     # needed): force a turn this long after the speaker went quiet if the model has not answered.
-    live_name_reply_seconds: float = 1.5
+    live_name_reply_seconds: float = 1.0
     # Mouth gate (code, not prompt): the Live model's voice is played only while the session is
     # engaged (someone called the name) or answers a tool call made while engaged. A name call can
     # land in the transcript a moment after the model starts answering, so the first
     # `live_call_grace_seconds` of an unauthorised turn are held back and released if the name shows
     # up in that window. Off = v0.8.0 behaviour.
     live_mouth_gate: bool = True  # SALID_LIVE_MOUTH_GATE
-    live_call_grace_seconds: float = 2.5
+    live_call_grace_seconds: float = 4.0
     # Engaged this recently counts as engaged for the mouth gate and the tool gate (SALID_LIVE_REENGAGE_GRACE_SECONDS).
     live_reengage_grace_seconds: float = 60.0
     # A name hit (either detector) counts only if real speech is behind it: noise / an unmuted mic
@@ -195,7 +195,7 @@ class Settings(BaseSettings):
     )
     # After the cue: no audio within this long -> the cue is sent once more; still nothing after
     # `live_fallback_seconds` more -> the classic path (agent + TTS) answers that utterance.
-    live_cue_retry_seconds: float = 6.0
+    live_cue_retry_seconds: float = 4.0
     live_fallback_seconds: float = 4.0
     # Voice-meeting transcription runs every few seconds: use the Singapore endpoint (own quota,
     # close to Discord's sin voice servers). Empty = reuse the bot's client (gemini_location).
