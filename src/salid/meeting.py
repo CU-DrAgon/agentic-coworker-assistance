@@ -2368,8 +2368,30 @@ class MeetingManager:
     def end_conversation(self, s: MeetingSession, reason: str = "") -> dict:
         """The Live model's tool: the exchange is over. Back to listening, with the reason shown."""
         why = next((k for k, rx in self._END_WHY if rx.search(reason or "")), "ended")
+        # The owner's rule: the exchange ends only on an explicit closing said by the caller
+        # ("thanks, that's all", "I'll talk with my team now", "bye"). The model was eager to end
+        # right after each answer, so the recent words must confirm it; otherwise stay engaged.
+        recent = " ".join(
+            ln.text for ln in s.transcript.recent(self.bot.s.now(), 25.0) if ln.speaker != "Salid"
+        )
+        if not self._CLOSING_RE.search(recent):
+            logger.info(
+                "meeting %s: end_conversation ignored: no explicit closing heard", s.guild_id
+            )
+            return {
+                "status": "engaged",
+                "note": "not an ending: they did not close the exchange explicitly; stay in it "
+                "and keep quiet until they speak to you",
+            }
         self._set_engaged(s, False, why=why)
         return {"status": "listening"}
+
+    _CLOSING_RE = re.compile(
+        r"ขอบคุณ|แค่นี้|เท่านี้|พอแล้ว|พอก่อน|บ๊ายบาย|ลาก่อน|คุยกับทีม|คุยกันเอง|ไว้คุยใหม่|ไปก่อน|จบแล้ว|เสร็จแล้ว"
+        r"|thank|that'?s (all|it)|bye|talk (with|to) (my|the) team|we'?re (done|good)|that'?ll be all"
+        r"|later|enough",
+        re.I,
+    )
 
     def _hush_hold_s(self) -> float:
         return float(getattr(self.bot.s, "hush_hold_seconds", 90.0))
