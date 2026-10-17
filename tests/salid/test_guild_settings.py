@@ -222,7 +222,9 @@ def test_channel_digest_and_role_rules(gstore):
 
 
 def test_make_guild_store_selects_backend():
-    mem = make_guild_store(FixedClockSettings(store="sqlite", guild_collection="g1"))
+    mem = make_guild_store(
+        FixedClockSettings(store="sqlite", guild_collection="g1", db_path=":memory:")
+    )
     assert isinstance(mem, MemoryGuildStore) and mem.collection == "g1"
     fs = make_guild_store(FixedClockSettings(store="firestore"))
     assert type(fs) is gs.GuildStore and fs.collection == "salid_guilds" and fs._client is None
