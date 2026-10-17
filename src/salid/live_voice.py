@@ -1599,6 +1599,7 @@ class LiveVoice:
                     profile=profile,
                     people=tag_candidates(here),
                     files=[],  # no attachments by voice; a remembered promo kit can be revised
+                    spoken=True,  # a voice answer: no media tools
                 )
 
             kw = agent_for(
@@ -1680,6 +1681,7 @@ class LiveVoice:
             profile=bot._profile_of(s.guild_id, who.id),
             people=tag_candidates(here),
             files=[],
+            spoken=True,  # asked by voice (answered by DM): no media tools
         )
         ans = await asyncio.to_thread(
             ask,

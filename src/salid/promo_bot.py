@@ -1,10 +1,14 @@
 """Discord glue of promo post kits (logic in `promo.py`).
 
 `PromoMixin` gives `SecretaryBot` the `make_promo_kit` agent tool (`_promo_tools`, appended to
-`extra_tools` by `_agent_kwargs`). It is offered only for chat answers (voice never passes files)
-that carry a usable photo or have a remembered kit for the same person in the same channel, so
-ordinary chats pay nothing for its description. Guild, channel and author are bound here, never
-model input. The daily cap and the revision memory live in this process (one bot process).
+`extra_tools` by `_agent_kwargs`). It is offered for answers that carry a usable photo or have
+a remembered kit for the same person in the same channel, so ordinary chats pay nothing for its
+description. Gated on `files is None` only: voice passes `files=[]` on purpose, so a remembered
+kit can be revised by voice.
+Guild, channel and author are bound here, never model input. The daily cap is counted in the
+DocStore (`imagegen_bot.StoredDailyBudget`, kind `salid_media_usage`, key = the day, field
+`promo_kits`), so a restart keeps it; the revision memory lives in this process (one bot
+process).
 """
 
 from __future__ import annotations
@@ -12,22 +16,29 @@ from __future__ import annotations
 import logging
 
 from . import cards
-from .media import DailyBudget
-from .promo import PHOTO_MIMES, PromoCtx, PromoMemory, promo_tools
+from .imagegen_bot import StoredDailyBudget
+from .promo import PromoCtx, PromoMemory, promo_tools, usable_photos
+from .videoad import MediaUsage
 
 logger = logging.getLogger(__name__)
 
 _warned = False  # "libfribidi missing" is logged once per process
+PROMO_FIELD = "promo_kits"  # the guild's AI scenes today, in the day's usage document
 
 
 class PromoMixin:
+    """Needs `self.s`, `self.llm`, `self.team` and `self.docs`: call `_init_promo()` once after
+    `self.docs` exists."""
+
     def _init_promo(self) -> None:
-        self.promo_budget = DailyBudget(self.s.promo_kits_per_day)
+        self.promo_budget = StoredDailyBudget(
+            MediaUsage(self.docs), self.s.promo_kits_per_day, field=PROMO_FIELD
+        )
         self.promo_memory = PromoMemory()
 
     def _promo_tools(self, message, guild, asker, files) -> list:
-        """`make_promo_kit` for this message, or [] (flag off, no Thai shaping, voice, or no photo
-        and no remembered kit). Never raises."""
+        """`make_promo_kit` for this message, or [] (flag off, no Thai shaping, no file list, or
+        no photo and no remembered kit). Never raises."""
         global _warned
         try:
             if files is None or not self.team.enabled(guild.id, "promo"):
@@ -37,9 +48,7 @@ class PromoMixin:
                     logger.error("libfribidi missing: promo kits off")
                     _warned = True
                 return []
-            photos = [
-                (f.index, f.data) for f in files if f.mime in PHOTO_MIMES and f.data and not f.skip
-            ]
+            photos = usable_photos(files)
             key = (guild.id, message.channel.id, asker.id)
             if not photos and self.promo_memory.get(key) is None:
                 return []

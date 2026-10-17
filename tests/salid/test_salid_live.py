@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 from salid.config import Settings
 from salid.extract import extract_receipt
 from salid.llm import make_client
+from salid.media_samples import cup_png
 
 pytestmark = pytest.mark.live
 GUILD = 1000
@@ -245,3 +246,107 @@ def test_live_deck_request(tmp_path):
     prs = Presentation(io.BytesIO(data))
     assert name.endswith(".pptx") and len(prs.slides) >= 2
     assert any(s.has_chart for slide in prs.slides for s in slide.shapes)
+
+
+def test_live_create_image(tmp_path):
+    """One real 1K Nano Banana image (about $0.03) through imagegen.generate_images: the model id,
+    location and request config are accepted. The image is saved under the printed folder."""
+    from salid import imagegen
+
+    s = Settings.from_env()
+    t = time.monotonic()
+    imgs, reason = imagegen.generate_images(
+        make_client(s),
+        s.image_model,
+        "A glass of iced latte on a wooden cafe table, soft morning light, seen from above.",
+        aspect="1:1",
+        size="1K",
+    )
+    print(f"\n{time.monotonic() - t:.1f}s model={s.image_model} result={'ok' if imgs else reason}")
+    assert imgs, f"no image: {reason}"
+    imgs[0].save(tmp_path / "image.png")
+    print(f"image: {tmp_path / 'image.png'} {imgs[0].size}")
+    assert imgs[0].width == imgs[0].height
+
+
+def test_live_omni_probe(tmp_path):
+    """One real 4 s 360p Gemini Omni image-to-video clip, inline delivery (well under $1),
+    through videogen.start_hero / wait_hero. Skips with a clear message when these credentials
+    may not use Omni (403 / PERMISSION_DENIED). Model: SALID_VIDEO_HERO_MODEL, else the spec's
+    id."""
+    from threading import Event
+
+    from promo_helpers import probe
+
+    from salid import videogen
+    from salid.llm import make_media_client
+
+    s = Settings.from_env()
+    model = s.video_hero_model or "gemini-omni-1.1-flash-preview"
+    client = make_client(s)
+    prompt = "A white ceramic cup on a wooden table, steam rising slowly, gentle camera push-in."
+    t = time.monotonic()
+    try:
+        iid = videogen.start_hero(
+            make_media_client(s), model, cup_png(), prompt, 4, resolution="360p"
+        )
+    except Exception as e:  # Interactions errors: PermissionDeniedError with .status_code 403
+        if videogen.permission_denied(e):
+            code, status = videogen.error_status(e)
+            pytest.skip(f"Omni refused these credentials ({code} {status}); needs project access")
+        raise
+    data, reason = videogen.wait_hero(client, iid, cancelled=Event(), poll_s=5.0)
+    print(f"\n{time.monotonic() - t:.1f}s model={model} result={'ok' if data else reason}")
+    assert data, f"no clip: {reason}"
+    path = tmp_path / "omni.mp4"
+    path.write_bytes(data)
+    info = probe(path)
+    print(f"clip: {path} {info}")
+    assert info["duration"] == pytest.approx(4.0, abs=1.0)
+
+
+def test_live_slideshow_ad(tmp_path):
+    """One full 15 s slideshow ad, no hero and no music (storyboard, 4-6 Nano Banana stills,
+    Thai narration; roughly $0.35). Saved under the printed temp folder: watch it and check the
+    Thai captions, the AI label, the narration and the safe area."""
+    from datetime import datetime
+
+    from promo_helpers import probe
+
+    from salid import speech, videoad
+    from salid.coo_store import SQLiteDocStore
+
+    s = Settings.from_env().model_copy(update={"video_hero_model": "", "video_music_model": ""})
+    client = make_client(s)
+    req = videoad.VideoRequest(
+        guild_id=GUILD,
+        user_id=1,
+        brief="ลาเต้เย็นสูตรลับ หอมกรุ่น ลด 20% ทุกวันศุกร์",
+        seconds=15,
+        photos=[],
+        hero_shots=0,
+        voice=True,
+        music=False,
+        lang="th",
+    )
+    budget = videoad.budget_mib(None)
+    t = time.monotonic()
+    res = videoad.run_video_ad(
+        req,
+        client=client,
+        settings=s,
+        say=lambda text: speech.say(s, client, text, "th"),
+        workdir=tmp_path,
+        budget_mib=budget,
+        handle=videoad.VideoHandle(),
+        usage=videoad.MediaUsage(SQLiteDocStore(":memory:")),
+        month=datetime.now().strftime("%Y-%m"),
+    )
+    info = probe(res.path)
+    print(
+        f"\n{time.monotonic() - t:.0f}s cost~${res.cost_usd:.2f} steps={res.steps_ms}\n"
+        f"ad: {res.path} {info}"
+    )
+    assert info["size"] == (1080, 1920) and set(info["codecs"]) == {"h264", "aac"}
+    assert info["duration"] == pytest.approx(15.0, abs=1.0)
+    assert res.path.stat().st_size <= budget * 2**20

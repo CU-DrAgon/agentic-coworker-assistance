@@ -204,6 +204,19 @@ class Settings(BaseSettings):
     # per guild/day; 0 = AI scenes off (kits use the original photo).
     promo_image_model: str = "gemini-nano-banana-2.1"
     promo_kits_per_day: int = 20
+    # Image generation (salid.imagegen): Nano Banana model for generated images (location `global`)
+    # and create_image limits, images per guild/day and per person/day (0 = none).
+    image_model: str = "gemini-nano-banana-2.1"
+    images_per_day: int = 20
+    images_per_user_day: int = 5
+    # Video ads (salid.videoad): finished ads per guild/month, hero motion seconds per guild/month,
+    # jobs running at once across the bot (1: a render shares the bot's CPU; measure before
+    # raising it), and the Omni hero / music models ("" = off).
+    video_ads_per_month: int = 10
+    video_hero_seconds_per_month: int = 60
+    video_max_jobs: int = 1
+    video_hero_model: str = ""
+    video_music_model: str = ""
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).
     guild_collection: str = "salid_guilds"
     # PDF documents (salid.pdf_report): regular TTF/OTF with Thai glyphs; empty = search known paths.

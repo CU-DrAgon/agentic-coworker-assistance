@@ -1096,6 +1096,62 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "research_title": {"th": "รายงานการค้นคว้า", "en": "Research report"},
     "research_dated": {"th": "ข้อมูล ณ วันที่ {at}", "en": "Information as of {at}"},
+    # ---------------------------------------------------------------- video ads (videoad_bot)
+    "video_started": {
+        "th": "กำลังทำวิดีโอโฆษณาให้ค่ะ ใช้เวลาสักครู่ เสร็จแล้วจะส่งไว้ที่ห้องนี้นะคะ",
+        "en": "Making your video ad. It takes a few minutes; I'll post it here when it's ready.",
+    },
+    "video_step_storyboard": {"th": "กำลังวางสตอรีบอร์ด…", "en": "Planning the storyboard…"},
+    "video_step_stills": {"th": "กำลังทำภาพแต่ละฉาก…", "en": "Making the scene pictures…"},
+    "video_step_hero": {"th": "กำลังทำช็อตเคลื่อนไหว…", "en": "Making the motion shots…"},
+    "video_step_audio": {"th": "กำลังใส่เสียงบรรยาย…", "en": "Recording the narration…"},
+    "video_step_render": {"th": "กำลังตัดต่อวิดีโอ…", "en": "Editing the video…"},
+    "video_done": {
+        "th": "วิดีโอโฆษณาเสร็จแล้วค่ะ (สร้างด้วย AI)",
+        "en": "Your video ad is ready (made with AI).",
+    },
+    "video_scenes": {"th": "ลำดับฉาก:", "en": "Scenes:"},
+    "video_caption": {"th": "แคปชันแนะนำ:", "en": "Suggested caption:"},
+    "video_failed": {
+        "th": "ขอโทษค่ะ ทำวิดีโอไม่สำเร็จ ({reason}) ลองสั่งใหม่อีกครั้งได้นะคะ",
+        "en": "Sorry, the video ad could not be made ({reason}). Please try again.",
+    },
+    "video_reason_storyboard": {
+        "th": "วางสตอรีบอร์ดไม่ได้",
+        "en": "the storyboard did not work out",
+    },
+    "video_reason_render": {"th": "ตัดต่อวิดีโอไม่สำเร็จ", "en": "the video could not be rendered"},
+    "video_reason_error": {"th": "เกิดข้อผิดพลาด", "en": "something went wrong"},
+    "video_upload_refused": {
+        "th": "วิดีโอทำเสร็จแล้ว แต่แนบไฟล์ในห้องนี้ไม่ได้ค่ะ (สลิดอาจไม่มีสิทธิ์แนบไฟล์ หรือไฟล์ใหญ่เกินไป)",
+        "en": "The video was made, but I couldn't attach it here (I may not have permission to "
+        "attach files, or it is too large).",
+    },
+    # burned into every video ad, and the end of its suggested caption
+    "video_ai_label": {"th": "สร้างด้วย AI", "en": "Made with AI"},
+    "video_ai_hashtag": {"th": "#สร้างด้วยAI", "en": "#MadeWithAI"},
+    "video_cancelling": {
+        "th": "กำลังยกเลิกการทำวิดีโอค่ะ…",
+        "en": "Cancelling the video ad…",
+    },
+    "video_cancelled": {"th": "ยกเลิกการทำวิดีโอแล้วค่ะ", "en": "The video ad was cancelled."},
+    "video_restarted": {
+        "th": "วิดีโอโฆษณาที่สั่งไว้ทำไม่เสร็จเพราะสลิดรีสตาร์ต รบกวนสั่งใหม่อีกครั้งนะคะ",
+        "en": "Your video ad was not finished because Salid restarted. Please ask again.",
+    },
+    "video_busy": {
+        "th": "ตอนนี้สลิดกำลังทำวิดีโออยู่ค่ะ รอให้เสร็จก่อนแล้วค่อยสั่งใหม่นะคะ",
+        "en": "Salid is already making a video right now. Please try again when it is done.",
+    },
+    "video_month_limit": {
+        "th": "เดือนนี้เซิร์ฟเวอร์นี้ทำวิดีโอโฆษณาครบ {n} ชิ้นแล้วค่ะ",
+        "en": "This server has used all {n} video ads for this month.",
+    },
+    "video_cancel_button": {"th": "ยกเลิก", "en": "Cancel"},
+    "video_not_yours": {
+        "th": "เฉพาะคนที่สั่งหรือผู้ดูแลเซิร์ฟเวอร์เท่านั้นที่ยกเลิกได้ค่ะ",
+        "en": "Only the person who asked or a server admin can cancel this.",
+    },
     "cancel_none": {
         "th": "ตอนนี้ไม่มีงานใหญ่ที่กำลังทำอยู่ค่ะ",
         "en": "There is no big task running right now.",

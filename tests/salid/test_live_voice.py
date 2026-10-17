@@ -1133,6 +1133,47 @@ async def test_answer_privately_dms_the_speaker_and_returns_no_content(lv, asked
     await lv.mgr.end((1000, 77))
 
 
+def spy_agent_kwargs(bot, monkeypatch) -> list:
+    """The `spoken` keyword of every `_agent_kwargs` call."""
+    seen, real = [], bot._agent_kwargs
+
+    def spy(*a, **kw):
+        seen.append(kw.get("spoken"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(bot, "_agent_kwargs", spy)
+    return seen
+
+
+async def test_ask_salid_builds_the_agent_as_a_spoken_answer(lv, asked, monkeypatch):
+    seen = spy_agent_kwargs(lv.bot, monkeypatch)
+    s, live = await lv.join(5, 12, 11)  # a room: the agent is built for two people
+    live.push(tool_msg("ask_salid", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert seen and all(x is True for x in seen)
+    await lv.mgr.end((1000, 77))
+
+
+async def test_answer_privately_builds_the_agent_as_a_spoken_answer(lv, asked, monkeypatch):
+    from salid.dm import DMResult
+
+    async def fake_dm(member, text, files=()):
+        return DMResult(True)
+
+    async def mem(message, guild, member):
+        return "PMEM"
+
+    monkeypatch.setattr("salid.dm.send_dm", fake_dm)
+    monkeypatch.setattr(lv.bot, "_memory_tools", mem)
+    seen = spy_agent_kwargs(lv.bot, monkeypatch)
+    s, live = await lv.join(5, 11)
+    s.live.feed(5, pcm48(1000))
+    live.push(tool_msg("answer_privately", {"question": "q"}))
+    await until(lambda: live.tool_responses)
+    assert seen == [True]
+    await lv.mgr.end((1000, 77))
+
+
 async def test_answer_privately_needs_a_known_speaker(lv, asked):
     s, live = await lv.join(5, 11)
     live.push(tool_msg("answer_privately", {"question": "q"}))

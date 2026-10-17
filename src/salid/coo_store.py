@@ -44,6 +44,12 @@ class DocStore(Protocol):
         """All docs of the guild in this kind (optionally filtered), oldest key first."""
         ...
 
+    def find_items(
+        self, kind: str, guild_id: int, where: Callable[[dict], bool] | None = None
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Like `find`, as (key, doc) pairs, for docs that do not carry their own key."""
+        ...
+
     def find_any(self, kind: str, doc_key: str) -> dict[str, Any] | None:
         """One doc by key across guilds (a button click knows only its request id)."""
         ...
@@ -101,13 +107,16 @@ class SQLiteDocStore:
             )
 
     def find(self, kind, guild_id, where=None):
+        return [doc for _, doc in self.find_items(kind, guild_id, where)]
+
+    def find_items(self, kind, guild_id, where=None):
         with self._conn() as c:
             rows = c.execute(
-                "SELECT doc FROM salid_docs WHERE kind=? AND guild_id=? ORDER BY key",
+                "SELECT key, doc FROM salid_docs WHERE kind=? AND guild_id=? ORDER BY key",
                 (kind, guild_id),
             ).fetchall()
-        docs = [json.loads(r[0]) for r in rows]
-        return [d for d in docs if where is None or where(d)]
+        items = [(key, json.loads(doc)) for key, doc in rows]
+        return [(k, d) for k, d in items if where is None or where(d)]
 
     def find_any(self, kind, doc_key):
         with self._conn() as c:
@@ -149,11 +158,14 @@ class FirestoreDocStore:
         return {k: v for k, v in d.items() if k != "_key"}
 
     def find(self, kind, guild_id, where=None):
+        return [doc for _, doc in self.find_items(kind, guild_id, where)]
+
+    def find_items(self, kind, guild_id, where=None):
         from google.cloud.firestore_v1.base_query import FieldFilter
 
         q = self.client.collection(kind).where(filter=FieldFilter("guild_id", "==", guild_id))
         docs = sorted(((s.to_dict() or {}) for s in q.stream()), key=lambda d: d.get("_key", ""))
-        return [self._clean(d) for d in docs if where is None or where(d)]
+        return [(d.get("_key", ""), self._clean(d)) for d in docs if where is None or where(d)]
 
     def find_any(self, kind, doc_key):
         from google.cloud.firestore_v1.base_query import FieldFilter
