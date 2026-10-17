@@ -2375,28 +2375,10 @@ class MeetingManager:
         last_voice = float(getattr(live, "_last_voice", 0.0) or 0.0)
         if last_voice and time.monotonic() - last_voice < 2.0:
             # they are still talking ("thanks… and also…"): not an ending yet
+            logger.info("meeting %s: end_conversation deferred: they are still talking", s.guild_id)
             return {"status": "engaged", "note": "they are still talking: wait, then answer them"}
-        recent = " ".join(
-            ln.text for ln in s.transcript.recent(self.bot.s.now(), 25.0) if ln.speaker != "Salid"
-        )
-        if not self._CLOSING_RE.search(recent):
-            logger.info(
-                "meeting %s: end_conversation ignored: no explicit closing heard", s.guild_id
-            )
-            return {
-                "status": "engaged",
-                "note": "not an ending: they did not close the exchange explicitly; stay in it "
-                "and keep quiet until they speak to you",
-            }
         self._set_engaged(s, False, why=why)
         return {"status": "listening"}
-
-    _CLOSING_RE = re.compile(
-        r"ขอบคุณ|แค่นี้|เท่านี้|พอแล้ว|พอก่อน|บ๊ายบาย|ลาก่อน|คุยกับทีม|คุยกันเอง|ไว้คุยใหม่|ไปก่อน|จบแล้ว|เสร็จแล้ว"
-        r"|thank|that'?s (all|it)|bye|talk (with|to) (my|the) team|we'?re (done|good)|that'?ll be all"
-        r"|later|enough",
-        re.I,
-    )
 
     def _hush_hold_s(self) -> float:
         return float(getattr(self.bot.s, "hush_hold_seconds", 90.0))

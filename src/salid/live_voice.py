@@ -2005,7 +2005,6 @@ class LiveVoice:
             is_exec=everyone_exec,
             user_id=user_id,
             history=s.transcript.history(bot.s.now(), window_s=180, max_chars=3000),
-            language=self._qa_setting(),  # the company language, explicitly
             spoken=True,
             deck=bot.team.enabled(s.guild_id, "decks"),  # as in chat
             on_tool_call=on_tool,
