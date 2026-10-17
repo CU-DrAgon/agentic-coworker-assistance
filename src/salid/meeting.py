@@ -2240,13 +2240,16 @@ class MeetingManager:
         elif said is not None and bare:
             if hushed:
                 return  # even a corroborated bare name needs a request in the same utterance
-            if live:
-                # The Live model's own transcript decides a bare name; the transcriber's "สลิด"
-                # alone (often a misheard one-word clip) never forces a turn.
-                s.pending_wake[seg.user_id] = time.monotonic()
-                return
             if not heard.name_called:
-                return  # classic: not addressed by the transcriber's own judgement: ignore
+                # The transcriber heard something like the name but does not think it was an
+                # address (a misheard one-word clip): in live mode only a pending wake (the
+                # next words within 5 s count), in classic mode nothing.
+                if live:
+                    s.pending_wake[seg.user_id] = time.monotonic()
+                return
+            # A bare "Salid" the transcriber itself judges as an address, with real speech
+            # behind it (the gate passed): a call. She answers ("Yes?") like a person would.
+            logger.info("meeting %s: bare name call (name_called)", s.guild_id)
         called = said is not None
         if called:
             self._clear_hush(s)  # the name with words in the hold: a normal call
