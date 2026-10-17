@@ -44,7 +44,7 @@ from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
 from .fillers import POOL_SIZE, ClipCache, FillerWriter, RecentLines, write_line
 from .gate import GateLine, notes_from_transcript
-from .i18n import EXTRA, LANGS, lang_name, resolve_lang, t
+from .i18n import EXTRA, LANGS, base_lang, detect_lang, lang_name, resolve_lang, t
 from .llm import generate
 from .minutes import (
     can_see,
@@ -1174,6 +1174,14 @@ class MeetingManager:
                     parts: list[str] = []
                     for lang, v in zip(targets, versions, strict=True):
                         tx = v[i].strip()
+                        # no "translation" of a line that is the same words, a bare name, or
+                        # already in that language
+                        if parts and (
+                            tx.casefold() == parts[0].casefold()
+                            or parse_wake(tx) == ""
+                            or detect_lang(parts[0]) == lang
+                        ):
+                            continue
                         if tx and tx not in seen:
                             seen.append(tx)
                             parts.append(
@@ -1340,6 +1348,7 @@ class MeetingManager:
             self.bot.s.gate_model,
             lines,
             channel_id=s.voice_channel.id,
+            language=base_lang(s.lang),
         )
         for n in notes[:3]:
             await self.post_note(s, n)
@@ -2200,7 +2209,12 @@ class MeetingManager:
             s.attendee_ids.add(seg.user_id)
             await self.bot.record_voice(s.voice_channel, seg.user_id, name, text, self.bot.s.now())
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
-        if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
+        if (
+            s.captions.on
+            and not getattr(member, "bot", False)
+            and not self._is_echo(s, seg)
+            and not bare_name(text, parse_wake(text))  # "สลิด" alone is a call, not a caption
+        ):
             s.captions.add(name, text)  # human speech only: never Salid's own words or notes
         if (vt := parse_voice_talk_command(text)) and not self._is_echo(s, seg):
             if self.may_switch_talk(s, member):

@@ -184,8 +184,17 @@ class _Notes(BaseModel):
     notes: list[str] = []
 
 
+def _lang_name(code: str) -> str:
+    from .i18n import lang_name
+
+    try:
+        return lang_name(code, 1)
+    except Exception:
+        return "English"
+
+
 def notes_from_transcript(
-    client, model: str, lines: list[GateLine], *, channel_id: int
+    client, model: str, lines: list[GateLine], *, channel_id: int, language: str = ""
 ) -> list[str]:
     """Batch gate over a meeting transcript: one short line per real decision, action item (owner
     and date when said) or number someone asked Salid to remember; [] for chit-chat. Fails quiet."""
@@ -193,8 +202,9 @@ def notes_from_transcript(
         f"{_ABOUT}\nMeeting transcript, oldest first:\n{_format(lines)}\n\n"
         "List ONLY things worth writing down: decisions, action items (who does what, by when if "
         "said), numbers or facts someone asked Salid to remember. Casual chat, greetings and "
-        "discussion without an outcome are NOT notes. One short line each in the language spoken, "
-        'at most 3, never quote speech. Reply JSON: {"notes": ["..."]} ({"notes": []} if none).'
+        "discussion without an outcome are NOT notes. One short line each"
+        + (f" written in {_lang_name(language)}" if language else " in the language spoken")
+        + ', at most 3, never quote speech. Reply JSON: {"notes": ["..."]} ({"notes": []} if none).'
     )
     try:
         resp = generate(
