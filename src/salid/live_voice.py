@@ -277,7 +277,7 @@ FILLER_TOOLS = {
 }  # tools that take seconds: worth a spoken "one moment"
 NATURAL_WINDOW_S = 8.0  # wake_policy natural: a turn this soon after her own words needs no name
 YIELD_ACTIVE_S = 0.5  # a person spoke this recently: she does not start talking over them
-YIELD_QUIET_S = 0.7  # ... she starts once they have been quiet this long
+YIELD_QUIET_S = 0.5  # ... she starts once they have been quiet this long
 YIELD_MAX_S = 6.0  # ... and drops the answer if they keep talking this long (half-sentence reply)
 SPEAKER_NOTE_MIN_S = 3.0  # speaker-change notes are at least this far apart
 BURST_GAP_S = 1.0  # a speaker's frames this close together are one stretch of speech
@@ -286,6 +286,8 @@ ASKER_MAX_AGE_S = 30.0
 # Intentional barge-in: the person Salid is answering talks over her for this long (loud frames,
 # short gaps allowed) = a real interruption. Other people's side talk and noise never count.
 TALKOVER_S = 0.8
+EARLY_CUT_S = 2.5  # in the first seconds of her answer the caller's voice stops her almost at once
+EARLY_CUT_SPEECH_S = 0.3
 TALKOVER_NO_WORDS_S = 1.6  # ... or this long when the Live transcript has no words for it yet
 TALKOVER_GAP_S = 0.35
 TALKOVER_RMS = 500.0  # the last utterance counts as "who asked" if it ended this recently
@@ -982,6 +984,7 @@ class LiveVoice:
         self._streaming = False  # audio has been sent and the stream has not been ended yet
         self._last_voice = 0.0
         self._yielding = False  # holding an answer until the person stops talking
+        self._turn_started_at = 0.0  # when her current answer started playing
         self._yield_buf: list[bytes] = []
         self._yield_task = None
         self._latency_pending = False
@@ -1100,7 +1103,11 @@ class LiveVoice:
             cur = self._talkover[uid] = [now, now]
         cur[1] = now
         words = len(self._heard_while_speaking.strip()) >= 2
-        if cur[1] - cur[0] >= (TALKOVER_S if words else TALKOVER_NO_WORDS_S):
+        # Right after she starts (her answer may have come on a thinking pause): the caller's
+        # voice cuts her at once, so she never talks over a sentence they are finishing.
+        early = now - self._turn_started_at <= EARLY_CUT_S
+        need = EARLY_CUT_SPEECH_S if early else (TALKOVER_S if words else TALKOVER_NO_WORDS_S)
+        if cur[1] - cur[0] >= need:
             self._talkover.clear()
             self._stop_requested()
 
@@ -2256,6 +2263,7 @@ class LiveVoice:
             return
         if not self._turn_audio:
             self._turn_audio = True
+            self._turn_started_at = time.monotonic()
             # the people this answer is for: whoever spoke just before it (and overlapped them)
             self._partners = set(self.recent_speakers())
             self._talkover.clear()

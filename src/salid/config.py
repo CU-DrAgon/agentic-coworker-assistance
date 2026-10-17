@@ -77,7 +77,7 @@ class Settings(BaseSettings):
     live_voice: str = "Leda"
     # Live turn-taking (automatic activity detection): short greetings are picked up quickly (start
     # sensitivity high), a pause is not an end of turn (end sensitivity low + silence_duration_ms).
-    live_silence_ms: int = 2000  # a thinking pause ("เอ่อ…") must not end the person's turn
+    live_silence_ms: int = 1000  # she may answer after ~1 s of silence; if the person goes on, she yields (owner, 2026-10-18)
     live_prefix_padding_ms: int = 300
     live_start_sensitivity: str = "high"  # high | low
     live_end_sensitivity: str = "low"  # high | low
