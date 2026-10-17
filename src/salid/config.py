@@ -114,7 +114,7 @@ class Settings(BaseSettings):
     # utterance). Engaged falls back to listening after this long without anyone addressing it
     # and without her speaking (live mode: the Live model decides stay/end via end_conversation,
     # this is only the cap; classic mode also ends after three unaddressed utterances).
-    engaged_timeout_seconds: float = 1800.0  # dead air is fine: the exchange stays open until the caller closes it (owner, 2026-10-18)
+    engaged_timeout_seconds: float = 300.0  # once called she stays in the exchange until told it is over; 5 min of silence toward her ends it (owner, 2026-10-18)
     # Engaged by the name alone (no question): back to listening after this long unless someone
     # addresses Salid (SALID_ENGAGED_BARE_TIMEOUT_SECONDS).
     engaged_bare_timeout_seconds: float = (
