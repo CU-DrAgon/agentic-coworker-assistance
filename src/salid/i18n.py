@@ -1070,6 +1070,20 @@ CATALOG: dict[str, dict[str, str]] = {
     "cmd_mode_arg": _bi("โหมดใหม่ (ไม่เลือก = ดูโหมดปัจจุบัน)", "New mode (empty = view)"),
     "cmd_language": _bi("ดูหรือตั้งภาษาที่สลิดตอบในห้องนี้", "View or set Salid's language here"),
     "cmd_language_arg": _bi("ภาษาใหม่ (ไม่เลือก = ดูภาษาปัจจุบัน)", "New language (empty = view)"),
+    "cmd_voice": _bi(
+        "เสียงของสลิดในประชุมนี้: ฟังอย่างเดียว หรือพูดได้",
+        "Salid's voice in this meeting: listen only or may talk",
+    ),
+    "cmd_voice_arg": _bi("โหมด", "Mode"),
+    "cmd_quiet": _bi(
+        "ให้สลิดเงียบจนกว่าจะเรียกชื่ออีกครั้ง", "Salid goes quiet until her name is called again"
+    ),
+    "cmd_quiet_done": _bi(
+        "เงียบแล้วค่ะ เรียกชื่อสลิดเมื่อต้องการ", "Quiet now. Call my name when you need me."
+    ),
+    "cmd_no_meeting": _bi(
+        "ตอนนี้ไม่มีประชุมที่สลิดอยู่ในห้องนี้", "There is no meeting with Salid here right now."
+    ),
     "cmd_join": _bi("ให้สลิดเข้าห้องเสียงเพื่อจดบันทึกประชุม", "Salid joins your voice channel"),
     "cmd_leave": _bi("ให้สลิดออกจากห้องเสียงและสรุปการประชุม", "Salid leaves and summarizes"),
     "cmd_summary": _bi("สรุปสิ่งที่คุยกันในห้อง", "Summarize what was discussed"),

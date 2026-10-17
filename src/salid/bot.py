@@ -2380,6 +2380,38 @@ class SecretaryBot(
 
         return captions_tools(session_of, self.meetings.set_captions, set_default)
 
+    def _meeting_of(self, interaction):
+        """The meeting the person is in (their voice channel), else the one whose text channel this is."""
+        gid = interaction.guild.id
+        ch = getattr(getattr(interaction.user, "voice", None), "channel", None)
+        s = self.meetings.session_in(gid, ch.id) if ch is not None else None
+        return s or self.meetings.session_for_channel(interaction.channel.id)
+
+    async def handle_voice_talk(self, interaction, mode: str) -> None:
+        """/voice listen_only|may_talk: the human switch for the meeting the person is in."""
+        lang = self._interaction_lang(interaction)
+        s = self._meeting_of(interaction)
+        if s is None:
+            await interaction.response.send_message(t("cmd_no_meeting", lang), ephemeral=True)
+            return
+        if not self.meetings.may_switch_talk(s, interaction.user):
+            await interaction.response.send_message(t("voice_talk_denied", s.lang), ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=False)
+        await self.meetings.set_voice_talk(s, mode)
+        key = "voice_talk_listen" if mode == "listen_only" else "voice_talk_may"
+        await interaction.followup.send(t(key, s.lang), ephemeral=True)
+
+    async def handle_quiet(self, interaction) -> None:
+        """/quiet: Salid stops talking now and stays quiet until her name is called again."""
+        lang = self._interaction_lang(interaction)
+        s = self._meeting_of(interaction)
+        if s is None:
+            await interaction.response.send_message(t("cmd_no_meeting", lang), ephemeral=True)
+            return
+        self.meetings._hush(s)
+        await interaction.response.send_message(t("cmd_quiet_done", s.lang), ephemeral=True)
+
     async def _voice_talk_command(self, message) -> bool:
         """Salid's voice in meetings, typed by a human (never an agent tool): org default
         ("listen only by default", executives) or this meeting ("listen only" / "you may talk" in
@@ -2750,6 +2782,31 @@ class SecretaryBot(
                     description=t("cmd_mode"),
                     callback=mode_cb,
                 )
+            )
+
+        async def voice_cb(interaction: discord.Interaction, mode: str):
+            await self.handle_voice_talk(interaction, mode)
+
+        voice_cb = app_commands.guild_only()(voice_cb)
+        voice_cb = app_commands.describe(mode=t("cmd_voice_arg"))(voice_cb)
+        voice_cb = app_commands.choices(
+            mode=[
+                app_commands.Choice(name="🔇 listen only / ฟังอย่างเดียว", value="listen_only"),
+                app_commands.Choice(name="🔊 may talk / พูดได้", value="may_talk"),
+            ]
+        )(voice_cb)
+        for name in ("voice", "เสียง"):
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_voice"), callback=voice_cb)
+            )
+
+        async def quiet_cb(interaction: discord.Interaction):
+            await self.handle_quiet(interaction)
+
+        quiet_cb = app_commands.guild_only()(quiet_cb)
+        for name in ("quiet", "เงียบ"):
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_quiet"), callback=quiet_cb)
             )
 
         async def memory_cb(interaction: discord.Interaction, days: int | None = None):
