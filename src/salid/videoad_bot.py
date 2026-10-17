@@ -34,7 +34,8 @@ from typing import Any
 import discord
 
 from . import cards, speech
-from .i18n import CATALOG, t
+from .dm import send_dm
+from .i18n import CATALOG, resolve_lang, t
 from .promo import PHOTO_MIMES
 from .videoad import (
     LENGTHS,
@@ -53,7 +54,6 @@ logger = logging.getLogger(__name__)
 JOBS = "salid_video_jobs"  # DocStore kind, key = job id
 FINAL = frozenset({"done", "failed", "cancelled"})
 PROGRESS_EVERY_S = 5.0  # the progress message is edited at most this often
-CANCEL_TIMEOUT_S = 900
 MAX_HERO_SHOTS = 2
 AI_HASHTAG = "#สร้างด้วยAI"
 MAX_REPLY = 1900
@@ -92,10 +92,11 @@ class VideoJob:
 
 
 class CancelView(discord.ui.View):
-    """The progress message's one button: cancels the job (requester or admin only)."""
+    """The progress message's one button: cancels the job (requester or admin only). No timeout:
+    a job with hero shots can run a long time; `_video_finish` stops the view when it ends."""
 
     def __init__(self, job_id: str, lang: str = "th"):
-        super().__init__(timeout=CANCEL_TIMEOUT_S)
+        super().__init__(timeout=None)
         self.job_id = job_id
         button = discord.ui.Button(
             label=t("video_cancel_button", lang), style=discord.ButtonStyle.danger
@@ -210,14 +211,15 @@ class VideoAdMixin:
             photos=list(photos) if use_photos else [],
             hero_shots=int(heroes),
             voice=bool(voice),
-            music=None,  # no music model yet
+            music=bool(music),  # the runner makes music only with SALID_VIDEO_MUSIC_MODEL
             lang=lang,
         )
+        # a peek, outside the lock (a DocStore read): the job's own take re-checks the month
+        if self.video_usage.used(gid, month, "ads") + 1 > cap:
+            return {"status": "limit", "say": t("video_month_limit", lang, n=cap)}
         with self._video_lock:  # check and reserve together: two quick asks cannot both start
             if gid in self._video_jobs or len(self._video_jobs) >= self.s.video_max_jobs:
                 return {"status": "busy", "say": t("video_busy", lang)}
-            if self.video_usage.used(gid, month, "ads") + 1 > cap:
-                return {"status": "limit", "say": t("video_month_limit", lang, n=cap)}
             self._video_jobs[gid] = job
         try:  # nothing between the reservation and here can raise
             loop.call_soon_threadsafe(self._launch_video, job, message, req)
@@ -259,7 +261,7 @@ class VideoAdMixin:
             job.handle.cancelled.set()
             raise
         except Exception:
-            logger.exception("video guild=%s job crashed", job.guild_id)
+            logger.exception("video job crashed: guild=%s", job.guild_id)
             if not job.final:
                 lang = job.lang
                 text = t("video_failed", lang, reason=t("video_reason_error", lang))
@@ -302,19 +304,24 @@ class VideoAdMixin:
                     usage=self.video_usage,
                     month=self.s.now().strftime("%Y-%m"),
                 )
+            except asyncio.CancelledError:
+                # shutdown: tell the thread before its temp dir is removed (it stops before its
+                # next step instead of writing into a deleted directory)
+                job.handle.cancelled.set()
+                raise
             except Cancelled:
                 state, text = "cancelled", t("video_cancelled", lang)
             except MonthLimit:
                 state, reason = "failed", "month_limit"
                 text = t("video_month_limit", lang, n=self.s.video_ads_per_month)
             except StoryboardError as e:  # problem lines only, never the storyboard text
-                logger.info("video guild=%s storyboard failed: %s", job.guild_id, e)
+                logger.info("video job storyboard failed: guild=%s %s", job.guild_id, e)
                 state, reason = "failed", "storyboard"
             except RuntimeError as e:  # our ffmpeg / budget errors
-                logger.warning("video guild=%s render failed: %s", job.guild_id, e)
+                logger.warning("video job render failed: guild=%s %s", job.guild_id, e)
                 state, reason = "failed", "render"
             except Exception:
-                logger.exception("video guild=%s pipeline crashed", job.guild_id)
+                logger.exception("video job pipeline crashed: guild=%s", job.guild_id)
                 state, reason = "failed", "error"
             if state == "done":
                 job.handle.cost_usd = res.cost_usd
@@ -455,7 +462,7 @@ class VideoAdMixin:
                 await interaction.response.send_message(t("video_not_yours", lang), ephemeral=True)
                 return
             job.handle.cancelled.set()
-            logger.info("video guild=%s cancel requested", job.guild_id)
+            logger.info("video job cancel requested: guild=%s", job.guild_id)
             await interaction.response.edit_message(view=None)
         except discord.HTTPException:
             logger.info("video cancel response failed", exc_info=True)
@@ -464,11 +471,15 @@ class VideoAdMixin:
     async def _sweep_video_jobs(self) -> None:
         """Once per process (the first on_ready; reconnects fire it again): jobs a restart cut
         off are marked failed with reason "restarted" and their requester is told to ask again.
-        Usage is not refunded. Jobs this process runs are skipped. Never raises."""
+        Usage is not refunded. Never raises.
+
+        Requests keep working while it runs, so each job is checked again right before it is
+        marked: its record is read afresh (a job that ended meanwhile is left alone) and a job
+        this process runs is skipped. A job's slot is reserved before its first record and
+        released only after its final one, so the slot check covers every live job."""
         if self._video_swept:
             return
         self._video_swept = True
-        live = {getattr(j, "job_id", None) for j in list(self._video_jobs.values())}
         for guild in list(self.guilds):
             try:
                 items = await asyncio.to_thread(
@@ -477,8 +488,14 @@ class VideoAdMixin:
             except Exception:
                 logger.warning("video job sweep failed for guild %s", guild.id, exc_info=True)
                 continue
-            for key, doc in items:
-                if key in live:
+            for key, _ in items:
+                try:
+                    doc = await asyncio.to_thread(self.docs.get, JOBS, guild.id, key)
+                except Exception:
+                    logger.warning("video job %s not read", key, exc_info=True)
+                    continue
+                # no await between this check and the write below starting
+                if not doc or doc.get("state") in FINAL or self._video_is_live(guild.id, key):
                     continue
                 update = {
                     **doc,
@@ -493,11 +510,22 @@ class VideoAdMixin:
                     continue
                 await self._video_tell_restarted(guild, doc)
 
+    def _video_is_live(self, guild_id: int, job_id: str) -> bool:
+        """This process runs (or is launching) the job `job_id` of the guild."""
+        with self._video_lock:
+            return getattr(self._video_jobs.get(guild_id), "job_id", None) == job_id
+
     async def _video_tell_restarted(self, guild, doc: dict) -> None:
+        """Tell the requester in the job's channel; no such channel (a DM after a restart, a
+        deleted channel): by DM (or their private Salid channel). Best effort."""
         try:
             cid, rid = int(doc.get("channel_id") or 0), int(doc.get("requester_id") or 0)
             channel = (guild.get_channel(cid) or self.get_channel(cid)) if cid else None
             if channel is None:
+                member = guild.get_member(rid) if rid else None
+                if member is not None:
+                    lang = resolve_lang(self.team.current(guild.id).default_language)
+                    await send_dm(member, t("video_restarted", lang))
                 return
             who = f"<@{rid}> " if rid else ""
             users = [discord.Object(rid)] if rid else False

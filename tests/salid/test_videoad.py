@@ -725,6 +725,7 @@ def test_assemble_needs_one_length_and_caption_per_clip(tmp_path):
 # ------------------------------------------------------------------ the job
 S = FixedClockSettings()
 S_HERO = FixedClockSettings(video_hero_model="omni-test")
+S_MUSIC = FixedClockSettings(video_music_model="music-test")
 SILENCE = b"\x00\x00" * 2400
 REAL_NARRATION = videoad.narration_wav
 BRIEF = "ลาเต้เย็นสูตรลับ ลด 20% ทุกวันศุกร์"
@@ -752,7 +753,7 @@ def req(**kw):
         photos=[],
         hero_shots=0,
         voice=True,
-        music=None,
+        music=False,
         lang="th",
     )
     return videoad.VideoRequest(**{**base, **kw})
@@ -762,10 +763,10 @@ def req(**kw):
 def fake_pipeline(monkeypatch):
     """The paid and slow parts of the job replaced by recorders: a 4 x 5 s storyboard (its first
     `hero_shots` scenes are hero scenes), 2 billed stills, empty clips, a narration file and an
-    MP4 of a few bytes. `hero_ok` makes the hero hook succeed."""
+    MP4 of a few bytes. `hero_ok` makes the hero hook succeed, `music_ok` the music hook."""
     fp = SimpleNamespace(
         hero_calls=0, hero_ok=False, on_stills=None, plans=[], stills=[], motion=[],
-        narrations=[], assembled=[], labels=[], plan_error=None,
+        narrations=[], assembled=[], labels=[], plan_error=None, music_calls=0, music_ok=False,
     )  # fmt: skip
 
     def plan(client, model, *, brief, seconds, photos, hero_shots, lang):
@@ -808,6 +809,13 @@ def fake_pipeline(monkeypatch):
             out.write_bytes(b"hero")
         return fp.hero_ok
 
+    def music(client, settings, board, seconds, handle, out):
+        fp.music_calls += 1
+        if not fp.music_ok:
+            return None
+        out.write_bytes(b"music")
+        return out
+
     real_caption = videoad.caption_png
 
     def caption(text, fonts, *, label=True):
@@ -816,7 +824,7 @@ def fake_pipeline(monkeypatch):
 
     for name, fn in [("plan_storyboard", plan), ("scene_stills", stills), ("motion_clip", motion),
                      ("narration_wav", narration), ("assemble", assemble), ("_hero_clip", hero),
-                     ("caption_png", caption)]:  # fmt: skip
+                     ("caption_png", caption), ("_music_track", music)]:  # fmt: skip
         monkeypatch.setattr(videoad, name, fn)
     return fp
 
@@ -896,7 +904,7 @@ def test_runner_happy_path_reports_each_step(tmp_path, fake_pipeline):
 def test_runner_wires_every_step(tmp_path, fake_pipeline):
     usage = videoad.MediaUsage(d := MemDocs())
     photos_in = [png_bytes((900, 900))]
-    res = run(tmp_path, usage=usage, photos=photos_in, accent="gold", music=tmp_path / "m.m4a")
+    res = run(tmp_path, usage=usage, photos=photos_in, accent="gold")
     assert res.path == tmp_path / "ad-20261014-1200.mp4" and res.path.read_bytes() == b"mp4"
     assert d.get("salid_media_usage", 1, "2026-10") == {"ads": 1}
     assert res.cost_usd == pytest.approx(2 * videoad.STILL_USD)
@@ -911,8 +919,31 @@ def test_runner_wires_every_step(tmp_path, fake_pipeline):
     assert [(a, b) for a, b, _ in lines] == [(0, 5), (5, 5), (10, 5), (15, 5)] and total == 20
     [asm] = fake_pipeline.assembled
     assert asm["seconds"] == [5, 5, 5, 5] and len(asm["clips"]) == len(asm["captions"]) == 4
-    assert asm["audio"] is not None and asm["budget"] == 19 and asm["music"] == tmp_path / "m.m4a"
+    assert asm["audio"] is not None and asm["budget"] == 19 and asm["music"] is None
     assert fake_pipeline.labels == [False] * 4  # assemble adds the one AI label itself
+    assert fake_pipeline.music_calls == 0  # no music asked for
+
+
+def test_music_is_skipped_while_the_model_setting_is_empty(tmp_path, fake_pipeline):
+    fake_pipeline.music_ok = True
+    run(tmp_path, music=True)
+    assert fake_pipeline.music_calls == 0 and fake_pipeline.assembled[0]["music"] is None
+
+
+def test_music_hook_runs_when_enabled_and_its_track_is_mixed(tmp_path, fake_pipeline):
+    seen = []
+    fake_pipeline.music_ok = True
+    h = videoad.VideoHandle(progress=lambda s, _d: seen.append(s))
+    run(tmp_path, settings=S_MUSIC, music=True, voice=False, handle=h)
+    assert fake_pipeline.music_calls == 1 and "audio" in seen
+    assert fake_pipeline.assembled[0]["music"].read_bytes() == b"music"
+    assert fake_pipeline.assembled[0]["audio"] is None  # no voice asked for
+
+
+def test_no_music_track_yet_means_no_music(tmp_path, fake_pipeline):
+    run(tmp_path, settings=S_MUSIC, music=True)  # the hook returns None (until Task 7)
+    assert fake_pipeline.music_calls == 1 and fake_pipeline.assembled[0]["music"] is None
+    assert videoad._music_track(None, S_MUSIC, sb(5, 5, 5, 5), 20, None, Path("m")) is None
 
 
 def test_cancel_during_stills_stops_paid_steps(tmp_path, fake_pipeline):  # Review Focus 4
@@ -939,6 +970,22 @@ def test_cancel_during_stills_skips_the_motion_clips(tmp_path, fake_pipeline):
     with pytest.raises(videoad.Cancelled):
         run(tmp_path, handle=h)
     assert fake_pipeline.motion == [] and fake_pipeline.assembled == []
+    assert h.cost_usd == pytest.approx(2 * videoad.STILL_USD)  # the stills were billed
+
+
+def test_hero_cost_is_counted_as_soon_as_its_seconds_are_taken(
+    tmp_path, fake_pipeline, monkeypatch
+):
+    h = videoad.VideoHandle()
+
+    def hero(client, settings, still, scene, handle, out):
+        handle.cancelled.set()  # cancelled while the first hero clip is being made
+        return False
+
+    monkeypatch.setattr(videoad, "_hero_clip", hero)
+    with pytest.raises(videoad.Cancelled):
+        run(tmp_path, handle=h, settings=S_HERO, hero_shots=2)
+    assert h.cost_usd == pytest.approx(2 * videoad.STILL_USD + 5 * videoad.HERO_USD_PER_S)
 
 
 def test_cancel_before_the_start_takes_nothing(tmp_path, fake_pipeline):
@@ -986,12 +1033,16 @@ def test_a_failed_hero_keeps_the_motion_clip_and_its_seconds_stay_taken(tmp_path
     assert fake_pipeline.assembled[0]["clips"][0].read_bytes() == b"clip"
 
 
-def test_hero_month_budget_used_up_means_no_hero_call(tmp_path, fake_pipeline):
+def test_hero_month_budget_used_up_means_no_hero_call(tmp_path, fake_pipeline, caplog):
+    caplog.set_level("INFO", logger="salid.videoad")
     d = MemDocs()
     d.put("salid_media_usage", 1, "2026-10", {"hero_seconds": 58})
     run(tmp_path, usage=videoad.MediaUsage(d), settings=S_HERO, hero_shots=1)
     assert fake_pipeline.hero_calls == 0
     assert d.get("salid_media_usage", 1, "2026-10") == {"hero_seconds": 58, "ads": 1}
+    lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith("video guild=")]
+    assert all(" step=" in ln for ln in lines)  # only step lines use the step prefix
+    assert any("hero budget" in r.getMessage() for r in caplog.records)
 
 
 def test_hero_hook_is_off_until_task_7():

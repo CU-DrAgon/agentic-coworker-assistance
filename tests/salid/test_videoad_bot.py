@@ -6,6 +6,7 @@ replaced by a fake `run_video_ad`; nothing touches the network or ffmpeg."""
 import asyncio
 import inspect
 import json
+import threading
 from types import SimpleNamespace
 
 import discord
@@ -105,14 +106,16 @@ def board():
 @pytest.fixture
 def runner(monkeypatch):
     """A fake `run_video_ad`: takes the month's ad like the real one, reports each step (after
-    waiting for a cancel when `wait_cancel`), then raises `error` or writes a tiny MP4."""
-    r = SimpleNamespace(calls=[], error=None, wait_cancel=False)
+    waiting for a cancel when `wait_cancel`), then raises `error` or writes a tiny MP4. `spent`
+    is the cost estimate it reports before its first step."""
+    r = SimpleNamespace(calls=[], error=None, wait_cancel=False, spent=0.0)
 
     def fake(req, *, client, settings, say, workdir, budget_mib, handle, usage, month):
         r.calls.append(SimpleNamespace(req=req, workdir=workdir, budget=budget_mib, month=month,
                                        handle=handle, say=say))  # fmt: skip
         if not usage.take(req.guild_id, month, "ads", 1, settings.video_ads_per_month):
             raise videoad.MonthLimit("month limit")
+        handle.cost_usd = r.spent
         for step in ("storyboard", "stills", "audio", "render"):
             if r.wait_cancel:
                 handle.cancelled.wait(5)
@@ -256,7 +259,7 @@ async def test_a_started_job_posts_progress_and_delivers_the_mp4(on, world, runn
     req = call.req
     assert (req.guild_id, req.user_id, req.seconds, req.lang) == (GUILD, world.staff.id, 15, "th")
     assert req.brief == "ลาเต้เย็น ลด 20%" and req.photos == [photo.data]
-    assert req.hero_shots == 0 and req.music is None and req.voice is True
+    assert req.hero_shots == 0 and req.music is False and req.voice is True
     assert call.month == "2026-10" and call.budget == 9.0  # no known limit: 10 MiB - 1
     assert not call.workdir.exists()  # the temp dir is always removed
     [posted] = world.pub.posted
@@ -321,6 +324,18 @@ async def test_the_month_limit_refuses_before_anything_starts(on, world, runner)
     assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 10}
 
 
+async def test_the_month_peek_reads_outside_the_slot_lock(on, world, runner, monkeypatch):
+    held = []
+    used = on.video_usage.used
+    monkeypatch.setattr(
+        on.video_usage, "used", lambda *a: held.append(on._video_lock.locked()) or used(*a)
+    )
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert held == [False]  # a DocStore read never blocks other guilds' tool calls
+
+
 async def test_a_month_limit_hit_inside_the_job_is_reported(on, world, runner):
     capture_posts(world.pub)
     on.docs.put("salid_media_usage", GUILD, "2026-10", {"ads": 9})
@@ -349,12 +364,14 @@ async def test_hero_shots_and_music_are_ignored_while_their_models_are_empty(on,
     out = tool(brief="a", hero_shots=2, music=True)
     assert out["status"] == "started" and out["ignored"] == ["hero_shots", "music"]
     await settle(on)
-    assert runner.calls[0].req.hero_shots == 0 and runner.calls[0].req.music is None
+    assert runner.calls[0].req.hero_shots == 0
+    assert runner.calls[0].req.music is True  # the user's request; the runner checks the model
     on.s.video_hero_model = "omni-test"
-    out = tool(brief="a", hero_shots=2)
+    on.s.video_music_model = "music-test"
+    out = tool(brief="a", hero_shots=2, music=True)
     assert out == STARTED
     await settle(on)
-    assert runner.calls[1].req.hero_shots == 2
+    assert runner.calls[1].req.hero_shots == 2 and runner.calls[1].req.music is True
 
 
 async def test_the_budget_follows_the_message_server_and_dms_get_the_default(on, world, runner):
@@ -377,7 +394,10 @@ async def test_the_budget_follows_the_message_server_and_dms_get_the_default(on,
         (ValueError("secret C"), "error"),
     ],
 )
-async def test_failures_tell_the_requester_without_details(on, world, runner, error, reason):
+async def test_failures_tell_the_requester_without_details(
+    on, world, runner, error, reason, caplog
+):
+    caplog.set_level("INFO", logger="salid.videoad_bot")
     capture_posts(world.pub)
     runner.error = error
     tool, msg = tool_for(on, world)
@@ -391,6 +411,8 @@ async def test_failures_tell_the_requester_without_details(on, world, runner, er
     shown = [*world.pub.sent, *msg.replies, *(e[0] for e in posted.edits)]
     assert all("secret" not in (x or "") for x in shown)
     assert not runner.calls[0].workdir.exists()
+    logged = [r.getMessage() for r in caplog.records if r.name == "salid.videoad_bot"]
+    assert logged and not any(m.startswith("video guild=") for m in logged)  # step prefix only
 
 
 async def test_without_a_progress_message_the_outcome_is_posted(on, world, runner):
@@ -484,7 +506,8 @@ async def start_waiting_job(bot, world, runner):
 async def test_cancel_by_someone_else_is_refused_and_the_job_keeps_running(on, world, runner):
     job, view, _ = await start_waiting_job(on, world, runner)
     [button] = view.children
-    assert button.label == t("video_cancel_button", "th") and view.timeout == 900
+    assert button.label == t("video_cancel_button", "th")
+    assert view.timeout is None  # a long job keeps its button; the job's end stops the view
     it = Click(world.g, world.peer, world.pub, on)
     await button.callback(it)
     assert it.sent == [(t("video_not_yours", "th"), True)] and not job.handle.cancelled.is_set()
@@ -504,7 +527,34 @@ async def test_an_admin_may_cancel_any_job(on, world, runner):
     assert job.handle.cancelled.is_set() and it.sent == []
     await settle(on)
     assert records(on)[0]["state"] == "cancelled" and msg.replies == []
-    assert on._video_jobs == {}
+    assert on._video_jobs == {} and view.is_finished()
+
+
+async def test_a_cancelled_job_records_what_was_already_spent(on, world, runner):
+    runner.spent = 2 * videoad.STILL_USD  # stills billed before the cancel
+    job, view, _ = await start_waiting_job(on, world, runner)
+    await view.children[0].callback(Click(world.g, world.staff, world.pub, on))
+    await settle(on)
+    [rec] = records(on)
+    assert rec["state"] == "cancelled" and rec["cost_usd"] == round(2 * videoad.STILL_USD, 4)
+
+
+async def test_shutdown_stops_the_thread_before_its_temp_dir_goes(on, world, runner, monkeypatch):
+    seen = []
+    real = videoad_bot.tempfile.TemporaryDirectory
+
+    class Dir(real):
+        def __exit__(self, *exc):  # what the worker thread was told when the dir was removed
+            seen.append(runner.calls[0].handle.cancelled.is_set())
+            return super().__exit__(*exc)
+
+    monkeypatch.setattr(videoad_bot.tempfile, "TemporaryDirectory", Dir)
+    job, _, _ = await start_waiting_job(on, world, runner)
+    job.task.cancel()  # the bot shuts down mid-job
+    with pytest.raises(asyncio.CancelledError):
+        await job.task
+    assert seen == [True]
+    assert records(on)[0]["state"] == "queued"  # left for the next start's sweep
 
 
 # ------------------------------------------------------------------ restart
@@ -538,15 +588,59 @@ async def test_the_sweep_runs_once_and_skips_live_and_finished_jobs(bot, world):
 
     bot.docs.put("salid_video_jobs", GUILD, "old", job("done"))
     bot.docs.put("salid_video_jobs", GUILD, "live", job("render"))
-    bot.docs.put("salid_video_jobs", GUILD, "lost", job("queued", channel=4242))  # channel gone
+    bot.docs.put("salid_video_jobs", GUILD, "lost", job("queued", channel=4242))  # a DM, say
     bot._video_jobs[GUILD] = SimpleNamespace(job_id="live", guild_id=GUILD)
     await bot._sweep_video_jobs()
     get = lambda key: bot.docs.get("salid_video_jobs", GUILD, key)  # noqa: E731
     assert (get("old")["state"], get("live")["state"]) == ("done", "render")
     assert get("lost")["state"] == "failed" and world.pub.sent == []
+    [(text, _)] = world.staff.dms  # no such channel: the requester gets a DM
+    assert t("video_restarted", "th") in text
     bot.docs.put("salid_video_jobs", GUILD, "later", job("stills"))
     await bot._sweep_video_jobs()  # on_ready again after a reconnect: no second sweep
     assert get("later")["state"] == "stills"
+
+
+async def test_the_sweep_never_fails_a_job_launched_while_it_runs(on, world, runner):
+    runner.wait_cancel = True
+    gate, real = threading.Event(), on.docs.find_items
+
+    def slow_find(*a, **kw):  # the sweep's read is still pending when the request comes in
+        gate.wait(5)
+        return real(*a, **kw)
+
+    on.docs.find_items = slow_find
+    sweep = asyncio.create_task(on._sweep_video_jobs())
+    await asyncio.sleep(0)
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    job_id = on._video_jobs[GUILD].job_id
+    rec = lambda: on.docs.get("salid_video_jobs", GUILD, job_id)  # noqa: E731
+    await until(rec)  # the new job's record ("queued") exists; the sweep's read still waits
+    gate.set()
+    await sweep
+    assert rec()["state"] == "queued" and rec()["reason"] == ""
+    assert not any(t("video_restarted", "th") in (m or "") for m in world.pub.sent)
+    on._video_jobs[GUILD].handle.cancelled.set()
+    await settle(on)
+    assert records(on)[0]["state"] == "cancelled"
+
+
+async def test_the_sweep_leaves_a_job_that_finished_meanwhile(bot, world, monkeypatch):
+    doc = {"guild_id": GUILD, "channel_id": world.pub.id, "requester_id": world.staff.id,
+           "state": "render"}  # fmt: skip
+    bot.docs.put("salid_video_jobs", GUILD, "j", doc)
+    real = bot.docs.find_items
+
+    def find_then_finish(*a, **kw):  # the job writes "done" right after the sweep's read
+        items = real(*a, **kw)
+        bot.docs.put("salid_video_jobs", GUILD, "j", {**doc, "state": "done"})
+        return items
+
+    bot.docs.find_items = find_then_finish
+    await bot._sweep_video_jobs()
+    assert bot.docs.get("salid_video_jobs", GUILD, "j")["state"] == "done"
+    assert world.pub.sent == []
 
 
 async def test_on_ready_sweeps_left_over_jobs(bot, world, monkeypatch):

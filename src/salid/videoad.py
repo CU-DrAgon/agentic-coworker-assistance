@@ -25,7 +25,8 @@ limit), re-encoding smaller when the first try is over it.
 Part 4, the job: `run_video_ad` runs every step for one `VideoRequest` in a work directory
 (blocking; the bot runs it in a worker thread, see `videoad_bot`), checking the `VideoHandle`
 for a cancel before each step and taking the guild's monthly usage (`MediaUsage`) before each
-paid step. Generated hero motion shots go through the `_hero_clip` hook (off for now).
+paid step. Generated hero motion shots and music go through the `_hero_clip` and
+`_music_track` hooks (off for now).
 
 Never logs the brief, prompts, captions or narration.
 """
@@ -897,7 +898,7 @@ class VideoRequest:
     photos: list[bytes]  # shop photos, in attachment order (photo:N)
     hero_shots: int
     voice: bool
-    music: Path | None  # a music track to mix under the voice (None = no music)
+    music: bool  # the user asked for background music (made only with SALID_VIDEO_MUSIC_MODEL)
     lang: str
     accent: str = "red"
 
@@ -915,6 +916,15 @@ def _hero_clip(client, settings, still: Path, scene: Scene, handle: VideoHandle,
     none (the scene keeps its motion clip). Called only for hero scenes and only when
     `settings.video_hero_model` is set. Not available yet: always False."""
     return False
+
+
+def _music_track(
+    client, settings, board: Storyboard, seconds: float, handle: VideoHandle, out: Path
+) -> Path | None:
+    """A background music track for the ad (`seconds` long) written to `out` and returned; None
+    when there is none (the ad has no music). Called only when the user asked for music and
+    `settings.video_music_model` is set. Not available yet: always None."""
+    return None
 
 
 def _report(handle: VideoHandle, step: str, detail: str = "") -> None:
@@ -947,18 +957,22 @@ def run_video_ad(
     (`settings.gemini_model`, sees `req.photos`), stills (`settings.image_model`, 9:16 2K) and
     their motion clips, hero clips (only with `settings.video_hero_model`; hero seconds taken
     from the month's budget before each call, never refunded), narration with `say` (any failure
-    -> captions only), captions (`label=False`: `assemble` adds the one AI label) and the final
+    -> captions only), music (only when asked for and `settings.video_music_model` is set, via
+    `_music_track`), captions (`label=False`: `assemble` adds the one AI label) and the final
     `ad-YYYYMMDD-HHMM.mp4` under `budget_mib`. `check(handle)` runs before every step and every
-    hero call. Raises Cancelled, StoryboardError or RuntimeError. Logs one line per step (guild,
-    step, ms, cost estimate), never the brief, captions or narration."""
+    hero call. `handle.cost_usd` counts each paid call as soon as it is made, so a cancelled job
+    still reports what it spent. Raises Cancelled, StoryboardError or RuntimeError. Logs one line
+    per step (guild, step, ms, cost estimate), never the brief, captions or narration."""
     gid = req.guild_id
     steps_ms: dict[str, int] = {}
     cost = 0.0
 
-    def done(step: str, t0: float, step_cost: float = 0.0) -> None:
+    def spend(amount: float) -> None:
         nonlocal cost
-        cost += step_cost
+        cost += amount
         handle.cost_usd = cost
+
+    def done(step: str, t0: float, step_cost: float = 0.0) -> None:
         steps_ms[step] = int((time.monotonic() - t0) * 1000)
         logger.info("video guild=%s step=%s ms=%d cost=%.2f", gid, step, steps_ms[step], step_cost)
 
@@ -989,6 +1003,7 @@ def run_video_ad(
     images, billed = scene_stills(
         client, settings.image_model, scenes, req.photos, req.accent, fonts
     )
+    spend(billed * STILL_USD)  # billed now, even if a cancel stops the motion clips
     stills, clips = [], []
     for i, (scene, img) in enumerate(zip(scenes, images, strict=True)):
         check(handle)  # motion clips cost nothing but take a while on one vCPU
@@ -1011,10 +1026,10 @@ def run_video_ad(
             if not usage.take(
                 gid, month, "hero_seconds", secs, settings.video_hero_seconds_per_month
             ):
-                logger.info("video guild=%s hero seconds for this month are used up", gid)
+                logger.info("video hero budget used up for this month: guild=%s", gid)
                 continue  # this scene keeps its motion clip; a shorter one may still fit
             hero_cost += secs * HERO_USD_PER_S
-            handle.cost_usd = cost + hero_cost
+            spend(secs * HERO_USD_PER_S)
             out = workdir / f"hero{i}.mp4"
             try:
                 made = _hero_clip(client, settings, stills[i], scenes[i], handle, out)
@@ -1027,21 +1042,34 @@ def run_video_ad(
                 clips[i] = out
         done("hero", t0, hero_cost)
 
-    audio = None
-    if req.voice:
+    audio = music = None
+    want_music = bool(req.music and settings.video_music_model)
+    if req.voice or want_music:
         check(handle)
         _report(handle, "audio")
         t0 = time.monotonic()
-        lines, start = [], 0.0
-        for s in scenes:
-            lines.append((start, s.seconds, s.voice_th))
-            start += s.seconds
-        wav = workdir / "voice.wav"
-        try:
-            audio = wav if narration_wav(say, lines, sum(seconds), wav) else None
-        except Exception as e:  # narration failure -> captions only
-            logger.warning("video narration failed: %s", type(e).__name__)
-            audio = None
+        if req.voice:
+            lines, start = [], 0.0
+            for s in scenes:
+                lines.append((start, s.seconds, s.voice_th))
+                start += s.seconds
+            wav = workdir / "voice.wav"
+            try:
+                audio = wav if narration_wav(say, lines, sum(seconds), wav) else None
+            except Exception as e:  # narration failure -> captions only
+                logger.warning("video narration failed: %s", type(e).__name__)
+                audio = None
+        if want_music:
+            check(handle)
+            try:
+                music = _music_track(
+                    client, settings, board, sum(seconds), handle, workdir / "music.wav"
+                )
+            except Cancelled:
+                raise
+            except Exception as e:  # no music: the ad goes on without it
+                logger.warning("video music failed: %s", type(e).__name__)
+                music = None
         done("audio", t0)
 
     check(handle)
@@ -1053,8 +1081,6 @@ def run_video_ad(
         caption_png(scene.caption_th, fonts, label=False)[0].save(cap)
         captions.append(cap)
     out = workdir / f"ad-{_stamp(settings)}.mp4"
-    assemble(
-        clips, seconds, captions, audio, out, budget_mib=budget_mib, music=req.music, fonts=fonts
-    )
+    assemble(clips, seconds, captions, audio, out, budget_mib=budget_mib, music=music, fonts=fonts)
     done("render", t0)
     return VideoResult(path=out, storyboard=board, cost_usd=cost, steps_ms=steps_ms)
