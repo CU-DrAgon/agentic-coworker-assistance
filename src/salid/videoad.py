@@ -4,7 +4,8 @@ Part 1, the storyboard: `plan_storyboard` asks the main model for a JSON `Storyb
 scenes, each with an English image prompt, a caption, a narration line, a length and a source:
 a generated still, a shop photo or a hero motion shot). The model sees the shop photos as small
 JPEG thumbnails, each after its `photo:N` label, before the brief. `check_storyboard` lists what
-is wrong (total length, Thai in a prompt, a missing shop photo, too many hero scenes); one re-ask
+is wrong (total length, Thai in a prompt, a shop photo the model was not shown, too many hero
+scenes); one re-ask
 carries those problems back to the model, together with the soft ones (narration lines too long
 for their scene, shop photos left unused), then a storyboard with hard problems fails with
 `StoryboardError`. Narration is finally cut to its scene by `fit_narration`.
@@ -14,8 +15,9 @@ scenes through `imagegen.generate_images`, at most 3 at a time, one retry unless
 a textless accent `fallback_card`; `photo:N` scenes from the shop photo framed by `frame_photo`,
 or an AI still when that photo is missing or unreadable; after a job cancel no further still is
 started or retried). `motion_clip` turns a still into a slow zoom clip with ffmpeg, and
-`caption_png` draws the scene caption and the "สร้างด้วย AI" label on a transparent overlay,
-inside the Reels / TikTok safe area `SAFE`.
+`caption_png` draws the scene caption and the AI label (i18n `video_ai_label`, in the reply
+language: "สร้างด้วย AI" / "Made with AI") on a transparent overlay, inside the Reels / TikTok
+safe area `SAFE`.
 
 Part 3, sound and the final cut: `narration_wav` lays each scene's spoken line at the scene's
 start, cut to the scene, into one 48 kHz WAV as long as the ad. `assemble` crossfades the
@@ -50,7 +52,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -63,6 +65,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from . import cards, imagegen, videogen
 from .cards import CardFonts
+from .i18n import t
 from .llm import generate
 from .promo import ACCENTS
 
@@ -141,10 +144,16 @@ photo shows. Never use a "photo:N" label that is not listed here."""
 NO_PHOTO_RULES = 'There are no shop photos: never use "photo:N".'
 
 
-def check_storyboard(sb: Storyboard, *, seconds: int, photos: int, hero_shots: int) -> list[str]:
-    """What is wrong with `sb` for an ad of `seconds` with `photos` shop photos and at most
-    `hero_shots` hero scenes ([] = usable). Problems are written for the model's re-ask and never
-    quote the storyboard's own text."""
+def check_storyboard(
+    sb: Storyboard, *, seconds: int, photos: int | Iterable[int], hero_shots: int
+) -> list[str]:
+    """What is wrong with `sb` for an ad of `seconds` with the shop photos `photos` and at most
+    `hero_shots` hero scenes ([] = usable). `photos` lists the `photo:N` labels the model was
+    shown (`_photo_parts`: readable ones, at most MAX_PHOTOS); a number n means photo:0 to
+    photo:n-1. Problems are written for the model's re-ask and never quote the storyboard's own
+    text."""
+    shown = set(range(photos)) if isinstance(photos, int) else set(photos)
+    labels = ", ".join(f"photo:{i}" for i in sorted(shown)) or "none"
     problems = []
     total = sum(s.seconds for s in sb.scenes)
     if abs(total - seconds) > TOTAL_SLACK:
@@ -158,9 +167,10 @@ def check_storyboard(sb: Storyboard, *, seconds: int, photos: int, hero_shots: i
         m = _SOURCE.fullmatch(s.source)
         if m is None:
             problems.append(f'scene {i}: source must be "ai", "photo:N" or "hero"')
-        elif m[1] is not None and int(m[1]) >= photos:
+        elif m[1] is not None and int(m[1]) not in shown:
             problems.append(
-                f"scene {i}: photo:{int(m[1])} does not exist; there are {photos} shop photos"
+                f"scene {i}: photo:{int(m[1])} is not a shop photo you were shown; "
+                f"the shop photos are: {labels}"
             )
         heroes += s.source == "hero"
     if heroes > hero_shots:
@@ -319,7 +329,8 @@ def plan_storyboard(
         response_mime_type="application/json",
         response_schema=Storyboard,
     )
-    ask = dict(limits=dict(seconds=seconds, photos=len(photos), hero_shots=hero_shots), shown=shown)
+    # photo:N is checked against the photos the model actually saw, not the attachments
+    ask = dict(limits=dict(seconds=seconds, photos=shown, hero_shots=hero_shots), shown=shown)
     user = types.Content(role="user", parts=[*parts, types.Part(text=brief.strip() or NO_BRIEF)])
     resp, first, problems, soft = _ask(client, model, [user], config, **ask)
     if first is not None and not problems and not soft:
@@ -343,7 +354,6 @@ def plan_storyboard(
 # ------------------------------------------------------------------ stills
 W, H, FPS = 1080, 1920, 30
 SAFE = (65, 270, 1080 - 65, 1250)  # Reels / TikTok draw their own buttons outside this box
-AI_LABEL = "สร้างด้วย AI"
 COVER_TOLERANCE = 1.25  # a photo whose aspect is within 25 % of 9:16 is cover-cropped
 PHOTO_SIDE = round(H * COVER_TOLERANCE)  # decoded long side: enough for any cover crop
 FILL_BLUR = 40
@@ -438,7 +448,6 @@ def scene_stills(
     scenes: list[Scene],
     photos: list[bytes],
     accent: str,
-    fonts: CardFonts,
     *,
     cancelled: threading.Event | None = None,
 ) -> tuple[list[Image.Image], int]:
@@ -449,8 +458,7 @@ def scene_stills(
     scenes at a time; a blocked still, or one that fails twice, becomes the textless
     `fallback_card` in `accent`. Once `cancelled` (the job's cancel) is set, no queued still is
     started and none is retried (no more paid calls; those scenes get the card, and the runner
-    raises Cancelled right after). `fonts` is unused since cards carry no text (kept so callers
-    keep one signature)."""
+    raises Cancelled right after)."""
     stills: list[Image.Image | None] = [_photo_still(s, photos) for s in scenes]
     todo = [i for i, img in enumerate(stills) if img is None]
     with ThreadPoolExecutor(max_workers=STILL_WORKERS) as pool:
@@ -478,12 +486,12 @@ def _shadowed_text(mask: Image.Image, blur: int) -> Image.Image:
 
 
 def caption_png(
-    caption: str, fonts: CardFonts, *, label: bool = True
+    caption: str, fonts: CardFonts, *, label: bool = True, lang: str = "th"
 ) -> tuple[Image.Image, tuple[int, int, int, int]]:
     """A transparent 1080x1920 overlay: the caption in white with a soft shadow, centred at the
-    bottom of SAFE (the text is clipped to SAFE, so it never leaves it), and the small AI_LABEL
-    top-left inside SAFE. Returns the overlay and the caption's box (no caption: a zero-size box
-    at the bottom centre of SAFE)."""
+    bottom of SAFE (the text is clipped to SAFE, so it never leaves it), and the small AI label
+    (`video_ai_label` in `lang`) top-left inside SAFE. Returns the overlay and the caption's box
+    (no caption: a zero-size box at the bottom centre of SAFE)."""
     x0, y0, x1, y1 = SAFE
     overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     box = (W // 2, y1, W // 2, y1)
@@ -501,7 +509,7 @@ def caption_png(
         box = (max(x, x0), max(y, y0), min(x + f.width, x1), min(y + f.height, y1))
     if label:
         badge = cards.measure_badge(
-            AI_LABEL, fonts.bold, (LABEL_SIZE, LABEL_SIZE), x1 - x0, LABEL_PAD
+            t("video_ai_label", lang), fonts.bold, (LABEL_SIZE, LABEL_SIZE), x1 - x0, LABEL_PAD
         )
         cards.draw_badge(overlay, badge, x0, y0, fonts.bold, fill=LABEL_FILL, text_fill="#FFFFFF")
     return overlay, box
@@ -725,9 +733,10 @@ def video_kbps(budget_mib: float, seconds: float, audio_kbps: int = AUDIO_KBPS) 
     return int(budget_mib * 8388.6 / seconds - audio_kbps)
 
 
-def label_png(fonts: CardFonts) -> Image.Image:
-    """A transparent 1080x1920 overlay with only the AI_LABEL badge (top-left inside SAFE)."""
-    return caption_png("", fonts)[0]
+def label_png(fonts: CardFonts, lang: str = "th") -> Image.Image:
+    """A transparent 1080x1920 overlay with only the AI label badge in `lang` (top-left inside
+    SAFE)."""
+    return caption_png("", fonts, lang=lang)[0]
 
 
 def _visible(img: Image.Image, path: Path) -> tuple[int, int] | None:
@@ -742,11 +751,11 @@ def _visible(img: Image.Image, path: Path) -> tuple[int, int] | None:
 
 
 def _overlays(
-    captions: list[Path], seconds: list[float], fonts: CardFonts, tmp: Path
+    captions: list[Path], seconds: list[float], fonts: CardFonts, tmp: Path, lang: str = "th"
 ) -> list[_Overlay]:
     """Scene captions (each shown during its scene, fading at scene changes only, so the first
     frame shows the opening caption and the last frame the closing one; empty ones skipped),
-    then the AI label for the whole video, never fading."""
+    then the AI label in `lang` for the whole video, never fading."""
     out = []
     start, last = 0.0, len(captions) - 1
     for i, (cap, s) in enumerate(zip(captions, seconds, strict=True)):
@@ -765,7 +774,7 @@ def _overlays(
                 )
             )
         start += s
-    corner = _visible(label_png(fonts), tmp / "label.png")
+    corner = _visible(label_png(fonts, lang=lang), tmp / "label.png")
     if corner is not None:
         out.append(
             _Overlay(
@@ -865,14 +874,15 @@ def assemble(
     budget_mib: float,
     music: Path | None = None,
     fonts: CardFonts | None = None,
+    lang: str = "th",
 ) -> Path:
     """Render the finished ad to `out` (MP4, at most `budget_mib` MiB) and return `out`.
 
     The scene `clips` (1080x1920, 30 fps) crossfade over XFADE_S, scene i starting at
     sum(seconds[:i]), so the ad lasts sum(seconds). Each scene's caption overlay (a 1080x1920
     RGBA PNG from `caption_png(..., label=False)`) shows during its scene with 0.2 s fades at
-    scene changes; one AI_LABEL overlay (made here with `fonts`) stays on for the whole video,
-    never fading. The narration `audio` and the optional `music` (MUSIC_DB under it) are mixed
+    scene changes; one AI label overlay (made here with `fonts`, in the reply language `lang`)
+    stays on for the whole video, never fading. The narration `audio` and the optional `music` (MUSIC_DB under it) are mixed
     and loudness-normalised; with neither, the ad has no audio track and the video gets the
     whole budget. H.264 High yuv420p 30 fps at `video_kbps` (maxrate 1.1x, buffer 2x), AAC 128k
     48 kHz, faststart. Over the budget: one re-encode at 80 % of the bitrate, then one at
@@ -888,7 +898,7 @@ def assemble(
     retry = int(kbps * RETRY_RATE)
     limit = budget_mib * 2**20
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
-        overlays = _overlays(captions, seconds, fonts or cards.card_fonts(), Path(tmp))
+        overlays = _overlays(captions, seconds, fonts or cards.card_fonts(), Path(tmp), lang)
         for rate, size in ((kbps, (W, H)), (retry, (W, H)), (retry, SMALL)):
             args = _assemble_args(clips, seconds, overlays, audio, music, out, rate, size)
             _ffmpeg(args, timeout=ASSEMBLE_TIMEOUT_S)
@@ -959,37 +969,84 @@ def check(handle: VideoHandle) -> None:
         raise Cancelled()
 
 
+def _number(value: float) -> int | float:
+    return int(value) if float(value).is_integer() else value
+
+
 class MediaUsage:
     """Media usage per guild in DocStore kind `salid_media_usage`, one number per field, taken
-    before each paid step and never refunded: key "YYYY-MM" for video (`ads`, `hero_seconds`,
-    `music_clips`), key "YYYY-MM-DD" for images (`images`, `images_user_<id>`, see
-    `imagegen_bot.StoredDailyBudget`)."""
+    before each paid step: key "YYYY-MM" for video (`ads`, `hero_seconds`, `music_clips`), key
+    "YYYY-MM-DD" for images and promo kits (`images`, `images_user_<id>`, `promo_kits`, see
+    `imagegen_bot.StoredDailyBudget`). Given back (`give_back`, never below 0) only for what was
+    never billed or never delivered: the ad of a job that ended before any paid media, the hero
+    seconds of a create the service refused, image units with no delivered image. Every
+    read-modify-write of a document is one read and one write under one lock (one bot
+    process)."""
 
     def __init__(self, docs):
         self.docs = docs
 
+    def doc(self, guild_id: int, key: str) -> dict:
+        """All counters of the guild's day or month (one read; {} when there are none)."""
+        doc = dict(self.docs.get(USAGE, guild_id, key) or {})
+        doc.pop("guild_id", None)  # Firestore adds it on write
+        return doc
+
     def used(self, guild_id: int, month: str, field: str) -> float:
-        doc = self.docs.get(USAGE, guild_id, month) or {}
-        return float(doc.get(field) or 0)
+        return float(self.doc(guild_id, month).get(field) or 0)
 
     def take(self, guild_id: int, month: str, field: str, amount: float, cap: float) -> bool:
         """Add `amount` to `field` unless that would pass `cap`; False (nothing written) then."""
-        return self._add(guild_id, month, field, amount, cap)
+
+        def change(doc: dict) -> dict | None:
+            total = float(doc.get(field) or 0) + amount
+            return None if total > cap else {field: total}
+
+        return self._update(guild_id, month, change)[0]
+
+    def take_upto(
+        self, guild_id: int, key: str, caps: dict[str, float], amount: int
+    ) -> tuple[int, dict]:
+        """Add the same whole number n to every field of `caps`: `amount`, trimmed so that no
+        field passes its cap (0 = nothing written). Returns (n, the counters afterwards)."""
+
+        n = 0
+
+        def change(doc: dict) -> dict | None:
+            nonlocal n
+            room = min(cap - float(doc.get(f) or 0) for f, cap in caps.items())
+            n = max(0, min(int(amount), math.floor(room)))
+            return {f: float(doc.get(f) or 0) + n for f in caps} if n > 0 else None
+
+        _, doc = self._update(guild_id, key, change)
+        return n, doc
 
     def add(self, guild_id: int, key: str, field: str, amount: float) -> None:
         """Add `amount` to `field` (the caller checked its cap)."""
-        self._add(guild_id, key, field, amount, None)
+        self._update(guild_id, key, lambda doc: {field: float(doc.get(field) or 0) + amount})
 
-    def _add(self, guild_id: int, key: str, field: str, amount: float, cap: float | None) -> bool:
+    def give_back(self, guild_id: int, key: str, fields: str | list[str], amount: float) -> None:
+        """Take `amount` off each of `fields` (one name or several), never below 0."""
+        names = [fields] if isinstance(fields, str) else list(fields)
+        self._update(
+            guild_id,
+            key,
+            lambda doc: {f: max(0.0, float(doc.get(f) or 0) - max(0.0, amount)) for f in names},
+        )
+
+    def _update(
+        self, guild_id: int, key: str, change: Callable[[dict], dict | None]
+    ) -> tuple[bool, dict]:
+        """One read-modify-write under the lock: `change(counters)` returns the fields to write,
+        or None to write nothing. Returns (written, the counters afterwards)."""
         with _USAGE_LOCK:
-            doc = dict(self.docs.get(USAGE, guild_id, key) or {})
-            doc.pop("guild_id", None)  # Firestore adds it on write
-            total = float(doc.get(field) or 0) + amount
-            if cap is not None and total > cap:
-                return False
-            doc[field] = int(total) if total.is_integer() else total
+            doc = self.doc(guild_id, key)
+            new = change(doc)
+            if new is None:
+                return False, doc
+            doc.update({f: _number(v) for f, v in new.items()})
             self.docs.put(USAGE, guild_id, key, doc)
-            return True
+            return True, doc
 
 
 @dataclass
@@ -1091,7 +1148,6 @@ def _hero_clip(
 def _music_track(
     client,
     settings,
-    board: Storyboard,
     seconds: float,
     handle: VideoHandle,
     out: Path,
@@ -1147,10 +1203,14 @@ def run_video_ad(
 ) -> VideoResult:
     """Make the whole ad in `workdir` (blocking; the bot runs it in a worker thread).
 
-    The month's ad is taken once at the start (MonthLimit when used up). Then storyboard
+    The month's ad is taken once at the start (MonthLimit when used up) and given back when the
+    job then fails or is cancelled before any paid media was billed (no still, hero clip or music
+    cost). Then storyboard
     (`settings.gemini_model`, sees `req.photos`), stills (`settings.image_model`, 9:16 2K) and
     their motion clips, hero clips (only with `settings.video_hero_model`; the seconds requested,
-    `videogen.hero_seconds`, taken from the month's budget before each call, never refunded),
+    `videogen.hero_seconds`, taken from the month's budget before each call; given back, with
+    their cost, only when the service refuses the create (HeroRefused), kept when a clip it
+    accepted fails later),
     narration with `say` (any failure -> captions only), music (only when asked for and
     `settings.video_music_model` is set, via `_music_track`; one `music_clips` taken from the
     month's budget first, capped at `settings.video_ads_per_month`), captions (`label=False`:
@@ -1163,22 +1223,66 @@ def run_video_ad(
     paid call as soon as it is made, so a cancelled job still reports what it spent. Raises
     Cancelled, StoryboardError or RuntimeError. Logs one line per step (guild, step, ms, cost
     estimate), never the brief, captions or narration."""
+    check(handle)
+    if not usage.take(req.guild_id, month, "ads", 1, settings.video_ads_per_month):
+        raise MonthLimit("month limit")
+    bill = _Bill(handle)
+    try:
+        return _video_steps(
+            req,
+            client=client,
+            settings=settings,
+            say=say,
+            workdir=workdir,
+            budget_mib=budget_mib,
+            handle=handle,
+            usage=usage,
+            month=month,
+            media_client=media_client,
+            bill=bill,
+        )
+    except Exception:
+        if bill.usd <= 0:  # nothing paid was made: the month's ad goes back
+            usage.give_back(req.guild_id, month, "ads", 1)
+            logger.info("video ad given back (nothing billed): guild=%s", req.guild_id)
+        raise
+
+
+@dataclass
+class _Bill:
+    """A job's paid media so far (USD estimate), mirrored into `handle.cost_usd` at once."""
+
+    handle: VideoHandle
+    usd: float = 0.0
+
+    def spend(self, amount: float) -> None:
+        self.usd += amount
+        self.handle.cost_usd = self.usd
+
+
+def _video_steps(
+    req: VideoRequest,
+    *,
+    client,
+    settings,
+    say: Callable[[str], bytes],
+    workdir: Path,
+    budget_mib: float,
+    handle: VideoHandle,
+    usage: MediaUsage,
+    month: str,
+    media_client,
+    bill: _Bill,
+) -> VideoResult:
+    """`run_video_ad` after the month's ad was taken: every step, paid media spent on `bill`."""
     gid = req.guild_id
     steps_ms: dict[str, int] = {}
-    cost = 0.0
-
-    def spend(amount: float) -> None:
-        nonlocal cost
-        cost += amount
-        handle.cost_usd = cost
+    spend = bill.spend
 
     def done(step: str, t0: float, step_cost: float = 0.0) -> None:
         steps_ms[step] = int((time.monotonic() - t0) * 1000)
         logger.info("video guild=%s step=%s ms=%d cost=%.2f", gid, step, steps_ms[step], step_cost)
 
-    check(handle)
-    if not usage.take(gid, month, "ads", 1, settings.video_ads_per_month):
-        raise MonthLimit("month limit")
     heroes_allowed = req.hero_shots if settings.video_hero_model else 0
 
     _report(handle, "storyboard")
@@ -1206,7 +1310,6 @@ def run_video_ad(
         scenes,
         req.photos,
         req.accent,
-        fonts,
         cancelled=handle.cancelled,  # a cancel stops the stills still queued
     )
     spend(billed * STILL_USD)  # billed now, even if a cancel stops the motion clips
@@ -1252,6 +1355,10 @@ def run_video_ad(
             except Cancelled:
                 raise
             except HeroRefused as e:  # the next request would be refused too: spend no more
+                # never accepted, so never billed: its seconds and their cost go back
+                usage.give_back(gid, month, "hero_seconds", secs)
+                hero_cost -= secs * HERO_USD_PER_S
+                spend(-secs * HERO_USD_PER_S)
                 logger.warning("video hero refused (%s): no more hero clips in this ad", e)
                 break
             except Exception as e:  # the scene keeps its motion clip
@@ -1290,7 +1397,6 @@ def run_video_ad(
                     music = _music_track(
                         client,
                         settings,
-                        board,
                         sum(seconds),
                         handle,
                         workdir / "music.wav",
@@ -1312,6 +1418,16 @@ def run_video_ad(
         caption_png(scene.caption_th, fonts, label=False)[0].save(cap)
         captions.append(cap)
     out = workdir / f"ad-{_stamp(settings)}.mp4"
-    assemble(clips, seconds, captions, audio, out, budget_mib=budget_mib, music=music, fonts=fonts)
+    assemble(
+        clips,
+        seconds,
+        captions,
+        audio,
+        out,
+        budget_mib=budget_mib,
+        music=music,
+        fonts=fonts,
+        lang=req.lang,  # the AI label in the reply language
+    )
     done("render", t0)
-    return VideoResult(path=out, storyboard=board, cost_usd=cost, steps_ms=steps_ms)
+    return VideoResult(path=out, storyboard=board, cost_usd=bill.usd, steps_ms=steps_ms)

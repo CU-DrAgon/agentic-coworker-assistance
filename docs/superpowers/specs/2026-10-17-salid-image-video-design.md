@@ -61,7 +61,7 @@ posting to social networks, longer than 30 s videos, resuming jobs after a resta
 - "@Salid ทำวิดีโอโฆษณา ... 20 วิ" posts a progress message at once and, within ~3 minutes
   (slideshow) or ~6 minutes (with a hero clip), a 1080x1920 MP4 of 20 s ± 1 s, H.264/AAC,
   under the guild's upload limit (default ≤ 19 MiB), with Thai narration, Thai captions inside
-  the TikTok/Reels safe area and an "สร้างด้วย AI" label.
+  the TikTok/Reels safe area and an AI label in the reply language ("สร้างด้วย AI" / "Made with AI").
 - Typical cost: image ~$0.04 (1K) / ~$0.06 (2K); 20 s slideshow ad ~$0.30; with one 6 s hero
   clip ~$0.90. No guild can exceed its daily (images) or monthly (video) limit, restarts included.
 - With the Omni/Lyria settings empty, every video request still produces a finished ad.
@@ -164,8 +164,9 @@ message, at most every 5 s, with a Cancel button for the requester or an admin):
    Prompts add "single continuous shot, no on-screen text, no dialogue" and never contain quotes.
    Blocked/failed/timeout -> that scene uses its still with motion.
 5. **Captions and label**: per scene a transparent 1080x1920 PNG from `cards` (Thai caption with
-   shadow inside the safe area: y 270-1250 px, ≥ 65 px from the sides) and a small "สร้างด้วย AI"
-   label; overlaid with a short fade.
+   shadow inside the safe area: y 270-1250 px, ≥ 65 px from the sides) and a small AI label that
+   follows the reply language ("สร้างด้วย AI" in Thai, "Made with AI" in English); overlaid with a
+   short fade.
 6. **Audio**: narration per scene from `speech.say` (WAV via ffmpeg), placed at each scene start;
    optional music (only when `SALID_VIDEO_MUSIC_MODEL` is set) ducked under the voice; `loudnorm`
    to about -16 LUFS. Narration failure -> captions only.
@@ -174,7 +175,8 @@ message, at most every 5 s, with a Cancel button for the requester or an admin):
    128` kbps with `maxrate`/`bufsize`; budget = min(19 MiB, guild limit − 1 MiB). Over budget ->
    one re-encode at 80 % bitrate, then 720p. Output `ad-YYYYMMDD-HHMM.mp4`.
 8. **Deliver**: reply to the request with the MP4, the storyboard as a short list and a suggested
-   Thai caption with "#สร้างด้วยAI"; upload refused -> text with the reason (existing fallback).
+   caption ending in the AI hashtag of the reply language ("#สร้างด้วยAI" / "#MadeWithAI"); upload
+   refused -> text with the reason (existing fallback) and the job ends failed (`upload_refused`).
 
 ### 4. Jobs, limits and settings
 
@@ -198,7 +200,7 @@ message, at most every 5 s, with a Cancel button for the requester or an admin):
   (food / cosmetics / supplements: no health or cure claims in captions or narration).
 - No editing of real people's photos; reference photos are products, logos, food or places (the tool
   description says so; Omni refuses some recognisable people).
-- The "สร้างด้วย AI" label on every video and the AI note in replies; Google's SynthID and C2PA
+- The AI label (in the reply language) on every video and the AI note in replies; Google's SynthID and C2PA
   are on model outputs (our edits break C2PA, which is documented).
 - Logs: one line per image call and per job step (guild, step, ms, cost estimate, outcome); never
   prompts, captions, narration, images or video.

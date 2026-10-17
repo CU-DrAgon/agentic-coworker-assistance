@@ -22,7 +22,17 @@ from promo_helpers import (
 
 from salid import cards, promo
 from salid.config import Settings
-from salid.media import DailyBudget
+from salid.coo_store import SQLiteDocStore
+from salid.imagegen_bot import StoredDailyBudget
+from salid.videoad import MediaUsage
+
+
+def stored(cap: float, docs=None) -> StoredDailyBudget:
+    """The promo kits' daily cap as the bot keeps it: DocStore `salid_media_usage`, the day's
+    document, field `promo_kits`."""
+    return StoredDailyBudget(
+        MediaUsage(docs or SQLiteDocStore(":memory:")), cap, field="promo_kits"
+    )
 
 
 # ------------------------------------------------------------------ request
@@ -163,11 +173,33 @@ def test_one_image_call_per_kit_even_on_timeout():  # review #7
 
 
 def test_take_unit_counts_before_the_call_and_respects_the_cap():
-    b = DailyBudget(2)
+    b = stored(2)
     assert [promo.take_unit(b, 1, "d") for _ in range(3)] == ["", "", "daily_limit"]
     assert promo.take_unit(b, 2, "d") == ""  # per guild
     assert promo.take_unit(b, 1, "d2") == ""  # per day
-    assert promo.take_unit(DailyBudget(0), 1, "d") == "disabled"
+    assert promo.take_unit(stored(0), 1, "d") == "disabled"
+
+
+def test_the_daily_cap_is_stored_so_a_restart_keeps_it():
+    docs = SQLiteDocStore(":memory:")
+    assert promo.take_unit(stored(2, docs), 1, "2026-10-16") == ""
+    assert docs.get("salid_media_usage", 1, "2026-10-16") == {"promo_kits": 1}
+    again = stored(2, docs)  # a restart: fresh process state, the same DocStore
+    assert [promo.take_unit(again, 1, "2026-10-16") for _ in range(2)] == ["", "daily_limit"]
+    assert docs.get("salid_media_usage", 1, "2026-10-16") == {"promo_kits": 2}
+
+
+def test_usable_photos_keeps_readable_photo_types_only():
+    from salid.qa import FileInput
+
+    png = FileInput(0, "a.png", "image/png", data=b"p")
+    gif = FileInput(1, "b.gif", "image/gif", data=b"g")
+    empty = FileInput(2, "c.jpg", "image/jpeg", data=b"")
+    skipped = FileInput(3, "d.webp", "image/webp", data=b"w")
+    skipped.skip = "over 15 MB"
+    webp = FileInput(4, "e.webp", "image/webp", data=b"w")
+    assert promo.usable_photos([png, gif, empty, skipped, webp]) == [(0, b"p"), (4, b"w")]
+    assert promo.usable_photos(None) == []
 
 
 def test_settings_defaults():
@@ -298,7 +330,7 @@ def ctx(**kw):
         key=(1, 10, 7),
         client=fake_client(scene, scene),
         model="m",
-        budget=DailyBudget(20),
+        budget=stored(20),
         fonts=cards.card_fonts(),
     )
     return promo.PromoCtx(**{**base, **kw})
@@ -354,7 +386,7 @@ def test_new_photo_starts_a_fresh_kit():
 
 @pytest.mark.parametrize("reason", ["daily_limit", "disabled"])
 def test_limits_fall_back_without_calling_the_model(reason):
-    budget = DailyBudget(1 if reason == "daily_limit" else 0)
+    budget = stored(1 if reason == "daily_limit" else 0)
     budget.add(1, "2026-10-16", 1)  # the only unit is already used
     c = ctx(budget=budget, client=fake_client(RuntimeError("must not be called")))
     out = promo.promo_tools(c)[0](headline="h", scene="cafe")

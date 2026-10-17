@@ -6,7 +6,7 @@ from promo_helpers import fake_client, image_response, png_bytes
 from test_coordinator import world  # fixture: world.g, .pub, .secret, .staff, .boss
 from test_modes import TMsg, bot  # fixture
 
-from salid import imagegen, qa
+from salid import imagegen, imagegen_bot, qa
 from salid.guild_settings import FEATURES, Features, GuildSettingsUpdate
 from salid.qa import FileInput
 
@@ -105,6 +105,64 @@ async def test_daily_caps_survive_a_restart(bot, world):
     assert tool(prompt="a cup")["status"] == "limit" and len(bot.llm.models.calls) == 1
 
 
+def count_usage_io(bot):
+    """Counts DocStore reads and writes of the media usage documents."""
+    io = {"get": 0, "put": 0}
+    get, put = bot.docs.get, bot.docs.put
+
+    def counted_get(kind, *a):
+        io["get"] += kind == "salid_media_usage"
+        return get(kind, *a)
+
+    def counted_put(kind, *a):
+        io["put"] += kind == "salid_media_usage"
+        return put(kind, *a)
+
+    bot.docs.get, bot.docs.put = counted_get, counted_put
+    return io
+
+
+async def test_one_read_before_the_take_and_one_read_modify_write_for_it(bot, world):
+    m, day = world.staff, bot.s.today().isoformat()
+    img = image_response(png_bytes((64, 64)))
+    bot.llm = fake_client(img, img)
+    [tool] = bot._image_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [])
+    io = count_usage_io(bot)
+    out = tool(prompt="a cup", count=2)
+    assert out["status"] == "ok" and out["images_left_today"] == 3
+    assert io == {"get": 2, "put": 1}  # the check, then one read-modify-write of both counts
+    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 2, f"images_user_{m.id}": 2}
+
+
+async def test_units_without_an_image_go_back_to_both_stored_counts(bot, world):
+    m, day = world.staff, bot.s.today().isoformat()
+    bot.llm = fake_client(image_response(png_bytes((64, 64))), RuntimeError("x"))
+    [tool] = bot._image_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [])
+    out = tool(prompt="a cup", count=2)
+    assert out["count_made"] == 1 and out["images_left_today"] == 4
+    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 1, f"images_user_{m.id}": 1}
+    bot.llm = None  # no client: nothing can be made, nothing stays taken
+    [tool] = bot._image_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [])
+    assert tool(prompt="a cup")["status"] == "error"
+    assert bot.docs.get("salid_media_usage", GUILD, day) == {"images": 1, f"images_user_{m.id}": 1}
+
+
+def test_the_stored_budget_has_no_unused_available():
+    assert not hasattr(imagegen_bot.StoredDailyBudget, "available")
+
+
+async def test_explicit_spoken_flag_keeps_the_tool_out_of_a_voice_answer(bot, world):
+    """Voice callers say so (`spoken=True`), even with a message that looks like chat."""
+    m = world.staff
+    msg = TMsg(world.g, world.pub, m, "วาดรูปแมว")
+    kw = dict(setting="th", lang="th", question="x", memory=None, profile=None)
+    assert bot._image_tools(msg, world.g, m, [], spoken=True) == []
+    voice = bot._agent_kwargs(msg, world.g, m, False, files=[], spoken=True, **kw)
+    assert "create_image" not in names(voice.get("extra_tools", []))
+    chat = bot._agent_kwargs(msg, world.g, m, False, files=[], spoken=False, **kw)
+    assert "create_image" in names(chat["extra_tools"])
+
+
 async def test_unusable_attachments_are_not_offered_as_references(bot, world):
     m = world.staff
     msg = TMsg(world.g, world.pub, m, "x")
@@ -146,6 +204,12 @@ async def test_a_dm_uses_the_dm_upload_limit_not_the_servers(bot, world, monkeyp
     monkeypatch.setattr("salid.imagegen_bot.image_tools", lambda ctx: seen.append(ctx) or [])
     bot._image_tools(TMsg(None, world.pub, m, "x"), world.g, m, [])  # a DM: message.guild None
     assert [c.max_bytes for c in seen] == [9 * 2**20]
+
+
+def test_the_capability_list_names_images_and_video_ads():
+    caps = qa.CAPABILITIES_PROMPT
+    assert "\n20) สร้างรูปจากคำบรรยาย:" in caps and "\n21) วิดีโอโฆษณาสั้น:" in caps
+    assert caps.index("19) สไลด์นำเสนอ") < caps.index("20) ") < caps.index("21) ")
 
 
 def test_images_flag_defaults_on():

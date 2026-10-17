@@ -4,7 +4,8 @@ The image model (Nano Banana, `settings.promo_image_model`) only restyles the sc
 product: the product stays as photographed and the model is told never to draw text. All text
 (headline, price, call to action, shop name) is typeset here with `salid.cards`, because Thai is
 not a language the image models render reliably. One image-model call per kit at most; the daily
-unit is taken before the call (blocked calls are billed too). When the call is blocked, fails or
+unit is taken before the call (blocked calls are billed too) from a count kept in the DocStore
+(`UnitBudget`), so a restart keeps it. When the call is blocked, fails or
 the cap is reached, the kit is built from the original photo instead, so the user always gets
 images. The photo and request of the last kit are kept in process memory only (revisions).
 """
@@ -19,14 +20,13 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel
 
 from . import cards, imagegen
 from .cards import CardFonts
-from .media import DailyBudget
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,17 @@ ACCENTS: dict[str, tuple[str, str]] = {  # badge fill, badge text
 LIMITS = {"headline": 40, "scene": 300, "price": 20, "call_to_action": 24, "shop_name": 30}
 MIN_SCENE = 3
 PHOTO_MIMES = {"image/png", "image/jpeg", "image/webp"}
+
+
+def usable_photos(files) -> list[tuple[int, bytes]]:
+    """(attachment index, data) of the files a media tool may use as a photo: PNG, JPEG or WebP,
+    read, and not skipped (`qa.FileInput`). Shared by the promo, image and video tools; `files`
+    None (a voice answer) has none."""
+    return [
+        (f.index, f.data) for f in files or () if f.mime in PHOTO_MIMES and f.data and not f.skip
+    ]
+
+
 MAX_PHOTO_SIDE = 2048
 MAX_PIXELS = imagegen.MAX_DECODE_PIXELS  # bigger canvases are refused before decoding
 LOW_QUALITY_SIDE = 400
@@ -170,13 +181,23 @@ def generate_scene(client, model: str, photo: Photo, scene: str) -> tuple[Image.
     return (imgs[0] if imgs else None), reason
 
 
-def take_unit(budget: DailyBudget, guild_id: int, day: str) -> str:
+class UnitBudget(Protocol):
+    """Units per guild per day with an atomic check-and-take (`imagegen_bot.StoredDailyBudget`,
+    field `promo_kits`: kept in the DocStore, so a restart keeps the count)."""
+
+    cap: float
+
+    def used(self, key: int, day: str) -> float: ...
+
+    def take(self, key: int, day: str, amount: float) -> bool: ...
+
+
+def take_unit(budget: UnitBudget, guild_id: int, day: str) -> str:
     """Take one AI-scene unit before the call: "" when taken, else "disabled" / "daily_limit"."""
     if budget.cap <= 0:
         return "disabled"
-    if not budget.available(guild_id, day):
+    if not budget.take(guild_id, day, 1):
         return "daily_limit"
-    budget.add(guild_id, day, 1)
     return ""
 
 
@@ -379,7 +400,7 @@ class PromoCtx:
     key: Key
     client: Any
     model: str
-    budget: DailyBudget
+    budget: UnitBudget
     fonts: CardFonts
     outbox: list[tuple[str, bytes]] = field(default_factory=list)
 

@@ -1407,6 +1407,7 @@ class LiveVoice:
                         memory=memory,
                         profile=profile,
                         people=tag_candidates(here),
+                        spoken=True,  # a voice answer: no media tools
                     )
                 )
 
@@ -1474,6 +1475,7 @@ class LiveVoice:
             memory=memory,
             profile=bot._profile_of(s.guild_id, who.id),
             people=tag_candidates(here),
+            spoken=True,  # asked by voice (answered by DM): no media tools
         )
         ans = await asyncio.to_thread(
             ask,

@@ -1,3 +1,4 @@
+import inspect
 import io
 import re
 import shutil
@@ -24,6 +25,7 @@ from pydantic import ValidationError
 
 from salid import cards, promo, videoad
 from salid.coo_store import FirestoreDocStore, SQLiteDocStore
+from salid.i18n import t as tr
 
 FONTS = cards.card_fonts()
 needs_ffmpeg = pytest.mark.skipif(
@@ -187,6 +189,40 @@ def test_an_unreadable_photo_is_skipped_but_keeps_its_index():
     assert len(c.models.calls) == 1 and out.scenes[0].source == "photo:1"
 
 
+def test_photo_labels_are_checked_against_the_photos_the_model_saw():
+    """photo:N must be a photo the model was shown: readable, and one of the first MAX_PHOTOS."""
+    board = sources(sb(5, 5, 5, 5), "photo:1")
+    assert videoad.check_storyboard(board, seconds=20, photos=[1], hero_shots=0) == []
+    unseen = sources(sb(5, 5, 5, 5), "photo:0", "photo:1")
+    [problem] = videoad.check_storyboard(unseen, seconds=20, photos=[1], hero_shots=0)
+    assert "photo:0" in problem and "photo:1" in problem  # the labels it may use
+    seventh = sources(sb(5, 5, 5, 5), "photo:6")
+    assert videoad.check_storyboard(seventh, seconds=20, photos=range(6), hero_shots=0)
+    assert videoad.check_storyboard(board, seconds=20, photos=[], hero_shots=0)  # none shown
+
+
+def test_a_storyboard_using_an_unreadable_photo_is_reasked_then_fails():
+    shots = [b"not an image", png_bytes((900, 900))]  # photo:0 is never shown to the model
+    bad = sources(sb(5, 5, 5, 5), "photo:0", "photo:1")
+    c = fake_client(json_response(bad.model_dump()), json_response(bad.model_dump()))
+    with pytest.raises(videoad.StoryboardError):
+        videoad.plan_storyboard(
+            c, "m", brief="latte", seconds=20, photos=shots, hero_shots=0, lang="th"
+        )
+    assert len(c.models.calls) == 2 and "photo:0" in str(c.models.calls[1][1][-1])
+
+
+def test_a_seventh_photo_is_never_a_scene():
+    bad = sources(sb(5, 5, 5, 5), "photo:0", "photo:1", "photo:2", "photo:6")
+    good = sources(sb(5, 5, 5, 5), "photo:0", "photo:1", "photo:2", "photo:3")
+    c = fake_client(json_response(bad.model_dump()), json_response(good.model_dump()))
+    out = videoad.plan_storyboard(
+        c, "m", brief="latte", seconds=20, photos=photos(7), hero_shots=0, lang="th"
+    )
+    assert len(c.models.calls) == 2 and "photo:6" in str(c.models.calls[1][1][-1])
+    assert [s.source for s in out.scenes] == ["photo:0", "photo:1", "photo:2", "photo:3"]
+
+
 def test_an_unused_photo_is_reasked_once_then_accepted():
     only_first = sources(sb(5, 5, 5, 5), "photo:0")
     c = fake_client(json_response(only_first.model_dump()), json_response(only_first.model_dump()))
@@ -276,9 +312,7 @@ def test_failed_ai_still_retries_once_then_uses_a_card(monkeypatch, reason):
     monkeypatch.setattr(
         videoad.imagegen, "generate_images", lambda *a, **k: calls.append(1) or ([], reason)
     )
-    stills, billed = videoad.scene_stills(
-        object(), "m", sb(5, 5, 5, 5).scenes[:1], [], "red", FONTS
-    )
+    stills, billed = videoad.scene_stills(object(), "m", sb(5, 5, 5, 5).scenes[:1], [], "red")
     assert len(calls) == 2 and stills[0].size == (1080, 1920) and billed == 2
     assert stills[0].tobytes() == videoad.fallback_card("red").tobytes()
 
@@ -288,9 +322,7 @@ def test_a_blocked_still_is_not_retried(monkeypatch):
     monkeypatch.setattr(
         videoad.imagegen, "generate_images", lambda *a, **k: calls.append(1) or ([], "blocked")
     )
-    stills, billed = videoad.scene_stills(
-        object(), "m", sb(5, 5, 5, 5).scenes[:1], [], "gold", FONTS
-    )
+    stills, billed = videoad.scene_stills(object(), "m", sb(5, 5, 5, 5).scenes[:1], [], "gold")
     assert len(calls) == 1 and billed == 1
     assert stills[0].tobytes() == videoad.fallback_card("gold").tobytes()
 
@@ -306,13 +338,13 @@ def test_no_still_is_started_or_retried_after_a_cancel(monkeypatch):
     monkeypatch.setattr(videoad.imagegen, "generate_images", gen)
     monkeypatch.setattr(videoad, "STILL_WORKERS", 1)  # the other scenes are queued
     stills, billed = videoad.scene_stills(
-        object(), "m", sb(5, 5, 5, 5).scenes, [], "red", FONTS, cancelled=cancelled
+        object(), "m", sb(5, 5, 5, 5).scenes, [], "red", cancelled=cancelled
     )
     assert calls == [1] and billed == 1  # no retry, no queued still: nothing more is billed
     assert len(stills) == 4
     calls.clear()
     stills, billed = videoad.scene_stills(
-        object(), "m", sb(5, 5, 5, 5).scenes[:2], [], "red", FONTS, cancelled=cancelled
+        object(), "m", sb(5, 5, 5, 5).scenes[:2], [], "red", cancelled=cancelled
     )
     assert calls == [] and billed == 0  # already cancelled: no call at all
 
@@ -325,9 +357,13 @@ def test_photo_scenes_use_the_shop_photo_without_a_model_call(monkeypatch):
         sb(5, 5, 5, 5, src="photo:0").scenes[:1],
         [png_bytes((900, 900))],
         "red",
-        FONTS,
     )
     assert stills[0].size == (1080, 1920) and billed == 0
+
+
+def test_unused_parameters_are_gone():
+    assert "fonts" not in inspect.signature(videoad.scene_stills).parameters
+    assert "board" not in inspect.signature(videoad._music_track).parameters
 
 
 def _gif() -> bytes:
@@ -348,7 +384,7 @@ def test_an_unusable_shop_photo_falls_back_to_an_ai_still(monkeypatch, shots):
 
     monkeypatch.setattr(videoad.imagegen, "generate_images", gen)
     stills, billed = videoad.scene_stills(
-        object(), "m", sb(5, 5, 5, 5, src="photo:0").scenes[:1], shots, "red", FONTS
+        object(), "m", sb(5, 5, 5, 5, src="photo:0").scenes[:1], shots, "red"
     )
     assert stills[0].size == (1080, 1920) and stills[0].getpixel((540, 960)) == (9, 9, 9)
     assert len(calls) == 1 and "a latte on a table" in calls[0] and billed == 1
@@ -362,7 +398,7 @@ def test_ai_stills_are_9x16_2k_and_resized_to_the_frame(monkeypatch):
         return [Image.new("RGB", (1536, 2752), (40, 50, 60))], ""
 
     monkeypatch.setattr(videoad.imagegen, "generate_images", gen)
-    stills, billed = videoad.scene_stills(object(), "m", sb(5, 5, 5, 5).scenes, [], "red", FONTS)
+    stills, billed = videoad.scene_stills(object(), "m", sb(5, 5, 5, 5).scenes, [], "red")
     assert [s.size for s in stills] == [(1080, 1920)] * 4 and billed == 4
     assert seen[0] == ("m", {"aspect": "9:16", "size": "2K"})
 
@@ -384,7 +420,7 @@ def test_stills_run_at_most_three_at_a_time_and_keep_scene_order(monkeypatch):
     board = sb(4, 4, 4, 4, 2, 2)
     for i, scene in enumerate(board.scenes):
         scene.image_prompt_en = f"shade {i * 10} cup"
-    stills, billed = videoad.scene_stills(object(), "m", board.scenes, [], "red", FONTS)
+    stills, billed = videoad.scene_stills(object(), "m", board.scenes, [], "red")
     assert peak[0] == 3 and billed == 6
     assert [s.getpixel((540, 960))[0] for s in stills] == [0, 10, 20, 30, 40, 50]
 
@@ -397,17 +433,17 @@ def test_mixed_photo_and_ai_scenes_keep_their_order(monkeypatch):
     )
     board = sources(sb(5, 5, 5, 5), "photo:0", "ai", "photo:1", "hero")
     shots = [png_bytes((900, 1600), (250, 0, 0)), png_bytes((900, 1600), (0, 250, 0))]
-    stills, billed = videoad.scene_stills(object(), "m", board.scenes, shots, "red", FONTS)
+    stills, billed = videoad.scene_stills(object(), "m", board.scenes, shots, "red")
     centre = [s.getpixel((540, 960)) for s in stills]
     assert centre == [(250, 0, 0), (9, 9, 9), (0, 250, 0), (9, 9, 9)] and billed == 2
 
 
 def test_no_model_call_without_a_client_or_with_a_thai_prompt(monkeypatch):
     monkeypatch.setattr(videoad.imagegen, "generate_images", lambda *a, **k: 1 / 0)
-    stills, billed = videoad.scene_stills(None, "m", sb(5, 5, 5, 5).scenes[:1], [], "red", FONTS)
+    stills, billed = videoad.scene_stills(None, "m", sb(5, 5, 5, 5).scenes[:1], [], "red")
     assert stills[0].size == (1080, 1920) and billed == 0
     thai = sb(5, 5, 5, 5, prompt="ลาเต้").scenes[:1]
-    assert videoad.scene_stills(object(), "m", thai, [], "red", FONTS)[1] == 0
+    assert videoad.scene_stills(object(), "m", thai, [], "red")[1] == 0
 
 
 @pytest.mark.parametrize("accent", list(promo.ACCENTS))
@@ -804,11 +840,13 @@ def req(**kw):
 @pytest.fixture
 def fake_pipeline(monkeypatch):
     """The paid and slow parts of the job replaced by recorders: a 4 x 5 s storyboard (its first
-    `hero_shots` scenes are hero scenes), 2 billed stills, empty clips, a narration file and an
-    MP4 of a few bytes. `hero_ok` makes the hero hook succeed, `music_ok` the music hook."""
+    `hero_shots` scenes are hero scenes), `billed` (2) billed stills, empty clips, a narration
+    file and an MP4 of a few bytes. `hero_ok` makes the hero hook succeed, `music_ok` the music
+    hook."""
     fp = SimpleNamespace(
         hero_calls=0, hero_ok=False, on_stills=None, plans=[], stills=[], motion=[],
         narrations=[], assembled=[], labels=[], plan_error=None, music_calls=0, music_ok=False,
+        billed=2,
     )  # fmt: skip
 
     def plan(client, model, *, brief, seconds, photos, hero_shots, lang):
@@ -821,13 +859,13 @@ def fake_pipeline(monkeypatch):
             board.scenes[i].source = "hero"
         return board
 
-    def stills(client, model, scenes, photos, accent, fonts, *, cancelled=None):
+    def stills(client, model, scenes, photos, accent, *, cancelled=None):
         fp.stills.append(
             dict(model=model, n=len(scenes), photos=photos, accent=accent, cancelled=cancelled)
         )
         if fp.on_stills is not None:
             fp.on_stills()
-        return [Image.new("RGB", (108, 192), (90, 90, 90)) for _ in scenes], 2
+        return [Image.new("RGB", (108, 192), (90, 90, 90)) for _ in scenes], fp.billed
 
     def motion(still, seconds, index, out):
         assert still.exists()
@@ -840,9 +878,11 @@ def fake_pipeline(monkeypatch):
         out.write_bytes(b"wav")
         return True
 
-    def assemble(clips, seconds, captions, audio, out, *, budget_mib, music=None, fonts=None):
+    def assemble(
+        clips, seconds, captions, audio, out, *, budget_mib, music=None, fonts=None, lang="th"
+    ):
         fp.assembled.append(dict(clips=clips, seconds=seconds, captions=captions, audio=audio,
-                                 budget=budget_mib, music=music))  # fmt: skip
+                                 budget=budget_mib, music=music, lang=lang))  # fmt: skip
         assert all(c.exists() for c in [*clips, *captions])
         out.write_bytes(b"mp4")
         return out
@@ -853,7 +893,7 @@ def fake_pipeline(monkeypatch):
             out.write_bytes(b"hero")
         return fp.hero_ok
 
-    def music(client, settings, board, seconds, handle, out, *, media_client=None):
+    def music(client, settings, seconds, handle, out, *, media_client=None):
         fp.music_calls += 1
         if not fp.music_ok:
             return None
@@ -1156,3 +1196,138 @@ def test_steps_are_logged_without_the_brief_or_captions(tmp_path, fake_pipeline,
     assert all(re.fullmatch(r"video guild=1 step=\w+ ms=\d+ cost=\d+\.\d\d", ln) for ln in lines)
     assert lines[1].endswith(f"cost={2 * videoad.STILL_USD:.2f}")
     assert BRIEF not in caplog.text and "ลาเต้" not in caplog.text and "หอมกรุ่น" not in caplog.text
+
+
+# ------------------------------------------------------------------ refunds
+def ads_used(d) -> float:
+    return (d.get("salid_media_usage", 1, "2026-10") or {}).get("ads", 0)
+
+
+def test_a_failure_before_any_paid_media_gives_the_ad_back(tmp_path, fake_pipeline):
+    fake_pipeline.plan_error = videoad.StoryboardError("no usable storyboard")
+    d = MemDocs()
+    with pytest.raises(videoad.StoryboardError):
+        run(tmp_path, usage=videoad.MediaUsage(d))
+    assert ads_used(d) == 0
+
+
+def test_a_cancel_before_any_paid_media_gives_the_ad_back(tmp_path, fake_pipeline):
+    h = videoad.VideoHandle()
+    h.progress = lambda step, _d: step == "storyboard" and h.cancelled.set()
+    d = MemDocs()
+    with pytest.raises(videoad.Cancelled):
+        run(tmp_path, handle=h, usage=videoad.MediaUsage(d))
+    assert fake_pipeline.stills == [] and ads_used(d) == 0
+
+
+def test_the_ad_stays_taken_once_paid_media_was_billed(tmp_path, fake_pipeline, monkeypatch):
+    def broken(*a, **kw):
+        raise RuntimeError("over budget")
+
+    monkeypatch.setattr(videoad, "assemble", broken)
+    d = MemDocs()
+    with pytest.raises(RuntimeError):
+        run(tmp_path, usage=videoad.MediaUsage(d))  # 2 stills were billed
+    assert ads_used(d) == 1
+
+
+def test_a_failed_ad_made_only_of_shop_photos_gives_the_ad_back(
+    tmp_path, fake_pipeline, monkeypatch
+):
+    def broken(*a, **kw):
+        raise RuntimeError("over budget")
+
+    fake_pipeline.billed = 0  # every scene used a shop photo: no image call
+    monkeypatch.setattr(videoad, "assemble", broken)
+    d = MemDocs()
+    with pytest.raises(RuntimeError):
+        run(tmp_path, usage=videoad.MediaUsage(d))
+    assert ads_used(d) == 0
+
+
+def test_a_finished_ad_keeps_its_ad_even_without_paid_media(tmp_path, fake_pipeline):
+    fake_pipeline.billed = 0
+    d = MemDocs()
+    run(tmp_path, usage=videoad.MediaUsage(d))
+    assert ads_used(d) == 1
+
+
+def test_a_refused_hero_gives_its_seconds_and_cost_back(tmp_path, fake_pipeline, monkeypatch):
+    calls = []
+
+    def refused(client, settings, still, scene, handle, out, *, media_client=None):
+        calls.append(handle.cost_usd)
+        raise videoad.HeroRefused("PermissionDenied")
+
+    monkeypatch.setattr(videoad, "_hero_clip", refused)
+    d = MemDocs()
+    h = videoad.VideoHandle()
+    res = run(tmp_path, handle=h, usage=videoad.MediaUsage(d), settings=S_HERO, hero_shots=2)
+    assert len(calls) == 1  # no second hero request after a refusal
+    assert d.get("salid_media_usage", 1, "2026-10") == {"ads": 1, "hero_seconds": 0}
+    assert res.cost_usd == pytest.approx(2 * videoad.STILL_USD) == h.cost_usd
+
+
+def test_a_refused_hero_alone_does_not_keep_the_ad_of_a_failed_job(
+    tmp_path, fake_pipeline, monkeypatch
+):
+    def refused(*a, **kw):
+        raise videoad.HeroRefused("PermissionDenied")
+
+    def broken(*a, **kw):
+        raise RuntimeError("over budget")
+
+    fake_pipeline.billed = 0
+    monkeypatch.setattr(videoad, "_hero_clip", refused)
+    monkeypatch.setattr(videoad, "assemble", broken)
+    d = MemDocs()
+    with pytest.raises(RuntimeError):
+        run(tmp_path, usage=videoad.MediaUsage(d), settings=S_HERO, hero_shots=1)
+    assert d.get("salid_media_usage", 1, "2026-10") == {"ads": 0, "hero_seconds": 0}
+
+
+def test_give_back_never_goes_below_zero(docs):
+    u = videoad.MediaUsage(docs)
+    u.give_back(1, "2026-10", "ads", 1)
+    assert u.used(1, "2026-10", "ads") == 0
+    assert u.take(1, "2026-10", "ads", 1, 2)
+    u.give_back(1, "2026-10", "ads", 1)
+    assert u.used(1, "2026-10", "ads") == 0
+
+
+# ------------------------------------------------------------------ the AI label's language
+@pytest.mark.parametrize("lang, text", [("th", "สร้างด้วย AI"), ("en", "Made with AI")])
+def test_the_ai_label_follows_the_reply_language(lang, text):
+    assert tr("video_ai_label", lang) == text
+    label = videoad.label_png(FONTS, lang=lang)
+    box = label.getchannel("A").getbbox()
+    assert label.size == (1080, 1920) and box is not None and box[3] <= 400
+    overlay, _ = videoad.caption_png("ลาเต้", FONTS, lang=lang)
+    assert overlay.crop(box).tobytes() == label.crop(box).tobytes()
+
+
+def test_the_two_labels_differ():
+    th, en = videoad.label_png(FONTS, lang="th"), videoad.label_png(FONTS, lang="en")
+    assert th.tobytes() != en.tobytes()
+
+
+def test_the_runner_renders_the_label_in_the_requests_language(tmp_path, fake_pipeline):
+    run(tmp_path, lang="en")
+    run(tmp_path, lang="th")
+    assert [a["lang"] for a in fake_pipeline.assembled] == ["en", "th"]
+
+
+def test_assemble_passes_the_language_to_the_label(monkeypatch, tmp_path):
+    seen, real = [], videoad.label_png
+
+    def label(fonts, lang="th"):
+        seen.append(lang)
+        return real(fonts, lang=lang)
+
+    monkeypatch.setattr(videoad, "label_png", label)
+    fake_ffmpeg(monkeypatch, [1000])
+    caps = caption_files(tmp_path, 1)
+    videoad.assemble(
+        [tmp_path / "a.mp4"], [4.0], caps, None, tmp_path / "o.mp4", budget_mib=9, lang="en"
+    )
+    assert seen == ["en"]

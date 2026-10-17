@@ -20,7 +20,6 @@ and status text (messages may carry account details).
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import os
 import sys
@@ -28,11 +27,10 @@ import threading
 import time
 from pathlib import Path
 
-from PIL import Image, ImageDraw
-
 from salid import imagegen, videogen
 from salid.config import Settings
 from salid.llm import make_client, make_media_client
+from salid.media_samples import cup_png
 
 OUT_DIR = Path("/tmp/salid-media-probe")
 OMNI_DEFAULT = "gemini-omni-1.1-flash-preview"
@@ -122,23 +120,6 @@ def _usage(obj) -> str:
         return type(obj).__name__
 
 
-def _cup_png(size: tuple[int, int] = (720, 1280)) -> bytes:
-    """A plain drawing of a white cup on a table: the still the probe clip starts from."""
-    w, h = size
-    img = Image.new("RGB", size, (190, 150, 110))
-    d = ImageDraw.Draw(img)
-    d.rectangle((0, int(h * 0.62), w, h), fill=(120, 80, 50))
-    d.rounded_rectangle(
-        (int(w * 0.33), int(h * 0.40), int(w * 0.62), int(h * 0.64)), radius=24, fill="white"
-    )
-    d.ellipse(
-        (int(w * 0.58), int(h * 0.45), int(w * 0.72), int(h * 0.56)), outline="white", width=14
-    )
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
-
-
 def probe_image(client: RecordingClient, model: str) -> bool:
     t = time.monotonic()
     imgs, reason = imagegen.generate_images(client, model, IMAGE_PROMPT, aspect="9:16", size="1K")
@@ -160,7 +141,7 @@ def probe_video(main: RecordingClient, media: RecordingClient, model: str) -> bo
     calls = main.interactions
     t = time.monotonic()
     try:
-        iid = videogen.start_hero(media, model, _cup_png(), VIDEO_PROMPT, 4, resolution="360p")
+        iid = videogen.start_hero(media, model, cup_png(), VIDEO_PROMPT, 4, resolution="360p")
     except Exception as e:
         ms = int((time.monotonic() - t) * 1000)
         print(f"video model={model} ms={ms} status=not-started usage=none error={_error(e)}")

@@ -18,7 +18,8 @@ from test_modes import Chan, TMsg, bot  # fixture
 
 from salid import videoad, videoad_bot
 from salid.guild_settings import FEATURES, Features, GuildSettingsUpdate
-from salid.i18n import t
+from salid.i18n import resolve_lang, t
+from salid.profiles import Profile, effective_language
 from salid.qa import FileInput
 
 STARTED = {
@@ -46,11 +47,14 @@ FILE = "ad-20261014-1200.mp4"
 
 # ------------------------------------------------------------------ fakes
 class RMsg(TMsg):
-    """A request message that keeps the keyword arguments of every reply."""
+    """A request message that keeps the keyword arguments of every reply; the message a reply
+    returns lists its attachments, as a Discord message does."""
 
     async def reply(self, text, **kw):
         self.reply_kw = [*getattr(self, "reply_kw", []), kw]
-        return await super().reply(text, **kw)
+        sent = await super().reply(text, **kw)
+        sent.attachments = [f.filename for f in kw.get("files") or ()]
+        return sent
 
 
 class Posted:
@@ -204,6 +208,19 @@ def records(bot):
     return bot.docs.find("salid_video_jobs", GUILD)
 
 
+def active(bot) -> dict:
+    """The active-jobs index: {job id: guild id} (DocStore kind salid_video_jobs, guild 0)."""
+    doc = dict(bot.docs.get("salid_video_jobs", 0, "_active") or {})
+    doc.pop("guild_id", None)
+    return doc
+
+
+def seed(bot, key, doc, gid=GUILD):
+    """A job record left by an earlier process, listed in the active-jobs index like a real one."""
+    bot.docs.put("salid_video_jobs", gid, key, doc)
+    bot.docs.put("salid_video_jobs", 0, "_active", {**active(bot), key: gid})
+
+
 # ------------------------------------------------------------------ when the tool is offered
 def test_video_ads_flag_defaults_off():
     assert "video_ads" in FEATURES and Features().video_ads is False
@@ -305,6 +322,44 @@ async def test_a_started_job_posts_progress_and_delivers_the_mp4(on, world, runn
     assert states == ["queued", "storyboard", "stills", "audio", "render", "done"]
     assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 1}
     assert on._video_jobs == {}
+
+
+async def test_the_job_follows_the_answers_language_not_the_channels(on, world, runner):
+    """An English-profile member writing Thai in an auto channel: `_answer` resolves "en" and
+    passes it to `_agent_kwargs`; the job, its messages, the label and the hashtag follow it."""
+    update = GuildSettingsUpdate(features={"video_ads": True}, default_language="auto")
+    on.guilds_store.save_settings(GUILD, update, "x")
+    on.team._cache.clear()
+    capture_posts(world.pub)
+    m = world.staff
+    msg = RMsg(world.g, world.pub, m, "ทำวิดีโอโฆษณาลาเต้")
+    assert on._lang(msg) == "th"  # what the message alone would give
+    setting = effective_language(on._lang_setting(msg), Profile(language="en"))
+    lang = resolve_lang(setting, msg.content)
+    kw = dict(setting=setting, lang=lang, question=msg.content, memory=None, profile=None)
+    tools = on._agent_kwargs(msg, world.g, m, False, files=[], **kw)["extra_tools"]
+    [tool] = [f for f in tools if f.__name__ == "create_video_ad"]
+    assert tool(brief="latte") == STARTED
+    await settle(on)
+    assert runner.calls[0].req.lang == "en"
+    assert world.pub.posted[0].text == t("video_started", "en")
+    assert msg.replies[-1].rstrip().endswith("#MadeWithAI")
+
+
+async def test_other_callers_keep_the_messages_language(on, world, runner):
+    tool, _ = tool_for(on, world)  # no language given: the message's own
+    tool(brief="a")
+    await settle(on)
+    assert runner.calls[0].req.lang == "th"
+
+
+async def test_explicit_spoken_flag_keeps_the_video_tool_out_of_a_voice_answer(on, world):
+    m = world.staff
+    msg = RMsg(world.g, world.pub, m, "ทำวิดีโอโฆษณา")
+    assert on._video_tools(msg, world.g, m, [], spoken=True) == []
+    kw = dict(setting="th", lang="th", question="x", memory=None, profile=None)
+    voice = on._agent_kwargs(msg, world.g, m, False, files=[], spoken=True, **kw)
+    assert "create_video_ad" not in names(voice.get("extra_tools", []))
 
 
 async def test_photos_can_be_left_out(on, world, runner):
@@ -529,10 +584,17 @@ async def test_an_upload_refused_still_sends_the_text_with_a_note(on, world, run
                 raise discord.HTTPException(SimpleNamespace(status=413, reason="x"), "too big")
             return await super().reply(text, **kw)
 
+    capture_posts(world.pub)
     tool, msg = tool_for(on, world, msg=TooBig(world.g, world.pub, world.staff, "x"))
     tool(brief="a")
     await settle(on)
     assert msg.replies[-1].endswith(t("attach_failed", "th"))
+    # the reply went out without the MP4: the job is not done, and the ad stays used (billed)
+    [rec] = records(on)
+    assert rec["state"] == "failed" and rec["reason"] == "upload_refused"
+    assert world.pub.posted[0].edits[-1] == (t("video_upload_refused", "th"), {"view": None})
+    assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 1}
+    assert t("video_upload_refused", "en") != t("video_upload_refused", "th")
 
 
 async def test_progress_edits_at_most_every_5_s_with_the_latest_step(ready):
@@ -559,6 +621,35 @@ async def test_progress_edits_at_most_every_5_s_with_the_latest_step(ready):
     bot._video_progress(job, "render")
     await job.edit_task
     assert sleeps == [5.0, 4.0] and len(job.msg.edits) == 3
+
+
+async def test_a_label_that_comes_during_an_edit_is_shown_after_it(ready):
+    bot, sleeps, gate = ready, [], asyncio.Event()
+
+    async def sleep(s):
+        sleeps.append(s)
+        bot.clock.advance(s)
+
+    class Slow(Posted):  # the first edit is slow to come back
+        async def edit(self, content=None, **kw):
+            if not self.edits:
+                await gate.wait()
+            self.edits.append((content, kw))
+            return self
+
+    bot._sleep = sleep
+    job = videoad_bot.VideoJob(
+        job_id="j", guild_id=GUILD, channel_id=10, requester_id=1, lang="th", created_at="x"
+    )
+    job.msg = Slow("start", {})
+    bot._video_progress(job, "storyboard")  # no edit for a while: at once
+    for _ in range(3):
+        await asyncio.sleep(0)  # the edit is in flight
+    bot._video_progress(job, "stills")
+    gate.set()
+    await job.edit_task
+    steps = [t("video_step_storyboard", "th"), t("video_step_stills", "th")]
+    assert [c for c, _ in job.msg.edits] == steps and sleeps == [5.0]  # still throttled
 
 
 # ------------------------------------------------------------------ cancel
@@ -653,9 +744,8 @@ async def test_shutdown_stops_the_thread_before_its_temp_dir_goes(on, world, run
 async def test_restart_marks_running_jobs_failed_and_tells_the_requester(
     bot, world
 ):  # Review Focus 5
-    bot.docs.put(
-        "salid_video_jobs",
-        GUILD,
+    seed(
+        bot,
         "j1",
         {
             "guild_id": GUILD,
@@ -671,6 +761,7 @@ async def test_restart_marks_running_jobs_failed_and_tells_the_requester(
     assert bot.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 1}
     assert any("video_restarted" in m or t("video_restarted", "th") in m for m in world.pub.sent)
     assert any(f"<@{world.staff.id}>" in m for m in world.pub.sent)
+    assert active(bot) == {}  # only the index entry goes; the record stays
 
 
 async def test_the_record_holds_the_pending_hero_id_only_while_it_runs(bot, world):
@@ -705,9 +796,9 @@ async def test_the_sweep_cancels_a_hero_clip_a_restart_left_running(bot, world, 
                 "state": state, **extra}  # fmt: skip
 
     bot.llm = Interactions(error)
-    bot.docs.put("salid_video_jobs", GUILD, "j1", job("hero", hero_id="omni-1"))
-    bot.docs.put("salid_video_jobs", GUILD, "j2", job("stills"))
-    bot.docs.put("salid_video_jobs", GUILD, "j3", job("done", hero_id="omni-old"))
+    seed(bot, "j1", job("hero", hero_id="omni-1"))
+    seed(bot, "j2", job("stills"))
+    seed(bot, "j3", job("done", hero_id="omni-old"))
     await bot._sweep_video_jobs()  # never raises
     assert bot.llm.cancelled == ["omni-1"]
     for key in ("j1", "j2"):
@@ -721,9 +812,9 @@ async def test_the_sweep_runs_once_and_skips_live_and_finished_jobs(bot, world):
         return {"guild_id": GUILD, "channel_id": channel, "requester_id": world.staff.id,
                 "state": state}  # fmt: skip
 
-    bot.docs.put("salid_video_jobs", GUILD, "old", job("done"))
-    bot.docs.put("salid_video_jobs", GUILD, "live", job("render"))
-    bot.docs.put("salid_video_jobs", GUILD, "lost", job("queued", channel=4242))  # a DM, say
+    seed(bot, "old", job("done"))
+    seed(bot, "live", job("render"))
+    seed(bot, "lost", job("queued", channel=4242))  # a DM, say
     bot._video_jobs[GUILD] = SimpleNamespace(job_id="live", guild_id=GUILD)
     await bot._sweep_video_jobs()
     get = lambda key: bot.docs.get("salid_video_jobs", GUILD, key)  # noqa: E731
@@ -731,20 +822,24 @@ async def test_the_sweep_runs_once_and_skips_live_and_finished_jobs(bot, world):
     assert get("lost")["state"] == "failed" and world.pub.sent == []
     [(text, _)] = world.staff.dms  # no such channel: the requester gets a DM
     assert t("video_restarted", "th") in text
-    bot.docs.put("salid_video_jobs", GUILD, "later", job("stills"))
+    assert active(bot) == {"live": GUILD}  # the live job leaves the index itself when it ends
+    seed(bot, "later", job("stills"))
     await bot._sweep_video_jobs()  # on_ready again after a reconnect: no second sweep
     assert get("later")["state"] == "stills"
 
 
 async def test_the_sweep_never_fails_a_job_launched_while_it_runs(on, world, runner):
     runner.wait_cancel = True
-    gate, real = threading.Event(), on.docs.find_items
+    gate, real, first = threading.Event(), on.docs.get, []
 
-    def slow_find(*a, **kw):  # the sweep's read is still pending when the request comes in
-        gate.wait(5)
-        return real(*a, **kw)
+    def slow_get(kind, gid, key):  # the sweep's index read is pending when the request comes in
+        worker = threading.current_thread() is not threading.main_thread()
+        if key == "_active" and worker and not first:
+            first.append(1)
+            gate.wait(5)
+        return real(kind, gid, key)
 
-    on.docs.find_items = slow_find
+    on.docs.get = slow_get
     sweep = asyncio.create_task(on._sweep_video_jobs())
     await asyncio.sleep(0)
     tool, _ = tool_for(on, world)
@@ -752,30 +847,83 @@ async def test_the_sweep_never_fails_a_job_launched_while_it_runs(on, world, run
     job_id = on._video_jobs[GUILD].job_id
     rec = lambda: on.docs.get("salid_video_jobs", GUILD, job_id)  # noqa: E731
     await until(rec)  # the new job's record ("queued") exists; the sweep's read still waits
+    assert active(on) == {job_id: GUILD}  # indexed when its slot was reserved
     gate.set()
     await sweep
     assert rec()["state"] == "queued" and rec()["reason"] == ""
+    assert active(on) == {job_id: GUILD}
     assert not any(t("video_restarted", "th") in (m or "") for m in world.pub.sent)
     on._video_jobs[GUILD].handle.cancelled.set()
     await settle(on)
-    assert records(on)[0]["state"] == "cancelled"
+    assert records(on)[0]["state"] == "cancelled" and active(on) == {}
 
 
 async def test_the_sweep_leaves_a_job_that_finished_meanwhile(bot, world, monkeypatch):
     doc = {"guild_id": GUILD, "channel_id": world.pub.id, "requester_id": world.staff.id,
            "state": "render"}  # fmt: skip
-    bot.docs.put("salid_video_jobs", GUILD, "j", doc)
-    real = bot.docs.find_items
+    seed(bot, "j", doc)
+    real = bot.docs.get
 
-    def find_then_finish(*a, **kw):  # the job writes "done" right after the sweep's read
-        items = real(*a, **kw)
-        bot.docs.put("salid_video_jobs", GUILD, "j", {**doc, "state": "done"})
-        return items
+    def get_then_finish(kind, gid, key):  # the job writes "done" right after the index read
+        got = real(kind, gid, key)
+        if key == "_active":
+            bot.docs.put("salid_video_jobs", GUILD, "j", {**doc, "state": "done"})
+        return got
 
-    bot.docs.find_items = find_then_finish
+    bot.docs.get = get_then_finish
     await bot._sweep_video_jobs()
-    assert bot.docs.get("salid_video_jobs", GUILD, "j")["state"] == "done"
-    assert world.pub.sent == []
+    assert real("salid_video_jobs", GUILD, "j")["state"] == "done"
+    assert world.pub.sent == [] and active(bot) == {}
+
+
+async def test_the_sweep_reads_only_the_index_and_its_jobs(bot, world):
+    def job(state):
+        return {"guild_id": GUILD, "channel_id": world.pub.id, "requester_id": world.staff.id,
+                "state": state}  # fmt: skip
+
+    seed(bot, "j1", job("stills"))
+    bot.docs.put("salid_video_jobs", GUILD, "stray", job("render"))  # not in the index
+    reads = []
+    real_get = bot.docs.get
+
+    def no_scan(*a, **kw):
+        raise AssertionError("the sweep scans no collection")
+
+    def get(kind, gid, key):
+        reads.append(key)
+        return real_get(kind, gid, key)
+
+    bot.docs.find_items, bot.docs.get = no_scan, get
+    await bot._sweep_video_jobs()
+    assert reads[0] == "_active" and reads.count("j1") == 1 and "stray" not in reads
+    assert real_get("salid_video_jobs", GUILD, "j1")["state"] == "failed"
+    assert real_get("salid_video_jobs", GUILD, "stray")["state"] == "render"
+    assert active(bot) == {}
+
+
+async def test_a_job_is_indexed_while_it_runs_and_leaves_the_index_when_it_ends(on, world, runner):
+    job, view, _ = await start_waiting_job(on, world, runner)
+    assert active(on) == {job.job_id: GUILD}
+    await view.children[0].callback(Click(world.g, world.staff, world.pub, on))
+    await settle(on)
+    assert records(on)[0]["state"] == "cancelled" and active(on) == {}
+
+
+@pytest.mark.parametrize(
+    "state, cost, refunded",
+    [("storyboard", 0.0, True), ("render", 0.1008, False), ("queued", 0.0, False)],
+)
+async def test_the_sweep_gives_the_ad_back_only_when_nothing_was_billed(
+    bot, world, state, cost, refunded
+):
+    seed(bot, "j", {"guild_id": GUILD, "channel_id": world.pub.id,
+                    "requester_id": world.staff.id, "state": state, "cost_usd": cost,
+                    "created_at": "2026-10-14T12:00:00+07:00"})  # fmt: skip
+    bot.docs.put("salid_media_usage", GUILD, "2026-10", {"ads": 3})
+    await bot._sweep_video_jobs()
+    assert bot.docs.get("salid_video_jobs", GUILD, "j")["state"] == "failed"
+    ads = bot.docs.get("salid_media_usage", GUILD, "2026-10")["ads"]
+    assert ads == (2 if refunded else 3)  # a queued job may not have taken its ad yet
 
 
 async def test_on_ready_sweeps_left_over_jobs(bot, world, monkeypatch):

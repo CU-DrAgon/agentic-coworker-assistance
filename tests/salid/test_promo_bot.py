@@ -84,6 +84,26 @@ async def test_kit_is_bound_to_guild_channel_author_and_budget(bot, world):
     assert bot.llm.models.calls[0][0] == "gemini-nano-banana-2.1"
 
 
+async def test_the_daily_kit_cap_survives_a_restart(bot, world):
+    m, day = world.staff, bot.s.today().isoformat()
+    bot.docs.put("salid_media_usage", GUILD, day, {"promo_kits": bot.s.promo_kits_per_day})
+    bot._init_promo()  # a restart: fresh process state, the same DocStore
+    bot.llm = fake_client(RuntimeError("must not be called"))
+    [tool] = bot._promo_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [img_input()])
+    out = tool(headline="ลาเต้", scene="cafe")
+    assert (out["status"], out["ai_scene"], out["reason"]) == ("ok", False, "daily_limit")
+    assert bot.llm.models.calls == [] and out["kits_left_today"] == 0
+
+
+async def test_explicit_spoken_flag_keeps_the_kit_out_of_a_voice_answer(bot, world):
+    m = world.staff
+    msg = TMsg(world.g, world.pub, m, "ทำโพสต์")
+    assert bot._promo_tools(msg, world.g, m, [img_input()], spoken=True) == []
+    kw = dict(setting="th", lang="th", question="x", memory=None, profile=None)
+    voice = bot._agent_kwargs(msg, world.g, m, False, files=[img_input()], spoken=True, **kw)
+    assert "make_promo_kit" not in names(voice.get("extra_tools", []))
+
+
 def test_promo_flag_defaults_on_and_capability_line():
     assert "promo" in FEATURES and Features().promo is True
     assert "โพสต์โปรโมทจากรูปสินค้า" in qa.CAPABILITIES_PROMPT

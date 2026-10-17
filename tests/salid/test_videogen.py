@@ -656,7 +656,7 @@ def test_the_hero_prompt_carries_a_motion_cue():
 
 
 def test_a_scene_left_with_the_fallback_card_gets_no_hero_call(tmp_path, real_hero, monkeypatch):
-    def stills(client, model, scenes, photos, accent, fonts, *, cancelled=None):
+    def stills(client, model, scenes, photos, accent, *, cancelled=None):
         imgs = [Image.new("RGB", (108, 192), (90, 90, 90)) for _ in scenes]
         imgs[0] = videoad.fallback_card(accent)  # scene 0's picture failed
         return imgs, 2
@@ -686,8 +686,9 @@ def test_a_refused_start_skips_the_other_heroes_without_their_seconds(
     h = videoad.VideoHandle()
     res = run_ad(tmp_path, hero_shots=2, usage=usage, handle=h)
     assert starts == [5] and res.path.exists()  # one refusal, the second hero never asked
-    assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 5
-    assert h.cost_usd == pytest.approx(2 * videoad.STILL_USD + 5 * videoad.HERO_USD_PER_S)
+    # the create was never accepted: its seconds and their cost are given back
+    assert d.get("salid_media_usage", 1, "2026-10")["hero_seconds"] == 0
+    assert h.cost_usd == pytest.approx(2 * videoad.STILL_USD)
     clips = pipeline.assembled[0]["clips"]
     assert clips[:2] == [tmp_path / "clip0.mp4", tmp_path / "clip1.mp4"]
     assert "PERMISSION_DENIED" not in caplog.text and "video hero refused" in caplog.text
@@ -890,6 +891,18 @@ def test_probe_needs_something_to_probe(monkeypatch, capsys):
 
 def test_probe_writes_only_to_its_tmp_folder():
     assert str(load_probe().OUT_DIR) == "/tmp/salid-media-probe"
+
+
+def test_the_probe_and_the_live_test_share_one_sample_still():
+    import io
+
+    from salid import media_samples
+
+    with Image.open(io.BytesIO(media_samples.cup_png())) as im:
+        assert im.format == "PNG" and im.size == (720, 1280)
+    assert not hasattr(load_probe(), "_cup_png")
+    live = (Path(__file__).parent / "test_salid_live.py").read_text()
+    assert "def _cup_png" not in live and "media_samples" in live
 
 
 def test_probe_runs_offline_with_a_fake_client(tmp_path, monkeypatch, capsys):

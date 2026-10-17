@@ -12,9 +12,12 @@ promo kits, `create_image` and the video ad stills, and the guards every caller 
   prompt, an attached photo or a remembered result as the reference, optional Thai/English text
   typeset by `overlay` on a scrim band (top for 9:16, bottom otherwise), PNG files (the whole
   batch as JPEG when the PNGs pass `ImageCtx.max_bytes`, which follows the server's upload
-  limit, at most OUTBOX_MAX_BYTES). Daily limits per guild and per person (any `DayBudget`:
-  `media.DailyBudget`, or the DocStore-backed one the bot uses, `imagegen_bot.StoredDailyBudget`),
-  taken per image before the calls (blocked calls are billed too). References are only photos of
+  limit, at most OUTBOX_MAX_BYTES; still over it: `fit_batch` lowers the quality, then the size,
+  then drops trailing images and the result says so). Daily limits per guild and per person (any
+  `DayBudget`: `media.DailyBudget`, or the DocStore-backed one the bot uses,
+  `imagegen_bot.StoredDailyBudget`, whose `pair` reads both counts at once), taken per image
+  before the calls; the units of images not delivered (none came back, a later step failed, or
+  dropped for the upload limit) are given back. References are only photos of
   products, logos, food or places, never of a real person (the tool description and NOTE tell
   the agent; spec section 5). `ImageMemory` keeps the last batch per (guild, channel, user) for
   revisions, in process memory only.
@@ -197,11 +200,16 @@ NOTE_FAILED = (
     " The image service refused or failed for some of them; suggest a different description."
 )
 NOTE_LIMIT = "Today's image limit for this server (or this person) is used up."
+NOTE_DROPPED = " Only {n} of {made} images fit this server's upload limit; say so."
 FAILED = {
     "blocked": "the image service refused this description; suggest a different one",
     "timeout": "the image service timed out; suggest trying again",
     "error": "the image service failed; suggest trying again",
+    "too_large": "the images are too large for this server's upload limit; suggest fewer or 1K",
 }
+# Tried in order while a JPEG batch is still over the upload budget: (quality, share of the
+# long side). After the last one, trailing images are dropped.
+SHRINK_STEPS = ((75, 1.0), (60, 1.0), (60, 0.75), (50, 0.5), (40, 0.35))
 _BUDGET_LOCK = threading.Lock()  # check-and-take of both daily budgets (tools run in threads)
 
 Key = tuple[int, int, int]  # (guild id, channel id, user id)
@@ -226,6 +234,40 @@ def _reference_png(data: bytes) -> bytes:
             return _png(img.convert("RGBA" if alpha else "RGB"))
         except Exception as e:
             raise ValueError("unreadable image") from e
+
+
+def _jpeg(img: Image.Image, quality: int, scale: float = 1.0) -> bytes:
+    """`img` as a JPEG at `quality`, its sides scaled by `scale` (never up)."""
+    if scale < 1:
+        size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
+        img = img.resize(size, Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.convert("RGB").save(buf, "JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def _total(files: list[tuple[str, bytes]]) -> int:
+    return sum(len(d) for _, d in files)
+
+
+def fit_batch(images: list[Image.Image], max_bytes: int) -> list[tuple[str, bytes]]:
+    """The batch as `image-N.jpg` files that together take at most `max_bytes`: each image by
+    `cards.to_jpeg` first, then the whole batch at each of SHRINK_STEPS (lower quality, then a
+    smaller long side), and last the trailing images dropped (all of them when not even one
+    fits)."""
+    each = max_bytes // max(1, len(images))
+    files = [
+        (f"image-{i}.jpg", cards.to_jpeg(img, max_bytes=each)) for i, img in enumerate(images, 1)
+    ]
+    for quality, scale in SHRINK_STEPS:
+        if _total(files) <= max_bytes:
+            return files
+        files = [
+            (name, _jpeg(img, quality, scale)) for (name, _), img in zip(files, images, strict=True)
+        ]
+    while files and _total(files) > max_bytes:
+        files.pop()
+    return files
 
 
 def overlay(
@@ -350,13 +392,53 @@ def _error(message: str) -> dict:
 
 class DayBudget(Protocol):
     """Units used per key (guild or person) per day: `media.DailyBudget` (memory) or
-    `imagegen_bot.StoredDailyBudget` (DocStore, survives restarts)."""
+    `imagegen_bot.StoredDailyBudget` (DocStore, survives restarts). A guild budget may also have
+    `pair(person_budget, guild_id)`, returning `Budgets` that read and change both counts at
+    once (or None)."""
 
     cap: float
 
     def used(self, key: int, day: str) -> float: ...
 
     def add(self, key: int, day: str, amount: float) -> None: ...
+
+    def give_back(self, key: int, day: str, amount: float) -> None: ...
+
+
+class Budgets(Protocol):
+    """The guild's and the person's budget of one request, used together."""
+
+    def counts(self, guild_id: int, user_id: int, day: str) -> tuple[float, float]: ...
+
+    def take(self, guild_id: int, user_id: int, day: str, amount: int) -> tuple[int, int]: ...
+
+    def give_back(self, guild_id: int, user_id: int, day: str, amount: int) -> None: ...
+
+
+@dataclass(frozen=True)
+class _Separate:
+    """Two budgets with nothing shared (`media.DailyBudget`), each read and changed on its own
+    (the caller holds _BUDGET_LOCK around `take`)."""
+
+    guild: DayBudget
+    person: DayBudget
+
+    def counts(self, guild_id: int, user_id: int, day: str) -> tuple[float, float]:
+        return self.guild.used(guild_id, day), self.person.used(user_id, day)
+
+    def take(self, guild_id: int, user_id: int, day: str, amount: int) -> tuple[int, int]:
+        """Take `amount` from both, trimmed to what both have left: (taken, left after)."""
+        g, u = self.counts(guild_id, user_id, day)
+        left = max(0, int(min(self.guild.cap - g, self.person.cap - u)))
+        n = max(0, min(amount, left))
+        if n:
+            self.guild.add(guild_id, day, n)
+            self.person.add(user_id, day, n)
+        return n, left - n
+
+    def give_back(self, guild_id: int, user_id: int, day: str, amount: int) -> None:
+        self.guild.give_back(guild_id, day, amount)
+        self.person.give_back(user_id, day, amount)
 
 
 @dataclass
@@ -379,11 +461,17 @@ class ImageCtx:
     max_bytes: int = OUTBOX_MAX_BYTES  # this reply's files together (the server's upload limit)
     outbox: list[tuple[str, bytes]] = field(default_factory=list)
 
+    def budgets(self) -> Budgets:
+        """Both budgets together: the guild budget's `pair` when it has one (one read per
+        check, one read-modify-write per take), else each on its own."""
+        pair = getattr(self.guild_budget, "pair", None)
+        joint = pair(self.user_budget, self.guild_id) if callable(pair) else None
+        return joint if joint is not None else _Separate(self.guild_budget, self.user_budget)
+
     def left(self) -> int:
         """Images this person may still make here today: the smaller of both budgets."""
-        g = self.guild_budget.cap - self.guild_budget.used(self.guild_id, self.day)
-        u = self.user_budget.cap - self.user_budget.used(self.user_id, self.day)
-        return max(0, int(min(g, u)))
+        g, u = self.budgets().counts(self.guild_id, self.user_id, self.day)
+        return max(0, int(min(self.guild_budget.cap - g, self.user_budget.cap - u)))
 
     def make(
         self,
@@ -424,7 +512,7 @@ class ImageCtx:
             return _error("file_index must be a file number, or -1 for none")
         if rev is None or not 0 <= rev <= MAX_IMAGES:
             return _error(f"revise must be 0 (new images) or 1-{MAX_IMAGES}")
-        if self.left() <= 0:  # before decoding any photo; checked again when taking
+        if self.left() <= 0:  # one read, before decoding any photo; the take checks again
             return {"status": "limit", "note": NOTE_LIMIT}
         refs: list[bytes] = []
         if rev:
@@ -444,37 +532,28 @@ class ImageCtx:
                 return _error(f"{e}; ask for a smaller photo")
             except ValueError:
                 return _error("the photo could not be read")
-        with _BUDGET_LOCK:  # taken per image before the calls: blocked calls are billed too
-            n = min(n_asked, self.left())
-            if n <= 0:
-                return {"status": "limit", "note": NOTE_LIMIT}
-            self.guild_budget.add(self.guild_id, self.day, n)
-            self.user_budget.add(self.user_id, self.day, n)
+        budgets = self.budgets()
+        with _BUDGET_LOCK:  # taken per image before the calls (one read-modify-write)
+            n, left = budgets.take(self.guild_id, self.user_id, self.day, n_asked)
+        if n <= 0:
+            return {"status": "limit", "note": NOTE_LIMIT}
         t0 = time.monotonic()
-        images, reason = generate_images(
-            self.client, self.model, prompt, refs=refs, aspect=aspect, size=size, count=n
-        )
-        files, kept, shown = [], [], []
-        for i, img in enumerate(images, 1):
-            small = img.copy()
-            small.thumbnail((MEMORY_SIDE, MEMORY_SIDE), Image.Resampling.LANCZOS)
-            kept.append(_png(small))  # the reference for `revise`: never the overlay text
-            if headline or subtitle:
-                img, _ = overlay(img, headline, subtitle, accent, self.fonts, top=aspect == "9:16")
-                data = _png(img)
-            else:
-                data = kept[-1] if small.size == img.size else _png(img)
-            shown.append(img)
-            files.append((f"image-{i}.png", data))
-        if sum(len(d) for _, d in files) > self.max_bytes:  # the whole batch, one format
-            each = self.max_bytes // len(shown)
-            files = [
-                (f"image-{i}.jpg", cards.to_jpeg(img, max_bytes=each))
-                for i, img in enumerate(shown, 1)
-            ]
-        if files:
-            self.outbox[:] = files  # a second call in the same turn replaces the first batch
-            self.memory.put(self.key, kept)
+        images: list[Image.Image] = []
+        files: list[tuple[str, bytes]] = []
+        try:
+            images, reason = generate_images(
+                self.client, self.model, prompt, refs=refs, aspect=aspect, size=size, count=n
+            )
+            files, kept = self._files(images, headline, subtitle, accent, aspect == "9:16")
+            if images and not files:
+                reason = "too_large"
+            if files:
+                self.outbox[:] = files  # a second call in the same turn replaces the first batch
+                self.memory.put(self.key, kept[: len(files)])
+        finally:  # the units of images not delivered go back (a crash included)
+            if len(files) < n:
+                budgets.give_back(self.guild_id, self.user_id, self.day, n - len(files))
+                left += n - len(files)
         logger.info(
             "image guild=%s made=%d asked=%d ms=%d",
             self.guild_id,
@@ -487,21 +566,45 @@ class ImageCtx:
                 **_error(FAILED.get(reason, FAILED["error"])),
                 "reason": reason,
                 "count_made": 0,
-                "images_left_today": self.left(),
+                "images_left_today": left,
             }
         note = NOTE
         if n < n_asked:
             note += NOTE_TRIMMED.format(n=n, asked=n_asked)
-        if len(files) < n:
+        if len(images) < n:
             note += NOTE_FAILED
+        if len(files) < len(images):
+            note += NOTE_DROPPED.format(n=len(files), made=len(images))
         return {
             "status": "ok",
             "files": [name for name, _ in files],
             "count_made": len(files),
             "reason": reason,
-            "images_left_today": self.left(),
+            "images_left_today": left,
             "note": note,
         }
+
+    def _files(
+        self, images: list[Image.Image], headline: str, subtitle: str, accent: str, top: bool
+    ) -> tuple[list[tuple[str, bytes]], list[bytes]]:
+        """(the files to send, the clean PNGs to remember for `revise`): PNGs with the overlay
+        text, or the whole batch as JPEGs that fit `max_bytes` (`fit_batch`, which may drop
+        trailing images)."""
+        files, kept, shown = [], [], []
+        for i, img in enumerate(images, 1):
+            small = img.copy()
+            small.thumbnail((MEMORY_SIDE, MEMORY_SIDE), Image.Resampling.LANCZOS)
+            kept.append(_png(small))  # the reference for `revise`: never the overlay text
+            if headline or subtitle:
+                img, _ = overlay(img, headline, subtitle, accent, self.fonts, top=top)
+                data = _png(img)
+            else:
+                data = kept[-1] if small.size == img.size else _png(img)
+            shown.append(img)
+            files.append((f"image-{i}.png", data))
+        if _total(files) > self.max_bytes:  # the whole batch, one format
+            files = fit_batch(shown, self.max_bytes)
+        return files, kept
 
 
 def image_tools(ctx: ImageCtx) -> list[Callable]:

@@ -1003,6 +1003,14 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "video_reason_render": {"th": "ตัดต่อวิดีโอไม่สำเร็จ", "en": "the video could not be rendered"},
     "video_reason_error": {"th": "เกิดข้อผิดพลาด", "en": "something went wrong"},
+    "video_upload_refused": {
+        "th": "วิดีโอทำเสร็จแล้ว แต่แนบไฟล์ในห้องนี้ไม่ได้ค่ะ (สลิดอาจไม่มีสิทธิ์แนบไฟล์ หรือไฟล์ใหญ่เกินไป)",
+        "en": "The video was made, but I couldn't attach it here (I may not have permission to "
+        "attach files, or it is too large).",
+    },
+    # burned into every video ad, and the end of its suggested caption
+    "video_ai_label": {"th": "สร้างด้วย AI", "en": "Made with AI"},
+    "video_ai_hashtag": {"th": "#สร้างด้วยAI", "en": "#MadeWithAI"},
     "video_cancelling": {
         "th": "กำลังยกเลิกการทำวิดีโอค่ะ…",
         "en": "Cancelling the video ad…",

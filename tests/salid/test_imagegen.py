@@ -256,19 +256,51 @@ def test_limit_when_nothing_is_left_for_the_guild_or_the_person():
     assert out["status"] == "limit"
 
 
-def test_budgets_are_taken_per_image_before_the_calls():
+def test_budgets_are_taken_per_image_before_the_calls(monkeypatch):
+    taken = []
+
+    def gen(client, model, prompt, **kw):  # what both budgets hold while the calls run
+        taken.append((c.guild_budget.used(1, c.day), c.user_budget.used(7, c.day)))
+        return [Image.new("RGB", (64, 64))] * kw["count"], ""
+
+    monkeypatch.setattr(imagegen, "generate_images", gen)
+    c = ictx()
+    out = imagegen.image_tools(c)[0](prompt="a cup", count=2)
+    assert taken == [(2, 2)] and out["count_made"] == 2 and out["images_left_today"] == 3
+
+
+def test_units_of_images_that_did_not_come_back_are_given_back():
     c = ictx(client=fake_client(image_response(png_bytes((64, 64))), RuntimeError("x")))
     out = imagegen.image_tools(c)[0](prompt="a cup", count=2)
     assert out["status"] == "ok" and out["count_made"] == 1 and out["files"] == ["image-1.png"]
-    assert c.guild_budget.used(1, c.day) == 2 and c.user_budget.used(7, c.day) == 2  # billed
-    assert "refused or failed" in out["note"] and out["images_left_today"] == 3
+    assert c.guild_budget.used(1, c.day) == 1 and c.user_budget.used(7, c.day) == 1
+    assert "refused or failed" in out["note"] and out["images_left_today"] == 4
 
 
-def test_nothing_made_is_an_error_but_still_counted():
+def test_nothing_made_is_an_error_and_its_units_are_given_back():
     c = ictx(client=fake_client(text_response("no")))
     out = imagegen.image_tools(c)[0](prompt="a cup")
     assert out["status"] == "error" and out["reason"] == "blocked" and out["count_made"] == 0
-    assert c.user_budget.used(7, c.day) == 1 and c.memory.get(c.key) is None
+    assert c.user_budget.used(7, c.day) == 0 and c.guild_budget.used(1, c.day) == 0
+    assert out["images_left_today"] == 5 and c.memory.get(c.key) is None
+
+
+def test_no_client_gives_every_unit_back():
+    c = ictx(client=None)
+    out = imagegen.image_tools(c)[0](prompt="a cup", count=3)
+    assert out["status"] == "error" and out["reason"] == "error"
+    assert c.guild_budget.used(1, c.day) == 0 and c.user_budget.used(7, c.day) == 0
+
+
+def test_a_crash_after_the_calls_gives_the_units_back(monkeypatch):
+    def broken(*a, **kw):
+        raise RuntimeError("font gone")
+
+    monkeypatch.setattr(imagegen, "overlay", broken)
+    c = ictx()
+    out = imagegen.image_tools(c)[0](prompt="a cup", count=2, headline="ลดพิเศษ")
+    assert out["status"] == "error" and c.outbox == [] and c.memory.get(c.key) is None
+    assert c.guild_budget.used(1, c.day) == 0 and c.user_budget.used(7, c.day) == 0
 
 
 def test_reference_photos_are_never_of_a_real_person():
@@ -363,6 +395,42 @@ def test_the_upload_budget_is_the_contexts_own(monkeypatch):
     assert out["files"] == ["image-1.jpg", "image-2.jpg"] == [n for n, _ in t.outbox]
     assert sum(len(d) for _, d in t.outbox) <= 8 * 2**20
     assert ictx().max_bytes == imagegen.OUTBOX_MAX_BYTES
+
+
+def test_a_jpeg_batch_still_over_the_budget_is_shrunk_until_it_fits(monkeypatch):
+    noisy = [Image.effect_noise((1024, 1024), 120).convert("RGB") for _ in range(3)]
+    monkeypatch.setattr(imagegen, "generate_images", lambda *a, **k: (list(noisy), ""))
+    first = sum(len(cards.to_jpeg(img, max_bytes=10**9)) for img in noisy)
+    budget = first // 4  # the first JPEG pass cannot fit this
+    c = ictx(max_bytes=budget)
+    t = imagegen.image_tools(c)[0]
+    out = t(prompt="static on an old tv", count=3)
+    assert out["status"] == "ok" and out["files"] == ["image-1.jpg", "image-2.jpg", "image-3.jpg"]
+    assert sum(len(d) for _, d in t.outbox) <= budget
+    assert c.user_budget.used(7, c.day) == 3
+
+
+def test_images_that_never_fit_are_dropped_from_the_end_and_said(monkeypatch):
+    noisy = [Image.effect_noise((1024, 1024), 120).convert("RGB") for _ in range(3)]
+    monkeypatch.setattr(imagegen, "generate_images", lambda *a, **k: (list(noisy), ""))
+    small = imagegen._jpeg(noisy[0], *imagegen.SHRINK_STEPS[-1])
+    c = ictx(max_bytes=len(small) + 100)  # room for one image at the smallest step
+    t = imagegen.image_tools(c)[0]
+    out = t(prompt="static on an old tv", count=3)
+    assert out["status"] == "ok" and out["files"] == ["image-1.jpg"] == [n for n, _ in t.outbox]
+    assert sum(len(d) for _, d in t.outbox) <= c.max_bytes
+    assert "upload limit" in out["note"] and out["count_made"] == 1
+    assert c.user_budget.used(7, c.day) == 1 and len(c.memory.get(c.key)) == 1  # 2 given back
+
+
+def test_a_batch_that_cannot_fit_at_all_is_an_error_with_its_units_back(monkeypatch):
+    noisy = [Image.effect_noise((512, 512), 120).convert("RGB") for _ in range(2)]
+    monkeypatch.setattr(imagegen, "generate_images", lambda *a, **k: (list(noisy), ""))
+    c = ictx(max_bytes=100)
+    t = imagegen.image_tools(c)[0]
+    out = t(prompt="static on an old tv", count=2)
+    assert out["status"] == "error" and out["reason"] == "too_large" and t.outbox == []
+    assert c.user_budget.used(7, c.day) == 0 and c.memory.get(c.key) is None
 
 
 def test_a_small_batch_stays_png():

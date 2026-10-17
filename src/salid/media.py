@@ -405,6 +405,10 @@ class DailyBudget:
     def add(self, guild_id: int, day: str, amount: float) -> None:
         self._used[guild_id] = (day, self.used(guild_id, day) + max(0.0, amount))
 
+    def give_back(self, guild_id: int, day: str, amount: float) -> None:
+        """Return `amount` units taken today (never below 0)."""
+        self._used[guild_id] = (day, max(0.0, self.used(guild_id, day) - max(0.0, amount)))
+
 
 def MediaBudget(minutes_per_day: int) -> DailyBudget:  # noqa: N802 - reads as a constructor
     return DailyBudget(max(0, minutes_per_day) * 60)

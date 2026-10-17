@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw, ImageFont
 from salid.config import Settings
 from salid.extract import extract_receipt
 from salid.llm import make_client
+from salid.media_samples import cup_png
 
 pytestmark = pytest.mark.live
 GUILD = 1000
@@ -247,23 +248,6 @@ def test_live_deck_request(tmp_path):
     assert any(s.has_chart for slide in prs.slides for s in slide.shapes)
 
 
-def _cup_png(size: tuple[int, int] = (720, 1280)) -> bytes:
-    """A plain drawing of a white cup on a table (the still a hero clip starts from)."""
-    w, h = size
-    img = Image.new("RGB", size, (190, 150, 110))
-    d = ImageDraw.Draw(img)
-    d.rectangle((0, int(h * 0.62), w, h), fill=(120, 80, 50))
-    d.rounded_rectangle(
-        (int(w * 0.33), int(h * 0.40), int(w * 0.62), int(h * 0.64)), radius=24, fill="white"
-    )
-    d.ellipse(
-        (int(w * 0.58), int(h * 0.45), int(w * 0.72), int(h * 0.56)), outline="white", width=14
-    )
-    buf = io.BytesIO()
-    img.save(buf, "PNG")
-    return buf.getvalue()
-
-
 def test_live_create_image(tmp_path):
     """One real 1K Nano Banana image (about $0.03) through imagegen.generate_images: the model id,
     location and request config are accepted. The image is saved under the printed folder."""
@@ -304,7 +288,7 @@ def test_live_omni_probe(tmp_path):
     t = time.monotonic()
     try:
         iid = videogen.start_hero(
-            make_media_client(s), model, _cup_png(), prompt, 4, resolution="360p"
+            make_media_client(s), model, cup_png(), prompt, 4, resolution="360p"
         )
     except Exception as e:  # Interactions errors: PermissionDeniedError with .status_code 403
         if videogen.permission_denied(e):

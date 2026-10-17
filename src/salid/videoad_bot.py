@@ -2,10 +2,11 @@
 
 `VideoAdMixin` gives `SecretaryBot`:
 - `_video_tools`: the `create_video_ad` agent tool (appended to `extra_tools` by `_agent_kwargs`)
-  for chat answers (never in a voice room, see `imagegen_bot.spoken`; interjections never get
-  it), only when the guild's `video_ads` flag is on (default off), ffmpeg is installed and Thai
-  text can be shaped. Guild, channel, author and the attached photos are bound here, never model
-  input;
+  for chat answers (never in a voice room: `_agent_kwargs(spoken=True)`, else
+  `imagegen_bot.looks_spoken`; interjections never get it), only when the guild's `video_ads`
+  flag is on (default off), ffmpeg is installed and Thai text can be shaped. Guild, channel,
+  author, the attached photos and the answer's language (`lang` from `_agent_kwargs`: the
+  person's profile language in an auto channel) are bound here, never model input;
 - the background job: the tool validates, peeks at the month's ads and reserves the guild's slot
   (one job per guild, `SALID_VIDEO_MAX_JOBS` across the bot) before anything starts, then
   `run_video_ad` runs in the bot's own render pool (`_video_pool`, `SALID_VIDEO_MAX_JOBS`
@@ -13,12 +14,18 @@
   message in the asker's channel, edited at most every 5 s with the current step, carries a
   Cancel button for the requester or an admin (pressed: "cancelling…" at once, and nothing is
   delivered afterwards); the MP4 comes back as a reply to the request with the scene list and a
-  suggested caption;
+  suggested caption ending in the AI hashtag of the job's language. A reply that went out
+  without the MP4 (Discord refused the file) ends the job failed with reason `upload_refused`
+  (the ad stays used: its media was billed);
 - job records in DocStore kind `salid_video_jobs` (written on every state change, with the
   pending Omni interaction id `hero_id` while a hero clip is made; never the brief, the
-  storyboard or media) and `_sweep_video_jobs`: on the first `on_ready`, jobs a restart cut off
-  are marked failed, a hero clip they left running is cancelled (best effort) and their
-  requester is told to ask again (usage is not refunded).
+  storyboard or media), and one active-jobs index in the same kind (guild 0, key `_active`,
+  `{job id: guild id}`), changed under the slot lock when a job is reserved and when it ends;
+  `_sweep_video_jobs`: on the first `on_ready`, it reads only that index and the jobs in it:
+  jobs a restart cut off are marked failed, a hero clip they left running is cancelled (best
+  effort), their ad is given back when the record shows nothing billed (`cost_usd` 0, past
+  `queued`), their requester is told to ask again, and their ids leave the index (records are
+  never deleted).
 
 Jobs and their slots live in this process (one bot process, like `memory_index` and `recent`).
 """
@@ -29,6 +36,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import re
 import shutil
 import tempfile
 import threading
@@ -43,9 +51,9 @@ import discord
 from . import cards, speech, videogen
 from .dm import send_dm
 from .i18n import CATALOG, resolve_lang, t
-from .imagegen_bot import spoken
+from .imagegen_bot import looks_spoken
 from .llm import make_media_client
-from .promo import PHOTO_MIMES
+from .promo import usable_photos
 from .videoad import (
     LENGTHS,
     Cancelled,
@@ -61,11 +69,12 @@ from .videoad import (
 logger = logging.getLogger(__name__)
 
 JOBS = "salid_video_jobs"  # DocStore kind, key = job id
+INDEX_GUILD, INDEX_KEY = 0, "_active"  # in JOBS: {job id: guild id} of every job not yet ended
 FINAL = frozenset({"done", "failed", "cancelled"})
 PROGRESS_EVERY_S = 5.0  # the progress message is edited at most this often
 MAX_HERO_SHOTS = 2
-AI_HASHTAG = "#สร้างด้วยAI"
 MAX_REPLY = 1900
+_MONTH = re.compile(r"\d{4}-\d{2}")
 STARTED_NOTE = "Reply in one short line that the video is being made and will be posted here."
 _NOT_ENABLED = {"hero_shots": "generated motion shots", "music": "background music"}
 
@@ -146,11 +155,18 @@ class VideoAdMixin:
             return self._video_media
 
     # ------------------------------------------------------------- agent tool
-    def _video_tools(self, message, guild, asker, files) -> list:
-        """`create_video_ad` for this message, or [] (a voice room, flag off, no ffmpeg, no
-        Thai shaping). Never raises."""
+    def _video_tools(
+        self, message, guild, asker, files, *, lang: str | None = None, spoken: bool = False
+    ) -> list:
+        """`create_video_ad` for this message, or [] (a voice room: `spoken`, or
+        `looks_spoken` for callers that do not say; flag off, no ffmpeg, no Thai shaping). The
+        job speaks `lang` (`_agent_kwargs` passes the answer's language, which follows the
+        person's profile in an auto channel); other callers get the message's own language.
+        Never raises."""
         try:
-            if spoken(message, files) or not self.team.enabled(guild.id, "video_ads"):
+            if spoken or looks_spoken(message, files):
+                return []
+            if not self.team.enabled(guild.id, "video_ads"):
                 return []
             if not ffmpeg_ready():
                 _warn_once("ffmpeg", "ffmpeg missing: create_video_ad off")
@@ -158,9 +174,10 @@ class VideoAdMixin:
             if not cards.thai_ready():
                 _warn_once("raqm", "libfribidi missing: create_video_ad off")
                 return []
-            photos = [f.data for f in files if f.mime in PHOTO_MIMES and f.data and not f.skip]
+            photos = [data for _, data in usable_photos(files)]
             loop = asyncio.get_running_loop()
-            return [self._video_tool(message, guild, asker, photos, self._lang(message), loop)]
+            lang = lang or self._lang(message)
+            return [self._video_tool(message, guild, asker, photos, lang, loop)]
         except Exception:
             logger.warning("video tool unavailable", exc_info=True)
             return []
@@ -246,10 +263,12 @@ class VideoAdMixin:
             if gid in self._video_jobs or len(self._video_jobs) >= self.s.video_max_jobs:
                 return {"status": "busy", "say": t("video_busy", lang)}
             self._video_jobs[gid] = job
+            self._video_index(job.job_id, gid)  # in the index before its first record
         try:  # nothing between the reservation and here can raise
             loop.call_soon_threadsafe(self._launch_video, job, message, req)
         except RuntimeError:  # the event loop is closing
             self._video_release(job)
+            self._video_unindex(job.job_id)
             return {"status": "error", "error": "the video could not be started"}
         out = {"status": "started", "note": STARTED_NOTE}
         if ignored:
@@ -263,7 +282,7 @@ class VideoAdMixin:
     def _launch_video(self, job: VideoJob, message, req: VideoRequest) -> None:
         try:
             task = asyncio.create_task(self._run_video(job, message, req))
-        except Exception:
+        except Exception:  # its index entry has no record: the next start's sweep drops it
             logger.warning("video job could not start", exc_info=True)
             self._video_release(job)
             return
@@ -358,16 +377,19 @@ class VideoAdMixin:
                 if job.handle.cancelled.is_set():  # pressed after the runner's last check
                     logger.info("video job cancelled before delivery: guild=%s", job.guild_id)
                     state, text = "cancelled", t("video_cancelled", lang)
-                else:
-                    await self._video_deliver(job, message, res)
+                elif await self._video_deliver(job, message, res):
                     text = t("video_done", lang)
+                else:  # the reply went out without the MP4; its media was billed: no refund
+                    state, reason = "failed", "upload_refused"
+                    text = t("video_upload_refused", lang)
         if reason and not text:
             text = t("video_failed", lang, reason=t(f"video_reason_{reason}", lang))
         await self._video_finish(job, message, state, text, reason=reason)
 
     def _video_progress(self, job: VideoJob, step: str) -> None:
         """A step started (on the loop): show its label, at most one edit per PROGRESS_EVERY_S
-        (a step that comes sooner waits, and the latest label wins). Nothing after a cancel (the
+        (a step that comes sooner waits, and the latest label wins, also one that comes while
+        an edit is in flight: `_video_edit_after` edits again). Nothing after a cancel (the
         message says "cancelling…") or when the label is unchanged (a hero clip's id came or
         went)."""
         key = f"video_step_{step}"
@@ -383,15 +405,22 @@ class VideoAdMixin:
         job.edit_task = asyncio.create_task(self._video_edit_after(job, wait))
 
     async def _video_edit_after(self, job: VideoJob, wait: float) -> None:
-        if wait > 0:
-            await self._sleep(wait)
-        if job.final or job.handle.cancelled.is_set():
-            return
-        job.last_edit = self._clock()
-        try:
-            await job.msg.edit(content=job.label)
-        except discord.HTTPException:
-            logger.info("video progress edit failed", exc_info=True)
+        """Edit the progress message to `job.label` after `wait` s; a label that changed while
+        the edit was in flight gets one more edit, PROGRESS_EVERY_S after the last."""
+        while True:
+            if wait > 0:
+                await self._sleep(wait)
+            if job.final or job.handle.cancelled.is_set():
+                return
+            label = job.label
+            job.last_edit = self._clock()
+            try:
+                await job.msg.edit(content=label)
+            except discord.HTTPException:
+                logger.info("video progress edit failed", exc_info=True)
+            if job.label == label:
+                return
+            wait = max(0.0, job.last_edit + PROGRESS_EVERY_S - self._clock())
 
     async def _video_finish(
         self, job: VideoJob, message, state: str, text: str, *, reason: str = ""
@@ -403,7 +432,8 @@ class VideoAdMixin:
             job.edit_task.cancel()
         if job.view is not None:
             job.view.stop()
-        await self._video_record(job, state, reason=reason)
+        if await self._video_record(job, state, reason=reason):  # ended: out of the index
+            await asyncio.to_thread(self._video_unindex, job.job_id)
         if job.msg is not None:
             try:
                 await job.msg.edit(content=text, view=None)
@@ -416,27 +446,33 @@ class VideoAdMixin:
                     f"<@{job.requester_id}> {text}", allowed_mentions=self._video_mentions(job)
                 )
 
-    async def _video_deliver(self, job: VideoJob, message, res) -> None:
+    async def _video_deliver(self, job: VideoJob, message, res) -> bool:
         """Reply to the request with the MP4, the scene list and a suggested caption. Reply
         failed (request gone, or any other error): the same in its channel. Upload refused there
-        too: the text with a note."""
+        too: the text with a note. True when the MP4 went out; False when only text did
+        (`_reply_with_uploads` falls back to text when Discord refuses the file: its message
+        then has no attachment)."""
         text, allowed = self._video_reply(job, res), self._video_mentions(job)
         files = [discord.File(str(res.path), filename=res.path.name)]
         try:
             try:
-                await self._reply_with_uploads(message, text, allowed, {"files": files})
-                return
+                sent = await self._reply_with_uploads(message, text, allowed, {"files": files})
+                if getattr(sent, "attachments", None):
+                    return True
+                logger.warning("video reply went out without the MP4: guild=%s", job.guild_id)
+                return False
             except Exception as e:  # gone, refused, or not a message that can be replied to
                 logger.info("video reply failed (%s); posting in the channel", type(e).__name__)
             files.append(discord.File(str(res.path), filename=res.path.name))
             try:
                 await message.channel.send(text, file=files[-1], allowed_mentions=allowed)
-                return
+                return True
             except discord.HTTPException:
                 logger.warning("could not post the video ad", exc_info=True)
             with contextlib.suppress(discord.HTTPException):
                 note = t("attach_failed", job.lang)
                 await message.channel.send(f"{text}\n{note}", allowed_mentions=allowed)
+            return False
         finally:
             for f in files:
                 f.close()
@@ -454,15 +490,16 @@ class VideoAdMixin:
         scenes = [f"{i}. {s.caption_th}" for i, s in enumerate(board.scenes, start=1)]
         closing = board.scenes[-1].caption_th if board.scenes else ""
         words = [board.title] + ([closing] if closing != board.title else [])
-        suggested = " ".join(w.strip() for w in [*words, AI_HASHTAG] if w.strip())
+        tag = t("video_ai_hashtag", lang)
+        suggested = " ".join(w.strip() for w in [*words, tag] if w.strip())
         head = f"<@{job.requester_id}> {t('video_done', lang)}"
         tail = f"{t('video_caption', lang)} {suggested}"
         text = f"{head}\n{t('video_scenes', lang)}\n" + "\n".join(scenes) + f"\n\n{tail}"
         return text if len(text) <= MAX_REPLY else f"{head}\n\n{tail}"
 
-    def _video_save(self, job: VideoJob, state: str, *, reason: str = "") -> None:
+    def _video_save(self, job: VideoJob, state: str, *, reason: str = "") -> bool:
         """Write the job's record (blocking), with `hero_id` while a hero clip is pending. Never
-        the brief, storyboard or media. Never raises."""
+        the brief, storyboard or media. Never raises; False when it was not written."""
         try:
             self.docs.put(
                 JOBS,
@@ -481,11 +518,42 @@ class VideoAdMixin:
                     **({"hero_id": job.handle.hero_id} if job.handle.hero_id else {}),
                 },
             )
+            return True
         except Exception:
             logger.warning("video job record not saved", exc_info=True)
+            return False
 
-    async def _video_record(self, job: VideoJob, state: str, *, reason: str = "") -> None:
-        await asyncio.to_thread(self._video_save, job, state, reason=reason)
+    async def _video_record(self, job: VideoJob, state: str, *, reason: str = "") -> bool:
+        return await asyncio.to_thread(self._video_save, job, state, reason=reason)
+
+    # ------------------------------------------------------------- active-jobs index
+    def _video_index(self, job_id: str, guild_id: int | None) -> None:
+        """Add `job_id` (of `guild_id`) to the active-jobs index, or remove it (None): one
+        read-modify-write of the one index document. The caller holds `_video_lock`, so two
+        changes never lose each other. Never raises (a job runs without its entry; an entry
+        left behind is dropped by the next start's sweep)."""
+        try:
+            doc = self._video_active()
+            if guild_id is None:
+                if job_id not in doc:
+                    return
+                del doc[job_id]
+            else:
+                doc[job_id] = guild_id
+            self.docs.put(JOBS, INDEX_GUILD, INDEX_KEY, doc)
+        except Exception:
+            logger.warning("video job index not updated", exc_info=True)
+
+    def _video_unindex(self, job_id: str) -> None:
+        """Remove an ended job from the index, under the slot lock (blocking)."""
+        with self._video_lock:
+            self._video_index(job_id, None)
+
+    def _video_active(self) -> dict[str, int]:
+        """The active-jobs index: {job id: guild id} (one read; blocking)."""
+        doc = dict(self.docs.get(JOBS, INDEX_GUILD, INDEX_KEY) or {})
+        doc.pop("guild_id", None)  # Firestore adds it on write
+        return {str(k): int(v) for k, v in doc.items()}
 
     # ------------------------------------------------------------- cancel
     async def _video_cancel_pressed(self, interaction, job_id: str) -> None:
@@ -514,50 +582,82 @@ class VideoAdMixin:
 
     # ------------------------------------------------------------- restart
     async def _sweep_video_jobs(self) -> None:
-        """Once per process (the first on_ready; reconnects fire it again): jobs a restart cut
-        off are marked failed with reason "restarted", the hero clip one left running (its
-        record's `hero_id`) is cancelled, best effort, and their requester is told to ask again.
-        Usage is not refunded. Never raises.
+        """Once per process (the first on_ready; reconnects fire it again), reading only the
+        active-jobs index and the job records it lists: jobs a restart cut off are marked failed
+        with reason "restarted", the hero clip one left running (its record's `hero_id`) is
+        cancelled, best effort, the month's ad is given back when the record shows nothing was
+        billed (`_video_refundable`), the requester is told to ask again, and the id leaves the
+        index (an entry whose record ended or is missing just leaves it). Never raises.
 
-        Requests keep working while it runs, so each job is checked again right before it is
-        marked: its record is read afresh (a job that ended meanwhile is left alone) and a job
-        this process runs is skipped. A job's slot is reserved before its first record and
-        released only after its final one, so the slot check covers every live job."""
+        Requests keep working while it runs, so each job is checked against this process's
+        slots before its record is read afresh, and again right before it is marked. A job's
+        slot is reserved (and the job indexed) before its first record and released only after
+        its final one, so a job of this process that is not live has already ended."""
         if self._video_swept:
             return
         self._video_swept = True
-        for guild in list(self.guilds):
-            try:
-                items = await asyncio.to_thread(
-                    self.docs.find_items, JOBS, guild.id, lambda d: d.get("state") not in FINAL
-                )
-            except Exception:
-                logger.warning("video job sweep failed for guild %s", guild.id, exc_info=True)
+        try:
+            index = await asyncio.to_thread(self._video_active)
+        except Exception:
+            logger.warning("video job sweep: index not read", exc_info=True)
+            return
+        for key, gid in index.items():
+            if self._video_is_live(gid, key):  # runs here: it leaves the index when it ends
                 continue
-            for key, _ in items:
-                try:
-                    doc = await asyncio.to_thread(self.docs.get, JOBS, guild.id, key)
-                except Exception:
-                    logger.warning("video job %s not read", key, exc_info=True)
-                    continue
-                # no await between this check and the write below starting
-                if not doc or doc.get("state") in FINAL or self._video_is_live(guild.id, key):
-                    continue
-                update = {
-                    **doc,
-                    "state": "failed",
-                    "reason": "restarted",
-                    "updated_at": self.s.now().isoformat(timespec="seconds"),
-                }
-                hero_id = str(update.pop("hero_id", "") or "")
-                try:
-                    await asyncio.to_thread(self.docs.put, JOBS, guild.id, key, update)
-                except Exception:
-                    logger.warning("video job %s not marked failed", key, exc_info=True)
-                    continue
-                if hero_id:
-                    await asyncio.to_thread(self._video_cancel_hero, hero_id)
+            try:
+                doc = await asyncio.to_thread(self.docs.get, JOBS, gid, key)
+            except Exception:
+                logger.warning("video job %s not read", key, exc_info=True)
+                continue
+            if not doc or doc.get("state") in FINAL:  # ended (or never written)
+                await asyncio.to_thread(self._video_unindex, key)
+                continue
+            # no await between this check and the write below starting
+            if self._video_is_live(gid, key):
+                continue
+            update = {
+                **doc,
+                "state": "failed",
+                "reason": "restarted",
+                "updated_at": self.s.now().isoformat(timespec="seconds"),
+            }
+            hero_id = str(update.pop("hero_id", "") or "")
+            try:
+                await asyncio.to_thread(self.docs.put, JOBS, gid, key, update)
+            except Exception:
+                logger.warning("video job %s not marked failed", key, exc_info=True)
+                continue
+            month = self._video_refundable(doc)
+            if month:
+                await asyncio.to_thread(self._video_give_back, gid, month)
+            await asyncio.to_thread(self._video_unindex, key)
+            if hero_id:
+                await asyncio.to_thread(self._video_cancel_hero, hero_id)
+            guild = next((g for g in self.guilds if g.id == gid), None)
+            if guild is not None:
                 await self._video_tell_restarted(guild, doc)
+
+    @staticmethod
+    def _video_refundable(doc: dict) -> str:
+        """The month whose ad a cut-off job gives back, or "": only when its record shows no
+        paid media (`cost_usd` 0) and the job was past `queued` (the runner takes the ad right
+        before reporting "storyboard"; a queued job may not have taken it)."""
+        try:
+            cost = float(doc["cost_usd"])
+        except (KeyError, TypeError, ValueError):
+            return ""
+        month = str(doc.get("created_at") or "")[:7]
+        if cost != 0 or doc.get("state") == "queued" or not _MONTH.fullmatch(month):
+            return ""
+        return month
+
+    def _video_give_back(self, guild_id: int, month: str) -> None:
+        """Give a cut-off job's ad back (blocking). Never raises."""
+        try:
+            self.video_usage.give_back(guild_id, month, "ads", 1)
+            logger.info("video ad given back after a restart: guild=%s", guild_id)
+        except Exception:
+            logger.warning("video ad not given back after a restart", exc_info=True)
 
     def _video_cancel_hero(self, interaction_id: str) -> None:
         """Cancel the Omni clip a restart left running (it would run, and bill, to its end), on
