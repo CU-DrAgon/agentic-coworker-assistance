@@ -6,7 +6,7 @@ from promo_helpers import fake_client, image_response, png_bytes
 from test_coordinator import world  # fixture: world.g, .pub, .secret, .staff, .boss
 from test_modes import TMsg, bot  # fixture
 
-from salid import qa
+from salid import imagegen, qa
 from salid.guild_settings import FEATURES, Features, GuildSettingsUpdate
 from salid.qa import FileInput
 
@@ -89,6 +89,19 @@ async def test_never_raises(bot, world, monkeypatch):
         "salid.imagegen_bot.image_tools", lambda ctx: (_ for _ in ()).throw(RuntimeError("x"))
     )
     assert bot._image_tools(msg, world.g, m, []) == []
+
+
+async def test_upload_budget_follows_the_servers_limit(bot, world, monkeypatch):
+    m = world.staff
+    msg = TMsg(world.g, world.pub, m, "x")
+    seen = []
+    monkeypatch.setattr("salid.imagegen_bot.image_tools", lambda ctx: seen.append(ctx) or [])
+    bot._image_tools(msg, world.g, m, [])  # no filesize_limit: discord.py's 10 MiB default
+    world.g.filesize_limit = 10 * 2**20  # unboosted / tier 1
+    bot._image_tools(msg, world.g, m, [])
+    world.g.filesize_limit = 100 * 2**20  # tier 3
+    bot._image_tools(msg, world.g, m, [])
+    assert [c.max_bytes for c in seen] == [9 * 2**20, 9 * 2**20, imagegen.OUTBOX_MAX_BYTES]
 
 
 def test_images_flag_defaults_on():

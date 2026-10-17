@@ -344,6 +344,17 @@ def test_a_batch_over_the_upload_budget_becomes_jpeg(monkeypatch):
     assert all(d.startswith(b"\x89PNG") for d in c.memory.get(c.key))  # memory stays PNG
 
 
+def test_the_upload_budget_is_the_contexts_own(monkeypatch):
+    noisy = [Image.effect_noise((2048, 2048), 120).convert("RGB") for _ in range(2)]
+    monkeypatch.setattr(imagegen, "generate_images", lambda *a, **k: (list(noisy), ""))
+    c = ictx(max_bytes=8 * 2**20)
+    t = imagegen.image_tools(c)[0]
+    out = t(prompt="static on an old tv", count=2, size="2K")
+    assert out["files"] == ["image-1.jpg", "image-2.jpg"] == [n for n, _ in t.outbox]
+    assert sum(len(d) for _, d in t.outbox) <= 8 * 2**20
+    assert ictx().max_bytes == imagegen.OUTBOX_MAX_BYTES
+
+
 def test_a_small_batch_stays_png():
     t = imagegen.image_tools(ictx())[0]
     out = t(prompt="a cup", count=4, size="1K")

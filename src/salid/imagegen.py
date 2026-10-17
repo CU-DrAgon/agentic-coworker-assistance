@@ -11,7 +11,8 @@ promo kits, `create_image` and the video ad stills, and the guards every caller 
 - `create_image` (`image_tools`, bound by `imagegen_bot.ImageMixin`): 1-4 images from an English
   prompt, an attached photo or a remembered result as the reference, optional Thai/English text
   typeset by `overlay` on a scrim band (top for 9:16, bottom otherwise), PNG files (the whole
-  batch as JPEG when the PNGs pass OUTBOX_MAX_BYTES, under Discord's upload limit). Daily limits
+  batch as JPEG when the PNGs pass `ImageCtx.max_bytes`, which follows the server's upload
+  limit, at most OUTBOX_MAX_BYTES). Daily limits
   per guild and per person (`DailyBudget`), taken per image before the calls (blocked calls are
   billed too). `ImageMemory` keeps the last batch per (guild, channel, user) for revisions, in
   process memory only.
@@ -183,7 +184,7 @@ SUBTITLE_MAX = 60
 REF_SIDE = 2048  # an attached reference photo is shrunk to this long side (like promo photos)
 MEMORY_SIDE = 1376  # remembered results: 1K kept as made, 2K halved (a reference needs no more)
 MEMORY_BYTES = 128 * 1024 * 1024  # all remembered results together, least recently used dropped
-OUTBOX_MAX_BYTES = 20 * 1024 * 1024  # one reply's files (Discord refuses the whole upload above)
+OUTBOX_MAX_BYTES = 20 * 1024 * 1024  # one reply's files at most; the bot lowers it per server
 NOTE = (
     "Reply briefly in the user's language: the images are attached and were made with AI. Do not "
     "describe people in them as real."
@@ -361,6 +362,7 @@ class ImageCtx:
     guild_budget: DailyBudget
     user_budget: DailyBudget
     fonts: CardFonts
+    max_bytes: int = OUTBOX_MAX_BYTES  # this reply's files together (the server's upload limit)
     outbox: list[tuple[str, bytes]] = field(default_factory=list)
 
     def left(self) -> int:
@@ -450,8 +452,8 @@ class ImageCtx:
                 data = kept[-1] if small.size == img.size else _png(img)
             shown.append(img)
             files.append((f"image-{i}.png", data))
-        if sum(len(d) for _, d in files) > OUTBOX_MAX_BYTES:  # the whole batch, one format
-            each = OUTBOX_MAX_BYTES // len(shown)
+        if sum(len(d) for _, d in files) > self.max_bytes:  # the whole batch, one format
+            each = self.max_bytes // len(shown)
             files = [
                 (f"image-{i}.jpg", cards.to_jpeg(img, max_bytes=each))
                 for i, img in enumerate(shown, 1)

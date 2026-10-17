@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 
 from . import cards
-from .imagegen import ImageCtx, ImageMemory, image_tools
+from .imagegen import OUTBOX_MAX_BYTES, ImageCtx, ImageMemory, image_tools
 from .media import DailyBudget
 from .promo import PHOTO_MIMES
 
@@ -55,6 +55,10 @@ class ImageMixin:
                     guild_budget=self.image_budget,
                     user_budget=self.image_user_budget,
                     fonts=cards.card_fonts(),
+                    # the server's upload limit (discord.py: 10 MiB unless boosted) minus 1 MiB
+                    max_bytes=min(
+                        OUTBOX_MAX_BYTES, int(getattr(guild, "filesize_limit", 10 * 2**20)) - 2**20
+                    ),
                 )
             )
         except Exception:
