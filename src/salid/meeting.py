@@ -1098,9 +1098,9 @@ class MeetingManager:
         if s.ending or s.leaving:
             return {"error": "meeting_ending"}
         if on:
-            # Captions show what people actually said, in the language they said it; a
-            # translation only when someone asks for one ("show captions in English").
-            s.captions.turn_on(language or "original", self._now())
+            # Captions read in the company language + the room's personal languages
+            # ("audience"); "original" = as spoken; a named language = only that one.
+            s.captions.turn_on(language or "audience", self._now())
             return {"status": "on", "language": language}
         s.captions.turn_off()
         if s.captions_defaulted:  # remember the hide, so a restart does not undo it
@@ -1132,15 +1132,35 @@ class MeetingManager:
             batch = s.captions.take(self._now())
             if not batch or not s.captions.on:
                 return
-            if language != "original":
-                texts = await asyncio.to_thread(
-                    translate_lines,
-                    self.bot.llm,
-                    self.bot.s.gate_model,
-                    [x for _, x in batch],
-                    language,
-                )
-                batch = [(sp, tx) for (sp, _), tx in zip(batch, texts, strict=True)]
+            # Whatever language was spoken, the captions read in the company language and in
+            # the languages the people in the room asked for (the owner's rule); an explicit
+            # "show captions in X" shows only X; "original" shows the words as spoken.
+            targets = (
+                [language]
+                if language not in ("", "original", "audience")
+                else [x for x in (s.langs or [s.lang]) if x and x != "auto"]
+            )
+            if targets:
+                versions = []
+                for lang in targets:
+                    versions.append(
+                        await asyncio.to_thread(
+                            translate_lines,
+                            self.bot.llm,
+                            self.bot.s.gate_model,
+                            [x for _, x in batch],
+                            lang,
+                        )
+                    )
+                merged = []
+                for i, (sp, _) in enumerate(batch):
+                    seen: list[str] = []
+                    for v in versions:
+                        tx = v[i].strip()
+                        if tx and tx not in seen:
+                            seen.append(tx)
+                    merged.append((sp, "\n↳ ".join(seen)))
+                batch = merged
             if s.ending or not s.captions.on:
                 return
             for msg in format_captions(batch):
