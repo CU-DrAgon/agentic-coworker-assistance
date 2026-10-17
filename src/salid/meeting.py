@@ -1098,9 +1098,9 @@ class MeetingManager:
         if s.ending or s.leaving:
             return {"error": "meeting_ending"}
         if on:
-            if language == "original" and s.lang != "th":
-                language = s.lang  # an English guild reads captions in English by default
-            s.captions.turn_on(language, self._now())
+            # Captions show what people actually said, in the language they said it; a
+            # translation only when someone asks for one ("show captions in English").
+            s.captions.turn_on(language or "original", self._now())
             return {"status": "on", "language": language}
         s.captions.turn_off()
         if s.captions_defaulted:  # remember the hide, so a restart does not undo it
