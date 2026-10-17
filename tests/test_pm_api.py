@@ -349,6 +349,7 @@ def test_task_create_and_patch_permissions(w):
         "title",
         "assignee",
         "due",
+        "no_deadline",
         "status",
         "note",
         "url",
@@ -825,6 +826,17 @@ def test_task_json_carries_the_handshake_state(w):
         "discord_user_id": "77",
         "name": "Boss",
     }
+
+
+def test_task_json_flags_a_task_without_a_deadline(w):
+    p = make(w, "adm")
+    w.tasks.save(Task(guild_id=GUILD, id="nd000001", project_id=p["id"], title="x"))
+    w.tasks.save(
+        Task(guild_id=GUILD, id="nd000002", project_id=p["id"], title="y", due="2026-10-20")
+    )
+    rows = call(w, "adm", "GET", f"/projects/{p['id']}/tasks").json()["tasks"]
+    flags = {r["id"]: r["no_deadline"] for r in rows}
+    assert flags == {"nd000001": True, "nd000002": False}
 
 
 def test_task_mode_and_personal_settings_are_admin_only_and_reach_the_guild(w):

@@ -506,7 +506,7 @@ function taskRow(tk, { onTick, showProject } = {}) {
     el("input", { type: "checkbox", checked: !open, disabled: !canTick, "aria-label": tk.title, onchange: (e) => onTick(tk, e.target.checked, e.target) }),
     el("span", { class: "grow" }, tk.step ? el("b", { class: "muted", text: t("pr_step").replace("{n}", String(tk.step)) + "  " }) : null, tk.title, tk.pct_done > 0 && open ? el("span", { class: "muted small", text: "  " + tk.pct_done + "%" }) : null, showProject && tk.project_name ? el("span", { class: "muted small", text: "  · " + tk.project_name }) : null),
     tk.confirm === "pending" || tk.confirm === "awaiting_approval" ? el("span", { class: "badge warn", text: t(tk.confirm === "pending" ? "tk_pending" : "tk_awaiting") }) : null,
-    tk.assignee ? who(tk.assignee) : null, dueBadge(tk.due, open));
+    tk.assignee ? who(tk.assignee) : null, dueBadge(tk.due, open) || (tk.no_deadline && open ? el("span", { class: "badge", text: t("no_deadline") }) : null));
 }
 async function tickTask(tk, done, box, redraw) {
   const prev = tk.status; tk.status = done ? "done" : "open"; redraw();

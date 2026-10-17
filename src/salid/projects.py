@@ -590,6 +590,7 @@ def task_json(task: Task, project_name: str | None = None) -> dict:
         "title": task.title,
         "assignee": task_assignee(task),
         "due": task.due,
+        "no_deadline": not task.due,
         "status": task.status,
         "note": task.note,
         "url": task.source_link,
