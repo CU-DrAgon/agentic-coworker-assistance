@@ -209,7 +209,8 @@ def end_conversation(reason: str = "") -> dict:
     listening.
 
     Args:
-        reason: why, in a few words: "thanked", "went back to each other" or "done".
+        reason: why, in a few words: "thanked", "said that's all", "goodbye". NOT for "went back
+        to each other", a pause or a change of topic: those keep the exchange open.
     """
     return {}
 
@@ -636,9 +637,11 @@ def build_instruction_en(
         "confirm they are done with you: “thank you, that's all”, “ok thanks, that's it for now "
         "Salid”, “I'll talk with my team now”, “goodbye”. Then call end_conversation(reason) and say "
         "nothing more (a short “Sure.” only if they thanked you directly). A bare “ok”, a pause, a "
-        "change of topic or a sentence to someone else is NOT an ending: stay in the exchange but "
-        "keep quiet until they speak to you again. Never interject because you know the answer, "
-        "even when the talk concerns the team or the past.\n"
+        "change of topic, or the caller talking to someone else for a while is NOT an ending: stay "
+        "in the exchange, keep quiet, and answer again the moment they speak to you (no need for "
+        "your name). The system ends the exchange by itself after 5 minutes without anyone talking "
+        "to you. Never interject because you know the answer, even when the talk concerns the team "
+        "or the past.\n"
         "- When told to be quiet, stay quiet until someone calls your name again.\n"
         "- A word that sounds like your name but sits mid-sentence and is not addressing you "
         "(for example “Salad”, “Siri”, “slip”) is not a call: stay quiet.\n"
@@ -811,7 +814,8 @@ def build_instruction(
         "- จบการคุยเฉพาะเมื่อคนที่เรียกคุณบอกจบอย่างชัดเจนด้วยคำที่ยืนยันว่าเสร็จธุระกับคุณแล้ว เช่น “ขอบคุณครับ แค่นี้นะ” "
         "“โอเคครับ ขอบคุณมาก งั้นแค่นี้นะคะสลิด” “ขอคุยกับทีมต่อนะ” “บ๊ายบาย” แล้วจึงเรียก end_conversation(reason) "
         "แล้วเงียบ (ตอบ “ได้ค่ะ” สั้น ๆ เฉพาะเมื่อเขาขอบคุณคุณโดยตรง) คำว่า “โอเค” เฉย ๆ การหยุดพูด การเปลี่ยนเรื่อง "
-        "หรือประโยคที่พูดกับคนอื่น ไม่ใช่การจบ: ยังอยู่ในบทสนทนาแต่เงียบไว้จนกว่าเขาจะพูดกับคุณอีก "
+        "หรือการที่เขาหันไปคุยกับคนอื่นสักพัก ไม่ใช่การจบ: ยังอยู่ในบทสนทนา เงียบไว้ แล้วตอบทันทีที่เขาพูดกับคุณอีก "
+        "(ไม่ต้องเรียกชื่อ) ระบบจะปิดบทสนทนาเองเมื่อไม่มีใครคุยกับคุณ 5 นาที "
         "ห้ามแทรกเพราะรู้คำตอบ แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต\n"
         "- เมื่อถูกบอกให้เงียบ ให้เงียบจนกว่าจะมีคนเรียกชื่อคุณอีกครั้ง\n"
         "- คำที่เสียงคล้ายชื่อคุณแต่อยู่กลางประโยคและไม่ใช่การเรียกคุณ (เช่น “สนิท” ใน “เขาสนิทกันมาก”, “สลิป”, “สิริ”) "

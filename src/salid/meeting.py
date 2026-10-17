@@ -2361,9 +2361,17 @@ class MeetingManager:
 
     _END_WHY = (
         ("thanks", re.compile(r"thank|ขอบคุณ|thx", re.I)),
+        (
+            "closed",
+            re.compile(r"bye|that'?s all|all for now|later|แค่นี้|เท่านี้|ไว้คุยใหม่|ลาก่อน|บ๊ายบาย|จบ", re.I),
+        ),
         ("each_other", re.compile(r"each\s*other|among|turn|กันเอง|คุยกัน|หัน", re.I)),
         ("hushed", re.compile(r"quiet|hush|เงียบ", re.I)),
     )
+    # Reasons that end the exchange. "They turned to each other" / "done" do NOT: once called, she
+    # stays with the caller until they close it in words; 5 minutes of silence toward her end it
+    # by themselves (engaged_timeout_seconds). The owner's rule, 2026-10-18.
+    _END_ACCEPT = ("thanks", "closed", "hushed")
 
     def end_conversation(self, s: MeetingSession, reason: str = "") -> dict:
         """The Live model's tool: the exchange is over. Back to listening, with the reason shown."""
@@ -2371,6 +2379,16 @@ class MeetingManager:
         # The owner's rule: the exchange ends only on an explicit closing said by the caller
         # ("thanks, that's all", "I'll talk with my team now", "bye"). The model was eager to end
         # right after each answer, so the recent words must confirm it; otherwise stay engaged.
+        if why not in self._END_ACCEPT:
+            logger.info(
+                "meeting %s: end_conversation ignored (%s): no explicit closing", s.guild_id, why
+            )
+            return {
+                "status": "engaged",
+                "note": "not an ending: they did not close the exchange in words. Stay with them "
+                "quietly (answer only what they say to you); the system ends it by itself after "
+                "5 minutes without anyone talking to you.",
+            }
         live = getattr(s, "live", None)
         last_voice = float(getattr(live, "_last_voice", 0.0) or 0.0)
         if last_voice and time.monotonic() - last_voice < 2.0:
