@@ -774,3 +774,26 @@ def test_finance_flag_from_settings_opens_the_budget(w):
     )
     assert call(w, "other", "PATCH", f"/projects/{pid}/budget", {"planned": 1}).status_code == 200
     assert call(w, "other", "GET", f"/projects/{pid}").json()["budget"]["planned"] == 1
+
+
+# ------------------------------------------------------------------ updates heard in chat
+def test_updates_heard_in_chat_are_served_on_the_project_not_on_the_card(w):
+    from salid import projects as P
+
+    pid = make(w)["id"]
+    repo = P.ProjectRepo(w.docs)
+    p = repo.get(GUILD, pid)
+    assert call(w, "mem", "GET", f"/projects/{pid}").json()["updates"] == []
+    p.updates = [
+        P.Update(at="2026-10-14 10:00", by=P.Person(name="Toey"), text="Beta on track", quote="q")
+    ]
+    repo.save(GUILD, p)
+    got = call(w, "mem", "GET", f"/projects/{pid}").json()
+    assert (
+        got["updates"][0]["text"] == "Beta on track" and got["updates"][0]["by"]["name"] == "Toey"
+    )
+    card = next(x for x in call(w, "mem", "GET", "/projects").json()["projects"] if x["id"] == pid)
+    assert "updates" not in card
+    # a normal edit keeps them
+    assert call(w, "mem", "PATCH", f"/projects/{pid}", {"overview": "hi"}).status_code == 200
+    assert len(call(w, "mem", "GET", f"/projects/{pid}").json()["updates"]) == 1

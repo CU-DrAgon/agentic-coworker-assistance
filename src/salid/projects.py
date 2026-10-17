@@ -242,6 +242,20 @@ class Change(BaseModel):
     impact: str = ""
 
 
+MAX_UPDATES = 50
+
+
+class Update(BaseModel):
+    """A short progress line Salid heard in chat and kept on the project (newest last)."""
+
+    at: str = ""
+    by: Person | None = None
+    text: str
+    quote: str = ""
+    channel_id: int = 0
+    jump_url: str = ""
+
+
 class Project(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     id: str = ""
@@ -267,6 +281,7 @@ class Project(BaseModel):
     hackathon: Hackathon | None = None
     budget: Budget = Field(default_factory=Budget)
     changes: list[Change] = Field(default_factory=list)
+    updates: list[Update] = Field(default_factory=list)
     deleted: bool = False
 
     @field_validator("name")
@@ -634,7 +649,7 @@ def project_json(
     return doc
 
 
-CARD_DROP = ("milestones", "risks", "links", "changes", "overview", "budget")
+CARD_DROP = ("milestones", "risks", "links", "changes", "updates", "overview", "budget")
 
 
 def card_json(p: Project, stats: dict) -> dict:
@@ -1068,6 +1083,7 @@ STRINGS = {
     "pm_lbl_my_tasks": {"th": "งานของฉันที่ค้างอยู่", "en": "My open tasks"},
     "pm_lbl_no_project": {"th": "ไม่มีโปรเจกต์", "en": "no project"},
     "pm_lbl_none_open": {"th": "ไม่มีงานค้างค่ะ", "en": "No open tasks."},
+    "pm_lbl_updates": {"th": "ความเคลื่อนไหวล่าสุด", "en": "Latest updates"},
 }
 CATALOG.update(STRINGS)
 
@@ -1083,6 +1099,8 @@ PROJECTS_PROMPT = (
     "“โปรเจกต์ของฉัน/งานของฉัน/my tasks” ใช้ my_projects_and_tasks; “ภาพรวมโปรเจกต์ X / status of project X” ใช้ project_show. "
     "ระบุโปรเจกต์ด้วยชื่อบางส่วนได้; ถ้าเครื่องมือบอกว่าไม่พบหรือกำกวม ให้บอกตรงๆ และถามชื่อที่ชัดเจน. "
     "เห็นเฉพาะโปรเจกต์ที่ผู้ถามมีสิทธิ์ดู งบประมาณ/การเงินไม่มีในเครื่องมือเหล่านี้ ถ้าถามให้บอกว่าดูได้ในหน้า /pm เฉพาะฝ่ายการเงิน. "
+    "ถ้ามีคนบอกว่าสลิดจดอะไรจากแชตผิด (ข้อความขึ้นต้น “บันทึกแล้ว”) ให้แก้ด้วย project_update ตั้งค่ากลับ โดยใส่ reason “correction”. "
+    "If someone says Salid recorded something wrong from the chat, set the field back with project_update and reason “correction”. "
     "Projects: create with project_create (name + department are enough), one owner per project, "
     "big changes (status, owner, deadline, priority) need a reason, no approval step."
 )
@@ -1423,4 +1441,8 @@ def render_summary(p: Project, tasks: list[Task], lang: str, today: date) -> str
         lines.append(
             f"{t('pm_lbl_review', lang)}: " + "; ".join(t(r, lang) for r in st["review_reasons"])
         )
-    return "\n".join(lines[:25])
+    lines = lines[:25]
+    if p.updates:  # heard in chat (salid.projects_listen); the newest five, after the capped body
+        lines.append(f"{t('pm_lbl_updates', lang)}:")
+        lines += [f"- {u.at[:10]} {u.text}" for u in p.updates[-5:][::-1]]
+    return "\n".join(lines)

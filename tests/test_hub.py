@@ -303,6 +303,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         vote_offers=True,
         reminders=True,
         projects=True,
+        project_notes=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
