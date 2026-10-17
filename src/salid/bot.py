@@ -81,6 +81,7 @@ from .guild_settings import (
 from .hints import with_hint
 from .hints_bot import HintsMixin
 from .i18n import (
+    base_lang,
     LANGS,
     LANGUAGE_LABELS,
     locale_lang,
@@ -591,6 +592,7 @@ class SecretaryBot(
             self._pc_backfill_start(guild)  # a private channel for every member, paced
         await self._ask_unanswered_languages()  # servers that never chose a main language
         self._start_import()
+        self._spawn(self._reconcile_channel_names())  # channel names follow the company language
         await self.meetings.resume_all()  # rejoin meetings a restart cut off
         self.meetings.scan_all()  # people already in voice channels: join by importance
         await self._sweep_video_jobs()  # video ads a restart cut off: failed, requester told
@@ -1194,6 +1196,43 @@ class SecretaryBot(
         private channels in the background."""
         await asyncio.to_thread(self.team.set_server_language, guild.id, language, apply_all)
         self._spawn(self._pc_rename_for_language(guild, language))
+        self._spawn(self._rename_salid_channels(guild, language))
+
+    async def _rename_salid_channels(self, guild, language: str) -> None:
+        """The channels Salid created for itself (the chat channel, the reports channel) follow the
+        company language: rename the other-language name to this language's. Failures are logged."""
+        from .coo import REPORT_CHANNEL_NAME, REPORT_CHANNEL_NAME_EN
+        from .modes import CHAT_CHANNEL_NAME, CHAT_CHANNEL_NAME_EN
+
+        lang = base_lang(language)
+        pairs = [
+            (CHAT_CHANNEL_NAME, CHAT_CHANNEL_NAME_EN),
+            (REPORT_CHANNEL_NAME, REPORT_CHANNEL_NAME_EN),
+        ]
+        for th, en in pairs:
+            new, old = (th, en) if lang == "th" else (en, th)
+            for ch in list(getattr(guild, "text_channels", []) or []):
+                if ch.name == old:
+                    try:
+                        await ch.edit(name=new, reason="Salid: company language")
+                        await asyncio.sleep(1.0)
+                    except Exception:
+                        logger.warning("could not rename channel %s", ch.id, exc_info=True)
+
+    async def _reconcile_channel_names(self) -> None:
+        """At startup: Salid's own channels and private channels match the company language."""
+        for guild in list(self.guilds):
+            try:
+                settings = await asyncio.to_thread(self.team.current, guild.id)
+                if not settings.language_chosen:
+                    continue
+                lang = settings.language_setting
+                await self._rename_salid_channels(guild, lang)
+                await self._pc_rename_for_language(guild, lang)
+            except Exception:
+                logger.warning(
+                    "channel name reconcile failed for guild %s", guild.id, exc_info=True
+                )
 
     async def _join_voice_tool(self, message, member, lang: str) -> dict:
         """Agent tool: join the voice channel the requester is in (explicit: overrides cooldowns)."""
