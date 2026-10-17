@@ -491,6 +491,16 @@ def test_price_check_drops_rows_without_a_price_and_keeps_the_sources():
     assert len(lines) == 4 and "ร้าน A" in lines[2] and "ร้าน C" in lines[3]
     assert "ร้าน B" not in out["table"] and "ร้าน D" not in out["table"]
     assert out["range"] == "฿1,290-2,490"
+    rows = out["lines"].split("\n\n")[0].splitlines()
+    assert (
+        len(rows) == 2 and rows[0].startswith("1. ร้าน A — ") and rows[1].startswith("2. ร้าน C — ")
+    )
+    assert "|" not in out["lines"] and "ช่วงราคา: ฿1,290-2,490" in out["lines"]
+    assert out["lines"].splitlines()[-2:] == [
+        "1. a.example — https://a.example/zx",
+        "2. b.example — https://b.example/zx",
+    ]
+    assert "`lines`" in out["instruction"] and "Markdown tables" in out["instruction"]
     assert out["sources"] == [
         {"n": 1, "title": "a.example", "link": "https://a.example/zx"},
         {"n": 2, "title": "b.example", "link": "https://b.example/zx"},
@@ -531,6 +541,10 @@ def test_procure_adds_moq_and_lead_time_columns():
         and "Lead time" in out["table"]
     )
     assert out["rows"] == 2 and out["range"] == "$3.90-4.20"
+    first = out["lines"].splitlines()[0]
+    assert first == "1. Acme Supply — PX-5: $4.20 pc (MOQ 500, lead time 14 days, 2026-10-12)"
+    assert out["lines"].splitlines()[1].endswith("(MOQ 1000, 2026-10-10)")
+    assert "Price range: $3.90-4.20" in out["lines"]
     instruction = c.web_client.models.calls[0][2].system_instruction
     assert (
         "PROCUREMENT" in instruction
@@ -760,3 +774,10 @@ def test_i18n_lines_exist_in_both_languages():
     assert t("concept_lbl_option", "en", n=2) == "Option 2"
     assert "2026-10-17" in t("concept_price_recheck", "en", date="2026-10-17")
     assert all(f"concept_kind_{k}" in CATALOG for k in concept.IMAGE_KINDS)
+
+
+def test_concept_prompt_tells_the_model_to_relay_lines_not_the_table():
+    from salid.qa import CONCEPT_PROMPT
+
+    assert "lines" in CONCEPT_PROMPT and "Markdown" in CONCEPT_PROMPT
+    assert "cheerful" not in CONCEPT_PROMPT.lower() and "ร่าเริง" not in CONCEPT_PROMPT

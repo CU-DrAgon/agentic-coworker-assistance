@@ -455,6 +455,32 @@ def to_markdown_table(rows: list[list[str]], purpose: str, lang: str) -> str:
     return "\n".join(lines)
 
 
+def to_lines(
+    rows: list[list[str]], purpose: str, lang: str, rng: str = "", sources: list[dict] | None = None
+) -> str:
+    """The chat rendering (Discord does not draw Markdown tables): one numbered line per row,
+    `1. source — model/spec: price unit (note)`, then the range line and the numbered sources.
+    Procurement rows add MOQ and lead time inside the brackets."""
+    out: list[str] = []
+    for i, r in enumerate(rows, 1):
+        extras = [c for c in r[4:-1] if c.strip("- ")]
+        if purpose == "procure":
+            extras = [
+                f"{n} {c}"
+                for n, c in zip(("MOQ", "lead time"), r[4:-1], strict=False)
+                if c.strip("- ")
+            ]
+        note = ", ".join([*extras, *([r[-1]] if r[-1].strip("- ") else [])])
+        price = " ".join(c for c in (r[2], r[3] if r[3].strip("- ") else "") if c)
+        out.append(f"{i}. {r[0]} — {r[1]}: {price}" + (f" ({note})" if note else ""))
+    if rng:
+        out += ["", f"{t('concept_price_range', lang)}: {rng}"]
+    if sources:
+        out.append("")
+        out += [f"{s['n']}. {s['title']} — {s['link']}".rstrip(" —") for s in sources]
+    return "\n".join(out)
+
+
 # ------------------------------------------------------------------ the agent tools
 NOTE_IMAGE = (
     "Reply in the user's language, short: say the image is attached and that it is an AI "
@@ -703,6 +729,7 @@ class ConceptCtx:
             }
         table = to_markdown_table(rows, purpose, self.lang)
         rng = price_range(rows) or ""
+        lines = to_lines(rows, purpose, self.lang, rng or model_range, sources)
         out: dict[str, Any] = {
             "status": "ok",
             "item": item,
@@ -710,6 +737,7 @@ class ConceptCtx:
             "date": today.isoformat(),
             "rows": len(rows),
             "table": table,
+            "lines": lines,
             "range": rng,
             "sources": sources,
         }
@@ -718,8 +746,9 @@ class ConceptCtx:
         saved = self._save_sourcing(idea, item, today, table, rng, sources)
         out["saved_in_idea"] = saved
         out["instruction"] = (
-            "Show the table as is (do not change any number), then the range line, then the "
-            "numbered sources with links. "
+            "In Discord chat relay `lines` verbatim (it already has the price range and the "
+            "numbered sources; Discord does not render Markdown tables, so never show `table` "
+            "there; do not change any number). "
             + t("concept_price_recheck", self.lang, date=today.isoformat())
             + (f" Say it was saved in the project document “{saved}”." if saved else "")
         )
@@ -806,9 +835,9 @@ def concept_tools(ctx: ConceptCtx, *, images: bool = True) -> list[Callable]:
         item: str, country: str = "TH", quantity: str = "", purpose: str = "buy", idea: str = ""
     ) -> dict:
         """Check CURRENT prices of a product or material on the internet (Google Search): shops,
-        marketplaces and supplier catalogues. Returns a table (source, model / spec, price, unit,
-        date or note), the price range and numbered sources; relay the table and the sources
-        as returned and add that prices must be re-checked before buying. Rows without a real
+        marketplaces and supplier catalogues. Returns `lines` (numbered rows: source, model / spec,
+        price, unit, note; then the price range and numbered sources) for chat, and `table`
+        (Markdown, for documents only). Discord shows no tables: relay `lines` as returned and add that prices must be re-checked before buying. Rows without a real
         price are dropped. Use for "ราคาเท่าไร", "เช็คราคา", "หาซัพพลายเออร์", "how much does X cost".
         For a supplier's catalogue page use web_search / read_web instead.
 
