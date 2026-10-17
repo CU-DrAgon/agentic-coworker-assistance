@@ -36,6 +36,11 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "create_poll",
         "call_vote",  # votes: the opener is the speaker
         "close_vote",
+        # reminders are the speaker's own data and the speaker asked aloud, so they bind to the
+        # speaker (unlike the other reads, which stay at the room's scope)
+        "set_reminder",
+        "cancel_reminder",
+        "list_reminders",
         "start_form",
         "set_captions",
         "set_captions_tool",

@@ -150,6 +150,7 @@ from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply
 from .quotation_bot import QuotationMixin
 from .receipt_forward import LEARN_DAYS, forward_receipt, learned_channels
 from .recent import RecentMessages
+from .reminders_bot import ReminderMixin
 from .scheduling import DiscordCalendar, MeetingService
 from .search_bot import SearchMixin
 from .secretary import SecretaryContext, SecretaryState
@@ -339,6 +340,7 @@ class SecretaryBot(
     SearchMixin,
     TravelMixin,
     MarketsMixin,
+    ReminderMixin,
     IdeasMixin,
     QuotationMixin,
     MeetingDocMixin,
@@ -504,6 +506,7 @@ class SecretaryBot(
         self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
+        self._reminders_init()  # personal reminders, once and recurring (salid.reminders_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
         self._quotation_init()  # quotations (salid.quotation_bot)
         self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
@@ -2190,6 +2193,7 @@ class SecretaryBot(
             *([] if interjection else self._maps_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
+            *([] if interjection else self._reminder_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
@@ -2961,6 +2965,7 @@ class SecretaryBot(
         await self._coo_due()
         await self._polls_forms_due()
         await self._votes_due()
+        await self._reminders_due()
         await self._pc_sweep()
         await self._travel_due()
         await self._markets_due()

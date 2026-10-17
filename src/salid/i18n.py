@@ -1881,6 +1881,143 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "งานใหญ่ใช้เวลานานเกิน {seconds} วินาที จึงยกเลิก",
         "en": "The big task ran longer than {seconds} seconds, so it was cancelled",
     },
+    # ---------------------------------------------------------------- reminders (reminders.py)
+    "rem_fire": {
+        "th": "⏰ เตือนค่ะ: {message}",
+        "en": "⏰ Reminder: {message}",
+    },
+    "rem_fire_from": {
+        "th": "⏰ {who} ฝากเตือนค่ะ: {message}",
+        "en": "⏰ Reminder from {who}: {message}",
+    },
+    "rem_late": {
+        "th": "(เลยเวลาที่ตั้งไว้ {when} แล้วค่ะ)",
+        "en": "(this was due {when})",
+    },
+    "rem_footer": {
+        "th": '({every} · ครั้งต่อไป {next} · บอกสลิดว่า "ยกเลิกเตือน {id}" ได้)',
+        "en": '({every} · next {next} · tell Salid "cancel reminder {id}" to stop)',
+    },
+    "rem_once": {
+        "th": "ครั้งเดียว",
+        "en": "once",
+    },
+    "rem_every_n": {
+        "th": "ทุก {n} {unit}",
+        "en": "every {n} {unit}",
+    },
+    "rem_unit_m": {
+        "th": "นาที",
+        "en": "min",
+    },
+    "rem_unit_h": {
+        "th": "ชั่วโมง",
+        "en": "h",
+    },
+    "rem_unit_d": {
+        "th": "วัน",
+        "en": "d",
+    },
+    "rem_every_day": {
+        "th": "ทุกวัน",
+        "en": "every day",
+    },
+    "rem_every_weekday": {
+        "th": "ทุกวันจันทร์-ศุกร์",
+        "en": "every weekday",
+    },
+    "rem_every_on": {
+        "th": "ทุก {days}",
+        "en": "every {days}",
+    },
+    "rem_today": {
+        "th": "วันนี้ {hm}",
+        "en": "today {hm}",
+    },
+    "rem_tomorrow": {
+        "th": "พรุ่งนี้ {hm}",
+        "en": "tomorrow {hm}",
+    },
+    "rem_err_empty": {
+        "th": "ไม่รู้ว่าจะให้เตือนเรื่องอะไรค่ะ",
+        "en": "There is nothing to remind about.",
+    },
+    "rem_err_too_long": {
+        "th": "ข้อความเตือนยาวเกินไปค่ะ (ไม่เกิน {n} ตัวอักษร)",
+        "en": "That reminder is too long (max {n} characters).",
+    },
+    "rem_err_no_time": {
+        "th": "ยังไม่ได้บอกเวลาที่จะให้เตือนค่ะ",
+        "en": "No time was given for the reminder.",
+    },
+    "rem_err_bad_time": {
+        "th": "อ่านเวลาไม่ออกค่ะ",
+        "en": "Could not read that time.",
+    },
+    "rem_err_past": {
+        "th": "เวลานั้นผ่านไปแล้วค่ะ",
+        "en": "That time has already passed.",
+    },
+    "rem_err_too_far": {
+        "th": "ตั้งเตือนล่วงหน้าได้ไม่เกิน 1 ปีค่ะ",
+        "en": "Reminders can be set at most 1 year ahead.",
+    },
+    "rem_err_bad_every": {
+        "th": "อ่านความถี่ไม่ออกค่ะ (ใช้ เช่น 30m, 2h, 1d)",
+        "en": "Could not read that interval (use e.g. 30m, 2h, 1d).",
+    },
+    "rem_err_min_interval": {
+        "th": "เตือนซ้ำถี่สุดทุก 15 นาทีค่ะ",
+        "en": "The shortest repeat interval is 15 minutes.",
+    },
+    "rem_err_both": {
+        "th": "เลือกอย่างใดอย่างหนึ่งค่ะ: เตือนทุกกี่ชั่วโมง หรือเตือนตามวันในสัปดาห์",
+        "en": "Choose either a repeat interval or weekdays, not both.",
+    },
+    "rem_err_bad_weekdays": {
+        "th": "อ่านวันในสัปดาห์ไม่ออกค่ะ",
+        "en": "Could not read those weekdays.",
+    },
+    "rem_err_weekly_needs_time": {
+        "th": "เตือนรายวัน/รายสัปดาห์ต้องบอกเวลาเป็น HH:MM ด้วยค่ะ",
+        "en": "Daily or weekly reminders need a time of day (HH:MM).",
+    },
+    "rem_err_bad_until": {
+        "th": "วันสิ้นสุดไม่ถูกต้องค่ะ (ต้องไม่ก่อนวันนี้ และไม่ก่อนการเตือนครั้งแรก)",
+        "en": "The end date is not valid (not before today or the first reminder).",
+    },
+    "rem_err_cap": {
+        "th": "มีเตือนที่ยังใช้งานอยู่ครบ {n} อันแล้วค่ะ ยกเลิกบางอันก่อนนะคะ",
+        "en": "There are already {n} active reminders; cancel some first.",
+    },
+    "rem_err_exec_only": {
+        "th": "ตั้งเตือนให้คนอื่นได้เฉพาะผู้บริหารค่ะ",
+        "en": "Only executives can set reminders for other people.",
+    },
+    "rem_err_person_not_found": {
+        "th": "ไม่เจอคนชื่อ “{person}” ในเซิร์ฟเวอร์ค่ะ",
+        "en": "I could not find anyone named “{person}”.",
+    },
+    "rem_err_ambiguous_person": {
+        "th": "มีหลายคนชื่อ “{person}” ค่ะ: {names}",
+        "en": "Several people match “{person}”: {names}.",
+    },
+    "rem_err_bad_where": {
+        "th": "ส่งเตือนได้แค่ทางช่องส่วนตัว (me) หรือในห้องนี้ (here) ค่ะ",
+        "en": "Reminders go to the private channel (me) or this channel (here) only.",
+    },
+    "rem_err_sensitive": {
+        "th": "ข้อความเกี่ยวกับการโอนเงินหรือรหัสผ่านฝากเตือนคนอื่นไม่ได้ค่ะ",
+        "en": "Money or credential text cannot be set as a reminder for someone else.",
+    },
+    "rem_err_not_found": {
+        "th": "ไม่เจอเตือนที่ตรงกันค่ะ",
+        "en": "No matching reminder.",
+    },
+    "rem_err_ambiguous": {
+        "th": "มีหลายอันที่ตรงกันค่ะ บอกรหัส (เช่น R-0012) ได้ไหมคะ",
+        "en": "Several reminders match; please give the id (e.g. R-0012).",
+    },
     # ---------------------------------------------------------------- meeting votes (votes.py)
     "vote_ballot": {
         "th": "🗳️ มติ: {question} — จากการประชุม {room}, ปิดโหวต {time}",
