@@ -1285,6 +1285,7 @@ async def test_only_the_partner_talking_over_salid_stops_her(lv):
     await until(lambda: lv.vc.played and s.speaking)
     v = s.live
     v._partners, v._turn_open = {5}, True
+    v._turn_started_at = 900.0  # her answer began long ago: no early cut
     loud, quiet = pcm48(8000), pcm48(50)
     t0 = 1000.0
     for i in range(150):  # 3 s of loud talk from a bystander (id 11): ignored
@@ -1293,11 +1294,10 @@ async def test_only_the_partner_talking_over_salid_stops_her(lv):
         v._check_talkover(5, quiet, t0 + i * 0.02)
     await asyncio.sleep(0.02)
     assert lv.vc.playing
-    for i in range(30):  # 0.6 s of the partner talking, no words heard yet: not enough
+    for i in range(30):  # 0.6 s of the partner talking: not enough
         v._check_talkover(5, loud, t0 + 10 + i * 0.02)
     assert lv.vc.playing
-    v._heard_while_speaking = "เดี๋ยวนะ ผมถามว่า"
-    for i in range(30, 45):  # with words, 0.8 s of talking over her: stop
+    for i in range(30, 45):  # 0.8 s of clear speech over her: stop
         v._check_talkover(5, loud, t0 + 10 + i * 0.02)
     await until(lambda: lv.vc.playing is False)
     assert v._muted_turn

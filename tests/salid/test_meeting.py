@@ -912,8 +912,9 @@ async def test_english_replies_for_the_invoker(env):
     assert await env.mgr.leave(m, lang="en") == "Salid is not in a meeting right now."
 
 
-async def test_meeting_follows_the_text_channels_language(env, monkeypatch):
-    env.bot.guilds_store.set_channel_language(1000, env.chan.id, "en")
+async def test_meeting_follows_the_company_language(env, monkeypatch):
+    # one company language for the whole server (per-channel overrides are gone)
+    env.bot.guilds_store.set_server_language(1000, "en")
     m = make_member(env.guild, 10, "Ann", env.chan)
     assert await env.mgr.join(m, lang="th") == t("meet_joined", "th", channel=env.chan.name)
     s = env.mgr.sessions[(1000, 77)]
@@ -1010,6 +1011,7 @@ def test_classic_answer_passes_memory_and_web_to_ask(monkeypatch):
             fallback_channel=None,
             voice_channel=SimpleNamespace(id=77, members=[SimpleNamespace(id=6, bot=False)]),
             language="th",
+            lang="th",
             ending=False,
             vc=SimpleNamespace(is_connected=lambda: True),
             tasks=[],

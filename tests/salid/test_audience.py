@@ -449,7 +449,7 @@ async def test_the_chair_can_force_one_language_for_one_meeting(env):
     assert s.langs == ["en", "th"]
 
 
-async def test_classic_speak_uses_each_languages_voice_and_says_the_mode_once(voice):
+async def test_classic_speak_uses_each_languages_voice_and_never_says_the_mode(voice):
     voice.bot.team.set_server_language(1000, "en")
     for uid, lang in ((10, None), (11, "th")):
         m = make_member(voice.guild, uid, f"P{uid}", voice.chan)
@@ -468,9 +468,8 @@ async def test_classic_speak_uses_each_languages_voice_and_says_the_mode_once(vo
     await task
     voices = [(c[1], c[2]) for c in voice.calls if c[0] == "tts"]
     langs = [v[0] for v in voices]
-    # the mode line in both languages, then the answer: English voice first, then the Thai voice
-    assert langs == ["en", "th", "en", "th"]
-    assert s.mode_spoken is True
+    # nothing about settings is spoken: just the answer, English voice first, then the Thai voice
+    assert langs == ["en", "th"]
     voice.calls.clear()
     voice.vc.played.clear()
     voice.vc.playing = False
@@ -482,7 +481,7 @@ async def test_classic_speak_uses_each_languages_voice_and_says_the_mode_once(vo
     voice.vc.playing = False
     voice.vc.after(None)
     await task
-    assert [c[1] for c in voice.calls if c[0] == "tts"] == ["en", "th"]  # no mode line again
+    assert [c[1] for c in voice.calls if c[0] == "tts"] == ["en", "th"]  # still no mode line
     await voice.mgr.end((1000, 77))
 
 

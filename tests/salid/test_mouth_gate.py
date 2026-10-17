@@ -343,7 +343,7 @@ def test_energy_settings_defaults():
     s = Settings(_env_file=None)
     assert s.name_min_voiced_seconds == 0.35 and s.name_min_rms == 250.0
     assert s.name_min_cv == 0.25
-    assert s.live_mouth_gate is True and s.live_call_grace_seconds == 2.5
+    assert s.live_mouth_gate is True and s.live_call_grace_seconds == 4.0
 
 
 async def test_classic_greeting_on_low_energy_audio_does_not_engage(lv, monkeypatch, caplog):  # noqa: F811
@@ -438,6 +438,7 @@ async def test_ask_salid_with_real_speech_engages(gl, caplog):
     s.live._run_tool = fake_run
     for f in frames_of(speechlike(1.5)):
         s.live.feed(5, f)
+    s.name_calls = [time.monotonic()]  # strict policy: her name was heard (ASR) a moment ago
     live.push(tool_msg("ask_salid", {"question": "งานอะไรค้าง"}))
     await until(lambda: live.tool_responses)
     assert live.tool_responses[-1][0].response != {"error": "nobody asked: stay silent"}

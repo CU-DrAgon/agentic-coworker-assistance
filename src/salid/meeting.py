@@ -85,7 +85,6 @@ CONTEXT_WINDOW_S = 5 * 60
 CONTEXT_MAX_CHARS = 6000
 SUMMARY_MAX_CHARS = 150_000
 PENDING_WAKE_S = 15.0
-BARE_WAKE_FOLLOW_S = 5.0  # live: a bare name is followed by the request within this long
 TRANSCRIBE_WORKERS = 2
 QUEUE_MAX = 60
 NOTE_MIN_GAP_S = 5.0
@@ -800,7 +799,7 @@ class MeetingSession:
     called_by: int = 0  # user id of whoever called her last (informational; no automatic pass)
     hushed_until: float = 0.0  # told to be quiet: silent listening until this (or her name + words)
     hushed_at: float = -1e9
-    engaged_bare: bool = False  # engagement started from the name alone: expires fast (10 s)
+    engaged_bare: bool = False  # engagement started from the name alone: waits `engaged_bare_timeout_seconds` (300 s)
     caller: str = ""  # display name of whoever called her (the exchange is theirs); live mode
     name_calls: list[float] = field(default_factory=list)  # ASR name_called hits (monotonic)
     unaddressed: int = 0  # consecutive utterances, while engaged, not addressed to Salid
@@ -814,7 +813,6 @@ class MeetingSession:
     starter_id: int = 0  # whoever invited Salid: the chair (with any executive in the room)
     language_mode: str = ""
     langs: list[str] = field(default_factory=list)
-    mode_spoken: bool = False  # the answering mode was said aloud once
     voice_talk: str = ""  # "" = the org default | "may_talk" | "listen_only" (human switch only)
     captions_defaulted: bool = (
         False  # the server default was applied (or the resume record says so)
@@ -1742,7 +1740,7 @@ class MeetingManager:
                 if lang in LANGS and lang != "auto"
                 else resolve_lang(self.bot.team.current(guild.id).language_setting),
                 announce="meet_announce_auto",
-                first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 10)) * 60.0,
+                first_grace=float(self.bot.s.leave_empty_seconds),
                 origin="auto",
                 _locked=True,
             )
@@ -2151,10 +2149,6 @@ class MeetingManager:
             and now - s.first_speech_at > delay
         ):
             self._spawn(s, self.ask_consent(s))
-        if s.hushed_until and now > s.hushed_until:
-            s.hushed_until = 0.0  # the hold is over: the normal listening rules return
-            if s.live is not None:
-                s.live.unhush()
         if s.engaged and now > s.engaged_until and not s.speaking:
             # nobody addressed Salid for a while: back to listening
             self._set_engaged(s, False, why="bare" if s.engaged_bare else "quiet")
@@ -2236,21 +2230,12 @@ class MeetingManager:
         if said is not None and not self._real_call(s, seg, text, said, bare):
             said = None  # noise the transcriber turned into a greeting: not a call
         live = s.voice_mode == "live"
-        pending_at = s.pending_wake.pop(seg.user_id, None) if live and not hushed else None
-        if said is None and live and pending_at is not None and not self._is_echo(s, seg):
-            # a bare name was heard a moment ago: the speaker's next words are the call when they
-            # are a question / a request
-            if time.monotonic() - pending_at < BARE_WAKE_FOLLOW_S and self._is_request(text):
-                said = text
-        elif said is not None and bare:
+        if said is not None and bare:
             if hushed:
                 return  # even a corroborated bare name needs a request in the same utterance
             if not heard.name_called:
                 # The transcriber heard something like the name but does not think it was an
-                # address (a misheard one-word clip): in live mode only a pending wake (the
-                # next words within 5 s count), in classic mode nothing.
-                if live:
-                    s.pending_wake[seg.user_id] = time.monotonic()
+                # address (a misheard one-word clip): not a call.
                 return
             # A bare "Salid" the transcriber itself judges as an address, with real speech
             # behind it (the gate passed): a call. She answers ("Yes?") like a person would.
@@ -2279,7 +2264,7 @@ class MeetingManager:
         if await self._minutes_instruction(s, member, text):
             return
         now = time.monotonic()
-        if s.engaged and not called and not live and self.is_dismissal(text):
+        if s.engaged and not called and not live and self.is_dismissal(text):  # CLASSIC mode only
             self._set_engaged(s, False)  # "ขอบคุณครับ พอแล้ว": back to listening, not leaving
             if (  # a reply only when she was thanked directly; "ok" / "next" = silence
                 s.voice_mode != "live"
@@ -2294,12 +2279,11 @@ class MeetingManager:
             )
         elif s.engaged and not self._is_echo(s, seg):
             if not live:
-                self._engaged_utterance(s, text, now, seg.user_id)
-            elif s.engaged_bare and seg.user_id and seg.user_id == s.called_by:
-                # the caller went on after her "Yes?": the exchange is running (the Live model
-                # decides when it is over; the cap is `engaged_timeout_seconds`)
-                s.engaged_bare = False
-                s.engaged_until = now + self._engage_s()
+                self._engaged_utterance(s, text, now, seg.user_id)  # CLASSIC mode only
+            elif seg.user_id and seg.user_id == s.called_by:
+                # Live: the caller's talk within the exchange renews the window (the Live model
+                # decides when it is over; `engaged_timeout_seconds` is the only timer)
+                self.renew_engaged(s, now)
         if s.voice_mode == "live":
             if called and s.live is not None:
                 # Deterministic: the name was said, so Salid must answer. If the Live model has
@@ -2365,12 +2349,11 @@ class MeetingManager:
             "closed",
             re.compile(r"bye|that'?s all|all for now|later|แค่นี้|เท่านี้|ไว้คุยใหม่|ลาก่อน|บ๊ายบาย|จบ", re.I),
         ),
-        ("each_other", re.compile(r"each\s*other|among|turn|กันเอง|คุยกัน|หัน", re.I)),
         ("hushed", re.compile(r"quiet|hush|เงียบ", re.I)),
     )
     # Reasons that end the exchange. "They turned to each other" / "done" do NOT: once called, she
-    # stays with the caller until they close it in words; 5 minutes of silence toward her end it
-    # by themselves (engaged_timeout_seconds). The owner's rule, 2026-10-18.
+    # stays with the caller until they close it in words; `engaged_timeout_seconds` without anyone
+    # talking to her ends it by itself. The owner's rule, 2026-10-18.
     _END_ACCEPT = ("thanks", "closed", "hushed")
 
     def end_conversation(self, s: MeetingSession, reason: str = "") -> dict:
@@ -2387,7 +2370,7 @@ class MeetingManager:
                 "status": "engaged",
                 "note": "not an ending: they did not close the exchange in words. Stay with them "
                 "quietly (answer only what they say to you); the system ends it by itself after "
-                "5 minutes without anyone talking to you.",
+                f"{self._engage_min()} minutes without anyone talking to you.",
             }
         live = getattr(s, "live", None)
         last_voice = float(getattr(live, "_last_voice", 0.0) or 0.0)
@@ -2398,17 +2381,13 @@ class MeetingManager:
         self._set_engaged(s, False, why=why)
         return {"status": "listening"}
 
-    def _hush_hold_s(self) -> float:
-        return float(getattr(self.bot.s, "hush_hold_seconds", 90.0))
-
     def _hush(self, s: MeetingSession) -> None:
         """Told to be quiet: stop talking now, forget any pending wake, go back to listening, and
-        stay silent until her name comes with words (or, when `hush_hold_seconds` > 0, for that
-        long). No reply: silence is the acknowledgement."""
+        stay silent until her name comes with words (no timer). No reply: silence is the
+        acknowledgement."""
         now = time.monotonic()
         fresh = now - s.hushed_at > 3.0  # the Live transcript and the classic hit are one hush
-        hold = self._hush_hold_s()  # 0 = no timer: silent until her name comes with words
-        s.hushed_at, s.hushed_until = now, (now + hold) if hold > 0 else float("inf")
+        s.hushed_at, s.hushed_until = now, float("inf")  # until her name comes with words
         s.pending_wake.clear()
         if s.live is not None:
             s.live.hush(fresh)
@@ -2423,10 +2402,6 @@ class MeetingManager:
             s.hushed_until = 0.0
             if s.live is not None:
                 s.live.clear_hush()
-
-    def _is_request(self, text: str) -> bool:
-        """A question or a request (`_ASK_RE`) or at least three words."""
-        return bool(self._ASK_RE.search(text or "")) or len((text or "").split()) >= 3
 
     def _real_call(self, s, seg: Segment, text: str, said: str, bare: bool = False) -> bool:
         """A bare greeting / name call (the shape noise is hallucinated into) counts only when the
@@ -2482,7 +2457,23 @@ class MeetingManager:
         return bool(cls._DISMISS_RE.search(text))
 
     def _engage_s(self) -> float:
-        return float(getattr(self.bot.s, "engaged_timeout_seconds", 45.0))
+        return float(getattr(self.bot.s, "engaged_timeout_seconds", 300.0))
+
+    def _engage_min(self) -> str:
+        """The engaged window in minutes for labels and prompts ("5", "2.5"): built from the setting."""
+        m = self._engage_s() / 60.0
+        return str(int(m)) if abs(m - round(m)) < 0.05 else f"{m:.1f}"
+
+    def renew_engaged(
+        self, s: MeetingSession, now: float | None = None, *, keep_bare: bool = False
+    ):
+        """Somebody talked with her (the caller spoke, or she answered): the quiet window starts
+        again. `keep_bare`: her own "Yes?" to a bare name does not turn the bare wait into a talk."""
+        if not s.engaged:
+            return
+        if not keep_bare:
+            s.engaged_bare = False
+        s.engaged_until = max(s.engaged_until, (now or time.monotonic()) + self._engage_s())
 
     # Not addressed to Salid: the heuristics are deliberately simple and live here in code.
     # While engaged, an utterance counts as addressed to her when it (a) says her name (handled
@@ -2573,7 +2564,7 @@ class MeetingManager:
         bare = bare and on and not (s.engaged and not s.engaged_bare)
         s.engaged_bare = bare
         span = (
-            float(getattr(self.bot.s, "engaged_bare_timeout_seconds", 10.0))
+            float(getattr(self.bot.s, "engaged_bare_timeout_seconds", 300.0))
             if bare
             else self._engage_s()
         )
@@ -2581,8 +2572,8 @@ class MeetingManager:
         s.unaddressed = 0
         if on:
             s.called_at = time.monotonic()
-            if by:
-                s.called_by = by
+            if by and (not s.engaged or not s.called_by):
+                s.called_by = by  # the exchange belongs to whoever opened it
         if on and name and s.engaged and not s.caller:
             s.caller = name  # the caller became known after the exchange began
             if s.live is not None:
@@ -2608,7 +2599,7 @@ class MeetingManager:
         else:
             text = t("voice_state_listening", s.lang)
             if live:
-                text += t(f"voice_why_{why or 'ended'}", s.lang)
+                text += t(f"voice_why_{why or 'ended'}", s.lang, mins=self._engage_min())
         with contextlib.suppress(RuntimeError):  # no running loop (sync caller): best effort
             self._spawn(s, self._post_state(s, text))
 
@@ -2909,15 +2900,7 @@ class MeetingManager:
             particle = str(getattr(bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
             spoken_parts: list[str] = []
             pcm = b""
-            if (
-                False and aud.MODE_NOTICES and not s.mode_spoken and s.langs
-            ):  # never spoken: text only
-                s.mode_spoken = True
-                company_only = len(s.langs) == 1 and s.language_mode == "company_only"
-                for r in langs:
-                    line = aud.mode_line(s.langs, [r], company_only=company_only)
-                    pcm += await asyncio.to_thread(say, bot.s, bot.llm, line, r)
-                    spoken_parts.append(line)
+            # the answering mode is never spoken (text line in the meeting chat only)
             for lang, block in pieces:
                 part = await asyncio.to_thread(
                     spoken_text, bot.llm, bot.s.gate_model, question, block, lang

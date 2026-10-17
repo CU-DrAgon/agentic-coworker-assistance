@@ -138,7 +138,7 @@ def build_realtime_input(settings: Any) -> types.RealtimeInputConfig:
                 types.EndSensitivity, getattr(settings, "live_end_sensitivity", "low"), "low"
             ),
             prefix_padding_ms=int(getattr(settings, "live_prefix_padding_ms", 300)),
-            silence_duration_ms=int(getattr(settings, "live_silence_ms", 1200)),
+            silence_duration_ms=int(getattr(settings, "live_silence_ms", 1000)),
         ),
     )
 
@@ -289,7 +289,6 @@ ASKER_MAX_AGE_S = 30.0
 TALKOVER_S = 0.8
 EARLY_CUT_S = 2.5  # in the first seconds of her answer the caller's voice stops her almost at once
 EARLY_CUT_SPEECH_S = 0.3
-TALKOVER_NO_WORDS_S = 1.6  # ... or this long when the Live transcript has no words for it yet
 TALKOVER_GAP_S = 0.35
 TALKOVER_RMS = 500.0  # the last utterance counts as "who asked" if it ended this recently
 ROOM_NOTE = (
@@ -336,7 +335,7 @@ ANNOUNCE_AUTH_S = 30.0  # the announcement turn may be heard for this long after
 
 # TODO(web timeout): grounded web search has a fixed 20 s timeout (llm.GROUNDED_TIMEOUT_S); there is
 # no per-call knob yet, so the 15 s voice target is not enforced.
-ANSWER_MAX_CHARS = 600
+ANSWER_MAX_CHARS = 700  # = SHORT_ANSWER_CHARS: what is spoken in full is never cut
 LEDGER_NOTE = (
     "(ในห้องเสียงมีผู้ที่ไม่ใช่ผู้บริหาร: ห้ามใช้หรือเปิดเผยข้อมูลบัญชี/ใบเสร็จ/การใช้จ่ายของร้าน "
     "ถ้าถามเรื่องนี้ให้ตอบสั้น ๆ ว่าดูได้เฉพาะเมื่อทุกคนในห้องเป็นผู้บริหาร ถามในแชทแทนได้)"
@@ -415,7 +414,7 @@ RESULT_CUE_SHORT_EN = (
     "“The {question} result is in the chat.” and stop. Do not read the result out.)"
 )
 SHORT_ANSWER_CHARS = (
-    700  # an answer this short is spoken in full (only long lists go "see the chat")
+    ANSWER_MAX_CHARS  # an answer this short is spoken in full (only long lists go "see the chat")
 )
 FAILED_CUE = (
     "(งานที่ขอไว้ งาน {job} คำถาม: {question} ทำไม่สำเร็จ — แจ้งสั้น ๆ ว่าทำให้ไม่ได้ "
@@ -580,6 +579,13 @@ def thai_date_line(now) -> str:
     return f"วันนี้คือ วัน{THAI_DAYS[now.weekday()]}ที่ {now.day} {THAI_MONTHS[now.month - 1]} {now.year}"
 
 
+def engaged_minutes(settings: Any) -> str:
+    """`engaged_timeout_seconds` in minutes for the prompts ("5"): the one number the quiet label,
+    the instruction and the timer all share."""
+    m = float(getattr(settings, "engaged_timeout_seconds", 300.0)) / 60.0
+    return str(int(m)) if abs(m - round(m)) < 0.05 else f"{m:.1f}"
+
+
 def _langs_block(langs: list[str] | None, company_only: bool, prompt_lang: str) -> str:
     """The room's answer languages for the Live instruction: the repeat-in-the-second-language
     rule, and the one-line mode statement for the first spoken reply (said once)."""
@@ -610,9 +616,14 @@ def build_instruction_en(
     now = now or settings.now()
     p = (
         f"Today is {now:%A, %B} {now.day}, {now.year}. The team's time zone is {settings.tz} "
-        f"(this session started at {now:%H:%M} local time). When asked the time or date, call "
-        "ask_salid, which knows the exact local time; never answer in UTC or guess.\n"
-        "LANGUAGE RULE (highest priority): this team's language is English. ALWAYS SPEAK ENGLISH, "
+        f"(this session started at {now:%H:%M} local time). "
+        + (
+            "When asked the time or date, call ask_salid, which knows the exact local time; never "
+            "answer in UTC or guess.\n"
+            if qa
+            else "Never answer a time in UTC or guess it.\n"
+        )
+        + "LANGUAGE RULE (highest priority): this team's language is English. ALWAYS SPEAK ENGLISH, "
         "even when the person speaks Thai or any other language to you; translate what you need. "
         "The only exceptions are the room's answer-languages rule below (if present) or an explicit "
         "request such as “answer in Thai”.\n"
@@ -639,9 +650,9 @@ def build_instruction_en(
         "nothing more (a short “Sure.” only if they thanked you directly). A bare “ok”, a pause, a "
         "change of topic, or the caller talking to someone else for a while is NOT an ending: stay "
         "in the exchange, keep quiet, and answer again the moment they speak to you (no need for "
-        "your name). The system ends the exchange by itself after 5 minutes without anyone talking "
-        "to you. Never interject because you know the answer, even when the talk concerns the team "
-        "or the past.\n"
+        f"your name). The system ends the exchange by itself after {engaged_minutes(settings)} minutes "
+        "without anyone talking to you. Never interject because you know the answer, even when the "
+        "talk concerns the team or the past.\n"
         "- When told to be quiet, stay quiet until someone calls your name again.\n"
         "- A word that sounds like your name but sits mid-sentence and is not addressing you "
         "(for example “Salad”, “Siri”, “slip”) is not a call: stay quiet.\n"
@@ -797,8 +808,12 @@ def build_instruction(
     now = now or settings.now()
     p = (
         f"{thai_date_line(now)} เขตเวลาของทีมคือ {settings.tz} (เซสชันนี้เริ่ม {now:%H:%M} น. เวลาท้องถิ่น) "
-        "ถ้ามีคนถามเวลาหรือวันที่ ให้เรียก ask_salid ซึ่งรู้เวลาท้องถิ่นที่แน่นอน ห้ามตอบเป็น UTC หรือเดา\n"
-        "คุณชื่อ “สลิด” (Salid) เป็นผู้จดบันทึกประจำทีม นั่งอยู่ในห้องเสียง Discord ของทีม งานหลักคือฟังและจดบันทึกการประชุมเงียบ ๆ "
+        + (
+            "ถ้ามีคนถามเวลาหรือวันที่ ให้เรียก ask_salid ซึ่งรู้เวลาท้องถิ่นที่แน่นอน ห้ามตอบเป็น UTC หรือเดา\n"
+            if qa
+            else "ห้ามตอบเวลาเป็น UTC หรือเดา\n"
+        )
+        + "คุณชื่อ “สลิด” (Salid) เป็นผู้จดบันทึกประจำทีม นั่งอยู่ในห้องเสียง Discord ของทีม งานหลักคือฟังและจดบันทึกการประชุมเงียบ ๆ "
         "ไม่ชวนคุยเอง คุณพูดเมื่อมีคนเรียกชื่อเท่านั้น แล้วคุยกับคนที่เรียกคุณ (และคนที่หันมาคุยด้วย) "
         "ไม่สั่งสอน ไม่ชวนคุยเอง ไม่อ่านกฎหรือนโยบายให้ใคร\n"
         "กติกาการพูด:\n"
@@ -815,7 +830,7 @@ def build_instruction(
         "“โอเคครับ ขอบคุณมาก งั้นแค่นี้นะคะสลิด” “ขอคุยกับทีมต่อนะ” “บ๊ายบาย” แล้วจึงเรียก end_conversation(reason) "
         "แล้วเงียบ (ตอบ “ได้ค่ะ” สั้น ๆ เฉพาะเมื่อเขาขอบคุณคุณโดยตรง) คำว่า “โอเค” เฉย ๆ การหยุดพูด การเปลี่ยนเรื่อง "
         "หรือการที่เขาหันไปคุยกับคนอื่นสักพัก ไม่ใช่การจบ: ยังอยู่ในบทสนทนา เงียบไว้ แล้วตอบทันทีที่เขาพูดกับคุณอีก "
-        "(ไม่ต้องเรียกชื่อ) ระบบจะปิดบทสนทนาเองเมื่อไม่มีใครคุยกับคุณ 5 นาที "
+        f"(ไม่ต้องเรียกชื่อ) ระบบจะปิดบทสนทนาเองเมื่อไม่มีใครคุยกับคุณ {engaged_minutes(settings)} นาที "
         "ห้ามแทรกเพราะรู้คำตอบ แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต\n"
         "- เมื่อถูกบอกให้เงียบ ให้เงียบจนกว่าจะมีคนเรียกชื่อคุณอีกครั้ง\n"
         "- คำที่เสียงคล้ายชื่อคุณแต่อยู่กลางประโยคและไม่ใช่การเรียกคุณ (เช่น “สนิท” ใน “เขาสนิทกันมาก”, “สลิป”, “สิริ”) "
@@ -1011,7 +1026,6 @@ class LiveVoice:
         self._awaiting_since = 0.0  # monotonic: when a tool call started waiting for its answer
         self._partners: set[int] = set()  # who Salid is answering (talking over her stops her)
         self._talkover: dict[int, list[float]] = {}  # partner id -> [start, last] loud speech
-        self._heard_while_speaking = ""
         self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
         self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
@@ -1110,11 +1124,10 @@ class LiveVoice:
         if cur is None or now - cur[1] > TALKOVER_GAP_S:
             cur = self._talkover[uid] = [now, now]
         cur[1] = now
-        words = len(self._heard_while_speaking.strip()) >= 2
         # Right after she starts (her answer may have come on a thinking pause): the caller's
         # voice cuts her at once, so she never talks over a sentence they are finishing.
         early = now - self._turn_started_at <= EARLY_CUT_S
-        need = EARLY_CUT_SPEECH_S if early else (TALKOVER_S if words else TALKOVER_NO_WORDS_S)
+        need = EARLY_CUT_SPEECH_S if early else TALKOVER_S
         if cur[1] - cur[0] >= need:
             self._talkover.clear()
             self._stop_requested()
@@ -1379,12 +1392,6 @@ class LiveVoice:
     def clear_hush(self) -> None:
         self._hushed = False  # the engagement that follows sends its own state line
 
-    def unhush(self) -> None:
-        """The hold is over: back to the normal listening state."""
-        if self._hushed:
-            self._hushed = False
-            self._spawn(self._send_state())
-
     def ensure_reply(
         self,
         since: float,
@@ -1420,8 +1427,6 @@ class LiveVoice:
                 self._hush_seen = True
                 self.bot.meetings._hush(self.session)
             return
-        if self._speaking():
-            self._heard_while_speaking += text
         if (
             self._speaking()
             and intentional_barge_in(self.bot.s)
@@ -1473,7 +1478,7 @@ class LiveVoice:
                 self._heard_buf,
                 None,
                 said or self._heard_buf,
-                wait=float(getattr(self.bot.s, "live_name_reply_seconds", 1.5)),
+                wait=float(getattr(self.bot.s, "live_name_reply_seconds", 1.0)),
                 track_voice=True,
             )
         )
@@ -1520,7 +1525,7 @@ class LiveVoice:
         sets = self.bot.s
         t0 = time.monotonic()
         if wait is None:
-            wait = float(getattr(sets, "live_force_reply_seconds", 1.2))
+            wait = float(getattr(sets, "live_force_reply_seconds", 2.0))
         while True:  # `track_voice`: the person may still be talking when the name is seen
             delay = max(since, self._last_voice if track_voice else 0.0) + wait - time.monotonic()
             if delay <= 0:
@@ -1535,7 +1540,7 @@ class LiveVoice:
         cue_at = time.monotonic()
         self._last_audio_at = cue_at  # one cue per call
         await self._cue(live, heard)
-        await asyncio.sleep(float(getattr(sets, "live_cue_retry_seconds", 6.0)))
+        await asyncio.sleep(float(getattr(sets, "live_cue_retry_seconds", 4.0)))
         live = self._live
         if live is None or self._closing or self.session.ending or self.session.leaving:
             return
@@ -1561,7 +1566,7 @@ class LiveVoice:
     # ---- audio in
     def _idle_s(self) -> float:
         """Silence is sent long enough for the server to end the turn (silence_duration_ms) first."""
-        ms = int(getattr(self.bot.s, "live_silence_ms", 0) or 0)
+        ms = int(getattr(self.bot.s, "live_silence_ms", 1000) or 0)
         return max(STREAM_IDLE_S, ms / 1000 + 0.8)
 
     async def _sender(self, live: Any) -> None:
@@ -1693,7 +1698,7 @@ class LiveVoice:
         try:
             await asyncio.wait(
                 {job.task, waiter},
-                timeout=float(getattr(sets, "live_foreground_seconds", 12.0)),
+                timeout=float(getattr(sets, "live_foreground_seconds", 25.0)),
                 return_when=asyncio.FIRST_COMPLETED,
             )
         finally:
@@ -2252,7 +2257,7 @@ class LiveVoice:
         now = time.monotonic()
         if not self._held:
             self._held_since = now
-        grace = float(getattr(self.bot.s, "live_call_grace_seconds", 2.5))
+        grace = float(getattr(self.bot.s, "live_call_grace_seconds", 4.0))
         if now - self._held_since <= grace:
             self._held.append(data)
             self._gated_turn = True
@@ -2264,7 +2269,7 @@ class LiveVoice:
         held, self._held = self._held, []
         if not held:
             return
-        grace = float(getattr(self.bot.s, "live_call_grace_seconds", 2.5))
+        grace = float(getattr(self.bot.s, "live_call_grace_seconds", 4.0))
         if time.monotonic() - self._held_since > grace:  # too late: the rest of the turn too
             self._gated_turn = True
             self._muted_turn = self._turn_open
@@ -2296,7 +2301,6 @@ class LiveVoice:
             # the people this answer is for: whoever spoke just before it (and overlapped them)
             self._partners = set(self.recent_speakers())
             self._talkover.clear()
-            self._heard_while_speaking = ""
             if self._latency_pending:
                 logger.info(
                     "live: user audio ended -> first audio %.1fs",
@@ -2306,9 +2310,8 @@ class LiveVoice:
         self._awaiting_answer = False
         s.introduced = True  # Salid has spoken: the room knows it is there
         self._last_audio_at = self._real_audio_at = time.monotonic()
-        if s.engaged and not s.engaged_bare:  # her own speech keeps the 90 s cap away
-            span = self.bot.meetings._engage_s()
-            s.engaged_until = max(s.engaged_until, self._real_audio_at + span)
+        if s.engaged and not s.engaged_bare:  # her own answer renews the quiet window
+            self.bot.meetings.renew_engaged(s, self._real_audio_at)
         src = self._source
         if src is not None and self._filler_until > self._real_audio_at:
             src.clear()  # the real answer is here: cut the rest of the "one moment" clip

@@ -81,9 +81,9 @@ from .guild_settings import (
 from .hints import with_hint
 from .hints_bot import HintsMixin
 from .i18n import (
-    base_lang,
     LANGS,
     LANGUAGE_LABELS,
+    base_lang,
     locale_lang,
     parse_language_command,
     parse_server_language_command,
@@ -1202,7 +1202,7 @@ class SecretaryBot(
         """The channels Salid created for itself (the chat channel, the reports channel) follow the
         company language: rename the other-language name to this language's. Failures are logged."""
         from .coo import REPORT_CHANNEL_NAME, REPORT_CHANNEL_NAME_EN
-        from .modes import CHAT_CHANNEL_NAME, CHAT_CHANNEL_NAME_EN
+        from .modes import CHAT_CHANNEL_NAME_EN
 
         lang = base_lang(language)
         pairs = [

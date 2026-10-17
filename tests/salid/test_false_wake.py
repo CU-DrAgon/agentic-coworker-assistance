@@ -16,7 +16,7 @@ from salid import live_voice as lvm
 from salid import meeting as mt
 from salid.config import Settings
 from salid.live_voice import FORCE_CUE, FORCE_CUE_EN
-from salid.meeting import BARE_WAKE_FOLLOW_S, Heard, SpeechStats, bare_name, looks_like_speech
+from salid.meeting import Heard, SpeechStats, bare_name, looks_like_speech
 
 
 def say(monkeypatch, *heard):
@@ -42,13 +42,13 @@ def seg(uid=5):
 
 
 # ------------------------------------------------------------------ live: a bare name
-async def test_live_bare_name_from_the_transcriber_only_sets_pending(lv, monkeypatch):
+async def test_live_bare_name_the_transcriber_doubts_is_left_to_the_live_model(lv, monkeypatch):
     s, live = await lv.join(5)
     calls = record_replies(s)
     say(monkeypatch, Heard("สลิด", False))
     await lv.mgr.handle_segment(s, seg())
-    assert s.engaged is False and calls == []
-    assert 5 in s.pending_wake
+    assert s.engaged is False and calls == [] and s.name_calls == []
+    assert s.pending_wake == {}  # no "next words are the call" rule in live mode
     await lv.mgr.end((1000, 77))
 
 
@@ -60,49 +60,6 @@ async def test_live_single_bare_name_with_name_called_true_leaves_it_to_the_live
     say(monkeypatch, Heard("สลิด", True))
     await lv.mgr.handle_segment(s, seg())
     assert s.engaged is False and calls == [] and len(s.name_calls) == 1
-    await lv.mgr.end((1000, 77))
-
-
-async def test_live_bare_name_then_a_question_within_5_seconds_is_the_call(lv, monkeypatch):
-    s, live = await lv.join(5)
-    calls = record_replies(s)
-    say(monkeypatch, Heard("สลิด", False), Heard("วันนี้มีนัดอะไรบ้าง", False))
-    await lv.mgr.handle_segment(s, seg())
-    await lv.mgr.handle_segment(s, seg())
-    assert s.engaged is True
-    assert len(calls) == 1 and calls[0][1]["question"] == "วันนี้มีนัดอะไรบ้าง"
-    assert 5 not in s.pending_wake
-    await lv.mgr.end((1000, 77))
-
-
-async def test_live_bare_name_then_three_plain_words_is_the_call_too(lv, monkeypatch):
-    s, live = await lv.join(5)
-    calls = record_replies(s)
-    say(monkeypatch, Heard("Salid", False), Heard("summarize the budget", False))
-    await lv.mgr.handle_segment(s, seg())
-    await lv.mgr.handle_segment(s, seg())
-    assert len(calls) == 1 and s.engaged is True
-    await lv.mgr.end((1000, 77))
-
-
-async def test_live_question_after_the_follow_window_is_nothing(lv, monkeypatch):
-    s, live = await lv.join(5)
-    calls = record_replies(s)
-    say(monkeypatch, Heard("สลิด", False), Heard("วันนี้มีนัดอะไรบ้าง", False))
-    await lv.mgr.handle_segment(s, seg())
-    s.pending_wake[5] -= BARE_WAKE_FOLLOW_S + 1  # the 5 s are over (the old window was 15 s)
-    await lv.mgr.handle_segment(s, seg())
-    assert s.engaged is False and calls == []
-    await lv.mgr.end((1000, 77))
-
-
-async def test_live_follow_up_must_come_from_the_same_speaker(lv, monkeypatch):
-    s, live = await lv.join(5, 6)
-    calls = record_replies(s)
-    say(monkeypatch, Heard("สลิด", False), Heard("วันนี้มีนัดอะไรบ้าง", False))
-    await lv.mgr.handle_segment(s, seg(5))
-    await lv.mgr.handle_segment(s, seg(6))
-    assert s.engaged is False and calls == []
     await lv.mgr.end((1000, 77))
 
 
@@ -330,16 +287,16 @@ async def test_reply_within_6_seconds_of_her_voice_is_addressed_for_anyone(env):
 
 
 # ------------------------------------------------------------------ bare engagement expires
-async def test_bare_engagement_goes_back_to_listening_after_10_seconds(env):
+async def test_bare_engagement_waits_the_configured_time_then_goes_back_to_listening(env):
     env.bot.s.voice_state_posts = False
     s = await start(env)
-    assert Settings(_env_file=None).engaged_bare_timeout_seconds == 10.0
+    assert Settings(_env_file=None).engaged_bare_timeout_seconds == 300.0
     env.mgr._set_engaged(s, True, by=10, bare=True)
     assert s.engaged_bare is True
-    assert 9.0 < s.engaged_until - time.monotonic() <= 10.0
-    env.mgr._consent_tick(s, time.monotonic() + 5)
+    assert 299.0 < s.engaged_until - time.monotonic() <= 300.0
+    env.mgr._consent_tick(s, time.monotonic() + 100)
     assert s.engaged is True
-    env.mgr._consent_tick(s, time.monotonic() + 11)
+    env.mgr._consent_tick(s, time.monotonic() + 301)
     assert s.engaged is False and s.engaged_bare is False
     await env.mgr.end((1000, 77))
 
@@ -495,21 +452,11 @@ async def test_during_the_hold_other_talk_is_not_an_engaged_conversation(lv, mon
     await lv.mgr.end((1000, 77))
 
 
-async def test_the_hold_expires_and_listening_returns(lv, monkeypatch):
+async def test_the_hush_has_no_timer(lv, monkeypatch):
     s, live = await lv.join(5)
-    sent = capture_cues(live)
-    monkeypatch.setattr(lv.mgr.bot.s, "hush_hold_seconds", 90.0, raising=False)
     lv.mgr._hush(s)
-    await asyncio.sleep(0.05)
-    lv.mgr._consent_tick(s, time.monotonic() + 91)
-    await asyncio.sleep(0.05)
-    assert s.hushed_until == 0.0 and s.live._hushed is False
-    assert lvm.STATE_LISTENING in [t for t, _ in sent] or lvm.STATE_LISTENING_EN in [
-        t for t, _ in sent
-    ]
-    say(monkeypatch, Heard("สลิด", False))
-    await lv.mgr.handle_segment(s, seg())
-    assert 5 in s.pending_wake  # the normal bare-name rules are back
+    lv.mgr._consent_tick(s, time.monotonic() + 10_000)
+    assert s.hushed_until > time.monotonic() + 10_000 and s.live._hushed is True
     await lv.mgr.end((1000, 77))
 
 
@@ -656,7 +603,7 @@ async def finish_and_get_cue(lv, monkeypatch, answer, mode=None, expect=True):
 
 
 async def test_long_result_is_one_short_sentence_by_default(lv, monkeypatch):
-    text, q = await finish_and_get_cue(lv, monkeypatch, "ผลลัพธ์ยาวมาก " * 30)
+    text, q = await finish_and_get_cue(lv, monkeypatch, "ผลลัพธ์ยาวมาก " * 80)
     assert "รายละเอียดอยู่ในแชต" in text and "ผลลัพธ์ยาวมาก" not in text
     assert text.startswith("(ผลงานที่ขอไว้เสร็จแล้ว") and q in text
 
@@ -667,7 +614,7 @@ async def test_short_answer_is_spoken_in_full(lv, monkeypatch):
 
 
 async def test_full_mode_keeps_the_whole_result(lv, monkeypatch):
-    long = "ผลลัพธ์ยาวมาก " * 30
+    long = "ผลลัพธ์ยาวมาก " * 80
     text, q = await finish_and_get_cue(lv, monkeypatch, long, mode="full")
     assert "ผลลัพธ์ยาวมาก" in text and "รายละเอียดอยู่ในแชต" not in text
 
