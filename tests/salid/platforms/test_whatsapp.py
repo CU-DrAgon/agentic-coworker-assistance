@@ -263,12 +263,245 @@ async def test_other_phone_numbers_statuses_and_unsupported_types_are_ignored(fx
     api, a, port, adapter = fx
     await adapter.on_payload(payload(text("not for us"), phone="999"))
     await adapter.on_payload(payload(statuses=[{"id": "wamid.OUT1", "status": "delivered"}]))
-    await adapter.on_payload(payload(msg("audio", audio={"id": "a1"}), msg("sticker", mid="s")))
+    await adapter.on_payload(payload(msg("sticker", mid="s"), msg("video", mid="v")))
     await adapter.on_payload(payload(msg("text", mid="empty", text={"body": "  "})))
     await adapter.on_payload({"entry": [{"changes": [{"value": None}]}]})
     await adapter.on_payload({})
     await a.drain()
     assert a.ask_fn.calls == [] and api.sent == [] and api.reads == []
+
+
+# ------------------------------------------------------------------ BSUID / usernames
+
+BSUID = "US.13491208655302741918"
+BSUID2 = "US.99999999999999999999"
+
+
+def bsuid_msg(mid="wamid.b1", body="hello there", **kw):
+    """A user with a username: no `from`, only `from_user_id`."""
+    m = {"id": mid, "from_user_id": BSUID, "timestamp": TS, "type": "text", "text": {"body": body}}
+    m.update(kw)
+    return m
+
+
+async def test_a_message_without_a_phone_number_is_answered_to_the_bsuid(fx):
+    api, a, port, adapter = fx
+    p = payload(bsuid_msg())
+    p["entry"][0]["changes"][0]["value"]["contacts"] = [
+        {"profile": {"name": "Nok"}, "user_id": BSUID}  # no wa_id
+    ]
+    await adapter.on_payload(p)
+    await a.drain()
+    assert len(a.ask_fn.calls) == 1
+    assert api.sent == [{"to": BSUID, "body": "ok", "reply_to": "wamid.b1"}]  # FakeApi's key
+    m = adapter._incoming(bsuid_msg(mid="wamid.b2"), {BSUID: "Nok"})
+    assert m.user == BSUID and m.room == BSUID and m.user_name == "Nok" and m.is_direct
+
+
+def test_the_room_is_the_bsuid_even_when_the_phone_number_shows_up_later(fx):
+    _api, _a, _port, adapter = fx
+    without = adapter._incoming(bsuid_msg(mid="m1"), {})
+    with_phone = adapter._incoming(bsuid_msg(mid="m2", **{"from": ALICE}), {})
+    assert without.room == with_phone.room == BSUID  # one chat, one memory
+    assert without.user == BSUID and with_phone.user == ALICE  # the wa_id wins for the user
+    legacy = adapter._incoming(text("old payload", mid="m3"), {})
+    assert legacy.room == ALICE  # no from_user_id (pre-BSUID payloads): the wa_id
+    assert adapter._incoming({"id": "m4", "type": "text", "text": {"body": "x"}}, {}) is None
+
+
+async def test_bsuid_is_sent_as_recipient_and_a_phone_number_as_to():
+    seen = []
+    t = graph_transport(
+        {"/messages": lambda r: httpx.Response(200, json={"messages": [{"id": "wamid.N"}]})}, seen
+    )
+    api = WhatsAppApi(TOKEN, PHONE_ID, transport=t)
+    await api.send_text(BSUID, "hi", None)
+    await api.send_text(ALICE, "hi", None)
+    await api.aclose()
+    b_bsuid, b_phone = seen[0][3], seen[1][3]
+    assert b_bsuid["recipient"] == BSUID and "to" not in b_bsuid
+    assert b_phone["to"] == ALICE and "recipient" not in b_phone
+
+
+async def test_bsuid_users_are_not_executives_unless_listed(s, tmp_path):
+    ps = PlatformSettings(_env_file=None, whatsapp_exec_numbers=ALICE)
+    a = make_assistant(s, tmp_path, ps=ps)
+    port = WhatsAppPort(FakeApi(), exec_bsuids={BSUID2})
+    adapter = WhatsAppAdapter(a, port, PHONE_ID)
+    await adapter.on_payload(payload(bsuid_msg(mid="m1")))
+    await adapter.on_payload(payload(bsuid_msg(mid="m2", from_user_id=BSUID2)))
+    await adapter.on_payload(payload(text("hi", mid="m3")))  # Alice, listed by phone number
+    await adapter.on_payload(payload(text("hi", mid="m4", sender=BOB)))
+    await a.drain()
+    by_text = sorted(c[1]["is_exec"] for c in a.ask_fn.calls)
+    assert by_text == [False, False, True, True]
+    assert not await WhatsAppPort(FakeApi()).is_admin(adapter._incoming(bsuid_msg(), {}))
+    assert await port.is_admin(adapter._incoming(bsuid_msg(mid="m9", from_user_id=BSUID2), {}))
+
+
+# ------------------------------------------------------------------ body cap
+
+
+def test_webhook_bodies_up_to_3_mb_are_accepted():
+    assert whatsapp.MAX_BODY >= 3 * 1000 * 1000
+    client, _r, pending = app_client()
+    pad = " " * (3 * 1000 * 1000)
+    ok = json.dumps({"entry": [], "pad": pad}).encode()
+    assert post(client, ok).status_code == 200 and len(pending) == 1
+
+
+# ------------------------------------------------------------------ statuses and rate limits
+
+
+async def test_failed_statuses_are_logged_by_error_code_only(fx, caplog):
+    api, a, port, adapter = fx
+    caplog.set_level(logging.DEBUG)
+    failed = {
+        "id": "wamid.OUT1",
+        "status": "failed",
+        "recipient_id": ALICE,
+        "errors": [{"code": 131047, "title": f"Re-engagement for {ALICE}", "message": "secret"}],
+    }
+    ok = {"id": "wamid.OUT2", "status": "delivered", "recipient_id": ALICE}
+    await adapter.on_payload(payload(statuses=["junk", failed, ok, {"status": "failed"}]))
+    assert "131047" in caplog.text and "unknown" in caplog.text
+    for needle in (ALICE, "Re-engagement", "secret", "wamid"):
+        assert needle not in caplog.text
+    assert api.sent == [] and a.ask_fn.calls == []
+
+
+class RateLimitedApi(FakeApi):
+    """Fails the first `fails` sends of every part with `code`, then succeeds."""
+
+    def __init__(self, code, fails, always_fail_part=None):
+        super().__init__()
+        self.code, self.fails, self.always_fail_part = code, fails, always_fail_part
+        self.attempts: dict[str, int] = {}
+
+    async def send_text(self, to, body, reply_to):
+        n = self.attempts[body] = self.attempts.get(body, 0) + 1
+        if body == self.always_fail_part or n <= self.fails:
+            raise WhatsAppError("send", 400, self.code)
+        return await super().send_text(to, body, reply_to)
+
+
+def slow_port(api):
+    waited: list[int] = []
+
+    async def sleep(seconds):
+        waited.append(seconds)
+
+    return WhatsAppPort(api, sleep=sleep), waited
+
+
+@pytest.mark.parametrize("code", [130429, 131056])
+async def test_rate_limit_errors_back_off_and_retry(fx, code):
+    _api, _a, _port, adapter = fx
+    api = RateLimitedApi(code, fails=2)
+    port, waited = slow_port(api)
+    m = adapter._incoming(text("q", mid="wamid.q"), {})
+    out = await port.deliver(m, ["one", "two"], None)
+    assert [x["body"] for x in api.sent] == ["one", "two"] and len(out) == 2
+    assert waited == [4, 16, 4, 16]  # bounded 4^X backoff, per part
+
+
+async def test_retries_are_bounded_and_later_parts_are_never_dropped_silently(fx, caplog):
+    _api, _a, _port, adapter = fx
+    api = RateLimitedApi(131056, fails=0, always_fail_part="two")
+    port, waited = slow_port(api)
+    m = adapter._incoming(text("q", mid="wamid.q"), {})
+    with pytest.raises(WhatsAppError):
+        await port.deliver(m, ["one", "two", "three"], None)
+    assert api.attempts == {"one": 1, "two": 3}  # first try + two retries, then it gives up
+    assert waited == [4, 16]
+    assert "1 of 3 parts sent, 2 not sent" in caplog.text and "131056" in caplog.text
+    assert ALICE not in caplog.text
+
+
+async def test_other_send_errors_are_not_retried_but_still_reported(fx, caplog):
+    _api, _a, _port, adapter = fx
+    api = RateLimitedApi(131047, fails=9)
+    port, waited = slow_port(api)
+    m = adapter._incoming(text("q", mid="wamid.q"), {})
+    with pytest.raises(WhatsAppError):
+        await port.deliver(m, ["one", "two"], None)
+    assert api.attempts == {"one": 1} and waited == []
+    assert "0 of 2 parts sent, 2 not sent" in caplog.text
+
+
+# ------------------------------------------------------------------ audio
+
+
+def test_voice_notes_are_passed_to_core_as_audio_files(fx):
+    api, _a, _port, adapter = fx
+    api.media["voice1"] = b"oggbytes"
+    voice = msg(
+        "audio", audio={"id": "voice1", "mime_type": "audio/ogg; codecs=opus", "voice": True}
+    )
+    m = adapter._incoming(voice, {})
+    assert m.text == ""
+    (f,) = m.files
+    assert (f.name, f.mime) == ("audio-wamid.1.ogg", "audio/ogg")
+    assert f.fetch() == b"oggbytes" and api.fetched == ["voice1"]
+    mp3 = adapter._incoming(
+        msg("audio", mid="w2", audio={"id": "voice1", "mime_type": "audio/mpeg"}), {}
+    )
+    assert mp3.files[0].name == "audio-w2.mp3"
+    bare = adapter._incoming(msg("audio", mid="w3", audio={"id": "voice1"}), {})
+    assert bare.files[0].name == "audio-w3.ogg" and bare.files[0].mime is None
+
+
+async def test_core_receives_audio_and_skips_it_as_an_unsupported_type(fx):
+    # Core only reads images, PDFs and text: `file_mime` returns None for audio, so the file is
+    # skipped ("unsupported file type") rather than transcribed. The adapter just passes it on.
+    api, a, port, adapter = fx
+    api.media["voice1"] = b"oggbytes"
+    voice = msg("audio", audio={"id": "voice1", "mime_type": "audio/ogg; codecs=opus"})
+    await adapter.on_payload(payload(voice))
+    await a.drain()
+    assert api.fetched == []  # never downloaded: not a type core can use
+
+
+# ------------------------------------------------------------------ human escalation
+
+
+@pytest.mark.parametrize(
+    "words",
+    ["human", "Human!", "คน", "ติดต่อเจ้าหน้าที่", "ขอคุยกับเจ้าหน้าที่หน่อยค่ะ", "I want to talk to a human"],
+)
+async def test_asking_for_a_person_gets_a_fixed_answer_without_the_model(fx, words):
+    api, a, port, adapter = fx
+    await adapter.on_payload(payload(text(words)))
+    await a.drain()
+    assert a.ask_fn.calls == []
+    assert [x["body"] for x in api.sent] == [whatsapp.HUMAN_REPLY]
+    assert api.reads == []  # no typing indicator for a fixed answer
+    assert "administrators" in whatsapp.HUMAN_REPLY and "ผู้ดูแล" in whatsapp.HUMAN_REPLY
+
+
+@pytest.mark.parametrize(
+    "words",
+    ["how many people came on Monday?", "คนที่จ่ายเงินเมื่อวานคือใคร", "สรุปค่าใช้จ่ายของคนในทีม"],
+)
+async def test_ordinary_questions_about_people_still_reach_the_model(fx, words):
+    api, a, port, adapter = fx
+    await adapter.on_payload(payload(text(words)))
+    await a.drain()
+    assert len(a.ask_fn.calls) == 1
+    assert whatsapp.HUMAN_REPLY not in [x["body"] for x in api.sent]
+
+
+async def test_the_human_answer_goes_to_a_bsuid_user_too_and_survives_a_send_error(fx, caplog):
+    api, a, port, adapter = fx
+    await adapter.on_payload(payload(bsuid_msg(body="human")))
+    assert api.sent[0]["to"] == BSUID
+
+    async def boom(*_a):
+        raise WhatsAppError("send", 500)
+
+    api.send_text = boom
+    await adapter.on_payload(payload(text("human", mid="m2")))  # logged, never raised
+    assert "human-contact reply failed" in caplog.text
 
 
 async def test_a_retried_delivery_is_answered_once(fx):

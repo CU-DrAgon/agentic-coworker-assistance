@@ -12,10 +12,19 @@
   with a typing indicator while Salid thinks.
 
 The official API only has 1:1 chats: the tenant is the business phone number (its id), every room
-is one customer (their wa_id) and is always addressed. Memory scope is the room itself, so a chat
-sees only its own history. Salid only ever answers an inbound message, which keeps it inside the
-24-hour customer service window; it never sends a proactive message (that needs an approved
-template). A wa_id is a phone number: it is never logged (core logs the internal room id).
+is one customer and is always addressed. Memory scope is the room itself, so a chat sees only its
+own history. Salid only ever answers an inbound message, which keeps it inside the 24-hour customer
+service window; it never sends a proactive message (that needs an approved template). A wa_id is a
+phone number: it is never logged (core logs the internal room id).
+
+Identity (usernames / BSUIDs, since April 2026): a message may carry no phone number (`from` and
+`wa_id` absent) but always has `from_user_id`, the business-scoped user id (BSUID, `US.1349...`).
+* user: the wa_id (`from`) when present, else the BSUID. Executives are matched on the phone number
+  only, so a BSUID user is never an executive unless listed in `exec_bsuids`.
+* room: the BSUID whenever the message has one, else the wa_id. The BSUID never changes, while the
+  phone number can appear or vanish (the user adopts a username, or we messaged them in the last 30
+  days), so keying the room on it keeps one chat one room (one memory) for its whole life.
+* reply: `to` when the user is a phone number, `recipient` (BSUID) otherwise.
 """
 
 from __future__ import annotations
@@ -51,11 +60,40 @@ PLATFORM = "whatsapp"
 GRAPH = "https://graph.facebook.com"
 TEXT_LIMIT = 4096  # characters per text message
 MAX_MESSAGES = 6
-MAX_BODY = 1_000_000
+MAX_BODY = 3 * 1024 * 1024  # Meta documents webhook payloads of up to 3 MB
 WEBHOOK_PATH = "/whatsapp/webhook"
 SEEN_KEEP = 5000
 SENT_KEEP = 2000
 DOWNLOAD_MAX = 20 * 1024 * 1024
+RETRY_CODES = frozenset({130429, 131056})  # throughput / pair rate limit: temporary
+RETRY_DELAYS = (4, 16)  # seconds, Meta's 4^X backoff; bounded so a reply never hangs for long
+HUMAN_REPLY = (
+    "Salid is an AI assistant. To reach a person, please contact the administrators of this "
+    "workspace directly (whoever set Salid up for you).\n\n"
+    "Salid เป็นผู้ช่วย AI หากต้องการติดต่อเจ้าหน้าที่ "
+    "กรุณาติดต่อผู้ดูแลของ workspace นี้โดยตรง (ผู้ที่ตั้งค่า Salid ให้คุณ)"
+)
+_HUMAN_EXACT = frozenset(
+    {"human", "a human", "agent", "person", "คน", "คนจริง", "คนจริงๆ", "เจ้าหน้าที่"}
+)
+_HUMAN_PHRASES = (
+    "talk to a human",
+    "talk to human",
+    "speak to a human",
+    "speak to a person",
+    "talk to a person",
+    "real person",
+    "human agent",
+    "ติดต่อเจ้าหน้าที่",
+    "คุยกับเจ้าหน้าที่",
+    "คุยกับคน",
+)
+
+
+def is_human_request(text: str) -> bool:
+    """A short message asking for a person ("human", "คน", "ติดต่อเจ้าหน้าที่", ...)."""
+    t = " ".join(text.lower().split()).strip(" .!?,…\"'()")
+    return t in _HUMAN_EXACT or (len(t) <= 80 and any(p in t for p in _HUMAN_PHRASES))
 
 
 class WhatsAppError(Exception):
@@ -80,7 +118,9 @@ def verify_signature(app_secret: str, body: bytes, header: str | None) -> bool:
 class Api(Protocol):
     """The Graph API calls the adapter uses; tests replace it with a fake."""
 
-    async def send_text(self, to: str, body: str, reply_to: str | None) -> str: ...
+    async def send_text(self, recipient: str, body: str, reply_to: str | None) -> str:
+        """`recipient` is a wa_id (digits) or a BSUID (sent as `recipient`, not `to`)."""
+        ...
 
     async def mark_read(self, message_id: str) -> None: ...
 
@@ -124,11 +164,12 @@ class WhatsAppApi:
             body = {}
         return body if isinstance(body, dict) else {}
 
-    async def send_text(self, to: str, body: str, reply_to: str | None) -> str:
+    async def send_text(self, recipient: str, body: str, reply_to: str | None) -> str:
+        phone = recipient.isascii() and recipient.isdigit()
         payload: dict = {
             "messaging_product": "whatsapp",
             "recipient_type": "individual",
-            "to": to,
+            "to" if phone else "recipient": recipient,
             "type": "text",
             "text": {"body": body, "preview_url": False},
         }
@@ -195,15 +236,25 @@ class WhatsAppPort:
     platform = PLATFORM
     max_messages = MAX_MESSAGES
 
-    def __init__(self, api: Api) -> None:
+    def __init__(
+        self,
+        api: Api,
+        *,
+        exec_bsuids: frozenset[str] | set[str] = frozenset(),
+        sleep: Callable = asyncio.sleep,
+    ) -> None:
         self.api = api
+        self.exec_bsuids = frozenset(exec_bsuids)  # executives without a phone number
+        self._sleep = sleep
         self.sent_ids: OrderedDict[str, None] = OrderedDict()  # to recognise replies to Salid
 
     async def room_view(self, msg: Incoming) -> RoomView:
         return RoomView(None, [])  # 1:1 only: the room alone
 
     async def is_admin(self, msg: Incoming) -> bool:
-        return False  # executives come from SALID_WHATSAPP_EXEC_NUMBERS only
+        # Executives are SALID_WHATSAPP_EXEC_NUMBERS (core matches `msg.user`, a phone number).
+        # A BSUID user is an executive only when listed in `exec_bsuids`.
+        return msg.user in self.exec_bsuids
 
     def format(self, text: str) -> list[str]:
         return textfmt.split_text(textfmt.to_whatsapp(text), TEXT_LIMIT)
@@ -223,10 +274,39 @@ class WhatsAppPort:
     async def drop_ack(self, ack: object) -> None:
         return None
 
+    async def _send(self, recipient: str, text: str, reply_to: str | None) -> str:
+        """send_text, retried a bounded number of times on a temporary rate limit."""
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                return await self.api.send_text(recipient, text, reply_to)
+            except WhatsAppError as e:
+                if e.graph_code not in RETRY_CODES or attempt == len(RETRY_DELAYS):
+                    raise
+                logger.warning(
+                    "whatsapp rate limited (code %s): retry %d in %d s",
+                    e.graph_code,
+                    attempt + 1,
+                    RETRY_DELAYS[attempt],
+                )
+                await self._sleep(RETRY_DELAYS[attempt])
+        raise AssertionError("unreachable")  # pragma: no cover
+
     async def deliver(self, msg: Incoming, texts: list[str], ack: object | None) -> list[str]:
         sent: list[str] = []
         for i, text in enumerate(texts):
-            mid = await self.api.send_text(msg.room, text, msg.message if i == 0 else None)
+            try:
+                mid = await self._send(msg.user, text, msg.message if i == 0 else None)
+            except Exception as e:
+                code = getattr(e, "graph_code", None)
+                logger.error(
+                    "whatsapp reply incomplete: %d of %d parts sent, %d not sent (%s, code %s)",
+                    i,
+                    len(texts),
+                    len(texts) - i,
+                    safe_exc(e),
+                    code,
+                )
+                raise
             if mid:
                 self.sent_ids[mid] = None
                 while len(self.sent_ids) > SENT_KEEP:
@@ -237,7 +317,17 @@ class WhatsAppPort:
 
 # ------------------------------------------------------------------ adapter (WhatsApp -> Salid)
 
-_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+_EXT = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "audio/ogg": ".ogg",
+    "audio/mpeg": ".mp3",
+    "audio/mp4": ".m4a",
+    "audio/aac": ".aac",
+    "audio/amr": ".amr",
+}
+_DEFAULT_EXT = {"image": ".jpg", "audio": ".ogg"}
 
 
 class WhatsAppAdapter:
@@ -257,19 +347,44 @@ class WhatsAppAdapter:
     async def _value(self, value: dict) -> None:
         if (value.get("metadata") or {}).get("phone_number_id") != self.phone_number_id:
             return  # another number of the same app (or a malformed payload)
-        names = {
-            c.get("wa_id"): (c.get("profile") or {}).get("name") or ""
-            for c in value.get("contacts") or []
-        }
-        for m in value.get("messages") or []:  # `statuses` are delivery receipts: ignored
+        names: dict = {}
+        for c in value.get("contacts") or []:
+            name = (c.get("profile") or {}).get("name") or ""
+            for key in (c.get("wa_id"), c.get("user_id")):  # phone number and/or BSUID
+                if key:
+                    names[key] = name
+        for st in value.get("statuses") or []:  # delivery receipts: only failures are logged
+            self._status(st)
+        for m in value.get("messages") or []:
             try:
                 msg = self._incoming(m, names)
                 if msg is None:
+                    continue
+                if not msg.files and is_human_request(msg.text):
+                    await self._escalate(msg)  # a fixed answer: the model is not called
                     continue
                 self.a.spawn(self.port.read(msg))
                 await self.a.handle(msg, self.port)
             except Exception as e:
                 logger.error("whatsapp message failed (%s)", safe_exc(e))
+
+    @staticmethod
+    def _status(st: object) -> None:
+        """Log a failed send by error code only (the status also carries a phone number)."""
+        if not isinstance(st, dict) or st.get("status") != "failed":
+            return
+        codes = [
+            e["code"]
+            for e in st.get("errors") or []
+            if isinstance(e, dict) and isinstance(e.get("code"), int)
+        ]
+        logger.warning("whatsapp delivery failed (error codes %s)", codes or "unknown")
+
+    async def _escalate(self, msg: Incoming) -> None:
+        try:
+            await self.port.deliver(msg, [HUMAN_REPLY], None)
+        except Exception as e:
+            logger.error("whatsapp human-contact reply failed (%s)", safe_exc(e))
 
     def _first_seen(self, mid: str) -> bool:
         if mid in self._seen:
@@ -280,19 +395,21 @@ class WhatsAppAdapter:
         return True
 
     def _incoming(self, m: dict, names: dict) -> Incoming | None:
-        mid, sender, kind = m.get("id"), m.get("from"), m.get("type")
-        if not mid or not sender:
+        mid, kind = m.get("id"), m.get("type")
+        phone, bsuid = str(m.get("from") or ""), str(m.get("from_user_id") or "")
+        user = phone or bsuid  # the phone number may be absent (username), the BSUID is not
+        if not mid or not user:
             return None
         text, files = "", []
         if kind == "text":
             text = (m.get("text") or {}).get("body") or ""
-        elif kind in ("image", "document"):
+        elif kind in ("image", "document", "audio"):
             media = m.get(kind) or {}
             text = media.get("caption") or ""
             if media.get("id"):
                 files = [self._file(kind, media, str(mid))]
         else:
-            return None  # audio, video, stickers, location, reactions, ...
+            return None  # video, stickers, location, reactions, ...
         if not text.strip() and not files:
             return None
         if not self._first_seen(str(mid)):
@@ -306,9 +423,9 @@ class WhatsAppAdapter:
         return Incoming(
             platform=PLATFORM,
             tenant=self.phone_number_id,
-            room=str(sender),
-            user=str(sender),
-            user_name=names.get(sender) or "",
+            room=bsuid or phone,  # BSUID never changes; the phone number can appear or vanish
+            user=user,
+            user_name=names.get(phone) or names.get(bsuid) or "",
             text=text.strip(),
             message=str(mid),
             at=at,
@@ -319,11 +436,12 @@ class WhatsAppAdapter:
 
     def _file(self, kind: str, media: dict, mid: str) -> FileRef:
         api, media_id = self.port.api, str(media["id"])
-        mime = media.get("mime_type")
+        mime = (media.get("mime_type") or "").split(";")[0].strip().lower() or None
         if kind == "document":
             name = media.get("filename") or f"file-{mid}"
-        else:
-            name = f"image-{mid}{_EXT.get(mime or '', mimetypes.guess_extension(mime or '') or '.jpg')}"
+        else:  # voice notes are "audio/ogg; codecs=opus"
+            ext = _EXT.get(mime or "") or mimetypes.guess_extension(mime or "")
+            name = f"{kind}-{mid}{ext or _DEFAULT_EXT[kind]}"
         return FileRef(name, mime, 0, lambda: api.fetch_media(media_id))
 
 
