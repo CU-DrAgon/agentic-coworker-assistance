@@ -1151,6 +1151,8 @@ class MeetingManager:
             # Whatever language was spoken, the captions read in the company language and in
             # the languages the people in the room asked for (the owner's rule); an explicit
             # "show captions in X" shows only X; "original" shows the words as spoken.
+            if language in ("", "original", "audience"):
+                s.langs = self._room_langs(s)  # fresh: a personal language may have changed
             targets = (
                 [language]
                 if language not in ("", "original", "audience")

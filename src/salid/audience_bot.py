@@ -111,14 +111,26 @@ class AudienceMixin:
         if kind == "unset":
             p.language = None
             self.profiles.save(gid, uid, p)
+            self._refresh_room_langs(gid)
             return aud.tt("aud_personal_unset", company)
         if company[0] == code:
             p.language = None
             self.profiles.save(gid, uid, p)
+            self._refresh_room_langs(gid)
             return aud.tt("aud_personal_same", company, lname=aud.name_in(code))
         p.language = code
         self.profiles.save(gid, uid, p)
+        self._refresh_room_langs(gid)
         return aud.tt("aud_personal_set", [company[0], code], lname=aud.name_in(code))
+
+    def _refresh_room_langs(self, gid: int) -> None:
+        """A personal language changed: running voice meetings in this server recompute their
+        languages at once (captions, spoken second language)."""
+        try:
+            for s in self.meetings.sessions_in_guild(gid):
+                self.meetings.refresh_langs(s)
+        except Exception:
+            pass
 
     async def _set_org_mode(self, member, gid: int, mode: str, company: list[str]) -> str:
         if not self.is_exec_member(member):
