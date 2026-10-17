@@ -34,7 +34,7 @@ from salid.qa import MAX_ROUNDS, SPOKEN_MAX_ROUNDS, ask
     "text",
     [
         "ขอบคุณครับ", "โอเคครับ ขอบคุณมากครับ", "พอแล้วครับ", "จบแค่นี้", "thanks, that's all",
-        "โอเค", "โอเคครับ", "คนต่อไป", "ต่อไป", "เชิญคนต่อไป", "เชิญต่อ", "ไปต่อ", "เอาล่ะ",
+        "คนต่อไป", "ต่อไป", "เชิญคนต่อไป", "เชิญต่อ", "ไปต่อ", "โอเค คนต่อไป", "เอาล่ะ ต่อไป",
         "ok next", "moving on", "next", "next person", "let's continue", "Okay, moving on.",
     ],
 )  # fmt: skip
@@ -47,6 +47,7 @@ def test_dismissal_phrases_old_and_new(text):
     [
         "ต่อไปเราจะคุยเรื่องงบประมาณของไตรมาสหน้ากัน", "next quarter we need a budget",
         "โอเค แล้วงบเท่าไหร่", "ออกประชุม", "leave the meeting", "ขอบคุณครับ แล้วเรื่องงบล่ะ",
+        "โอเค", "โอเคครับ", "ok", "okay", "เอาล่ะ", "Okay.",  # acknowledgements keep the conversation
     ],
 )  # fmt: skip
 def test_whole_short_utterances_only(text):

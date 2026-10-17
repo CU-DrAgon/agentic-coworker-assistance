@@ -2194,11 +2194,21 @@ class MeetingManager:
         r"|^\W*(?:ok(?:ay)?[,. ]*)?(?:thanks?(?:\s+you)?|thank\s+you)(?:[,. ]+(?:that'?s\s+all|that'?s\s+it|"
         r"we'?re\s+good|bye))?\W*$"
         r"|^\W*(?:that'?s\s+(?:all|it)|we'?re\s+good|all\s+good|no\s+more\s+questions)\W*$"
-        # "ok" / "next person" / "moving on": the meeting goes on without her (whole utterance only)
+        # "next person" / "moving on" (with or without a leading "ok"): the meeting goes on without
+        # her (whole utterance only). A bare "โอเค" / "ok" / "เอาล่ะ" is an acknowledgement, NOT a
+        # dismissal: the person is still talking with her (the owner, 2026-10-17).
         r"|^\W*(?:(?:โอเค|ok(?:ay)?|เอาล่ะ|เอาละ|งั้น)[\s,.]*)*(?:(?:ครับ|ค่ะ|คะ|นะ)\s*)?"
-        r"(?:(?:โอเค|ok(?:ay)?|เอาล่ะ|เอาละ|คนต่อไป|ต่อไป|เชิญ\s*(?:คนต่อไป|ต่อ)|ไปต่อ|next(?:\s+(?:person|one|please))?"
+        r"(?:(?:คนต่อไป|ต่อไป|เชิญ\s*(?:คนต่อไป|ต่อ)|ไปต่อ|next(?:\s+(?:person|one|please))?"
         r"|moving\s+on|let'?s\s+(?:continue|move\s+on|go\s+on))"
         r"(?:[\s,.]*(?:ครับ|ค่ะ|คะ|นะ|เลย|ครับผม|please))*[\s,.!]*)+$",
+        re.I,
+    )
+    # A short acknowledgement said to Salid while engaged ("โอเค", "ok", "ได้", "อืม", "got it"):
+    # the conversation goes on, it is addressed to her, nothing to answer.
+    _ACK_RE = re.compile(
+        r"^\W*(?:(?:โอเค|ok(?:ay)?|เอาล่ะ|เอาละ|ได้|อืม|อือ|เออ|ครับ|ค่ะ|คะ|ใช่|เข้าใจแล้ว|รับทราบ"
+        r"|yes|yeah|yep|sure|right|got\s+it|i\s+see|alright|understood|noted)"
+        r"[\s,.!]*(?:ครับ|ค่ะ|คะ|นะ|ผม|เลย)?[\s,.!]*)+$",
         re.I,
     )
 
@@ -2260,7 +2270,10 @@ class MeetingManager:
         gap = now - max(s.called_at, s.speaking_until - SPEAK_COOLDOWN_S)  # since called / spoke
         if gap <= self.REPLY_WINDOW_S:
             return True
-        return gap <= self.QUESTION_WINDOW_S and bool(self._ASK_RE.search(text or ""))
+        if gap > self.QUESTION_WINDOW_S:
+            return False
+        txt = (text or "").strip()
+        return bool(self._ASK_RE.search(txt)) or (len(txt) <= 30 and bool(self._ACK_RE.match(txt)))
 
     def _engaged_utterance(
         self, s: MeetingSession, text: str, now: float, user_id: int = 0
