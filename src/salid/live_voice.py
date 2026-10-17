@@ -882,6 +882,47 @@ def same_question(a: str, b: str) -> bool:
     return a in b or b in a or difflib.SequenceMatcher(None, a, b).ratio() >= 0.8
 
 
+# What the room is told she is doing, per tool family (TH, EN). Unknown tools: a humanised name.
+ACTIVITY_LABELS: list[tuple[tuple[str, ...], str, str]] = [
+    (
+        ("web_search", "search_web", "deep_research", "price_check", "places"),
+        "🔎 กำลังค้นเว็บ",
+        "🔎 searching the web",
+    ),
+    (
+        ("find_document", "read_document", "documents", "list_documents", "wiki"),
+        "📄 กำลังอ่านเอกสาร",
+        "📄 reading documents",
+    ),
+    (("data_", "sql", "analy", "chart", "calc"), "🧮 กำลังคำนวณ", "🧮 calculating"),
+    (
+        ("list_tasks", "update_task", "add_task", "project_", "my_projects"),
+        "📋 กำลังดูงานและโปรเจกต์",
+        "📋 checking tasks and projects",
+    ),
+    (("memory", "recall", "search_memory"), "🧠 กำลังค้นความจำ", "🧠 searching memory"),
+    (("schedule", "meeting", "calendar", "remind"), "📅 กำลังดูตารางนัด", "📅 checking the schedule"),
+    (("receipt", "ledger", "quotation", "expense"), "🧾 กำลังดูบัญชี", "🧾 checking the books"),
+    (
+        ("pdf", "deck", "slides", "report", "concept_image", "image"),
+        "🖨️ กำลังทำเอกสาร/ภาพ",
+        "🖨️ preparing a document / image",
+    ),
+]
+
+
+def activity_label(tool: str, en: bool) -> str:
+    """A short line for the status message when the brain calls `tool`."""
+    t = (tool or "").lower()
+    for keys, th, en_text in ACTIVITY_LABELS:
+        if any(k in t for k in keys):
+            return en_text if en else th
+    if not t or t in ("ask_salid", "answer_privately", "post_note", "end_conversation"):
+        return ""
+    nice = t.replace("_", " ")
+    return f"⚙️ {nice}" if en else f"⚙️ กำลังใช้ {nice}"
+
+
 class _Job:
     """One ask_salid job: it runs to the end whatever the room does. `background`: a known-long tool
     was called (hand it off at once); `detached`: the Live model was told "working" (the result is
@@ -895,6 +936,7 @@ class _Job:
         self.detached = False
         self.done = False
         self.result: dict | None = None
+        self.activity = ""  # what she is doing right now, shown on the status line
         self.status_msg: Any = None  # the ONE typed status line of this job, edited in place
         self.status_task: asyncio.Task | None = None
         self.still = False
@@ -1619,6 +1661,9 @@ class LiveVoice:
             return {"error": "too many jobs running", "say": catalog("voice_jobs_full", lang)}
         job = _Job(question)
         self._jobs[job.id] = job
+        # In a meeting the room sees at once that she is on it (the owner's rule: silence while
+        # she works is confusing), then what she is doing, then ✅.
+        self._status(job, "working")
         job.task = asyncio.create_task(self._job_main(job))
         self._bg.add(job.task)
         job.task.add_done_callback(self._bg.discard)
@@ -1665,6 +1710,8 @@ class LiveVoice:
             return
         if state == "still":
             job.still = True
+        if state == "activity" and job.done:
+            return
         prev = job.status_task
 
         async def run() -> None:
@@ -1675,6 +1722,8 @@ class LiveVoice:
                 text = catalog("voice_job_done", lang, question=q)
             else:
                 text = catalog("voice_working_text", lang, question=q)
+                if job.activity:
+                    text += f" · {job.activity}"
                 if job.still:
                     text += catalog("voice_still_suffix", lang)
             try:
@@ -1916,9 +1965,16 @@ class LiveVoice:
         loop = asyncio.get_running_loop()
 
         def on_tool(name: str) -> None:  # from the agent's thread: a known-long tool = background
-            if job is not None and name in BACKGROUND_TOOLS:
+            if job is None:
+                return
+            if name in BACKGROUND_TOOLS:
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(job.background.set)
+            label = activity_label(name, self._en())
+            if label and label != job.activity:
+                job.activity = label
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(self._status, job, "activity")
 
         self._with_langs(kw)
         ans = await asyncio.to_thread(
