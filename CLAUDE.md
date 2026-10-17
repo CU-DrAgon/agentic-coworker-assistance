@@ -45,7 +45,7 @@ Gemini (`gemini-3.5-flash`, transcribe + diarize) → Firestore. On Stop: `/fini
 
 Discord bot "สลิด" (display name Salid), **multi-tenant**: tenant key = Discord guild id; any server adds it via the public invite and gets an isolated ledger and settings with no setup. Receipt photos to an expense ledger, Thai executive Q&A. Env vars are all
 `SALID_*` (see `.env.example`). `SALID_STORE=sqlite` (default) or `firestore`. Deployment is prepared but **not run**: `Dockerfile.salid`, `cloudbuild.salid.yaml`, `scripts/deploy_salid.sh`
-(dry-run by default, `--apply` to execute; README "Deploying Salid"). Never use `--apply` without human approval. Bot-facing replies and prompts are English by default (`i18n.DEFAULT_LANGUAGE`) and **bilingual**: every typed command has Thai and English forms, and a per-channel reply language `th`/`en`/extra (`auto` only until the server has chosen; see Languages) (`/ภาษา` `/language`, typed `speak English`, hub; guild `default_language`) switches everything Salid says. Each server picks its main language once: on join (and at startup for servers that never answered) `language_ask.py` posts a persistent select menu, admins/executives only; `language_chosen` / `language_asked_at` in the guild doc, and until chosen the server runs on `auto` (a doc that already has `default_language` counts as chosen). All fixed user-facing strings live in `src/salid/i18n.py` (`t(key, lang, **fmt)`; Thai text is the original wording, add both languages for every new string); LLM prompts take a `language` argument.
+(dry-run by default, `--apply` to execute; README "Deploying Salid"). Never use `--apply` without human approval. The system's base language is **English** (`i18n.DEFAULT_LANGUAGE`; an unchosen server runs in English, never follow-the-words). Language is set at TWO levels only (2026-10-18): the **company language** for the whole server (`/company-language`, typed `use English everywhere`, hub, `language_ask.py` select menu on join; `default_language` + `language_chosen` in the guild doc) and each person's **personal language** (`/language`, typed `talk to me in Thai`, stored in the profile). There is no per-channel language any more (`channel_languages` is ignored). Every typed command has Thai and English forms; Salid always *understands* Thai and English, the settings decide what she *says*. See Languages below. All fixed user-facing strings live in `src/salid/i18n.py` (`t(key, lang, **fmt)`; Thai text is the original wording, add both languages for every new string); LLM prompts take a `language` argument.
 
 | File | Role |
 | --- | --- |
@@ -138,7 +138,7 @@ Tests in `tests/` are fully offline (every external service is mocked). Fixture:
 
 ### Languages (Salid)
 
-**Company language + personal language** (`audience.py`, 2026-10-17). The server's chosen language is THE language of everything Salid says, types and produces; a person may add a personal language (profile) and an executive can force "company language only" (guild `language_mode`, or per meeting by the chair). Per message the languages are: company first, then the personal language of each person involved (recipient, and the giver when a line goes back to them) when it differs, at most three; the model is told to reply in the company language and, with 2+ languages, to repeat in the next one (`second_language_rule`). Nothing is decided from the language somebody wrote or spoke or from the Discord locale once the server has chosen (an unchosen server keeps `auto` until the question is answered); listening never changes. Use `AudienceMixin.langs_for` / `_deliver_langs` and `audience.tt` / `render`, never `profile.language` directly.
+**Company language + personal language** (`audience.py`, 2026-10-17/18). The server's chosen language is THE language of everything Salid says, types and produces; a person may add a personal language (profile) and an executive can force "company language only" (guild `language_mode`, or per meeting by the chair). Per message the languages are: company first, then the personal language of each person involved (recipient, and the giver when a line goes back to them) when it differs, at most three; the model is told to reply in the company language and, with 2+ languages, to repeat in the next one (`second_language_rule`); a second-language block is labelled `*(Thai translation)*` and captions use `↳ (Thai translation) …` so a reader who does not know the script sees it is a translation. Nothing is decided from the language somebody wrote or spoke or from the Discord locale (an unchosen server runs in English); listening never changes. Voice: the spoken hint (`qa.spoken_hint`) follows the company language (a Thai hint used to pull answers into Thai) and a translate-if-wrong-script safety net guards both voice paths. Use `AudienceMixin.langs_for` / `_deliver_langs` and `audience.tt` / `render`, never `profile.language` or `channel_languages` directly.
 
 Two tiers. **Primary** `th`, `en`: every string hand-written in `i18n.CATALOG`. **Second tier** `zh hi ms id vi ko ja`:
 fixed strings come from generated `src/salid/locales/<lang>.json`; the model is told `Reply ONLY in <language>` at the
@@ -149,6 +149,19 @@ and `lang_name(lang)` for prompts that name the language. Thai particles only ap
 `pdf_report.find_fonts(lang=)` / `script_fonts` (Noto CJK faces extracted from the .ttc into the user cache, Devanagari),
 `font_note` when the fonts are missing (labels fall back to English), `cards.card_fonts(lang)`, `deck.DECK_FONTS`. The hub UI
 stays Thai/English but its language selects list all ten. Adding a catalog key: add th + en, then re-run the translate script.
+
+### Memory retention and data stores (Salid)
+
+- What the staff tell Salid is the **company's asset**: team memory is kept **forever by default** (guild
+  `memory_retention_days` = 0, `guild_settings.effective_retention_days` maps it to a 10-year window for
+  readers, imports and purges; the hub offers "Keep forever (company asset)" first). A positive value is
+  an explicit company choice to purge older memory. Nothing is deleted when a company stops using the
+  service except by that company's own request.
+- The Discord bot, the web center (`/center`, `/pm`, web chat) and the platform bridges MUST point at the
+  SAME store (`SALID_STORE` + `SALID_DB_PATH` locally, Firestore in production): a second process with
+  its own `data/ledger.db` sees an empty company. A person is one identity across them: the org member's
+  `email` (web, Google sign-in) must carry their `discord_user_id` (member link), otherwise "my tasks" on
+  the web is empty while Discord knows them.
 
 ## Infrastructure that already exists — never recreate
 
