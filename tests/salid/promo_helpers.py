@@ -2,6 +2,7 @@
 
 import io
 import json
+import subprocess
 
 from conftest import FakeClient
 from google.genai import types
@@ -62,3 +63,31 @@ def _raiser(exc: BaseException):
 def fake_client(*results) -> FakeClient:
     """A client whose generate_content returns (or raises) `results` in order."""
     return FakeClient([_raiser(r) if isinstance(r, BaseException) else r for r in results])
+
+
+def probe(path) -> dict:
+    """ffprobe of a media file: {"duration": seconds, "codecs": [...], "size": (w, h)} (size is
+    (None, None) without a video stream)."""
+    out = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration:stream=codec_name,width,height",
+            "-of",
+            "json",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    data = json.loads(out.stdout)
+    streams = data.get("streams", [])
+    video = next((s for s in streams if "width" in s), {})
+    return {
+        "duration": float(data["format"]["duration"]),
+        "codecs": [s["codec_name"] for s in streams],
+        "size": (video.get("width"), video.get("height")),
+    }

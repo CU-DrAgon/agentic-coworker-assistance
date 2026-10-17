@@ -9,6 +9,13 @@ carries those problems back to the model, together with the soft ones (narration
 for their scene, shop photos left unused), then a storyboard with hard problems fails with
 `StoryboardError`. Narration is finally cut to its scene by `fit_narration`.
 
+Part 2, the pictures: `scene_stills` makes one 1080x1920 still per scene (AI scenes and hero
+scenes through `imagegen.generate_images`, at most 3 at a time, one retry, then `fallback_card`;
+`photo:N` scenes from the shop photo framed by `frame_photo`, or an AI still when that photo is
+missing or unreadable). `motion_clip` turns a still into a slow zoom clip with ffmpeg, and
+`caption_png` draws the scene caption and the "สร้างด้วย AI" label on a transparent overlay,
+inside the Reels / TikTok safe area `SAFE`.
+
 Never logs the brief, prompts, captions or narration.
 """
 
@@ -17,13 +24,18 @@ from __future__ import annotations
 import io
 import logging
 import re
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 from google.genai import types
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel, Field, ValidationError
 
 from . import cards, imagegen
+from .cards import CardFonts
 from .llm import generate
+from .promo import ACCENTS
 
 logger = logging.getLogger(__name__)
 
@@ -144,21 +156,28 @@ def fit_narration(text: str, seconds: float, cps: float = CPS) -> str:
     return ""
 
 
+def _load_photo(data: bytes, side: int) -> Image.Image:
+    """A shop photo upright, RGB (transparency on white), long side at most `side`. Only
+    PHOTO_FORMATS; raises imagegen.ImageTooLarge, ValueError or a decode error otherwise."""
+    with imagegen.open_capped(data, formats=PHOTO_FORMATS) as im:
+        im.draft("RGB", (side, side))  # JPEG: decode at a reduced scale
+        im.thumbnail((side, side), Image.Resampling.LANCZOS)
+        img = ImageOps.exif_transpose(im)
+        if img.mode in ("RGBA", "LA", "PA", "P") or "transparency" in img.info:
+            rgba = img.convert("RGBA")
+            img = Image.new("RGB", rgba.size, "white")
+            img.paste(rgba, mask=rgba.getchannel("A"))
+        return img.convert("RGB")
+
+
 def _thumbnail(data: bytes) -> bytes | None:
     """A shop photo as the storyboard model sees it: upright, RGB (transparency on white), long
     side at most THUMB_SIDE, JPEG. None when it cannot be read or is too large to decode."""
     try:
-        with imagegen.open_capped(data, formats=PHOTO_FORMATS) as im:
-            im.draft("RGB", (THUMB_SIDE, THUMB_SIDE))  # JPEG: decode at a reduced scale
-            im.thumbnail((THUMB_SIDE, THUMB_SIDE), Image.Resampling.LANCZOS)
-            img = ImageOps.exif_transpose(im)
-            if img.mode in ("RGBA", "LA", "PA", "P") or "transparency" in img.info:
-                rgba = img.convert("RGBA")
-                img = Image.new("RGB", rgba.size, "white")
-                img.paste(rgba, mask=rgba.getchannel("A"))
-            buf = io.BytesIO()
-            img.convert("RGB").save(buf, "JPEG", quality=THUMB_QUALITY)
-            return buf.getvalue()
+        img = _load_photo(data, THUMB_SIDE)
+        buf = io.BytesIO()
+        img.save(buf, "JPEG", quality=THUMB_QUALITY)
+        return buf.getvalue()
     except Exception as e:  # any undecodable upload: the model just does not see it
         logger.warning("video storyboard photo skipped: %s", type(e).__name__)
         return None
@@ -290,3 +309,212 @@ def plan_storyboard(
     if first is not None and not problems:  # the re-ask was only about soft problems
         return _fitted(first)
     raise StoryboardError("no usable storyboard after one re-ask: " + "; ".join(problems2))
+
+
+# ------------------------------------------------------------------ stills
+W, H, FPS = 1080, 1920, 30
+SAFE = (65, 270, 1080 - 65, 1250)  # Reels / TikTok draw their own buttons outside this box
+AI_LABEL = "สร้างด้วย AI"
+COVER_TOLERANCE = 1.25  # a photo whose aspect is within 25 % of 9:16 is cover-cropped
+PHOTO_SIDE = round(H * COVER_TOLERANCE)  # decoded long side: enough for any cover crop
+FILL_BLUR = 40
+FILL_BRIGHTNESS = 0.65
+STILL_WORKERS = 3  # scenes whose still is made at the same time
+STILL_TRIES = 2  # one try and one retry, then the fallback card
+STILL_PROMPT = "{prompt}\nNo text, letters, numbers, logos or watermarks anywhere in the picture."
+CARD_SIZES = (96, 56)
+CARD_LINES = 4
+CAPTION_SIZES = (88, 48)
+CAPTION_LINES = 3
+LABEL_SIZE = 30
+LABEL_PAD = (18, 8)
+LABEL_FILL = "#00000099"  # black at 60 %
+
+
+def frame_photo(img: Image.Image) -> Image.Image:
+    """`img` as an exact 1080x1920 RGB frame, never stretched: cover-cropped when its aspect is
+    within 25 % of 9:16, else contained whole on a blurred, darkened cover of itself."""
+    src = img.convert("RGB")
+    ratio = (src.width / src.height) / (W / H)
+    if max(ratio, 1 / ratio) <= COVER_TOLERANCE:
+        return cards.cover(src, (W, H))
+    canvas = cards.cover(src, (W, H)).filter(ImageFilter.GaussianBlur(FILL_BLUR))
+    canvas = ImageEnhance.Brightness(canvas).enhance(FILL_BRIGHTNESS)
+    fit = ImageOps.contain(src, (W, H), Image.Resampling.LANCZOS)
+    canvas.paste(fit, ((W - fit.width) // 2, (H - fit.height) // 2))
+    return canvas
+
+
+def fallback_card(caption: str, accent: str, fonts: CardFonts) -> Image.Image:
+    """The still of a scene whose picture failed: the accent colour (unknown = red) with the
+    caption centred in the safe area."""
+    fill, text_fill = ACCENTS.get(accent, ACCENTS["red"])
+    img = Image.new("RGB", (W, H), fill)
+    text = cards.drawable(caption, fonts.bold)
+    if text:
+        x0, y0, x1, y1 = SAFE
+        f = cards.fit_text(text, fonts.bold, x1 - x0, CARD_LINES, CARD_SIZES)
+        x = x0 + (x1 - x0 - f.width) // 2
+        y = y0 + (y1 - y0 - f.height) // 2
+        cards.draw_lines(img, x, y, f, fonts.bold, fill=text_fill, align="center", width=f.width)
+    return img
+
+
+def _ai_still(client, model: str, scene: Scene) -> tuple[Image.Image | None, int]:
+    """(still or None, images billed) for a generated scene: one try and one retry. No call (and
+    no bill) without a client or with Thai in the prompt (imagegen would refuse it)."""
+    billed = 0
+    if client is not None and imagegen.english_only(scene.image_prompt_en):
+        prompt = STILL_PROMPT.format(prompt=scene.image_prompt_en)
+        for _ in range(STILL_TRIES):
+            imgs, reason = imagegen.generate_images(client, model, prompt, aspect="9:16", size="2K")
+            billed += 1
+            if imgs:
+                return cards.cover(imgs[0], (W, H)), billed
+            logger.warning("video still failed (%s)", reason)
+    return None, billed
+
+
+def _photo_still(scene: Scene, photos: list[bytes]) -> Image.Image | None:
+    """The framed shop photo of a `photo:N` scene; None when the scene is not a photo scene or
+    its photo is missing, unreadable or not PNG / JPEG / WebP."""
+    m = _SOURCE.fullmatch(scene.source)
+    if m is None or m[1] is None:
+        return None
+    n = int(m[1])
+    if n >= len(photos):
+        logger.warning("video shop photo %d missing", n)
+        return None
+    try:
+        return frame_photo(_load_photo(photos[n], PHOTO_SIDE))
+    except Exception as e:
+        logger.warning("video shop photo %d unusable: %s", n, type(e).__name__)
+        return None
+
+
+def scene_stills(
+    client, model: str, scenes: list[Scene], photos: list[bytes], accent: str, fonts: CardFonts
+) -> tuple[list[Image.Image], int]:
+    """One 1080x1920 still per scene, in scene order, and the number of images billed (one per
+    image-model call). `photo:N` scenes use the shop photo without a model call (framed one at
+    a time, so at most one big photo is decoded at once); AI and hero scenes (and photo scenes
+    whose photo is unusable) are generated from the scene's English prompt, STILL_WORKERS
+    scenes at a time; a still that fails twice becomes `fallback_card` (drawn here, not in the
+    worker threads)."""
+    stills: list[Image.Image | None] = [_photo_still(s, photos) for s in scenes]
+    todo = [i for i, img in enumerate(stills) if img is None]
+    with ThreadPoolExecutor(max_workers=STILL_WORKERS) as pool:
+        made = list(pool.map(lambda i: _ai_still(client, model, scenes[i]), todo))
+    billed = 0
+    for i, (img, n) in zip(todo, made, strict=True):
+        billed += n
+        stills[i] = img if img is not None else fallback_card(scenes[i].caption_th, accent, fonts)
+    return stills, billed
+
+
+# ------------------------------------------------------------------ captions
+def _shadowed_text(mask: Image.Image, blur: int) -> Image.Image:
+    """White text (alpha = `mask`) over its soft dark shadow, as a straight-alpha RGBA layer
+    (cards.draw_lines' own shadow pastes transparent black, which vanishes on RGBA)."""
+    shade = Image.new("L", mask.size, 0)
+    shade.paste(mask, (0, max(1, blur // 3)))
+    shade = shade.filter(ImageFilter.GaussianBlur(blur))
+    shade = shade.point(lambda v: v * cards.SHADOW_ALPHA // 255)
+    layer = Image.new("RGBA", mask.size, (0, 0, 0, 0))
+    layer.putalpha(shade)
+    text = Image.new("RGBA", mask.size, (255, 255, 255, 0))
+    text.putalpha(mask)
+    return Image.alpha_composite(layer, text)
+
+
+def caption_png(
+    caption: str, fonts: CardFonts, *, label: bool = True
+) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    """A transparent 1080x1920 overlay: the caption in white with a soft shadow, centred at the
+    bottom of SAFE (the text is clipped to SAFE, so it never leaves it), and the small AI_LABEL
+    top-left inside SAFE. Returns the overlay and the caption's box (no caption: a zero-size box
+    at the bottom centre of SAFE)."""
+    x0, y0, x1, y1 = SAFE
+    overlay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    box = (W // 2, y1, W // 2, y1)
+    text = cards.drawable(caption, fonts.bold)
+    if text:
+        f = cards.fit_text(text, fonts.bold, x1 - x0, CAPTION_LINES, CAPTION_SIZES)
+        blur = max(2, f.size // 12)
+        x = x0 + (x1 - x0 - f.width) // 2
+        y = y1 - 2 * blur - f.height  # the shadow stays inside SAFE too
+        mask = Image.new("L", (W, H), 0)
+        cards.draw_lines(mask, x, y, f, fonts.bold, fill="white", align="center", width=f.width)
+        clipped = Image.new("L", (W, H), 0)
+        clipped.paste(mask.crop(SAFE), (x0, y0))
+        overlay = _shadowed_text(clipped, blur)
+        box = (max(x, x0), max(y, y0), min(x + f.width, x1), min(y + f.height, y1))
+    if label:
+        badge = cards.measure_badge(
+            AI_LABEL, fonts.bold, (LABEL_SIZE, LABEL_SIZE), x1 - x0, LABEL_PAD
+        )
+        cards.draw_badge(overlay, badge, x0, y0, fonts.bold, fill=LABEL_FILL, text_fill="#FFFFFF")
+    return overlay, box
+
+
+# ------------------------------------------------------------------ motion
+FFMPEG_TIMEOUT_S = 120
+ZOOM = 0.10  # a scene zooms between 1.0 and 1.10
+
+
+def _ffmpeg(args: list[str]) -> None:
+    """Run ffmpeg with `args` (no shell). Raises RuntimeError with ffmpeg's last stderr line."""
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *args]
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"ffmpeg timed out after {FFMPEG_TIMEOUT_S} s") from e
+    except OSError as e:
+        raise RuntimeError(f"ffmpeg could not start ({type(e).__name__})") from e
+    if proc.returncode != 0:
+        lines = (proc.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError(f"ffmpeg failed: {lines[-1] if lines else f'exit {proc.returncode}'}")
+
+
+def zoompan_args(seconds: float, index: int) -> list[str]:
+    """The `-vf` arguments that turn a looped still into `seconds` of 1080x1920 at 30 fps with a
+    slow centred zoom: in on even scenes, out on odd ones. The still is first covered at twice
+    the frame size so the zoom does not jitter."""
+    frames = max(1, round(seconds * FPS))
+    step = f"{ZOOM:g}*on/{max(1, frames - 1)}"
+    zoom = f"1+{step}" if index % 2 == 0 else f"{1 + ZOOM:g}-{step}"
+    chain = ",".join(
+        [
+            f"scale={2 * W}:{2 * H}:force_original_aspect_ratio=increase:flags=lanczos",
+            f"crop={2 * W}:{2 * H}",
+            f"zoompan=z='{zoom}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
+            f":d={frames}:s={W}x{H}:fps={FPS}",
+            "setsar=1",
+        ]
+    )
+    return ["-vf", chain]
+
+
+def motion_clip(still: Path, seconds: float, index: int, out: Path) -> None:
+    """Render `still` as a `seconds` long H.264 clip (yuv420p, 30 fps, 1080x1920) with the slow
+    zoom of `zoompan_args`. Raises RuntimeError with ffmpeg's last stderr line on failure."""
+    _ffmpeg(
+        [
+            "-loop",
+            "1",
+            "-i",
+            str(still),
+            *zoompan_args(seconds, index),
+            "-t",
+            f"{seconds:.3f}",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "18",
+            str(out),
+        ]
+    )

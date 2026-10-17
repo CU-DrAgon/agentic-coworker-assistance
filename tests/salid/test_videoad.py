@@ -1,11 +1,19 @@
 import io
+import shutil
+import threading
+import time
 
 import pytest
 from PIL import Image
-from promo_helpers import fake_client, json_response, png_bytes, text_response
+from promo_helpers import fake_client, json_response, png_bytes, probe, text_response
 from pydantic import ValidationError
 
-from salid import cards, videoad
+from salid import cards, promo, videoad
+
+FONTS = cards.card_fonts()
+needs_ffmpeg = pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None, reason="no ffmpeg"
+)
 
 
 def sb(*secs, src="ai", prompt="a latte on a table", voice="หอมกรุ่น"):
@@ -215,3 +223,217 @@ def test_an_empty_brief_still_sends_text():
         c, "m", brief="  ", seconds=20, photos=photos(1), hero_shots=0, lang="th"
     )
     assert c.models.calls[0][1][0].parts[-1].text.strip()
+
+
+# ------------------------------------------------------------------ stills, captions, motion
+@pytest.mark.parametrize("src", [(3000, 1000), (800, 4000), (1080, 1920), (900, 1500)])
+def test_frame_photo_is_exact_and_undistorted(src):  # Review Focus 2
+    out = videoad.frame_photo(Image.new("RGB", src, (200, 30, 30)))
+    assert out.size == (1080, 1920)
+
+
+def test_wide_photo_sits_on_a_blurred_fill():
+    img = Image.new("RGB", (3000, 1000), (220, 20, 20))
+    out = videoad.frame_photo(img)
+    assert out.getpixel((540, 960))[0] > 180 and out.getpixel((540, 40)) != out.getpixel((540, 960))
+
+
+def test_extreme_photos_keep_their_aspect_on_the_fill():  # Review Focus 2
+    wide = Image.new("RGB", (3000, 1000), (255, 255, 255))
+    out = videoad.frame_photo(wide).convert("L")
+    rows = [y for y in range(1920) if out.getpixel((540, y)) > 240]
+    assert len(rows) == pytest.approx(360, abs=4)  # 1080 wide -> 360 high, not stretched
+    tall = Image.new("RGB", (800, 4000), (255, 255, 255))
+    out = videoad.frame_photo(tall).convert("L")
+    cols = [x for x in range(1080) if out.getpixel((x, 960)) > 240]
+    assert len(cols) == pytest.approx(384, abs=4)  # 1920 high -> 384 wide
+
+
+def test_near_9x16_photo_is_cover_cropped():
+    img = Image.new("RGB", (900, 1500), (10, 200, 10))
+    out = videoad.frame_photo(img)
+    assert out.getpixel((2, 2)) == out.getpixel((540, 960))  # no fill border
+
+
+def test_failed_ai_still_retries_once_then_uses_a_card(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        videoad.imagegen, "generate_images", lambda *a, **k: calls.append(1) or ([], "error")
+    )
+    stills, billed = videoad.scene_stills(
+        object(), "m", sb(5, 5, 5, 5).scenes[:1], [], "red", FONTS
+    )
+    assert len(calls) == 2 and stills[0].size == (1080, 1920) and billed == 2
+
+
+def test_photo_scenes_use_the_shop_photo_without_a_model_call(monkeypatch):
+    monkeypatch.setattr(videoad.imagegen, "generate_images", lambda *a, **k: 1 / 0)
+    stills, billed = videoad.scene_stills(
+        object(),
+        "m",
+        sb(5, 5, 5, 5, src="photo:0").scenes[:1],
+        [png_bytes((900, 900))],
+        "red",
+        FONTS,
+    )
+    assert stills[0].size == (1080, 1920) and billed == 0
+
+
+def _gif() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (900, 900), (1, 2, 3)).save(buf, "GIF")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    "shots", [[b"not an image"], [_gif()], []], ids=["unreadable", "gif", "missing"]
+)
+def test_an_unusable_shop_photo_falls_back_to_an_ai_still(monkeypatch, shots):
+    calls = []
+
+    def gen(client, model, prompt, **kw):
+        calls.append(prompt)
+        return [Image.new("RGB", (768, 1376), (9, 9, 9))], ""
+
+    monkeypatch.setattr(videoad.imagegen, "generate_images", gen)
+    stills, billed = videoad.scene_stills(
+        object(), "m", sb(5, 5, 5, 5, src="photo:0").scenes[:1], shots, "red", FONTS
+    )
+    assert stills[0].size == (1080, 1920) and stills[0].getpixel((540, 960)) == (9, 9, 9)
+    assert len(calls) == 1 and "a latte on a table" in calls[0] and billed == 1
+
+
+def test_ai_stills_are_9x16_2k_and_resized_to_the_frame(monkeypatch):
+    seen = []
+
+    def gen(client, model, prompt, **kw):
+        seen.append((model, kw))
+        return [Image.new("RGB", (1536, 2752), (40, 50, 60))], ""
+
+    monkeypatch.setattr(videoad.imagegen, "generate_images", gen)
+    stills, billed = videoad.scene_stills(object(), "m", sb(5, 5, 5, 5).scenes, [], "red", FONTS)
+    assert [s.size for s in stills] == [(1080, 1920)] * 4 and billed == 4
+    assert seen[0] == ("m", {"aspect": "9:16", "size": "2K"})
+
+
+def test_stills_run_at_most_three_at_a_time_and_keep_scene_order(monkeypatch):
+    lock, running, peak = threading.Lock(), [0], [0]
+
+    def gen(client, model, prompt, **kw):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+        time.sleep(0.05)
+        with lock:
+            running[0] -= 1
+        shade = int(prompt.split()[1])
+        return [Image.new("RGB", (768, 1376), (shade, shade, shade))], ""
+
+    monkeypatch.setattr(videoad.imagegen, "generate_images", gen)
+    board = sb(4, 4, 4, 4, 2, 2)
+    for i, scene in enumerate(board.scenes):
+        scene.image_prompt_en = f"shade {i * 10} cup"
+    stills, billed = videoad.scene_stills(object(), "m", board.scenes, [], "red", FONTS)
+    assert peak[0] == 3 and billed == 6
+    assert [s.getpixel((540, 960))[0] for s in stills] == [0, 10, 20, 30, 40, 50]
+
+
+def test_mixed_photo_and_ai_scenes_keep_their_order(monkeypatch):
+    monkeypatch.setattr(
+        videoad.imagegen,
+        "generate_images",
+        lambda *a, **k: ([Image.new("RGB", (768, 1376), (9, 9, 9))], ""),
+    )
+    board = sources(sb(5, 5, 5, 5), "photo:0", "ai", "photo:1", "hero")
+    shots = [png_bytes((900, 1600), (250, 0, 0)), png_bytes((900, 1600), (0, 250, 0))]
+    stills, billed = videoad.scene_stills(object(), "m", board.scenes, shots, "red", FONTS)
+    centre = [s.getpixel((540, 960)) for s in stills]
+    assert centre == [(250, 0, 0), (9, 9, 9), (0, 250, 0), (9, 9, 9)] and billed == 2
+
+
+def test_no_model_call_without_a_client_or_with_a_thai_prompt(monkeypatch):
+    monkeypatch.setattr(videoad.imagegen, "generate_images", lambda *a, **k: 1 / 0)
+    stills, billed = videoad.scene_stills(None, "m", sb(5, 5, 5, 5).scenes[:1], [], "red", FONTS)
+    assert stills[0].size == (1080, 1920) and billed == 0
+    thai = sb(5, 5, 5, 5, prompt="ลาเต้").scenes[:1]
+    assert videoad.scene_stills(object(), "m", thai, [], "red", FONTS)[1] == 0
+
+
+def test_fallback_card_is_the_accent_with_the_caption_in_the_safe_area():
+    card = videoad.fallback_card("ลาเต้เย็น ลด 20%", "green", FONTS)
+    fill, text = promo.ACCENTS["green"]
+    rgb = tuple(int(fill[i : i + 2], 16) for i in (1, 3, 5))
+    assert card.size == (1080, 1920) and card.mode == "RGB"
+    assert card.getpixel((5, 5)) == rgb and card.getpixel((540, 1900)) == rgb
+    inside = card.crop(videoad.SAFE).getcolors(1_000_000)
+    assert any(c == (255, 255, 255) for _, c in inside)  # caption drawn inside SAFE
+    outside = card.crop((0, 0, 1080, 270)).getcolors(10)
+    assert outside == [(1080 * 270, rgb)]
+    assert videoad.fallback_card("x", "no-such-accent", FONTS).getpixel((5, 5)) == (229, 57, 53)
+
+
+def test_caption_stays_in_the_safe_area_with_the_label():
+    png, box = videoad.caption_png("ลาเต้เย็น หอมกรุ่น ลดพิเศษ 20% ทั้งเดือน", FONTS)
+    x0, y0, x1, y1 = box
+    assert png.mode == "RGBA" and png.size == (1080, 1920)
+    assert x0 >= 65 and x1 <= 1015 and y0 >= 270 and y1 <= 1250
+    assert png.getpixel((5, 1900))[3] == 0  # outside: transparent
+
+
+def test_caption_png_draws_only_inside_the_safe_area_and_the_label_is_optional():
+    png, box = videoad.caption_png("ลาเต้เย็น หอมกรุ่น ลดพิเศษ 20% ทั้งเดือน", FONTS)
+    alpha = png.getchannel("A")
+    text = alpha.point(lambda v: 255 if v == 255 else 0)  # fully opaque = text, not shadow
+    tx0, ty0, tx1, ty1 = text.getbbox()
+    assert tx0 >= 65 and tx1 <= 1015 and ty0 >= 270 and ty1 <= 1250
+    label = alpha.crop((65, 270, 540, 360))
+    assert label.getextrema()[1] > 0  # the AI label sits top-left inside SAFE
+    assert box[1] > 360  # the caption does not cover it
+    bare, _ = videoad.caption_png("ลาเต้เย็น", FONTS, label=False)
+    assert bare.getchannel("A").crop((65, 270, 540, 360)).getextrema()[1] == 0
+    empty, _ = videoad.caption_png("", FONTS, label=False)
+    assert empty.getchannel("A").getextrema() == (0, 0)
+
+
+def test_zoompan_args_frames_and_direction():
+    a, b = videoad.zoompan_args(4.0, 0), videoad.zoompan_args(4.0, 1)
+    assert "d=120" in " ".join(a) and "s=1080x1920" in " ".join(a) and a != b
+    assert "fps=30" in " ".join(a) and videoad.zoompan_args(4.0, 2) == a
+
+
+@needs_ffmpeg
+def test_motion_clip_renders_with_ffmpeg(tmp_path):
+    still = tmp_path / "s.png"
+    Image.new("RGB", (1080, 1920), "gray").save(still)
+    videoad.motion_clip(still, 1.0, 0, tmp_path / "c.mp4")
+    p = probe(tmp_path / "c.mp4")
+    assert p["duration"] == pytest.approx(1.0, abs=0.1)
+    assert p["size"] == (1080, 1920) and p["codecs"] == ["h264"]
+
+
+@needs_ffmpeg
+def test_motion_clip_failure_carries_ffmpegs_last_line(tmp_path):
+    with pytest.raises(RuntimeError, match="No such file"):
+        videoad.motion_clip(tmp_path / "missing.png", 1.0, 1, tmp_path / "c.mp4")
+
+
+def test_motion_clip_runs_ffmpeg_without_a_shell(monkeypatch, tmp_path):
+    seen = {}
+
+    class Done:
+        returncode = 1
+        stderr = b"frame=0\nError opening input: boom\n"
+
+    def run(cmd, **kw):
+        seen["cmd"], seen["kw"] = cmd, kw
+        return Done()
+
+    monkeypatch.setattr(videoad.subprocess, "run", run)
+    with pytest.raises(RuntimeError, match="Error opening input: boom"):
+        videoad.motion_clip(tmp_path / "s.png", 2.0, 0, tmp_path / "c.mp4")
+    cmd = seen["cmd"]
+    assert isinstance(cmd, list) and cmd[0] == "ffmpeg" and "-loop" in cmd
+    assert seen["kw"] == {"check": False, "capture_output": True, "timeout": 120}
+    for flag in ("libx264", "yuv420p", "veryfast", "18", str(tmp_path / "c.mp4")):
+        assert flag in cmd
+    assert cmd[cmd.index("-t") + 1] == "2.000"
