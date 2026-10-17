@@ -40,15 +40,19 @@ executive-assistant tools, broadcasts, polls, voice, deep tasks, video, image de
 A WhatsApp user who adopts a username may be sent to us **without a phone number**: `from` and `wa_id`
 are missing, but `from_user_id` (the business-scoped user id, `US.1349...`) is always there.
 
-- **User**: the phone number (`from`) when present, otherwise the BSUID.
-- **Room** (the chat and its memory): the BSUID whenever the message has one, otherwise the phone number.
-  The BSUID never changes, while a phone number can appear (we messaged them in the last 30 days) or
-  disappear, so keying on it keeps one customer in one room for good.
-- **Reply**: `to` for a phone number, `recipient` for a BSUID.
-- **Executives** are matched on the phone number. A user we only know by BSUID is **not** an executive.
-  (The adapter can accept a set of executive BSUIDs, but `SALID_WHATSAPP_EXEC_NUMBERS` keeps digits
-  only, so they cannot be listed there yet.)
-- A person seen both ways has two user identities (so their own-receipts view can differ), one room.
+- **One person, one identity.** Whenever a message carries a BSUID, the **user** and the **room** (the
+  chat, its memory and its receipts) are the BSUID. The BSUID never changes, while a phone number can
+  appear (we messaged them in the last 30 days), vanish, or be reused by a different person. A new
+  BSUID on an old phone number is therefore a new user and cannot see the previous holder's receipts.
+  Only a message with no BSUID at all (older payloads) falls back to the phone number for both.
+- **Phone number**: kept only as the reply address and for executive matching, never as the identity.
+- **Reply**: `to` when a phone number is known (sent with the latest message), `recipient` (the BSUID)
+  otherwise.
+- **Executives** are matched on the phone number sent with the message (`SALID_WHATSAPP_EXEC_NUMBERS`),
+  so an executive who writes with a BSUID and no phone number is **not** treated as one until a message
+  with the phone number arrives. The adapter can also accept a set of executive BSUIDs (`exec_bsuids`),
+  but `SALID_WHATSAPP_EXEC_NUMBERS` keeps digits only, so they cannot be listed there yet.
+- A person seen with and without a phone number is still the same user and room.
 
 ## 1. Meta developer app
 

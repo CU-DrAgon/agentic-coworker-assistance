@@ -19,12 +19,14 @@ phone number: it is never logged (core logs the internal room id).
 
 Identity (usernames / BSUIDs, since April 2026): a message may carry no phone number (`from` and
 `wa_id` absent) but always has `from_user_id`, the business-scoped user id (BSUID, `US.1349...`).
-* user: the wa_id (`from`) when present, else the BSUID. Executives are matched on the phone number
-  only, so a BSUID user is never an executive unless listed in `exec_bsuids`.
-* room: the BSUID whenever the message has one, else the wa_id. The BSUID never changes, while the
-  phone number can appear or vanish (the user adopts a username, or we messaged them in the last 30
-  days), so keying the room on it keeps one chat one room (one memory) for its whole life.
-* reply: `to` when the user is a phone number, `recipient` (BSUID) otherwise.
+One person is one identity:
+* user and room: the BSUID whenever the message has one, else the wa_id. The BSUID never changes,
+  while the phone number can appear or vanish (the user adopts a username, or we messaged them in
+  the last 30 days) and can be reused by a different person. Keying both on the BSUID keeps one
+  chat in one room with one receipt history, and a new holder of an old number cannot see it.
+* the phone number is kept only as the outbound recipient (`port.phones`) and for executive
+  matching (`SALID_WHATSAPP_EXEC_NUMBERS`; `exec_bsuids` may also list BSUIDs).
+* reply: `to` when a phone number is known (or is the user), `recipient` (BSUID) otherwise.
 """
 
 from __future__ import annotations
@@ -241,10 +243,13 @@ class WhatsAppPort:
         api: Api,
         *,
         exec_bsuids: frozenset[str] | set[str] = frozenset(),
+        exec_numbers: frozenset[str] | set[str] = frozenset(),
         sleep: Callable = asyncio.sleep,
     ) -> None:
         self.api = api
-        self.exec_bsuids = frozenset(exec_bsuids)  # executives without a phone number
+        self.exec_bsuids = frozenset(exec_bsuids)  # executives listed by BSUID
+        self.exec_numbers = frozenset(exec_numbers)  # phone numbers; the adapter fills it if empty
+        self.phones: OrderedDict[str, str] = OrderedDict()  # BSUID -> its current phone number
         self._sleep = sleep
         self.sent_ids: OrderedDict[str, None] = OrderedDict()  # to recognise replies to Salid
 
@@ -252,9 +257,22 @@ class WhatsAppPort:
         return RoomView(None, [])  # 1:1 only: the room alone
 
     async def is_admin(self, msg: Incoming) -> bool:
-        # Executives are SALID_WHATSAPP_EXEC_NUMBERS (core matches `msg.user`, a phone number).
-        # A BSUID user is an executive only when listed in `exec_bsuids`.
-        return msg.user in self.exec_bsuids
+        # msg.user is the BSUID (or the phone number when there is none). Executives are the
+        # listed BSUIDs, or whoever's phone number (as sent with this message) is listed.
+        return msg.user in self.exec_bsuids or self.recipient(msg.user) in self.exec_numbers
+
+    def remember_phone(self, user: str, phone: str) -> None:
+        """Track the phone number a BSUID user is currently reachable on (none: forget it)."""
+        if not phone or phone == user:
+            self.phones.pop(user, None)
+            return
+        self.phones[user] = phone
+        self.phones.move_to_end(user)
+        while len(self.phones) > SENT_KEEP:
+            self.phones.popitem(last=False)
+
+    def recipient(self, user: str) -> str:
+        return self.phones.get(user) or user
 
     def format(self, text: str) -> list[str]:
         return textfmt.split_text(textfmt.to_whatsapp(text), TEXT_LIMIT)
@@ -295,7 +313,9 @@ class WhatsAppPort:
         sent: list[str] = []
         for i, text in enumerate(texts):
             try:
-                mid = await self._send(msg.user, text, msg.message if i == 0 else None)
+                mid = await self._send(
+                    self.recipient(msg.user), text, msg.message if i == 0 else None
+                )
             except Exception as e:
                 code = getattr(e, "graph_code", None)
                 logger.error(
@@ -333,6 +353,8 @@ _DEFAULT_EXT = {"image": ".jpg", "audio": ".ogg"}
 class WhatsAppAdapter:
     def __init__(self, assistant: Assistant, port: WhatsAppPort, phone_number_id: str) -> None:
         self.a, self.port, self.phone_number_id = assistant, port, phone_number_id
+        if not port.exec_numbers:
+            port.exec_numbers = frozenset(getattr(assistant, "exec_ids", {}).get("whatsapp") or ())
         self._seen: OrderedDict[str, None] = OrderedDict()
 
     async def on_payload(self, payload: dict) -> None:
@@ -397,7 +419,7 @@ class WhatsAppAdapter:
     def _incoming(self, m: dict, names: dict) -> Incoming | None:
         mid, kind = m.get("id"), m.get("type")
         phone, bsuid = str(m.get("from") or ""), str(m.get("from_user_id") or "")
-        user = phone or bsuid  # the phone number may be absent (username), the BSUID is not
+        user = bsuid or phone  # one person, one identity: the BSUID, the phone only as a fallback
         if not mid or not user:
             return None
         text, files = "", []
@@ -414,6 +436,7 @@ class WhatsAppAdapter:
             return None
         if not self._first_seen(str(mid)):
             return None  # Meta retried a delivery
+        self.port.remember_phone(user, phone)
         ts = m.get("timestamp")
         try:
             at = datetime.fromtimestamp(int(ts), UTC)
@@ -423,7 +446,7 @@ class WhatsAppAdapter:
         return Incoming(
             platform=PLATFORM,
             tenant=self.phone_number_id,
-            room=bsuid or phone,  # BSUID never changes; the phone number can appear or vanish
+            room=user,
             user=user,
             user_name=names.get(phone) or names.get(bsuid) or "",
             text=text.strip(),
