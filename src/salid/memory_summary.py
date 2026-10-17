@@ -70,7 +70,8 @@ action_items (list of {{who, what, due, by}}; who = the person's name as written
 numbers (amounts, dates, IDs mentioned that matter, each with its context), open_questions (list of strings). \
 Merge the new messages into the previous summary: keep what is still true, add what is new, \
 update items that changed. Be concise and keep the whole summary compact: at most 12 topics, 15 decisions, \
-15 action_items, 15 numbers and 10 open_questions; when a list is full, merge or drop the least important older entries."""
+15 action_items, 15 numbers and 10 open_questions; when a list is full, merge or drop the least important older entries. \
+Things Salid itself was asked to do (look up, remind, record) are not action items."""
 
 
 def format_lines(messages: Sequence[MemoryMessage], zone: ZoneInfo) -> str:

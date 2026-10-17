@@ -25,8 +25,17 @@ from .llm import generate
 from .memory_access import Scope, is_dm_scope
 from .memory_store import MemoryMessage
 from .memory_summary import format_lines
+from .naming import mentions_name
 
 logger = logging.getLogger(__name__)
+
+_BOT_WHO_RE = re.compile(r"^\W*(?:บอท|ผู้ช่วย|bot|the\s+bot|assistant|ai|the\s+assistant)\W*$", re.I)
+
+
+def is_assistant_who(who: str) -> bool:
+    """The doer named in an action item is Salid itself (or "the bot"): not a team task."""
+    return bool(who) and (mentions_name(who) or bool(_BOT_WHO_RE.match(who)))
+
 
 STATUSES = ("open", "done")
 SIMILARITY = 0.78  # titles at least this similar (same assignee) are one task
@@ -393,6 +402,9 @@ class TaskTracker:
         project_ids = None  # loaded once, only if there is an item
         for a in items[:MAX_TASKS_PER_SUMMARY]:
             who = (a.get("who") or "").strip()
+            if is_assistant_who(who):
+                logger.debug("tasks: skipped an action item for the assistant itself")
+                continue
             by = (a.get("by") or "").strip()
             title = a["what"].strip()[:300]
             due = parse_due(a.get("due"), today)

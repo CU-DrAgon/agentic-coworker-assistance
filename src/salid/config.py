@@ -112,6 +112,12 @@ class Settings(BaseSettings):
     # utterance). Engaged falls back to listening after this long without anyone addressing it
     # (or sooner: three utterances in a row that are not addressed to Salid).
     engaged_timeout_seconds: float = 45.0
+    # Engaged by the name alone (no question): back to listening after this long unless someone
+    # addresses Salid (SALID_ENGAGED_BARE_TIMEOUT_SECONDS).
+    engaged_bare_timeout_seconds: float = 12.0
+    # "Be quiet" / "เงียบก่อน": Salid says nothing and does not wake on a bare name for this long
+    # (her name with words clears it) (SALID_HUSH_HOLD_SECONDS).
+    hush_hold_seconds: float = 90.0
     # Every listening <-> engaged change (and the join) is shown as one short line in the meeting's
     # text chat; a flip back within 15 s edits the previous line instead of posting a new one.
     voice_state_posts: bool = True
@@ -124,6 +130,10 @@ class Settings(BaseSettings):
     # (`live_result_pause_seconds` of no room audio, waited for at most `live_result_wait_seconds`;
     # it is always posted to the text chat). At most `live_max_jobs` run at once per session.
     live_foreground_seconds: float = 12.0
+    # How a finished background job is announced by voice: "short" = one sentence ("the result is in
+    # the chat"; an answer of <= 160 chars is said in full), "full" = the whole result, "off" =
+    # chat only (SALID_LIVE_RESULT_VOICE). Progress is never spoken.
+    live_result_voice: str = "short"
     live_max_jobs: int = 3
     live_result_pause_seconds: float = 1.5
     live_result_wait_seconds: float = 90.0
@@ -151,6 +161,10 @@ class Settings(BaseSettings):
     name_min_voiced_seconds: float = 0.35  # SALID_NAME_MIN_VOICED_SECONDS
     name_min_cv: float = 0.25  # SALID_NAME_MIN_CV
     name_min_rms: float = 250.0  # SALID_NAME_MIN_RMS
+    # A clip that is ONLY the name ("สลิด") must have this much voiced audio: saying "Salid" takes
+    # >= 0.45 s, while one-word clips (so / sure / slide) the transcriber turned into the name are
+    # shorter (SALID_NAME_BARE_MIN_VOICED_SECONDS).
+    name_bare_min_voiced_seconds: float = 0.45
     # A spoken "one moment" clip while a slow tool (ask_salid) runs. If it is still running after
     # `live_filler_again_seconds` ONE typed note goes to the meeting chat (not spoken).
     live_filler: bool = True

@@ -1190,6 +1190,8 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "⏳ ยังทำอยู่ค่ะ: {question}",
         "en": "⏳ Still working on it: {question}",
     },
+    "voice_job_done": {"th": "✅ เสร็จแล้ว: {question}", "en": "✅ Done: {question}"},
+    "voice_still_suffix": {"th": " · ยังทำอยู่", "en": " · still working"},
     "voice_bg_1": {
         "th": "งานนี้ใช้เวลาหน่อยค่ะ สลิดทำให้อยู่ เดี๋ยวได้แล้วจะบอกนะคะ คุยเรื่องอื่นต่อได้เลยค่ะ",
         "en": "This one takes a little while. I'm on it and I'll tell you when it's ready; keep talking meanwhile.",

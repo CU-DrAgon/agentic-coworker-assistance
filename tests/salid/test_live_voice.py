@@ -1288,7 +1288,7 @@ async def test_any_mode_keeps_the_old_server_barge_in(lv):
     s, live = await lv.join(5)
     live.push(audio_msg())
     await until(lambda: lv.vc.played and s.speaking)
-    live.push(heard_msg("หยุดก่อน"))  # no local stop in "any" mode; the server decides
+    live.push(heard_msg("เดี๋ยวก่อน"))  # no local stop in "any" mode; the server decides
     await asyncio.sleep(0.05)
     assert lv.vc.playing
     live.push(interrupted_msg())

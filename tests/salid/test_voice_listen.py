@@ -87,18 +87,18 @@ async def test_three_unaddressed_utterances_drop_back_to_listening(env, monkeypa
     await env.mgr.end((1000, 77), "shutdown")
 
 
-async def test_callers_own_utterances_are_never_unaddressed(env, monkeypatch):
+async def test_callers_own_utterances_get_no_automatic_pass(env, monkeypatch):
     s = await quiet_session(env)
     env.mgr._set_engaged(s, True, by=10)
     assert s.called_by == 10
     s.called_at = time.monotonic() - 60
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "เมื่อวานไปกินข้าวมา")
     monkeypatch.setattr(env.mgr, "answer", lambda *a, **k: asyncio.sleep(0))
-    for _ in range(5):
-        await env.mgr.handle_segment(s, segment(10))
-    assert s.engaged is True and s.unaddressed == 0
-    await env.mgr.handle_segment(s, segment(11))  # someone else: counts
-    assert s.unaddressed == 1
+    await env.mgr.handle_segment(s, segment(10))  # the caller too: not addressed, counts
+    assert s.engaged is True and s.unaddressed == 1
+    await env.mgr.handle_segment(s, segment(10))
+    await env.mgr.handle_segment(s, segment(10))
+    assert s.engaged is False
     await env.mgr.end((1000, 77), "shutdown")
 
 
@@ -356,7 +356,7 @@ async def test_same_question_while_a_job_runs_gets_still_working_and_no_second_a
     await until(lambda: len(live.tool_responses) == 2)
     got = {r[0].id: r[0].response for r in live.tool_responses}
     assert got["a"]["status"] == "working" and got["b"]["status"] == "working"
-    assert got["b"]["say"] == t("voice_still_working", "th") and got["b"]["job"] == got["a"]["job"]
+    assert "say" not in got["b"] and got["b"]["job"] == got["a"]["job"]  # nothing is spoken
     assert len(brain.started) == 1 and not brain.cancelled  # no second agent
     brain.gates["ยอดเดือนนี้เท่าไร"].set()
     await until(lambda: "💬 **สลิด:** ตอบ ยอดเดือนนี้เท่าไร" in lv.chan.sent)

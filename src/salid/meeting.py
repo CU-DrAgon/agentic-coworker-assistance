@@ -84,6 +84,7 @@ CONTEXT_WINDOW_S = 5 * 60
 CONTEXT_MAX_CHARS = 6000
 SUMMARY_MAX_CHARS = 150_000
 PENDING_WAKE_S = 15.0
+BARE_WAKE_FOLLOW_S = 5.0  # live: a bare name is followed by the request within this long
 TRANSCRIBE_WORKERS = 2
 QUEUE_MAX = 60
 NOTE_MIN_GAP_S = 5.0
@@ -177,6 +178,58 @@ def parse_wake(text: str) -> str | None:
     if before.casefold() in _GREETINGS:  # "Hey Salid": a greeting, not a question
         return ""
     return before if len(before) >= 2 else ""
+
+
+# ---- hush: "be quiet" / "เงียบก่อน": silent listening until the name is called again
+_HUSH_LEAD_RE = re.compile(
+    r"^(?:[\s,.!?~ๆ]|สลิด|salid|ซาลิด|hey|เฮ้ย|เฮ้|โอเค|ok(?:ay)?|เออ|งั้น|ครับผม|ครับ|ค่ะ|คะ|นะ"
+    r"|please|ช่วย|ขอ|ก็)+",
+    re.I,
+)
+# Unambiguous commands: anything may follow ("เงียบก่อนนะ เดี๋ยวเรียก", "be quiet for now").
+_HUSH_SURE_RE = re.compile(
+    r"^(?:เงียบ(?!สงบ|สนิท|เชียบ)|หยุดพูด|หยุดก่อน|พอแล้ว|พอก่อน|ฟังอย่างเดียว|ฟังเฉย|ไม่ต้องพูด"
+    r"|ไม่ต้องตอบ|หุบปาก"
+    r"|(?:be\s+quiet|shut\s+up|stop\s+talking|just\s+listen|listen\s+only|don'?t\s+answer"
+    r"|no\s+need\s+to\s+answer)(?![a-z]))",
+    re.I,
+)
+# Words that are also ordinary sentence starts ("stop the meeting", "enough about that"): a hush
+# only when nothing but politeness follows.
+_HUSH_WEAK_RE = re.compile(
+    r"^(?:quiet|stop|that'?s\s+enough|enough)"
+    r"(?:[\s,.!]*(?:please|now|for\s+now|it|already|ok(?:ay)?|salid|สลิด|ครับ|ค่ะ|คะ|นะ))*"
+    r"[\s,.!?]*$",
+    re.I,
+)
+
+
+def is_hush(text: str) -> bool:
+    """ "Be quiet" in Thai or English, at any time (speaking, engaged or listening), whatever the
+    server language: after the name / politeness / fillers the utterance IS or STARTS with one of
+    the hush commands (<= 60 chars). Leaving the meeting and mid-sentence words are not hushes."""
+    t_ = " ".join(str(text or "").split())
+    if not t_ or len(t_) > 60 or parse_meeting_command(t_) == "leave":
+        return False
+    body = _HUSH_LEAD_RE.sub("", t_)
+    return bool(_HUSH_SURE_RE.match(body) or _HUSH_WEAK_RE.match(body))
+
+
+_BARE_FILLER_RE = re.compile(
+    r"ครับผม|ครับ|ค่ะ|คะ|นะ|จ้า|จ๋า|ทุกคน|เฮ้ย|เฮ้|หวัดดี|สวัสดี|ว่าไง|hello|hey|hi|yo|ok|okay",
+    re.I,
+)
+
+
+def bare_name(text: str, said: str | None) -> bool:
+    """The utterance is only the name: `parse_wake` found no question (`said == ""`) and what is
+    left of the text without the name, politeness fillers and punctuation is <= 2 characters."""
+    if said != "":
+        return False
+    span = find_call(text or "")
+    rest = (text or "") if span is None else text[: span[0]] + " " + text[span[1] :]
+    rest = _BARE_FILLER_RE.sub(" ", rest)
+    return len(re.sub(r"[\s\W_]+", "", rest)) <= 2
 
 
 # ------------------------------------------------------------------ transcript
@@ -362,20 +415,24 @@ def speech_stats(pcm: bytes, min_rms: float = 250.0, frame_bytes: int = 3840) ->
     return stats_from_frame_rms(values, min_rms)
 
 
-def looks_like_speech(stats: SpeechStats, settings) -> tuple[bool, str]:
+def looks_like_speech(stats: SpeechStats, settings, bare: bool = False) -> tuple[bool, str]:
     """The name-hit energy gate: (ok, reason). Voiced seconds, voiced fraction, frame-RMS
     variation and overall loudness; a real bare "สลิด" (~0.5 s) passes, a click, a burst of noise
-    or stationary hiss / hum does not."""
+    or stationary hiss / hum does not. `bare`: the clip is only the name (no other words); the
+    name takes >= `name_bare_min_voiced_seconds`, so a short one-word clip needs more voiced audio
+    than a sentence does."""
     floor = float(getattr(settings, "name_min_rms", 250.0))
     # a short but LOUD call ("สลิด!" said sharply): clearly a voice, even with few voiced frames
     if (
         stats.rms >= float(getattr(settings, "name_loud_rms", LOUD_RMS))
-        and stats.voiced_s >= 0.15
+        and stats.voiced_s >= (0.3 if bare else 0.15)
         and stats.cv >= float(getattr(settings, "name_min_cv", 0.25))
     ):
         return True, ""
     if stats.voiced_s < float(getattr(settings, "name_min_voiced_seconds", 0.35)):
         return False, "too little voiced audio"
+    if bare and stats.voiced_s < float(getattr(settings, "name_bare_min_voiced_seconds", 0.45)):
+        return False, "too little voiced audio for a bare name"
     if stats.voiced_fraction < 0.3:
         return False, "low voiced fraction"
     if stats.cv < float(getattr(settings, "name_min_cv", 0.25)):
@@ -396,16 +453,44 @@ def stats_line(stats: SpeechStats) -> str:
 # ------------------------------------------------------------------ transcription / summary
 class _Heard(BaseModel):
     text: str
+    name_called: bool = False
 
 
+@dataclass(frozen=True)
+class Heard:
+    """One transcribed clip: the words, and whether the speaker addressed Salid by name."""
+
+    text: str
+    name_called: bool = False
+
+
+# Neither prompt primes the name. A prompt that said "write สลิด when you hear something like it"
+# turned one-word clips (so / sure / solid / slide / said, สลับ / สะดวก / สนิท) into a call.
 TRANSCRIBE_PROMPT = (
     "ถอดเสียงพูดภาษาไทยหรือภาษาอังกฤษในคลิปนี้ (เสียงของคนคนเดียวในการประชุม) ตามที่พูดจริงทุกคำ "
-    "ภาษาอังกฤษที่พูดให้คงเป็นภาษาอังกฤษ ไม่ต้องแปล ไม่ต้องใส่ชื่อผู้พูด\n"
-    "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ถ้าได้ยินคำนี้ให้เขียนว่า สลิด "
-    "ถ้าได้ยินชื่อ สลิด ให้สะกดว่า สลิด (ไม่ใช่ สนิท สิริ สลิป) อย่าตัดคำท้ายประโยคทิ้ง\n"
+    "ภาษาอังกฤษที่พูดให้คงเป็นภาษาอังกฤษ ไม่ต้องแปล ไม่ต้องใส่ชื่อผู้พูด อย่าตัดคำท้ายประโยคทิ้ง\n"
+    "ผู้ช่วยในประชุมชื่อ “สลิด” (Salid) ให้เขียนว่า สลิด เฉพาะเมื่อผู้พูดเรียกผู้ช่วยด้วยชื่อนี้ชัดเจนเท่านั้น "
+    "คำที่ออกเสียงคล้ายกัน (สลับ สะดวก สนิท สิริ ครับสิ, so sure solid slide salad said) ไม่ใช่ชื่อ "
+    "ให้เขียนตามที่ได้ยินจริง คลิปที่มีคำเดียวสั้น ๆ แทบไม่เคยเป็นการเรียกชื่อ\n"
+    "name_called เป็น true เฉพาะเมื่อผู้พูดใช้ชื่อสลิดเรียกผู้ช่วยเพื่อคุยด้วย (ไม่ใช่พูดถึงเฉย ๆ) นอกนั้นเป็น false\n"
     "ถ้าไม่มีเสียงพูดชัดเจน (เงียบ เสียงรบกวน เสียงหายใจ) ให้ตอบ text เป็นสตริงว่าง ห้ามแต่งข้อความขึ้นเอง "
     "ถ้าไม่แน่ใจว่ามีคำพูดจริง ให้ตอบ text ว่าง ห้ามใส่คำทักทายหรือชื่อที่ไม่ได้ยินชัดเจน "
-    'ตอบเป็น JSON {"text": "..."}'
+    'ตอบเป็น JSON {"text": "...", "name_called": false}'
+)
+TRANSCRIBE_PROMPT_EN = (
+    "Transcribe the speech in this clip (one person in a meeting). Transcribe Thai or English "
+    "exactly as spoken, verbatim, in its own script; never translate, and do not add a speaker "
+    "name. Keep the end of the sentence.\n"
+    'The meeting assistant is called "Salid" (Thai: สลิด). Write Salid (or สลิด) only when the '
+    "speaker clearly addresses the assistant by that name. Similar-sounding words (so, sure, "
+    "solid, slide, salad, said, สลับ, สะดวก, สนิท, สิริ, ครับสิ) are NOT the name: write what you "
+    "hear. A clip with one short word is almost never the name.\n"
+    "name_called is true only when the name is used to address the assistant (not when someone "
+    "just talks about it); otherwise false.\n"
+    "If there is no clear speech (silence, noise, breathing) answer text as an empty string; never "
+    "invent text. If you are not sure there is real speech, answer an empty text; never write a "
+    "greeting or a name you did not clearly hear. "
+    'Answer as JSON {"text": "...", "name_called": false}'
 )
 SUMMARY_PROMPT = """คุณคือ “สลิด” เลขาประชุมของทีม จากบันทึกการประชุมด้านล่าง (รูปแบบ [เวลา] ชื่อ: ข้อความ ถอดจากเสียงอัตโนมัติ อาจมีคำผิด) \
 เขียนสรุปการประชุมเป็นภาษาไทยที่กระชับ ใช้เฉพาะข้อมูลที่อยู่ในบันทึก ห้ามแต่งเพิ่ม ใช้หัวข้อตามนี้:
@@ -446,8 +531,12 @@ def pcm_to_wav(pcm: bytes) -> bytes:
 
 
 def transcribe_prompt(language: str | None = None) -> str:
-    """The transcription prompt: Thai or English, plus the session's language when it is one of
-    the second-tier languages. Transcripts stay verbatim (never translated)."""
+    """The transcription prompt for a session whose reply language is `language`: English for
+    "en", Thai otherwise, plus a note when it is one of the second-tier languages. The reply
+    language never limits what people may SAY: both prompts transcribe Thai or English verbatim
+    (never translated). Neither primes the name."""
+    if language == "en":
+        return TRANSCRIBE_PROMPT_EN
     if language not in EXTRA:
         return TRANSCRIBE_PROMPT
     return (
@@ -457,9 +546,10 @@ def transcribe_prompt(language: str | None = None) -> str:
     )
 
 
-def transcribe_pcm(client: Any, model: str, pcm: bytes, language: str | None = None) -> str:
+def transcribe_heard(client: Any, model: str, pcm: bytes, language: str | None = None) -> Heard:
     """Blocking: 48 kHz stereo PCM -> 16 kHz mono FLAC (ffmpeg, in memory) -> Gemini on Vertex.
-    Returns the Thai text, "" when there was no speech."""
+    Returns the words ("" when there was no speech) and whether the name was used to address
+    Salid."""
     flac = to_flac(pcm_to_wav(pcm))
     config = types.GenerateContentConfig(
         response_mime_type="application/json", response_schema=_Heard, temperature=0.0
@@ -471,12 +561,22 @@ def transcribe_pcm(client: Any, model: str, pcm: bytes, language: str | None = N
         config,
     )
     raw = (getattr(resp, "text", None) or "").strip()
+    called = False
     try:
-        text = str(json.loads(raw).get("text", ""))
+        data = json.loads(raw)
+        text = str(data.get("text", ""))
+        called = data.get("name_called") is True
     except (ValueError, AttributeError):
         text = raw
     text = text.strip()
-    return "" if re.fullmatch(r"[\s\W_]*", text) else text
+    if re.fullmatch(r"[\s\W_]*", text):
+        return Heard("", False)
+    return Heard(text, called)
+
+
+def transcribe_pcm(client: Any, model: str, pcm: bytes, language: str | None = None) -> str:
+    """The words only (see `transcribe_heard`)."""
+    return transcribe_heard(client, model, pcm, language).text
 
 
 def summarize_transcript(client: Any, model: str, transcript: str, language: str = "en") -> str:
@@ -649,7 +749,10 @@ class MeetingSession:
     engaged: bool = False  # False = listening (speaks only when its name is called)
     engaged_until: float = 0.0
     called_at: float = -1e9  # monotonic time she was last called by name / engaged
-    called_by: int = 0  # user id of whoever called her (their utterances are always addressed)
+    called_by: int = 0  # user id of whoever called her last (informational; no automatic pass)
+    hushed_until: float = 0.0  # told to be quiet: silent listening until this (or her name + words)
+    hushed_at: float = -1e9
+    engaged_bare: bool = False  # engagement started from the name alone: expires fast (12 s)
     unaddressed: int = 0  # consecutive utterances, while engaged, not addressed to Salid
     state_msg: Any = None  # the last state line posted to the text chat (edited on a quick flip)
     state_at: float = -1e9  # monotonic time of that post
@@ -1783,6 +1886,10 @@ class MeetingManager:
             and now - s.first_speech_at > delay
         ):
             self._spawn(s, self.ask_consent(s))
+        if s.hushed_until and now > s.hushed_until:
+            s.hushed_until = 0.0  # the hold is over: the normal listening rules return
+            if s.live is not None:
+                s.live.unhush()
         if s.engaged and now > s.engaged_until and not s.speaking:
             self._set_engaged(s, False)  # nobody addressed Salid for a while: back to listening
         if s.consent == "pending" and now > s.consent_until:
@@ -1815,13 +1922,10 @@ class MeetingManager:
         name = (
             member.display_name if member else t("meet_participant", s.lang, n=seg.user_id % 1000)
         )
-        text = await asyncio.to_thread(
-            transcribe_pcm,
-            self.stt_client,
-            self.bot.s.gemini_model,
-            seg.pcm,
-            *((s.lang,) if s.lang in EXTRA else ()),
+        heard = await asyncio.to_thread(
+            transcribe_heard, self.stt_client, self.bot.s.gemini_model, seg.pcm, s.lang
         )
+        text = heard.text
         if not text:
             return
         now_m = time.monotonic()
@@ -1844,11 +1948,40 @@ class MeetingManager:
         logger.info("meeting %s: %s said %d chars", s.guild_id, seg.user_id, len(text))
         if s.captions.on and not getattr(member, "bot", False) and not self._is_echo(s, seg):
             s.captions.add(name, text)  # human speech only: never Salid's own words or notes
+        if self.is_hush(text) and not self._is_echo(s, seg):
+            self._hush(s)  # silence is the acknowledgement: no reply, no note, no vote offer
+            return
         said = parse_wake(text)
-        if said is not None and not self._real_call(s, seg, text, said):
+        bare = bare_name(text, said)
+        hushed = s.hushed_until > time.monotonic()
+        if said is not None and not self._real_call(s, seg, text, said, bare):
             said = None  # noise the transcriber turned into a greeting: not a call
+        live = s.voice_mode == "live"
+        pending_at = s.pending_wake.pop(seg.user_id, None) if live and not hushed else None
+        if said is None and live and pending_at is not None and not self._is_echo(s, seg):
+            # a bare name was heard a moment ago: the speaker's next words are the call when they
+            # are a question / a request
+            if time.monotonic() - pending_at < BARE_WAKE_FOLLOW_S and self._is_request(text):
+                said = text
+        elif said is not None and bare:
+            if hushed:
+                return  # even a corroborated bare name needs a request in the same utterance
+            if live:
+                # The Live model's own transcript decides a bare name; the transcriber's "สลิด"
+                # alone (often a misheard one-word clip) never forces a turn.
+                s.pending_wake[seg.user_id] = time.monotonic()
+                return
+            if not heard.name_called:
+                return  # classic: not addressed by the transcriber's own judgement: ignore
         called = said is not None
-        if not called and s.recording != "not_recording" and not self._is_echo(s, seg):
+        if called:
+            self._clear_hush(s)  # the name with words in the hold: a normal call
+        if (
+            not called
+            and not hushed
+            and s.recording != "not_recording"
+            and not self._is_echo(s, seg)
+        ):
             self._spawn(s, self.bot.vote_offer_from_room(s, name, text))  # text offer only
         if called and parse_meeting_command(said) == "leave":
             self._spawn(s, self._leave_politely(s))  # "สลิด ออกประชุม"
@@ -1869,7 +2002,9 @@ class MeetingManager:
                 self._spawn(s, self._say_text(s, self._sp(s, "meet_dismiss_ack")))
             return
         if called:
-            self._set_engaged(s, True, name=name if member is not None else "", by=seg.user_id)
+            self._set_engaged(
+                s, True, name=name if member is not None else "", by=seg.user_id, bare=bare
+            )
         elif s.engaged and not self._is_echo(s, seg):
             self._engaged_utterance(s, text, now, seg.user_id)
         if s.voice_mode == "live":
@@ -1910,7 +2045,37 @@ class MeetingManager:
             s.tasks.append(asyncio.create_task(self.acknowledge(s, question)))
         await self.answer(s, member, name, question)
 
-    def _real_call(self, s, seg: Segment, text: str, said: str) -> bool:
+    is_hush = staticmethod(is_hush)
+
+    def _hush_hold_s(self) -> float:
+        return float(getattr(self.bot.s, "hush_hold_seconds", 90.0))
+
+    def _hush(self, s: MeetingSession) -> None:
+        """Told to be quiet: stop talking now, forget any pending wake, go back to listening, and
+        stay silent for `hush_hold_seconds` unless her name comes with words. No reply."""
+        now = time.monotonic()
+        fresh = now - s.hushed_at > 3.0  # the Live transcript and the classic hit are one hush
+        s.hushed_at, s.hushed_until = now, now + self._hush_hold_s()
+        s.pending_wake.clear()
+        if s.live is not None:
+            s.live.hush(fresh)
+        elif fresh:
+            _stop_playback(s.vc)
+        if fresh:
+            s.speaking = False
+        self._set_engaged(s, False)
+
+    def _clear_hush(self, s: MeetingSession) -> None:
+        if s.hushed_until:
+            s.hushed_until = 0.0
+            if s.live is not None:
+                s.live.clear_hush()
+
+    def _is_request(self, text: str) -> bool:
+        """A question or a request (`_ASK_RE`) or at least three words."""
+        return bool(self._ASK_RE.search(text or "")) or len((text or "").split()) >= 3
+
+    def _real_call(self, s, seg: Segment, text: str, said: str, bare: bool = False) -> bool:
         """A bare greeting / name call (the shape noise is hallucinated into) counts only when the
         audio behind it looks like speech (`looks_like_speech`). Logs the numbers, never the text."""
         if not (is_greeting(said or text) or len(text.strip()) <= 20):
@@ -1919,7 +2084,7 @@ class MeetingManager:
         if float(getattr(sets, "name_min_voiced_seconds", 0.35)) <= 0:
             return True  # energy gate off
         stats = speech_stats(seg.pcm, float(getattr(sets, "name_min_rms", 250.0)))
-        ok, reason = looks_like_speech(stats, sets)
+        ok, reason = looks_like_speech(stats, sets, bare=bare)
         logger.info(
             "meeting %s: name hit %s %s",
             s.guild_id,
@@ -1970,6 +2135,30 @@ class MeetingManager:
     REPLY_WINDOW_S = 6.0
     QUESTION_WINDOW_S = 20.0
     UNADDRESSED_LIMIT = 3
+    # Said to a friend, not to Salid: slang for "you" / "mate", never a request to an assistant.
+    _SELF_TALK_RE = re.compile(
+        r"มึง|กู(?!เกิล|รู)|เว้ย|ว่ะ|ไอ้|(?<![a-z])(?:dude|bro|guys|you\s+guys|man,)", re.I
+    )
+
+    def _addresses_attendee(self, s: MeetingSession, text: str, user_id: int) -> bool:
+        """The utterance calls another person in the room by their display name (or its first
+        word): it is meant for them."""
+        low = (text or "").casefold()
+        guild = s.voice_channel.guild
+        for uid in s.attendee_ids:
+            if uid == user_id:
+                continue
+            member = guild.get_member(uid)
+            if member is None or getattr(member, "bot", False):
+                continue
+            full = str(getattr(member, "display_name", "") or "").strip().casefold()
+            words = full.split()
+            names = [full] if len(full) >= 2 else []
+            if words and len(words[0]) >= 3:
+                names.append(words[0])
+            if any(n in low for n in names):
+                return True
+        return False
 
     def _addressed(self, s: MeetingSession, text: str, now: float) -> bool:
         """Is this utterance (heard while engaged, no name in it) meant for Salid?"""
@@ -1983,18 +2172,34 @@ class MeetingManager:
     def _engaged_utterance(
         self, s: MeetingSession, text: str, now: float, user_id: int = 0
     ) -> None:
-        if (user_id and user_id == s.called_by) or self._addressed(s, text, now):
+        elsewhere = bool(self._SELF_TALK_RE.search(text or "")) or self._addresses_attendee(
+            s, text, user_id
+        )
+        if not elsewhere and self._addressed(s, text, now):
             s.unaddressed = 0
+            s.engaged_bare = False
             s.engaged_until = now + self._engage_s()  # talking with Salid keeps it engaged
             return
         s.unaddressed += 1
         if s.unaddressed >= self.UNADDRESSED_LIMIT:
             self._set_engaged(s, False)  # people talk among themselves: back to listening
 
-    def _set_engaged(self, s: MeetingSession, on: bool, name: str = "", by: int = 0) -> None:
+    def _set_engaged(
+        self, s: MeetingSession, on: bool, name: str = "", by: int = 0, bare: bool = False
+    ) -> None:
         """listening <-> engaged. The Live model is told the state so it stays silent when
-        listening, and the change is shown in the meeting's text chat. `name`: who called her."""
-        s.engaged_until = time.monotonic() + self._engage_s() if on else 0.0
+        listening, and the change is shown in the meeting's text chat. `name`: who called her.
+        `bare`: the name was said with no question; unless someone addresses her within
+        `engaged_bare_timeout_seconds` she goes back to listening (a running conversation is not
+        shortened by a bare name)."""
+        bare = bare and on and not (s.engaged and not s.engaged_bare)
+        s.engaged_bare = bare
+        span = (
+            float(getattr(self.bot.s, "engaged_bare_timeout_seconds", 12.0))
+            if bare
+            else self._engage_s()
+        )
+        s.engaged_until = time.monotonic() + span if on else 0.0
         s.unaddressed = 0
         if on:
             s.called_at = time.monotonic()

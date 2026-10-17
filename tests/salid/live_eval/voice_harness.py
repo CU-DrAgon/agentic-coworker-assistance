@@ -245,22 +245,22 @@ class Rig:
         self._patch(self.mgr, "_connect", connect)
 
         # --- instrumentation
-        orig_tr = mt.transcribe_pcm
+        orig_tr = mt.transcribe_heard
 
-        def traced(client, model, pcm):
+        def traced(client, model, pcm, language=None):
             t0 = time.monotonic()
-            text = orig_tr(client, model, pcm)
+            heard = orig_tr(client, model, pcm, language)
             self.events.append(
                 {
                     "kind": "heard",
                     "t": time.monotonic(),
-                    "text": text,
+                    "text": heard.text,
                     "took": time.monotonic() - t0,
                 }
             )
-            return text
+            return heard
 
-        self._patch(mt, "transcribe_pcm", traced)
+        self._patch(mt, "transcribe_heard", traced)
         orig_say = mt.say
 
         def counted_say(*a, **k):

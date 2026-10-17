@@ -193,3 +193,21 @@ class ThaiGuildStore(MemoryGuildStore):
         if g.language_chosen:
             return g
         return g.model_copy(update={"default_language": "th", "language_chosen": True})
+
+
+@pytest.fixture(autouse=True)
+def _heard_follows_transcribe_pcm(monkeypatch):
+    """`handle_segment` transcribes with `meeting.transcribe_heard`. Most tests fake the words by
+    patching `meeting.transcribe_pcm`; this keeps that working (the clip counts as addressed by
+    name, as a real transcriber would say for a spoken "สลิด ..."). Tests of the name_called
+    judgement patch `transcribe_heard` themselves."""
+    from salid import meeting as mt
+
+    real_pcm, real_heard = mt.transcribe_pcm, mt.transcribe_heard
+
+    def heard(client, model, pcm, language=None):
+        if mt.transcribe_pcm is real_pcm:  # not faked: the real transcriber
+            return real_heard(client, model, pcm, language)
+        return mt.Heard(mt.transcribe_pcm(client, model, pcm), True)
+
+    monkeypatch.setattr(mt, "transcribe_heard", heard)

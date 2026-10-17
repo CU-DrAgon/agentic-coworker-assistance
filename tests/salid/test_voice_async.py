@@ -112,7 +112,9 @@ async def test_slow_job_returns_working_without_a_say_and_the_live_model_is_not_
     assert not [
         c for c in lv.bot.fillers.calls if c.get("facts")
     ]  # no spoken hand-off line written
-    note = t("voice_handoff_text", "th", question=Q)  # the status is typed in the meeting chat
+    note = t(
+        "voice_working_text", "th", question=Q
+    )  # the one status line is typed in the meeting chat
     assert lv.chan.sent.count(note) == 1 and note.startswith("⏳")
     # the room goes on: another tool call is answered while the job still runs
     live.push(tool_msg("post_note", {"text": "x"}, id="n"))
@@ -141,7 +143,7 @@ async def test_english_room_gets_the_handoff_note_in_english(lv, monkeypatch):
     s.language = "en"
     live.push(tool_msg("ask_salid", {"question": "build the Q3 summary"}))
     await until(lambda: live.tool_responses)
-    assert t("voice_handoff_text", "en", question="build the Q3 summary") in lv.chan.sent
+    assert t("voice_working_text", "en", question="build the Q3 summary") in lv.chan.sent
     brains.release("build the Q3 summary")
     await lv.mgr.end((1000, 77))
 
@@ -172,7 +174,7 @@ async def test_finished_job_is_posted_to_chat_and_announced_only_after_a_pause(l
 
 
 async def test_result_longer_than_the_cap_is_cut_in_the_cue_not_in_chat(lv, monkeypatch):
-    setup_async(lv)
+    setup_async(lv, live_result_voice="full")
 
     async def long(self, q):
         await asyncio.sleep(0.2)
@@ -316,8 +318,8 @@ async def test_the_same_question_again_says_still_working(lv, monkeypatch):
     live.push(tool_msg("ask_salid", {"question": Q + "?"}, id="b"))
     await until(lambda: len(live.tool_responses) == 2)
     again = live.tool_responses[1][0].response
-    assert again["status"] == "working" and again["say"] == "ยังทำอยู่ค่ะ"  # one short sentence
-    assert t("voice_still_working_text", "th", question=Q + "?") in lv.chan.sent  # and a typed note
+    assert again["status"] == "working" and "say" not in again  # progress is never spoken
+    assert any(x.startswith("⏳") and "ยังทำอยู่" in x for x in lv.chan.sent)  # a typed note only
     assert brains.started == [Q]
     brains.release(Q)
     await lv.mgr.end((1000, 77))
@@ -478,7 +480,7 @@ def test_prompts_explain_working_status_and_the_result_message_in_both_languages
     s = FixedClockSettings()
     th, en = build_instruction(s, "th"), build_instruction(s, "en")
     assert "status=working" in th and "ไม่ต้องรอ" in th and "(ผลงานที่ขอไว้เสร็จแล้ว" in th
-    assert "ไม่ต้องพูดถึงมัน" in th and "ห้ามเรียบเรียงใหม่" in th and "ห้ามพูดคำเติมเอง" in th
+    assert "อย่าพูดอะไรเกี่ยวกับมัน" in th and "ห้ามเรียบเรียงใหม่" in th and "ห้ามพูดคำเติมเอง" in th
     assert "ให้พูดบรรทัด say ตามที่เป็น" not in th
     assert "status=working" in en and "do not wait" in en and "(The requested job is done" in en
     assert "say nothing about it" in en and "do not rephrase" not in en.split("status=working")[0]

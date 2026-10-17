@@ -278,12 +278,12 @@ async def test_classic_decision_log_has_numbers_and_no_text(lv, monkeypatch, cap
     caplog.set_level(logging.INFO, logger="salid.meeting")
     s, live = await lv.join(5)
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด")
-    await lv.mgr.handle_segment(s, mt.Segment(5, speechlike(0.5, seed=7), time.monotonic(), 0.5))
-    assert s.engaged is True
+    await lv.mgr.handle_segment(s, mt.Segment(5, speechlike(0.8, seed=7), time.monotonic(), 0.8))
+    assert s.engaged is False and 5 in s.pending_wake  # live: a bare name only waits for a request
     await lv.mgr.end((1000, 77))
     line = next(r.getMessage() for r in caplog.records if "name hit" in r.getMessage())
     assert re.fullmatch(
-        r"meeting \d+: name hit accepted dur=0\.50 rms=\d+ voiced=[\d.]+ vf=[\d.]+ cv=[\d.]+", line
+        r"meeting \d+: name hit accepted dur=0\.80 rms=\d+ voiced=[\d.]+ vf=[\d.]+ cv=[\d.]+", line
     ), line
     assert "สลิด" not in line
 
@@ -336,7 +336,7 @@ def test_voiced_fraction_silence_noise_and_speech():
 
 def test_transcription_prompt_no_longer_primes_the_greeting():
     assert "หวัดดีครับ สลิด" not in mt.TRANSCRIBE_PROMPT
-    assert "สะกดว่า สลิด" in mt.TRANSCRIBE_PROMPT and "ตอบ text ว่าง" in mt.TRANSCRIBE_PROMPT
+    assert "สะกดว่า สลิด" not in mt.TRANSCRIBE_PROMPT and "ตอบ text ว่าง" in mt.TRANSCRIBE_PROMPT
 
 
 def test_energy_settings_defaults():

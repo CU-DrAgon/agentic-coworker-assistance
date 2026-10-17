@@ -46,6 +46,8 @@ from .meeting import (
     SpeechStats,
     _connected,
     _stop_playback,
+    bare_name,
+    is_hush,
     looks_like_speech,
     parse_meeting_command,
     parse_wake,
@@ -224,9 +226,9 @@ def ask_salid(question: str) -> dict:
     document, deck, poll, event, send something). Do NOT call it for general knowledge, opinions,
     small talk or explanations you can give yourself. Returns {"answer": ...} to say as it is;
     or {"status": "working", "job": ...}: the job runs in the background and a note is already in
-    the text chat, so say nothing about it (at most “ค่ะ” / “Okay”), do not wait, go on with the
-    conversation (the result is sent later as a bracketed message); or an error with
-    {"say": ...} to read as it is. A "working" answer that has a "say" line: say that line.
+    the text chat, so say NOTHING about it (not even "one moment"), do not wait, go back to
+    listening (the result is sent later as a bracketed message); or an error with
+    {"say": ...} to read as it is.
 
     Args:
         question: the question, complete and self-contained (names, dates, the topic).
@@ -339,7 +341,15 @@ STATE_ENGAGED = (
     "(สถานะ: กำลังคุยกับคนที่เรียกคุณอยู่ ตอบเฉพาะประโยคที่พูดกับคุณ ไม่ต้องรอให้เรียกชื่อ "
     "ถ้าเขาบอกโอเค/ต่อไป/พอแล้ว หรือเริ่มคุยกันเอง ให้เงียบแล้วกลับไปฟังโดยไม่พูดอะไร)"
 )
-FORCE_CUE = "(มีคนเรียกชื่อคุณ: ตอบกลับทันทีตามบริบท)"
+STATE_HUSHED = "(สถานะ: ถูกบอกให้เงียบ ห้ามพูดอะไรเลยจนกว่าจะมีคนเรียกชื่อสลิด ไม่ต้องรับทราบ)"
+STATE_HUSHED_EN = (
+    "(State: told to be quiet. Say nothing at all until someone calls the name Salid. "
+    "No acknowledgement.)"
+)
+FORCE_CUE = (
+    "(มีคนเรียกชื่อคุณ: ตอบสิ่งที่เขาถามตามบริบท ถ้าเขาแค่เรียกชื่อและไม่ได้ถามอะไร "
+    "ให้ตอบสั้น ๆ คำเดียว เช่น คะ? แล้วหยุด ห้ามแต่งคำถามขึ้นเอง)"
+)
 STATE_LISTENING_EN = (
     "(State: listening. Nobody is talking to you yet. Take notes silently and say nothing until "
     "someone calls the name Salid.)"
@@ -349,7 +359,11 @@ STATE_ENGAGED_EN = (
     "to hear your name. If they say ok / next / enough, or start talking among themselves, go quiet "
     "and back to listening without saying anything.)"
 )
-FORCE_CUE_EN = "(Someone called your name: reply at once, in context.)"
+FORCE_CUE_EN = (
+    "(Someone called your name. Answer what they asked, in context. If they only said your name "
+    "and asked nothing, reply with one short word such as 'Yes?' and nothing more. "
+    "Never invent a question.)"
+)
 HEARD_EN = " What they said: “{heard}”"
 RESULT_CUE = (
     "(ผลงานที่ขอไว้เสร็จแล้ว งาน {job} คำถาม: {question} ผลลัพธ์: {answer} — "
@@ -360,6 +374,15 @@ RESULT_CUE_EN = (
     "open with one short line such as “Here is the result on …:” and say the result as given; "
     "do not rephrase it.)"
 )
+RESULT_CUE_SHORT = (
+    "(ผลงานที่ขอไว้เสร็จแล้ว งาน {job} คำถาม: {question} — พูดประโยคเดียวสั้น ๆ ว่า "
+    "“ได้ผลเรื่อง {question} แล้วค่ะ รายละเอียดอยู่ในแชตนะคะ” แล้วหยุด ห้ามอ่านผลลัพธ์)"
+)
+RESULT_CUE_SHORT_EN = (
+    "(The requested job is done. Job {job}, question: {question}. Say ONE short sentence: "
+    "“The {question} result is in the chat.” and stop. Do not read the result out.)"
+)
+SHORT_ANSWER_CHARS = 160  # an answer this short is spoken in full
 FAILED_CUE = (
     "(งานที่ขอไว้ งาน {job} คำถาม: {question} ทำไม่สำเร็จ — แจ้งสั้น ๆ ว่าทำให้ไม่ได้ "
     "โดยพูดตามนี้ ห้ามเรียบเรียงใหม่: {answer})"
@@ -614,10 +637,9 @@ def build_instruction_en(
             "- ask_salid is also how you DO things (documents, decks, polls, events, messages): it has "
             "every tool the text assistant has.\n"
             "- ask_salid may answer at once, or reply status=working: the job runs in the background and "
-            "the system has already typed a note in the text chat, so say nothing about it (at most "
-            "“Okay” if someone is clearly waiting for an answer), do not wait, and go on with the "
-            "conversation (other questions are fine; the job keeps running). If status=working comes "
-            "with a “say” line (the same job asked again), say that short line as it is. When the "
+            "the system has already typed a note in the text chat. When ask_salid returns status "
+            "“working”, say nothing about it (not even “one moment”) and go back to listening; do "
+            "not wait (other questions are fine; the job keeps running). When the "
             "system later sends “(The requested job is done ...)”, announce it briefly and say the "
             "result as given. If a file was made, the answer says it was put in the text chat.\n"
         )
@@ -723,9 +745,8 @@ def build_instruction(
             "เครื่องมือค้นข้อมูลขัดข้องค่ะ”) ห้ามแต่งคำตอบเอง\n"
             "- ask_salid ใช้ลงมือทำงานได้ด้วย (เอกสาร สไลด์ โพล นัดหมาย ส่งข้อความ) เพราะมีเครื่องมือครบเท่าผู้ช่วยในแชท\n"
             "- ask_salid อาจตอบทันที หรือตอบ status=working: งานทำอยู่เบื้องหลังและระบบพิมพ์โน้ตในแชตให้แล้ว "
-            "ดังนั้นไม่ต้องพูดถึงมัน (อย่างมากพูดแค่ “ค่ะ” ถ้ามีคนรอคำตอบอยู่ชัด ๆ) ไม่ต้องรอ "
-            "แล้วคุยเรื่องอื่นต่อได้เลย (ถามเรื่องอื่นเพิ่มได้ งานยังทำอยู่) ถ้า status=working มี “say” มาด้วย "
-            "(ถามงานเดิมซ้ำ) ให้พูดประโยคสั้น ๆ นั้นตามที่เป็น เมื่อระบบส่ง "
+            "ถ้าได้ status=working อย่าพูดอะไรเกี่ยวกับมันเลย (แม้แต่ “แป๊บนึงนะคะ”) แล้วกลับไปฟังต่อ "
+            "ไม่ต้องรอ (ถามเรื่องอื่นเพิ่มได้ งานยังทำอยู่) เมื่อระบบส่ง "
             "“(ผลงานที่ขอไว้เสร็จแล้ว ...)” มาภายหลัง ให้ประกาศสั้น ๆ แล้วพูดผลลัพธ์ตามที่ได้ ห้ามเรียบเรียงใหม่ "
             "ถ้ามีไฟล์ คำตอบจะบอกว่าส่งไว้ในแชตแล้ว\n"
         )
@@ -770,6 +791,9 @@ class _Job:
         self.detached = False
         self.done = False
         self.result: dict | None = None
+        self.status_msg: Any = None  # the ONE typed status line of this job, edited in place
+        self.status_task: asyncio.Task | None = None
+        self.still = False
 
 
 _JOB: contextvars.ContextVar[_Job | None] = contextvars.ContextVar("salid_voice_job", default=None)
@@ -814,6 +838,9 @@ class LiveVoice:
         self._said: list[str] = []
         self._turn_audio = False
         self._awaiting_answer = False  # a tool call was answered: its spoken answer comes next
+        self._hushed = False  # told to be quiet (state line sent)
+        self._hushed_at = -1e9
+        self._hush_seen = False
         self._muted_turn = False  # someone said "stop": drop the rest of this model turn
         self._turn_open = False  # the server is still sending the current model turn
         self._turn_open_since = 0.0  # monotonic: when the current model turn began
@@ -1104,6 +1131,10 @@ class LiveVoice:
         """Tell the model whether it is engaged in a conversation or only listening."""
         self._engaged = engaged
         if engaged:
+            self._hushed = False
+        elif self._hushed:
+            return  # the hushed state line was sent already
+        if engaged:
             self._last_engaged_at = time.monotonic()
             self._release_held()  # the name arrived while the first words were being held back
         self._spawn(self._send_state())
@@ -1112,13 +1143,36 @@ class LiveVoice:
         live = self._live
         if live is None or self._closing:
             return  # the current state is sent again when the session connects
-        if self._en():
+        if self._hushed:
+            text = STATE_HUSHED_EN if self._en() else STATE_HUSHED
+        elif self._en():
             text = STATE_ENGAGED_EN if self._engaged else STATE_LISTENING_EN
         else:
             text = STATE_ENGAGED if self._engaged else STATE_LISTENING
         await live.send_client_content(
             turns=types.Content(role="user", parts=[types.Part(text=text)]), turn_complete=False
         )
+
+    def hush(self, fresh: bool = True) -> None:
+        """Told to be quiet: stop talking now, drop the rest of the turn, cancel forced turns and
+        send the hushed state line (once)."""
+        self._hushed_at = time.monotonic()
+        self._last_engaged_at = -1e9  # the mouth gate's grace after an engagement ends here
+        self._engaged = False
+        if fresh:
+            self._stop_requested()
+        if not self._hushed:
+            self._hushed = True
+            self._spawn(self._send_state())
+
+    def clear_hush(self) -> None:
+        self._hushed = False  # the engagement that follows sends its own state line
+
+    def unhush(self) -> None:
+        """The hold is over: back to the normal listening state."""
+        if self._hushed:
+            self._hushed = False
+            self._spawn(self._send_state())
 
     def ensure_reply(
         self,
@@ -1150,6 +1204,11 @@ class LiveVoice:
             self._flush_heard()
         self._heard_at = now
         self._heard_buf += text
+        if is_hush(self._heard_buf):
+            if not self._hush_seen:
+                self._hush_seen = True
+                self.bot.meetings._hush(self.session)
+            return
         if self._speaking():
             self._heard_while_speaking += text
         if (
@@ -1165,6 +1224,8 @@ class LiveVoice:
         said = parse_wake(self._heard_buf)  # the same detector as the classic path
         if said is None:
             return
+        if self.session.hushed_until > now and not said:
+            return  # a bare name in the hold wakes nobody
         if float(getattr(self.bot.s, "name_min_voiced_seconds", 0.35)) > 0:
             stats = self._speech_stats(now)
             ok, reason = looks_like_speech(stats, self.bot.s)
@@ -1176,6 +1237,7 @@ class LiveVoice:
                     logger.info("live: name hit rejected: %s %s", reason, stats_line(stats))
                 return
             logger.info("live: name hit accepted %s", stats_line(stats))
+        self.bot.meetings._clear_hush(self.session)
         self._last_engaged_at = now
         self._heard_hit = True
         if parse_meeting_command(said) == "leave":
@@ -1192,6 +1254,7 @@ class LiveVoice:
             True,
             name=self.speaker_name(who[0]) if len(who) == 1 else "",
             by=who[0] if len(who) == 1 else 0,
+            bare=bare_name(self._heard_buf, said),
         )
         self._spawn(
             self._force_reply(
@@ -1208,7 +1271,7 @@ class LiveVoice:
         """The utterance is over: a thank-you / "that's enough" said to Salid while it is engaged
         puts it back to listening (like the classic path), then start a fresh buffer."""
         text, hit = self._heard_buf.strip(), self._heard_hit
-        self._heard_buf, self._heard_hit = "", False
+        self._heard_buf, self._heard_hit, self._hush_seen = "", False, False
         self._rejected_logged = False
         if text and not hit and self._engaged:
             mgr = self.bot.meetings
@@ -1226,7 +1289,9 @@ class LiveVoice:
     async def _cue(self, live: Any, heard: str) -> None:
         en = self._en()
         cue = FORCE_CUE_EN if en else FORCE_CUE
-        if heard.strip():  # the model may have dropped the audio: say what was heard (transcript)
+        # the model may have dropped the audio: say what was heard (transcript), but only when
+        # there are words beyond the name (never hand it a bare name as "what they said")
+        if heard.strip() and parse_wake(heard) != "":
             if en:
                 cue += HEARD_EN.format(heard=heard.strip()[:300])
             else:
@@ -1247,6 +1312,7 @@ class LiveVoice:
         track_voice: bool = False,
     ) -> None:
         sets = self.bot.s
+        t0 = time.monotonic()
         if wait is None:
             wait = float(getattr(sets, "live_force_reply_seconds", 1.2))
         while True:  # `track_voice`: the person may still be talking when the name is seen
@@ -1255,7 +1321,7 @@ class LiveVoice:
                 break
             await asyncio.sleep(delay)
         live = self._live
-        if live is None or self._closing or self.session.ending:
+        if live is None or self._closing or self.session.ending or self._hushed_at >= t0:
             return
         if self._answering(since):
             return  # the model is answering (or answered, or waiting for a tool result) already
@@ -1267,13 +1333,15 @@ class LiveVoice:
         live = self._live
         if live is None or self._closing or self.session.ending or self.session.leaving:
             return
+        if self._hushed_at >= t0:
+            return
         if self._real_audio_at >= cue_at or self._turn_audio or self._awaiting_answer:
             return
         logger.info("live: still no audio after the cue: cueing once more")
         cue_at = time.monotonic()
         await self._cue(live, heard)
         await asyncio.sleep(float(getattr(sets, "live_fallback_seconds", 4.0)))
-        if self._closing or self.session.ending or self.session.leaving:
+        if self._closing or self.session.ending or self.session.leaving or self._hushed_at >= t0:
             return
         if self._real_audio_at >= cue_at or self._turn_audio or self._awaiting_answer:
             return
@@ -1393,19 +1461,15 @@ class LiveVoice:
         conversational), or at once with "working" when its first tool call is a known-long one
         (`BACKGROUND_TOOLS`); otherwise the job runs on and `_announce` tells the room at the next
         pause. The hand-off is a typed note in the meeting chat, never spoken. The same question
-        while it runs gets "still working" (a note + one short spoken sentence); a different one is a new job
+        while it runs gets "still working" (the status line is edited in place, nothing is spoken); a different one is a new job
         (at most `live_max_jobs`). Nothing here cancels a job: not a new question, not barge-in."""
         sets, lang = self.bot.s, self._filler_lang()
         running = [j for j in self._jobs.values() if not j.done]
         for j in running:
             if same_question(j.question, question):
                 logger.info("live: ask_salid asked again, job %s still running", j.id)
-                self._echo_text("voice_still_working_text", question=status_question(question))
-                return {
-                    "status": "working",
-                    "job": j.id,
-                    "say": catalog("voice_still_working", lang),  # answers the person: spoken
-                }
+                self._status(j, "still")  # an edit of the same line, never a spoken sentence
+                return {"status": "working", "job": j.id}
         if len(running) >= int(getattr(sets, "live_max_jobs", 3)):
             logger.info("live: ask_salid refused: %d jobs running", len(running))
             return {"error": "too many jobs running", "say": catalog("voice_jobs_full", lang)}
@@ -1427,7 +1491,7 @@ class LiveVoice:
             return job.result
         job.detached = True  # from here the result is announced, not returned
         logger.info("live: job %s goes to the background", job.id)
-        self._echo_text("voice_handoff_text", question=status_question(question))
+        self._status(job, "working")  # no extra "sent to the background" line
         return {"status": "working", "job": job.id}  # no `say`: the chat note is the status
 
     async def _job_main(self, job: _Job) -> dict:
@@ -1439,9 +1503,54 @@ class LiveVoice:
         finally:
             job.result, job.done = res, True
             self._jobs.pop(job.id, None)
+        if job.status_task is not None:
+            self._status(job, "done")
         if job.detached:
             self._spawn(self._announce(job))
         return res
+
+    def _status(self, job: _Job, state: str) -> None:
+        """The job's ONE typed status line: "⏳ Looking into it: q" (posted once), edited in place
+        to add "· still working" and finally "✅ Done: q". Never raises; an edit that fails posts
+        the line as a new message (the old behaviour)."""
+        if state == "working" and job.status_task is not None:
+            return  # the line exists already (the filler's note came first)
+        if state == "done" and job.status_task is None:
+            return  # a quick job never had a status line
+        if state == "still" and job.still:
+            return
+        if state == "still":
+            job.still = True
+        prev = job.status_task
+
+        async def run() -> None:
+            if prev is not None:
+                await asyncio.gather(prev, return_exceptions=True)
+            lang, q = self._filler_lang(), status_question(job.question)
+            if state == "done":
+                text = catalog("voice_job_done", lang, question=q)
+            else:
+                text = catalog("voice_working_text", lang, question=q)
+                if job.still:
+                    text += catalog("voice_still_suffix", lang)
+            try:
+                if job.status_msg is not None:
+                    try:
+                        await job.status_msg.edit(content=text)
+                        return
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        logger.debug("live: could not edit the status line", exc_info=True)
+                        job.status_msg = None
+                job.status_msg = await self.echo(text)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("live: could not post to the text chat (%s)", type(e).__name__)
+
+        with contextlib.suppress(RuntimeError):
+            job.status_task = self._spawn(run())
 
     def _quiet(self, pause: float) -> bool:
         """Nobody has spoken for `pause` seconds and Salid is neither speaking nor about to."""
@@ -1483,10 +1592,17 @@ class LiveVoice:
         full text is already in the chat). No pause within `live_result_wait_seconds`: chat only."""
         en, res = self._en(), job.result or {}
         q = " ".join(job.question.split())[:160]
-        if res.get("answer"):
-            cue = (RESULT_CUE_EN if en else RESULT_CUE).format(
-                job=job.id, question=q, answer=str(res["answer"])[:ANSWER_MAX_CHARS]
-            )
+        mode = str(getattr(self.bot.s, "live_result_voice", "short"))
+        if mode == "off":
+            return  # chat only
+        answer = str(res.get("answer") or "")
+        if answer:
+            short = mode != "full" and len(answer) > SHORT_ANSWER_CHARS
+            cue = (
+                (RESULT_CUE_SHORT_EN if en else RESULT_CUE_SHORT)
+                if short
+                else (RESULT_CUE_EN if en else RESULT_CUE)
+            ).format(job=job.id, question=q, answer=answer[:ANSWER_MAX_CHARS])
         else:
             say = str(res.get("say") or catalog("voice_tool_failed_say", self._filler_lang()))
             cue = (FAILED_CUE_EN if en else FAILED_CUE).format(job=job.id, question=q, answer=say)
@@ -1768,6 +1884,8 @@ class LiveVoice:
         """The gate for a tool call batch. Passing only thanks to the grace re-engages in code (the
         state line in chat is right). `ask_salid` / `answer_privately` while not engaged is
         evidence: if the last 3 s of user audio is real speech, someone did ask, so engage."""
+        if self.session.hushed_until > time.monotonic():
+            return False  # told to be quiet: no tool runs until her name is called again
         if self._gate_open():
             if (
                 not self.session.engaged
@@ -2069,7 +2187,18 @@ class LiveVoice:
             await asyncio.sleep(max(0.0, wait - (time.monotonic() - started)))
             s = self.session
             if not (self._closing or s.ending or s.leaving):
-                self._echo_text("voice_working_text", question=status_question(question))
+                job = next(
+                    (
+                        j
+                        for j in self._jobs.values()
+                        if not j.done and same_question(j.question, question)
+                    ),
+                    None,
+                )
+                if job is not None:
+                    self._status(job, "working")  # the job's own line: edited later, not repeated
+                else:
+                    self._echo_text("voice_working_text", question=status_question(question))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -2205,7 +2334,7 @@ class LiveVoice:
         self._held.clear()
         self._turn_audio = self._awaiting_answer = False
 
-    def _spawn(self, coro: Any) -> None:
+    def _spawn(self, coro: Any) -> asyncio.Task:
         async def guarded() -> None:
             try:
                 await coro
@@ -2217,3 +2346,4 @@ class LiveVoice:
         task = asyncio.create_task(guarded())
         self._bg.add(task)
         task.add_done_callback(self._bg.discard)
+        return task

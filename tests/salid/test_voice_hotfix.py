@@ -77,7 +77,7 @@ async def test_handoff_posts_a_text_line_returns_no_say_and_plays_no_clip(lv, mo
     assert res["status"] == "working" and "say" not in res and res["job"]
     await asyncio.sleep(0.2)
     assert played == []  # the model said nothing and no fallback clip is rendered either
-    assert lv.chan.sent.count(t("voice_handoff_text", "th", question=q)) == 1
+    assert lv.chan.sent.count(t("voice_working_text", "th", question=q)) == 1
     brains.release(q)
     await lv.mgr.end((1000, 77))
 
