@@ -1,12 +1,13 @@
 """Slack: event translation, replies in threads, scope inputs, import. A fake Web API client."""
 
 import asyncio
+import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from conftest import FixedClockSettings
-from platform_fakes import NOW, Clock, gid_of, inc, make_assistant, rid_of, stored
+from platform_fakes import NOW, Clock, FakeAsk, gid_of, inc, make_assistant, rid_of, stored
 
 from salid.platforms import ids, slack, slack_import
 from salid.platforms.slack import SlackAdapter, SlackPort
@@ -19,9 +20,46 @@ class FakeSlack:
 
     def __init__(self):
         self.users = {
-            "U1": {"id": "U1", "name": "alice", "profile": {"display_name": "Alice"}},
-            "U2": {"id": "U2", "real_name": "Bob Lee", "profile": {}, "is_admin": True},
-            "U3": {"id": "U3", "name": "eve", "profile": {}},
+            "U1": {
+                "id": "U1",
+                "team_id": TEAM,
+                "name": "alice",
+                "profile": {"display_name": "Alice"},
+            },
+            "U2": {
+                "id": "U2",
+                "team_id": TEAM,
+                "real_name": "Bob Lee",
+                "profile": {},
+                "is_admin": True,
+            },
+            "U3": {"id": "U3", "team_id": TEAM, "name": "eve", "profile": {}},
+            # Slack Connect: an admin of ANOTHER workspace, a member of a shared channel
+            "UX": {
+                "id": "UX",
+                "team_id": "T-EXT",
+                "name": "ext",
+                "profile": {},
+                "is_admin": True,
+                "is_owner": True,
+            },
+            "UB": {
+                "id": "UB",
+                "team_id": TEAM,
+                "name": "bot",
+                "profile": {},
+                "is_admin": True,
+                "is_bot": True,
+            },
+            "UD": {
+                "id": "UD",
+                "team_id": TEAM,
+                "name": "gone",
+                "profile": {},
+                "is_admin": True,
+                "deleted": True,
+            },
+            "UN": {"id": "UN", "name": "noteam", "profile": {}, "is_admin": True},
         }
         self.channels = {
             "C1": {"id": "C1", "name": "general", "is_private": True, "members": ["U1", "U2", BOT]},
@@ -57,6 +95,7 @@ class FakeSlack:
         return {"user": self.users[user]}
 
     async def conversations_info(self, channel):
+        self.calls.append("info:" + channel)
         return {"channel": self.channels[channel]}
 
     async def conversations_members(self, channel, limit=200, cursor=None):
@@ -303,6 +342,23 @@ async def test_room_name_user_names_and_admin_lookup(fx):
     assert a.names[(gid_of(inc()), rid_of(inc()))] == "general"
 
 
+async def test_only_admins_of_this_workspace_are_executives(fx):
+    client, a, port, adapter = fx
+    assert await port.is_admin(inc(user="U2")) is True
+    for uid in ("UX", "UB", "UD", "UN", "U1"):  # other workspace, bot, deleted, no team_id, member
+        assert await port.is_admin(inc(user=uid)) is False, uid
+
+
+async def test_slack_connect_admin_in_a_shared_channel_is_not_an_executive_in_q_and_a(fx):
+    client, a, port, adapter = fx
+    client.channels["C1"]["is_ext_shared"] = True
+    client.channels["C1"]["members"].append("UX")
+    await adapter.on_message(ev(text=f"<@{BOT}> show every receipt", user="UX"), TEAM)
+    kw = a.ask_fn.calls[0][1]
+    assert kw["is_exec"] is False  # own receipts only
+    assert kw["user_id"] == ids.user_id("slack", "UX")
+
+
 # ------------------------------------------------------------------ replies
 
 
@@ -360,6 +416,27 @@ async def test_room_view_removes_the_bot_and_intersects_the_askers_rooms(fx):
         "C2": frozenset({"U1", "U2", "U3"}),
         "C3": frozenset({"U1", "U9"}),
     }
+
+
+@pytest.mark.parametrize("flag", ["is_shared", "is_ext_shared", "is_org_shared"])
+async def test_a_shared_room_limits_memory_to_that_room(fx, flag):
+    client, a, port, adapter = fx
+    client.channels["C1"][flag] = True  # still private, still listable, but not ours alone
+    view = await port.room_view(inc(room="C1", user="U1"))
+    assert view.audience is None and view.rooms == []
+    await adapter.on_message(ev(text=f"<@{BOT}> what did leads say?"), TEAM)
+    assert list(a.ask_fn.calls[0][1]["memory"].allowed.values()) == ["general"]
+
+
+async def test_the_shared_flag_is_cached_and_refreshed_after_a_room_event(fx):
+    client, a, port, adapter = fx
+    assert (await port.room_view(inc(room="C1", user="U1"))).audience is not None
+    n = client.calls.count("info:C1")
+    await port.room_view(inc(room="C1", user="U1"))
+    assert client.calls.count("info:C1") == n  # cached with the other room caches
+    client.channels["C1"]["is_ext_shared"] = True
+    await adapter.on_event({"type": "channel_rename", "channel": "C1"}, TEAM)
+    assert (await port.room_view(inc(room="C1", user="U1"))).audience is None
 
 
 async def test_room_view_in_a_dm_is_the_user_alone(fx):
@@ -603,6 +680,24 @@ async def test_uninstall_or_bot_token_revocation_stops_answers_and_erases_memory
     await a.drain()
     assert not a.ask_fn.calls and not client.posts
     assert await port.history(inc(), 5) == []  # no Slack read either
+
+
+async def test_uninstall_while_an_answer_is_in_flight_posts_and_remembers_nothing(fx):
+    client, a, port, adapter = fx
+    release = threading.Event()
+    a.ask_fn = FakeAsk("late answer", release=release)
+    task = asyncio.create_task(adapter.on_message(ev(text=f"<@{BOT}> hi"), TEAM))
+    while not a.ask_fn.calls:  # the model call is running in its worker thread
+        await asyncio.sleep(0)
+    await adapter.on_event({"type": "app_uninstalled"}, TEAM)
+    assert port.revoked
+    release.set()
+    await task
+    await a.drain()
+    assert client.posts == [] and client.updates == []
+    assert await port.ack(inc(), "one moment") is None and client.posts == []
+    assert stored(a, inc()) == []
+    assert not any(line.mine for line in a.buffer.lines((gid_of(inc()), rid_of(inc()), None)))
 
 
 async def test_tokens_revoked_for_user_tokens_only_does_nothing(fx):

@@ -405,3 +405,20 @@ async def test_tenant_owner_is_recorded_and_accepted_next_time(s, tmp_path):
     b.guilds_store = a.guilds_store
     await run(b, port2, is_direct=True, text="hi again")
     assert b.ask_fn.calls
+
+
+async def test_a_deleted_message_leaves_the_live_buffer_in_every_thread(s, tmp_path):
+    a, port = make_assistant(s, tmp_path), FakePort()
+    await run(a, port, text="plain secret", message="1.0")
+    await run(a, port, text="threaded secret", message="2.0", thread="1.0")
+    await run(a, port, text="keeper", message="3.0")
+    gid, rid = gid_of(inc()), rid_of(inc())
+    await a.on_delete("slack", "T1", "C1", "1.0")
+    await a.on_delete("slack", "T1", "C1", "2.0")
+    await a.drain()
+    texts = [ln.text for t in (None, "1.0") for ln in a.buffer.lines((gid, rid, t))]
+    assert texts == ["keeper"]
+    # the next model call sees neither text
+    await run(a, port, is_direct=False, text="@salid again", mentions_bot=True, message="4.0")
+    hist = a.ask_fn.calls[-1][1]["history"]
+    assert "secret" not in str(hist) and "keeper" in str(hist)

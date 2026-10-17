@@ -18,12 +18,14 @@ Run it: `uv run python -m salid.platforms` (it starts every platform that has it
   DM. Receipts are recorded in the ledger of your workspace.
 - **Ledger questions** ("how much did we spend on ingredients this month?"). Executives see
   everyone's receipts, everyone else only their own. Executives are the people in
-  `SALID_SLACK_EXEC_USER_IDS` plus the workspace owners and admins.
+  `SALID_SLACK_EXEC_USER_IDS` plus the owners and admins **of this workspace**. A Slack Connect
+  guest who is an admin of their own workspace is not an executive here (Salid checks that the
+  user's `team_id` is this workspace; bots, deleted users and unknown teams never count).
 - **Team memory**: every message in channels Salid is in (and its own replies) is remembered, with
   day summaries and meaning search. Salid reads a channel's memory for you only if you are in that
   channel **and** everyone who can read the channel the answer is posted in can read it too.
-  If Slack cannot enumerate every reader of the answering room (a public channel, an API error, or
-  over 5000 members), Salid uses that room alone. Optionally it imports the history of channels it
+  If Slack cannot enumerate every reader of the answering room (a public channel, a Slack Connect or
+  org-shared channel, an API error, or over 5000 members), Salid uses that room alone. Optionally it imports the history of channels it
   joins, within the retention window.
 - **Per-workspace settings**: the same settings document as a Discord server (feature switches,
   per-channel modes `off / listen / call / join / chat`, reply language, memory retention), keyed
@@ -189,7 +191,9 @@ verification) instead of Socket Mode, and a **Slack Marketplace** listing, which
 history rate limit for a distributed app. Marketplace rules require deleting a workspace's data
 within **14 business days** of uninstall. Salid already does the erasing part: on `app_uninstalled`
 (or `tokens_revoked` for the bot token) it stops answering that workspace at once and deletes its
-remembered messages, summaries and embeddings.
+remembered messages, summaries and embeddings. Answers still in flight at that moment are
+not posted and not remembered. Receipts in the ledger are **not** deleted yet: a phase 2 tenant
+purge must also remove them before Marketplace rules can be met.
 
 ## Privacy
 
@@ -205,5 +209,5 @@ remembered messages, summaries and embeddings.
   Tokens stay in `.env` or the secret manager and are handed only to Slack's SDK; files are
   downloaded only from Slack's file hosts.
 - On `app_uninstalled` or a revoked bot token the workspace's memory is erased and Salid stops
-  answering. Receipts already in the ledger are kept: delete them from the ledger store if you
-  need them gone too.
+  answering. Receipts already in the ledger are not deleted on uninstall yet (phase 2 tenant
+  purge): delete them from the ledger store if you need them gone too.

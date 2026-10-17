@@ -239,6 +239,15 @@ class RoomBuffer:
             if mid == message_id:
                 q[i] = (mid, HistLine(line.at, line.who, text, line.mine))
 
+    def remove(self, room: tuple, message_id: str) -> None:
+        """Forget a deleted message in every thread of a room (`room` = (tenant, room))."""
+        for key, q in self._d.items():
+            if key[:2] == room:
+                kept = [item for item in q if item[0] != message_id]
+                if len(kept) != len(q):
+                    q.clear()
+                    q.extend(kept)
+
     def lines(self, key: tuple, before: str | None = None) -> list[HistLine]:
         out: list[HistLine] = []
         for mid, line in self._d.get(key, ()):
@@ -467,6 +476,8 @@ class Assistant:
     async def on_delete(self, platform: str, tenant: str, room: str, message: str) -> None:
         gid = ids.tenant_id(platform, tenant)
         mid = ids.message_id(platform, tenant, room, message)
+        # a deleted / unsent message must not reach the next model call through the live buffer
+        self.buffer.remove((gid, ids.room_id(platform, tenant, room)), message)
         self._enqueue(partial(self.memory.delete, gid, [mid]))
 
     # -------------------------------------------------------------- addressing
@@ -773,6 +784,8 @@ class Assistant:
         remember: bool = True,
         cap: str = "th",
     ) -> None:
+        if getattr(port, "revoked", False):
+            return  # the tenant was removed while this answer was in flight: nothing to say or keep
         parts = port.format(text)
         limit = getattr(port, "max_messages", 10)
         if len(parts) > limit:
@@ -782,7 +795,7 @@ class Assistant:
         except Exception as e:
             logger.error("deliver failed tenant=%s room=%s (%s)", gid, rid, safe_exc(e))
             return
-        if not remember:
+        if not remember or getattr(port, "revoked", False):
             return
         now = self._clock()
         self._windows[(gid, rid, ids.user_id(msg.platform, msg.user))] = now

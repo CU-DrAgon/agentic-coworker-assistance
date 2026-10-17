@@ -106,6 +106,7 @@ class SlackPort:
         self._users: dict[str, tuple[float, dict]] = {}
         self._room_names: dict[str, tuple[float, str]] = {}
         self._room_private: dict[str, tuple[float, bool]] = {}
+        self._room_shared: dict[str, tuple[float, bool]] = {}
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
@@ -127,7 +128,12 @@ class SlackPort:
         return prof.get("display_name") or u.get("real_name") or u.get("name") or uid
 
     async def is_admin(self, msg: Incoming) -> bool:
+        """Workspace admin/owner of THIS workspace only. A Slack Connect user from another
+        workspace can be an admin there (users.info says so in a shared channel): that must never
+        make them an executive here. A bot, a deleted user or a missing team_id fails closed."""
         u = await self.user(msg.user)
+        if u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
+            return False
         return bool(u.get("is_admin") or u.get("is_owner") or u.get("is_primary_owner"))
 
     def _fresh(self, cache: dict, channel: str):
@@ -154,6 +160,10 @@ class SlackPort:
         private = info.get("is_private")
         if isinstance(private, bool):
             self._room_private[channel] = (self._clock(), private)
+        # Slack Connect / org-shared: people of other workspaces or orgs are in the room, so its
+        # audience cannot be listed from this workspace.
+        shared = any(bool(info.get(k)) for k in ("is_shared", "is_ext_shared", "is_org_shared"))
+        self._room_shared[channel] = (self._clock(), shared)
         if info.get("name"):
             self._room_names[channel] = (self._clock(), info["name"])
         return info
@@ -163,6 +173,7 @@ class SlackPort:
         """A channel was renamed, archived, left or deleted: drop what we cached about it."""
         self._room_names.pop(channel, None)
         self._room_private.pop(channel, None)
+        self._room_shared.pop(channel, None)
         self._members.pop(channel, None)
         self._bot_rooms = None
 
@@ -225,9 +236,13 @@ class SlackPort:
             audience: frozenset[str] | None = frozenset({msg.user})
         else:
             private = self._fresh(self._room_private, msg.room)
-            if private is None:
+            shared = self._fresh(self._room_shared, msg.room)
+            if private is None or shared is None:
                 await self._conversation_info(msg.room)
                 private = self._fresh(self._room_private, msg.room)
+                shared = self._fresh(self._room_shared, msg.room)
+            if shared is not False:  # shared, or unknown: fail closed
+                return RoomView(None, [])
             # conversations.members is the full audience only for private conversations. Public
             # channels are readable by people who have not joined, so their audience is unknown.
             if not private:
@@ -279,6 +294,8 @@ class SlackPort:
         raise AssertionError("unreachable")
 
     async def ack(self, msg: Incoming, text: str) -> object | None:
+        if self.revoked:
+            return None
         resp = await self._call(
             self.client.chat_postMessage,
             channel=msg.room,
@@ -298,6 +315,8 @@ class SlackPort:
     async def deliver(self, msg: Incoming, texts: list[str], ack: object | None) -> list[str]:
         """Post the chunks in order, at most one per second per channel. A chunk that cannot be
         posted is logged and the later ones are still tried; the first failure is raised after."""
+        if self.revoked:
+            return []  # uninstalled while the answer was in flight: post nothing
         sent: list[str] = []
         rest = list(texts)
         if ack is not None and rest:
