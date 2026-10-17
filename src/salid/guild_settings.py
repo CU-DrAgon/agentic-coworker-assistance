@@ -5,7 +5,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, promo, decks}: bool, all
+                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, promo, images, decks}: bool, all
                          default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
@@ -101,6 +101,7 @@ FEATURES = (
     "link_guard",
     "meeting_transcript_doc",
     "promo",
+    "images",
     "decks",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
@@ -175,6 +176,7 @@ class Features(BaseModel):
     link_guard: bool = True  # warns once under a message with a clearly dangerous link
     meeting_transcript_doc: bool = True  # minutes PDF with who-said-what at meeting end + tool
     promo: bool = True  # promo post kits from product photos (AI scene + typeset text)
+    images: bool = True  # create_image: images from a description (Nano Banana + typeset text)
     decks: bool = True  # the chat agent may build .pptx slide decks (salid.deck)
 
 

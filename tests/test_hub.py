@@ -294,6 +294,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         link_guard=True,
         meeting_transcript_doc=True,
         promo=True,
+        images=True,
         decks=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"

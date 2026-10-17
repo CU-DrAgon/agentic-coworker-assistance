@@ -93,6 +93,7 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .imagegen_bot import ImageMixin
 from .licensing import Licensing, make_licensing
 from .longtext import needs_attachment, split_sections, summary_of
 from .maps_bot import MapsMixin
@@ -345,6 +346,7 @@ class SecretaryBot(
     BriefingMixin,
     ProfileMixin,
     DeliverMixin,
+    ImageMixin,
     PromoMixin,
     MediaMixin,
     discord.Client,
@@ -466,6 +468,7 @@ class SecretaryBot(
         self.image_stats = {"described": 0, "failed": 0, "skipped": 0}  # cost visibility
         self._init_media()
         self._init_promo()
+        self._init_images()
         self.importer = MemoryImporter(
             self.memory_store,
             settings,
@@ -2186,6 +2189,8 @@ class SecretaryBot(
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
             # make_promo_kit: chat only (voice passes no files), with a photo or a remembered kit
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
+            # create_image: chat only (voice passes no files), with or without a photo
+            *([] if interjection else self._image_tools(message, guild, asker, files)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]

@@ -1,10 +1,14 @@
+import io
+import logging
+
 import httpx
 import pytest
 from google.genai import types
 from PIL import Image, ImageFile
 from promo_helpers import fake_client, image_response, png_bytes, text_response
 
-from salid import imagegen, promo
+from salid import cards, imagegen, promo
+from salid.media import DailyBudget
 
 
 def promo_photo() -> promo.Photo:
@@ -141,3 +145,215 @@ def test_promo_scene_goes_through_imagegen(monkeypatch):
         and seen["size"] == "2K"
         and len(seen["refs"]) == 1
     )
+
+
+# ------------------------------------------------------------------ create_image tool
+def ictx(**kw):
+    img = image_response(png_bytes((768, 1376)))
+    base = dict(
+        guild_id=1,
+        user_id=7,
+        day="2026-10-17",
+        photos=[],
+        memory=imagegen.ImageMemory(),
+        key=(1, 10, 7),
+        client=fake_client(img, img, img, img),
+        model="m",
+        guild_budget=DailyBudget(20),
+        user_budget=DailyBudget(5),
+        fonts=cards.card_fonts(),
+    )
+    return imagegen.ImageCtx(**{**base, **kw})
+
+
+def test_makes_count_files_and_counts_both_budgets():
+    c = ictx()
+    [tool] = imagegen.image_tools(c)
+    out = tool(prompt="a cat in a cafe, watercolour", aspect="9:16", count=3)
+    assert out["status"] == "ok" and out["files"] == ["image-1.png", "image-2.png", "image-3.png"]
+    assert len(tool.outbox) == 3 and out["images_left_today"] == 2  # user cap 5 → 2 left
+
+
+def test_thai_prompt_is_refused_before_any_call():
+    c = ictx()
+    out = imagegen.image_tools(c)[0](prompt="แมวในร้านกาแฟ")
+    assert out["status"] == "error" and "English" in out["error"] and c.client.models.calls == []
+
+
+def test_request_is_trimmed_to_what_is_left():
+    ub = DailyBudget(5)
+    ub.add(7, "2026-10-17", 4)
+    out = imagegen.image_tools(ictx(user_budget=ub))[0](prompt="a cup", count=3)
+    assert out["count_made"] == 1 and "Only 1 of 3" in out["note"]
+
+
+def test_overlay_band_and_text_inside(monkeypatch):
+    img = Image.new("RGB", (768, 1376), "white")
+    out, placed = imagegen.overlay(
+        img, "ลดพิเศษ 20%", "วันนี้เท่านั้น", "red", cards.card_fonts(), top=True
+    )
+    m = round(0.06 * 768)
+    assert all(b[0] >= m and b[2] <= 768 - m and b[3] <= 1376 // 2 for _, b in placed)  # top half
+    _, placed = imagegen.overlay(
+        Image.new("RGB", (1024, 1024)), "h", "", "red", cards.card_fonts(), top=False
+    )
+    assert placed[0][1][1] >= 1024 // 2  # bottom half
+
+
+def test_revise_sends_the_remembered_image_as_reference():
+    c = ictx()
+    tool = imagegen.image_tools(c)[0]
+    tool(prompt="a cup", count=2)
+    c2 = ictx(memory=c.memory)
+    out = imagegen.image_tools(c2)[0](prompt="warmer light", revise=2)
+    assert out["status"] == "ok" and c2.client.models.calls[0][1][0].inline_data is not None
+
+
+def test_revise_without_memory_and_bad_fields_are_errors():
+    t = imagegen.image_tools(ictx())[0]
+    assert t(prompt="x", revise=1)["status"] == "error"
+    assert t(prompt="x", aspect="3:2")["status"] == "error"
+    assert t(prompt="x", count=5)["status"] == "error"
+    assert t(prompt="x", headline="h" * 41)["status"] == "error"
+
+
+def test_tool_never_raises_and_logs_no_prompt(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="salid.imagegen")
+    imagegen.image_tools(ictx())[0](prompt="secret garden")
+    assert "secret garden" not in caplog.text and "image guild=1" in caplog.text
+    monkeypatch.setattr(imagegen, "generate_images", lambda *a, **k: 1 / 0)
+    assert imagegen.image_tools(ictx())[0](prompt="x")["status"] == "error"
+
+
+def test_more_bad_fields_are_errors_without_calls():
+    c = ictx()
+    t = imagegen.image_tools(c)[0]
+    for kw in (
+        dict(prompt=""),
+        dict(prompt="p" * 601),
+        dict(prompt="x", size="4K"),
+        dict(prompt="x", count=0),
+        dict(prompt="x", subtitle="s" * 61),
+        dict(prompt="x", headline="h", accent="pink"),
+        dict(prompt="x", file_index=3),  # no such photo
+        dict(prompt="x", revise=5),
+    ):
+        assert t(**kw)["status"] == "error", kw
+    assert c.client.models.calls == []
+    c.memory.put(c.key, [png_bytes((8, 8))])
+    assert t(prompt="x", revise=2)["status"] == "error"  # only one remembered
+    assert c.client.models.calls == [] and c.user_budget.used(7, c.day) == 0
+
+
+def test_limit_when_nothing_is_left_for_the_guild_or_the_person():
+    gb = DailyBudget(20)
+    gb.add(1, "2026-10-17", 20)
+    c = ictx(guild_budget=gb)
+    out = imagegen.image_tools(c)[0](prompt="a cup")
+    assert out["status"] == "limit" and "limit" in out["note"] and c.client.models.calls == []
+    out = imagegen.image_tools(ictx(user_budget=DailyBudget(0)))[0](prompt="a cup")
+    assert out["status"] == "limit"
+
+
+def test_budgets_are_taken_per_image_before_the_calls():
+    c = ictx(client=fake_client(image_response(png_bytes((64, 64))), RuntimeError("x")))
+    out = imagegen.image_tools(c)[0](prompt="a cup", count=2)
+    assert out["status"] == "ok" and out["count_made"] == 1 and out["files"] == ["image-1.png"]
+    assert c.guild_budget.used(1, c.day) == 2 and c.user_budget.used(7, c.day) == 2  # billed
+    assert "refused or failed" in out["note"] and out["images_left_today"] == 3
+
+
+def test_nothing_made_is_an_error_but_still_counted():
+    c = ictx(client=fake_client(text_response("no")))
+    out = imagegen.image_tools(c)[0](prompt="a cup")
+    assert out["status"] == "error" and out["reason"] == "blocked" and out["count_made"] == 0
+    assert c.user_budget.used(7, c.day) == 1 and c.memory.get(c.key) is None
+
+
+def test_note_is_the_ai_reminder_without_extras_when_all_were_made():
+    out = imagegen.image_tools(ictx())[0](prompt="a cup", count=2)
+    assert out["note"] == imagegen.NOTE and out["count_made"] == 2 and out["reason"] == ""
+
+
+def test_attached_photo_is_the_reference(monkeypatch):
+    seen = {}
+
+    def fake(client, model, prompt, **k):
+        seen.update(k, prompt=prompt)
+        return [Image.new("RGB", (64, 64))], ""
+
+    monkeypatch.setattr(imagegen, "generate_images", fake)
+    photo = png_bytes((300, 200))
+    out = imagegen.image_tools(ictx(photos=[(2, photo)]))[0](
+        prompt="this bottle on a beach", file_index=2, aspect="4:5", size="2K"
+    )
+    assert out["status"] == "ok" and (seen["aspect"], seen["size"], seen["count"]) == (
+        "4:5",
+        "2K",
+        1,
+    )
+    [ref] = seen["refs"]
+    assert ref.startswith(b"\x89PNG") and Image.open(io.BytesIO(ref)).size == (300, 200)
+    seen.clear()
+    imagegen.image_tools(ictx(photos=[(2, photo)]))[0](prompt="a cup")
+    assert seen["refs"] == []  # a photo is a reference only when the model picks it
+
+
+def test_attached_photo_too_large_or_unreadable_is_an_error(monkeypatch):
+    monkeypatch.setattr(imagegen, "MAX_DECODE_PIXELS", 1000)
+    out = imagegen.image_tools(ictx(photos=[(0, png_bytes((100, 100)))]))[0](
+        prompt="x", file_index=0
+    )
+    assert out["status"] == "error" and "megapixels" in out["error"]
+    out = imagegen.image_tools(ictx(photos=[(0, b"not an image")]))[0](prompt="x", file_index=0)
+    assert out["status"] == "error" and "read" in out["error"]
+
+
+def test_files_are_png_with_overlay_and_memory_keeps_the_clean_images():
+    c = ictx()
+    t = imagegen.image_tools(c)[0]
+    t(prompt="a cup", aspect="9:16", count=2, headline="ลดพิเศษ 20%", subtitle="วันนี้")
+    name, data = t.outbox[0]
+    with Image.open(io.BytesIO(data)) as im:
+        assert name == "image-1.png" and im.format == "PNG" and im.size == (768, 1376)
+        top = im.convert("RGB").crop((0, 0, 768, 300))
+        bottom = im.convert("RGB").crop((0, 1076, 768, 1376))
+    plain = Image.new("RGB", (768, 300), (120, 140, 160))
+    assert top.tobytes() != plain.tobytes()  # 9:16: the text band is at the top
+    assert bottom.tobytes() == plain.tobytes()
+    [first, second] = c.memory.get(c.key)
+    with Image.open(io.BytesIO(first)) as im:
+        assert im.convert("RGB").getpixel((384, 100)) == (120, 140, 160)  # no text in memory
+    t(prompt="a mug")
+    assert [n for n, _ in t.outbox] == ["image-1.png"]  # a second call replaces the first batch
+    assert len(c.memory.get(c.key)) == 1
+
+
+def test_overlay_darkens_the_band_and_draws_thai():
+    w, h = 1024, 1024
+    out, placed = imagegen.overlay(
+        Image.new("RGB", (w, h), "white"), "ลดพิเศษ", "", "red", cards.card_fonts(), top=False
+    )
+    assert out.getpixel((5, h - 5))[0] < 255 and out.getpixel((5, 5)) == (255, 255, 255)
+    [(kind, box)] = placed
+    text = out.crop(box).convert("L")
+    assert kind == "headline" and text.getextrema()[1] == 255  # white glyphs over the scrim
+    _, placed = imagegen.overlay(
+        Image.new("RGB", (w, h)), "", "only a subtitle", "blue", cards.card_fonts(), top=True
+    )
+    assert [k for k, _ in placed] == ["subtitle"]
+
+
+def test_image_memory_expires_drops_oldest_and_caps_bytes():
+    now = [0.0]
+    mem = imagegen.ImageMemory(ttl_s=10, max_entries=2, clock=lambda: now[0])
+    mem.put((1, 1, 1), [b"a"])
+    mem.put((1, 1, 2), [b"b"])
+    mem.put((1, 1, 3), [b"c"])
+    assert mem.get((1, 1, 1)) is None and mem.get((1, 1, 3)) == [b"c"]
+    now[0] = 11
+    assert mem.get((1, 1, 3)) is None
+    small = imagegen.ImageMemory(max_bytes=10)
+    small.put((1, 1, 1), [b"x" * 6])
+    small.put((1, 1, 2), [b"y" * 6])
+    assert small.get((1, 1, 1)) is None and small.get((1, 1, 2)) == [b"y" * 6]

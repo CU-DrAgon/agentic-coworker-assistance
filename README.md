@@ -413,6 +413,18 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   reuse the remembered photo (process memory only, never stored). Check the look with
   `uv run python scripts/salid_sample_promo.py <photo>` (offline; `--live` makes one billed call) and the live test
   `pytest tests/salid/test_salid_live.py -m live -k promo -s`.
+- **Images from a description** (`src/salid/imagegen.py`, `imagegen_bot.py`, feature flag `images`, default on):
+  "วาดรูปแมวในร้านกาแฟ สไตล์สีน้ำ" and the `create_image` tool returns 1-4 PNGs (`image-1.png` ...) in 1:1, 4:5,
+  9:16 or 16:9, 1K or 2K, made with Nano Banana (`SALID_IMAGE_MODEL`, default `gemini-nano-banana-2.1`, location
+  `global`, one call per image, no retry). The agent writes the prompt in English (a Thai prompt is refused before
+  any call, because the model would draw the Thai); Thai or English text the user wants on the image goes in
+  `headline` / `subtitle` and is typeset by Salid on a scrim band (top for 9:16, bottom otherwise, subtitle in an
+  accent pill), so it needs `libfribidi` like promo kits. An attached product photo can be the reference
+  (`file_index`), and "เอาแบบที่ 2 แต่โทนอุ่นขึ้น" edits a result of the last batch (`revise`; the clean images
+  are kept 30 minutes per person and channel in process memory, never stored). Limits `SALID_IMAGES_PER_DAY` (20
+  per guild) and `SALID_IMAGES_PER_USER_DAY` (5 per person), counted per image before the calls (blocked images
+  count too); a bigger request is trimmed to what is left and the reply says so. The reply says the images were
+  made with AI. Logs carry guild, counts and time only, never the prompt or the images.
 - **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
   retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
   same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.
