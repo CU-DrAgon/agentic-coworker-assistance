@@ -2708,7 +2708,7 @@ class MeetingManager:
                 is_exec=bot.is_exec_member(member),
                 user_id=member.id,
                 history=history,
-                language=s.language,
+                language=s.lang,  # the company language (never "auto": the settings decide)
                 languages=getattr(s, "langs", None)
                 if aud.multi(getattr(s, "langs", None) or [])
                 else None,

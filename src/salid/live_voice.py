@@ -2044,8 +2044,17 @@ class LiveVoice:
                 self.bot.meetings._set_engaged(self.session, True)
             return True
         if any(n in ("ask_salid", "answer_privately") for n in names):
-            stats = self._speech_stats(time.monotonic(), ASK_EVIDENCE_S)
+            now = time.monotonic()
+            stats = self._speech_stats(now, ASK_EVIDENCE_S)
             ok, reason = self._ask_evidence(stats)
+            if ok and self._wake_policy() != "natural":
+                # strict: the model asking on someone's behalf is not enough; her name must
+                # have been heard in the last few seconds (Live transcript or ASR name_called)
+                recent = now - self._live_hit_at <= 8.0 or any(
+                    now - x <= 8.0 for x in getattr(self.session, "name_calls", [])
+                )
+                if not recent:
+                    ok, reason = False, "no name heard (strict policy)"
             if ok:
                 logger.info(
                     "live: ask_salid accepted: speech heard, engaging %s", stats_line(stats)
