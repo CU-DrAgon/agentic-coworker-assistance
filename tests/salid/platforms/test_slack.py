@@ -39,6 +39,12 @@ class FakeSlack:
         self.reply_page = 1000  # replies per conversations.replies page
         self.broken_threads: set[str] = set()
         self.member_pages = 1
+        self.errors: list[Exception] = []  # raised by the next history/replies calls, in order
+        self.max_page: int | None = None  # the restricted tier clamps `limit` (15)
+        self.history_calls: list[dict] = []
+        self.reply_calls: list[dict] = []
+        self.files: dict[str, dict] = {}
+        self.file_calls: list[str] = []
 
     async def users_info(self, user):
         self.calls.append("users_info")
@@ -87,10 +93,27 @@ class FakeSlack:
         self.deleted.append(kw)
         return {"ok": True}
 
-    async def conversations_history(self, channel, limit=200, oldest=None, cursor=None):
+    async def files_info(self, file):
+        self.file_calls.append(file)
+        if file not in self.files:
+            raise RuntimeError("file_not_found")
+        return {"file": self.files[file]}
+
+    async def conversations_history(
+        self, channel, limit=200, oldest=None, latest=None, inclusive=False, cursor=None
+    ):
+        self.history_calls.append({"channel": channel, "limit": limit, "oldest": oldest})
+        if self.errors:
+            raise self.errors.pop(0)
+        if self.max_page:
+            limit = min(limit, self.max_page)
         rows = self.history.get(channel, [])
+        ge = (lambda a, b: a >= b) if inclusive else (lambda a, b: a > b)
+        le = (lambda a, b: a <= b) if inclusive else (lambda a, b: a < b)
         if oldest:
-            rows = [m for m in rows if float(m["ts"]) > float(oldest)]
+            rows = [m for m in rows if ge(float(m["ts"]), float(oldest))]
+        if latest:
+            rows = [m for m in rows if le(float(m["ts"]), float(latest))]
         rows = sorted(rows, key=lambda m: -float(m["ts"]))  # Slack: newest first
         start = int(cursor or 0)
         page = rows[start : start + limit]
@@ -101,6 +124,9 @@ class FakeSlack:
         }
 
     async def conversations_replies(self, channel, ts, limit=100, oldest=None, cursor=None):
+        self.reply_calls.append({"channel": channel, "ts": ts, "limit": limit})
+        if self.errors:
+            raise self.errors.pop(0)
         if ts in self.broken_threads:
             raise RuntimeError("ratelimited")
         rows = self.replies.get(ts, [])
@@ -389,8 +415,10 @@ async def test_history_is_read_from_slack_for_a_thread_after_a_restart(fx):
 # ------------------------------------------------------------------ import
 
 
-def msgs(n, start=1791946000, user="U1"):
-    return [{"ts": f"{start + i}.000100", "user": user, "text": f"message {i}"} for i in range(n)]
+def msgs(n, start=1791946000, user="U1", step=1):
+    return [
+        {"ts": f"{start + i * step}.000100", "user": user, "text": f"message {i}"} for i in range(n)
+    ]
 
 
 async def test_import_reads_history_once_and_is_idempotent(fx):
@@ -491,24 +519,17 @@ async def test_a_thread_that_cannot_be_read_skips_the_channel_for_this_run(fx):
     assert await imp.run() == 1  # retried next run
 
 
-async def test_a_window_too_large_is_skipped_not_imported_with_a_hole(fx, monkeypatch):
+async def test_a_cell_too_large_is_split_and_still_imported_whole(fx, monkeypatch):
     client, a, port, adapter = fx
     from datetime import UTC, datetime
 
     a._now = lambda: datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
-    monkeypatch.setattr(slack_import, "MAX_WINDOW", 3)
-    client.history["C1"] = msgs(10)
+    monkeypatch.setattr(slack_import, "MAX_CELL", 3)
+    # 10 messages spread 2 h apart: the 7-day cell is too big, halves until each fits
+    client.history["C1"] = msgs(10, start=1791900000, step=3600)
     imp = slack_import.SlackImporter(a, port, page_sleep=0)
-    assert await imp.run() == 0
-    assert (
-        a.memory_store.messages(
-            ids.tenant_id("slack", TEAM),
-            [ids.room_id("slack", TEAM, "C1")],
-            "2025-01-01",
-            "2026-12-31",
-        )
-        == []
-    )
+    assert await imp.run() == 10
+    assert await slack_import.SlackImporter(a, port, page_sleep=0).run() == 0  # idempotent
 
 
 async def test_import_respects_the_memory_switch(fx):

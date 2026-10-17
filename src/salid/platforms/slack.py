@@ -7,8 +7,11 @@ no public endpoint is needed. Tokens never reach a log line.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
 import time
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
@@ -16,7 +19,7 @@ from typing import Any
 import httpx
 
 from ..qa import MAX_FILE_BYTES
-from . import textfmt
+from . import ids, textfmt
 from .config import PlatformSettings
 from .core import Assistant, FileRef, HistLine, Incoming, RoomInfo, RoomView, safe_exc
 
@@ -32,6 +35,37 @@ MAX_MEMBERS = 5000  # a bigger room: audience unknown, so memory stays in that r
 MAX_ROOMS = 60  # other rooms considered for memory scope
 MAX_PAGES = 20
 ACCEPTED_SUBTYPES = {None, "file_share", "thread_broadcast"}
+ROOM_TTL_S = 600.0  # channel name / privacy caches expire after this long
+HISTORY_TIMEOUT_S = 3.0  # the live read in the answer path gives up after this long
+HISTORY_BLOCK_MAX_S = 300.0  # after a 429 the live read is skipped for Retry-After (capped)
+POST_GAP_S = 1.1  # chat.postMessage: about one message per second per channel
+POST_TRIES = 5  # attempts per message when Slack answers 429
+POST_WAIT_MAX_S = 60.0
+MENTION_WAIT_S = 1.0  # an app_mention waits this long for its twin `message` event
+MAX_FILE_LOOKUPS = 4
+REVOKED_EVENTS = {"app_uninstalled", "tokens_revoked"}
+ROOM_EVENTS = {
+    "channel_rename", "group_rename", "channel_archive", "group_archive", "channel_unarchive",
+    "group_unarchive", "channel_left", "group_left", "channel_deleted", "group_deleted",
+    "member_joined_channel", "member_left_channel",
+}  # fmt: skip
+# One Bolt listener for every non-message event (keeps the listener count at three).
+LIFECYCLE_EVENTS = re.compile("^(" + "|".join(sorted(ROOM_EVENTS | REVOKED_EVENTS)) + ")$")
+
+
+def retry_after(e: BaseException) -> float | None:
+    """Seconds Slack asks us to wait when `e` is an HTTP 429, else None."""
+    resp = getattr(e, "response", None)
+    if resp is None or getattr(resp, "status_code", None) != 429:
+        return None
+    try:
+        headers = getattr(resp, "headers", None) or {}
+        for k, v in headers.items():
+            if str(k).lower() == "retry-after":
+                return max(float(v), 0.0)
+    except (TypeError, ValueError):
+        pass
+    return 1.0
 
 
 class SlackPort:
@@ -40,18 +74,38 @@ class SlackPort:
     platform = PLATFORM
     max_messages = MAX_MESSAGES
 
-    def __init__(self, client, team_id: str, bot_user_id: str, clock=time.monotonic) -> None:
+    def __init__(
+        self,
+        client,
+        team_id: str,
+        bot_user_id: str,
+        clock=time.monotonic,
+        *,
+        history_client=None,
+        import_client=None,
+        sleep=asyncio.sleep,
+        history_timeout: float = HISTORY_TIMEOUT_S,
+    ) -> None:
         self.client, self.team_id, self.bot_user_id, self._clock = (
             client,
             team_id,
             bot_user_id,
             clock,
         )
+        # Clients without the SDK's sleeping 429 handler: the live read must never stall an
+        # answer and the importer paces itself (see slack_import.Throttle).
+        self.history_client = history_client or client
+        self.import_client = import_client or client
+        self._sleep, self._history_timeout = sleep, history_timeout
+        self.revoked = False  # app_uninstalled / tokens_revoked: this tenant is gone
+        self._history_blocked_until = 0.0
+        self._history_warned = False
+        self._next_post: dict[str, float] = {}
         self._members: dict[str, tuple[float, frozenset[str]]] = {}
         self._bot_rooms: tuple[float, dict[str, tuple[str, str]]] | None = None
         self._users: dict[str, tuple[float, dict]] = {}
-        self._room_names: dict[str, str] = {}
-        self._room_private: dict[str, bool] = {}
+        self._room_names: dict[str, tuple[float, str]] = {}
+        self._room_private: dict[str, tuple[float, bool]] = {}
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
@@ -76,16 +130,20 @@ class SlackPort:
         u = await self.user(msg.user)
         return bool(u.get("is_admin") or u.get("is_owner") or u.get("is_primary_owner"))
 
+    def _fresh(self, cache: dict, channel: str):
+        hit = cache.get(channel)
+        if hit is not None and self._clock() - hit[0] < ROOM_TTL_S:
+            return hit[1]
+        return None
+
     async def room_name(self, channel: str) -> str:
-        if channel in self._room_names:
-            return self._room_names[channel]
+        known = self._fresh(self._room_names, channel)
+        if known is not None:
+            return known
         info = await self._conversation_info(channel)
         if info is None:
             return ""
-        name = info.get("name") or ""
-        if name:
-            self._room_names[channel] = name
-        return name
+        return info.get("name") or ""
 
     async def _conversation_info(self, channel: str) -> dict | None:
         try:
@@ -95,8 +153,23 @@ class SlackPort:
             return None
         private = info.get("is_private")
         if isinstance(private, bool):
-            self._room_private[channel] = private
+            self._room_private[channel] = (self._clock(), private)
+        if info.get("name"):
+            self._room_names[channel] = (self._clock(), info["name"])
         return info
+
+    # ------------------------------------------------------------ cache invalidation
+    def forget_room(self, channel: str) -> None:
+        """A channel was renamed, archived, left or deleted: drop what we cached about it."""
+        self._room_names.pop(channel, None)
+        self._room_private.pop(channel, None)
+        self._members.pop(channel, None)
+        self._bot_rooms = None
+
+    def members_changed(self, channel: str, user: str | None = None) -> None:
+        self._members.pop(channel, None)
+        if user == self.bot_user_id:
+            self._bot_rooms = None  # the list of rooms Salid is in changed
 
     async def _pages(self, call, key: str, **kw) -> list[Any]:
         out: list[Any] = []
@@ -151,11 +224,13 @@ class SlackPort:
         if msg.is_direct:
             audience: frozenset[str] | None = frozenset({msg.user})
         else:
-            if msg.room not in self._room_private:
+            private = self._fresh(self._room_private, msg.room)
+            if private is None:
                 await self._conversation_info(msg.room)
+                private = self._fresh(self._room_private, msg.room)
             # conversations.members is the full audience only for private conversations. Public
             # channels are readable by people who have not joined, so their audience is unknown.
-            if not self._room_private.get(msg.room, False):
+            if not private:
                 return RoomView(None, [])
             audience = await self.members(msg.room, fresh=True)
         if audience is None:
@@ -176,9 +251,40 @@ class SlackPort:
     def _thread(self, msg: Incoming) -> str | None:
         return msg.thread or (None if msg.is_direct else msg.message)
 
+    async def _pace(self, channel: str) -> None:
+        """Reserve the next posting slot of a channel (>= POST_GAP_S after the previous one)."""
+        now = self._clock()
+        start = max(now, self._next_post.get(channel, 0.0))
+        self._next_post[channel] = start + POST_GAP_S
+        if len(self._next_post) > 1000:
+            self._next_post = {c: t for c, t in self._next_post.items() if t > now}
+        if start > now:
+            await self._sleep(start - now)
+
+    async def _call(self, fn, **kw):
+        """A Web API write: paced per channel, and retried when Slack answers 429 (waiting the
+        Retry-After it asks for). The `channel` keyword is passed through to Slack."""
+        channel = kw.get("channel")
+        for attempt in range(POST_TRIES):
+            if channel is not None:
+                await self._pace(channel)
+            try:
+                return await fn(**kw)
+            except Exception as e:
+                wait = retry_after(e)
+                if wait is None or attempt == POST_TRIES - 1:
+                    raise
+                logger.info("slack asked us to wait %.0fs (429)", wait)
+                await self._sleep(min(wait, POST_WAIT_MAX_S))
+        raise AssertionError("unreachable")
+
     async def ack(self, msg: Incoming, text: str) -> object | None:
-        resp = await self.client.chat_postMessage(
-            channel=msg.room, thread_ts=self._thread(msg), text=textfmt.to_slack(text), mrkdwn=True
+        resp = await self._call(
+            self.client.chat_postMessage,
+            channel=msg.room,
+            thread_ts=self._thread(msg),
+            text=textfmt.to_slack(text),
+            mrkdwn=True,
         )
         return (msg.room, resp.get("ts")) if resp.get("ts") else None
 
@@ -190,43 +296,77 @@ class SlackPort:
             logger.warning("could not remove the acknowledgement (%s)", safe_exc(e))
 
     async def deliver(self, msg: Incoming, texts: list[str], ack: object | None) -> list[str]:
+        """Post the chunks in order, at most one per second per channel. A chunk that cannot be
+        posted is logged and the later ones are still tried; the first failure is raised after."""
         sent: list[str] = []
         rest = list(texts)
         if ack is not None and rest:
             channel, ts = ack
             try:
-                await self.client.chat_update(channel=channel, ts=ts, text=rest[0], mrkdwn=True)
+                await self._call(
+                    self.client.chat_update, channel=channel, ts=ts, text=rest[0], mrkdwn=True
+                )
                 sent.append(ts)
                 rest.pop(0)
             except Exception as e:
                 logger.warning("could not edit the acknowledgement (%s)", safe_exc(e))
                 await self.drop_ack(ack)
-        for text in rest:
-            resp = await self.client.chat_postMessage(
-                channel=msg.room,
-                thread_ts=self._thread(msg),
-                text=text,
-                mrkdwn=True,
-                unfurl_links=False,
-                reply_broadcast=False,
-            )
+        failure: Exception | None = None
+        for i, text in enumerate(rest):
+            try:
+                resp = await self._call(
+                    self.client.chat_postMessage,
+                    channel=msg.room,
+                    thread_ts=self._thread(msg),
+                    text=text,
+                    mrkdwn=True,
+                    unfurl_links=False,
+                    reply_broadcast=False,
+                )
+            except Exception as e:
+                logger.error(
+                    "reply chunk %d/%d was not delivered (%s)", i + 1, len(rest), safe_exc(e)
+                )
+                failure = failure or e
+                sent.append("")
+                continue
             sent.append(resp.get("ts") or "")
+        if failure is not None:
+            raise failure
         return sent
 
+    def _history_failed(self, why: str, wait: float = 0.0) -> None:
+        if wait:
+            self._history_blocked_until = self._clock() + min(wait, HISTORY_BLOCK_MAX_S)
+        if not self._history_warned:
+            self._history_warned = True
+            logger.warning("could not read Slack history, using the live buffer (%s)", why)
+
     async def history(self, msg: Incoming, limit: int) -> list[HistLine]:
-        """Recent messages of the thread (or the room), oldest first, read from Slack."""
-        try:
-            if msg.thread:
-                resp = await self.client.conversations_replies(
-                    channel=msg.room, ts=msg.thread, limit=limit
-                )
-                raw = resp.get("messages") or []
-            else:
-                resp = await self.client.conversations_history(channel=msg.room, limit=limit)
-                raw = list(reversed(resp.get("messages") or []))
-        except Exception as e:
-            logger.warning("could not read Slack history (%s)", safe_exc(e))
+        """Recent messages of the thread (or the room), oldest first, read from Slack. Bounded
+        by a short timeout, never retried and skipped while Slack is rate limiting us: the caller
+        falls back to what the live events already filled in."""
+        if self.revoked or self._clock() < self._history_blocked_until:
             return []
+        try:
+            out = await asyncio.wait_for(self._read_history(msg, limit), self._history_timeout)
+        except TimeoutError:
+            self._history_failed("timed out")
+            return []
+        except Exception as e:
+            self._history_failed(safe_exc(e), retry_after(e) or 0.0)
+            return []
+        self._history_warned = False
+        return out
+
+    async def _read_history(self, msg: Incoming, limit: int) -> list[HistLine]:
+        client = self.history_client
+        if msg.thread:
+            resp = await client.conversations_replies(channel=msg.room, ts=msg.thread, limit=limit)
+            raw = resp.get("messages") or []
+        else:
+            resp = await client.conversations_history(channel=msg.room, limit=limit)
+            raw = list(reversed(resp.get("messages") or []))
         out = []
         for m in raw:
             if m.get("subtype") not in ACCEPTED_SUBTYPES:
@@ -241,6 +381,14 @@ class SlackPort:
             who = "Salid" if mine else await self.user_name(uid)
             out.append(HistLine(_ts(m.get("ts")), who, text, mine))
         return out
+
+    async def file_info(self, file_id: str) -> dict | None:
+        """files.info: the real file object of a Slack Connect stub (`check_file_info`)."""
+        try:
+            return (await self.client.files_info(file=file_id)).get("file") or None
+        except Exception as e:
+            logger.warning("files.info failed (%s)", safe_exc(e))
+            return None
 
 
 def _ts(ts: str | None) -> datetime:
@@ -284,14 +432,22 @@ class SlackAdapter:
         fetch: Callable[[str], bytes],
         *,
         on_joined: Callable[[str], None] | None = None,
+        merge_wait: float = MENTION_WAIT_S,
+        delete_data: bool = True,
     ) -> None:
         self.a, self.port, self.fetch, self.on_joined = assistant, port, fetch, on_joined
+        self.merge_wait, self.delete_data = merge_wait, delete_data
+        # (channel, ts) of messages that arrived as a `message` event / app_mentions waiting for it
+        self._message_seen: OrderedDict[tuple[str, str], None] = OrderedDict()
+        self._mention_held: dict[tuple[str, str], asyncio.Event] = {}
 
     async def on_message(
         self, event: dict, team_id: str | None = None, *, mention: bool = False
     ) -> None:
         """A `message` or `app_mention` event. Edits and deletions update the memory; everything
         from a bot (Salid included) is ignored."""
+        if self.port.revoked:
+            return
         team = team_id or event.get("team") or self.port.team_id
         sub = event.get("subtype")
         if sub == "message_changed":
@@ -311,6 +467,28 @@ class SlackAdapter:
             or not event.get("ts")
         ):
             return
+        key = (event["channel"], event["ts"])
+        if mention:
+            if key in self._message_seen:
+                return  # the `message` event came first and carries everything
+            if not event.get("files") and event.get("channel_type") != "im":
+                # app_mention may arrive without its attachments: give the twin `message` event
+                # a moment, it is the one to answer (core drops the second event of a message).
+                held = self._mention_held[key] = asyncio.Event()
+                try:
+                    await asyncio.wait_for(held.wait(), self.merge_wait)
+                    return
+                except TimeoutError:
+                    pass
+                finally:
+                    self._mention_held.pop(key, None)
+        else:
+            self._message_seen[key] = None
+            while len(self._message_seen) > 500:
+                self._message_seen.popitem(last=False)
+            held = self._mention_held.get(key)
+            if held is not None:
+                held.set()
         msg = await self._incoming(event, team, mention)
         await self.a.handle(msg, self.port)
 
@@ -340,13 +518,25 @@ class SlackAdapter:
             mentions_others=any(m != bot for m in mentioned),
             thread=thread if thread and thread != ts else None,
             replies_to_bot=bool(event.get("parent_user_id") == bot and thread and thread != ts),
-            files=self._files(event.get("files") or []),
+            files=await self._files(event.get("files") or []),
             room_name=room_name,
         )
 
-    def _files(self, raw: list[dict]) -> list[FileRef]:
+    async def _files(self, raw: list[dict]) -> list[FileRef]:
         out = []
+        lookups = 0
         for f in raw:
+            if f.get("mode") == "tombstone":
+                continue
+            if (
+                not (f.get("url_private_download") or f.get("url_private"))
+                and f.get("file_access") == "check_file_info"
+                and f.get("id")
+                and lookups < MAX_FILE_LOOKUPS
+            ):
+                # Slack Connect: the event holds a stub, files.info has the real file object
+                lookups += 1
+                f = await self.port.file_info(f["id"]) or {}
             url = f.get("url_private_download") or f.get("url_private")
             if not url or f.get("mode") == "tombstone":
                 continue
@@ -385,6 +575,55 @@ class SlackAdapter:
         if event.get("user") == self.port.bot_user_id and self.on_joined is not None:
             self.on_joined(event.get("channel") or "")
 
+    async def on_event(self, event: dict, team_id: str | None = None) -> None:
+        """Everything that is not a message: channel changes (caches), membership and removal."""
+        kind = event.get("type")
+        team = team_id or event.get("team") or self.port.team_id
+        if kind in REVOKED_EVENTS:
+            await self._revoked(kind, event, team)
+            return
+        if self.port.revoked or kind not in ROOM_EVENTS:
+            return
+        ch = event.get("channel")
+        channel = ch.get("id") if isinstance(ch, dict) else ch
+        if not channel:
+            return
+        if kind in ("member_joined_channel", "member_left_channel"):
+            self.port.members_changed(channel, event.get("user"))
+            if kind == "member_joined_channel":
+                self.joined(event)
+            return
+        if kind in ("channel_rename", "group_rename"):
+            self.port.forget_room(channel)
+            return
+        self.port.forget_room(channel)  # archived, unarchived, left, deleted
+
+    async def _revoked(self, kind: str, event: dict, team: str) -> None:
+        """app_uninstalled / tokens_revoked: stop answering this workspace and erase what Salid
+        remembered of it (memory with its vectors). Only a revoked *bot* token counts."""
+        if team != self.port.team_id or self.port.revoked:
+            return
+        if kind == "tokens_revoked" and not (event.get("tokens") or {}).get("bot"):
+            return  # only user tokens were revoked; Salid uses the bot token
+        self.port.revoked = True
+        gid = ids.tenant_id(PLATFORM, team)
+        logger.warning("slack %s: this workspace is removed, no more answers tenant=%d", kind, gid)
+        if not self.delete_data:
+            return
+        try:
+            await self.a.drain()  # queued memory writes must not land after the deletion
+            n = await asyncio.to_thread(self.a.memory.delete_guild, gid)
+            logger.info("slack tenant=%d memory erased (%s)", gid, n)
+        except Exception as e:
+            logger.error("could not erase the memory of tenant=%d (%s)", gid, safe_exc(e))
+        self.a.tenants.pop(gid, None)
+        store = getattr(self.a, "guilds_store", None)
+        if store is not None:
+            try:
+                await asyncio.to_thread(store.set_active, gid, False)
+            except Exception as e:
+                logger.warning("could not mark tenant=%d inactive (%s)", gid, safe_exc(e))
+
 
 async def connect(ps: PlatformSettings, assistant: Assistant):
     """Log in, build the Bolt app and return (handler, adapter, port). The caller runs
@@ -396,9 +635,15 @@ async def connect(ps: PlatformSettings, assistant: Assistant):
 
     client = AsyncWebClient(token=ps.slack_bot_token)
     client.retry_handlers.append(AsyncRateLimitErrorRetryHandler(max_retry_count=2))
+    # no sleeping 429 handler on these: the live history read has a short timeout and the
+    # importer paces itself and honours Retry-After
+    live = AsyncWebClient(
+        token=ps.slack_bot_token, timeout=int(HISTORY_TIMEOUT_S), retry_handlers=[]
+    )
+    plain = AsyncWebClient(token=ps.slack_bot_token, retry_handlers=[])
     auth = await client.auth_test()
     team, bot = auth["team_id"], auth["user_id"]
-    port = SlackPort(client, team, bot)
+    port = SlackPort(client, team, bot, history_client=live, import_client=plain)
     token = ps.slack_bot_token
 
     adapter = SlackAdapter(assistant, port, lambda url: download(token, url))
@@ -412,9 +657,9 @@ async def connect(ps: PlatformSettings, assistant: Assistant):
     async def _mention(event, context):
         await adapter.on_message(event, context.team_id, mention=True)
 
-    @app.event("member_joined_channel")
-    async def _joined(event):
-        adapter.joined(event)
+    @app.event(LIFECYCLE_EVENTS)
+    async def _lifecycle(event, context):
+        await adapter.on_event(event, context.team_id)
 
     return AsyncSocketModeHandler(app, ps.slack_app_token), adapter, port
 
