@@ -1155,11 +1155,15 @@ class MeetingManager:
                 merged = []
                 for i, (sp, _) in enumerate(batch):
                     seen: list[str] = []
-                    for v in versions:
+                    parts: list[str] = []
+                    for lang, v in zip(targets, versions, strict=True):
                         tx = v[i].strip()
                         if tx and tx not in seen:
                             seen.append(tx)
-                    merged.append((sp, "\n↳ ".join(seen)))
+                            parts.append(
+                                tx if not parts else f"↳ ({lang_name(lang, 1)} translation) {tx}"
+                            )
+                    merged.append((sp, "\n".join(parts)))
                 batch = merged
             if s.ending or not s.captions.on:
                 return

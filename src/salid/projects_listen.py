@@ -273,7 +273,7 @@ class ProjectListener:
             today = date.fromisoformat(day)
         except ValueError:
             today = now.date()
-        lang = resolve_lang(
+        lang = resolve_lang(  # the company language; an unchosen server follows the words
             self.lang_of(guild_id, channel_id), " ".join(m.text for m in lines[-5:])
         )
         known = {p.id: p for p in projects}

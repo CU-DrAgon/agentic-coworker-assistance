@@ -168,13 +168,21 @@ def tt(key: str, langs: list[str], **kw) -> str:
     """`t(key, lang)` for each language joined with a blank line; identical renderings are
     dropped (a key that is the same in every language is shown once)."""
     seen: list[str] = []
+    out: list[str] = []
     for lang in langs or [DEFAULT_LANGUAGE]:
         r = _render_lang(lang)
         # a callable value is asked for its text in each language (e.g. a language's name)
         text = t(key, r, **{k: (v(r) if callable(v) else v) for k, v in kw.items()})
         if text not in seen:
             seen.append(text)
-    return "\n\n".join(seen)
+            out.append(text if not out else translation_label(lang) + text)
+    return "\n\n".join(out)
+
+
+def translation_label(lang: str) -> str:
+    """The English header that marks a second-language block as a translation, so a reader who
+    does not know that script sees it is a translation and not a different message."""
+    return f"*({lang_name(lang, 1)} translation)*\n"
 
 
 def render(fn, langs: list[str]) -> str:
@@ -193,13 +201,15 @@ def join_blocks(blocks: dict[str, str], langs: list[str]) -> str:
     """Per-language texts (already formatted) in audience order, identical ones once. A language
     without a block is skipped; no match at all -> the first block available."""
     seen: list[str] = []
+    out: list[str] = []
     for lang in langs:
         text = blocks.get(lang)
         if text and text not in seen:
             seen.append(text)
-    if not seen and blocks:
-        seen.append(next(iter(blocks.values())))
-    return "\n\n".join(seen)
+            out.append(text if not out else translation_label(lang) + text)
+    if not out and blocks:
+        out.append(next(iter(blocks.values())))
+    return "\n\n".join(out)
 
 
 def _names(langs: list[str], render: str) -> list[str]:
