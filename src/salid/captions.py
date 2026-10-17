@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -132,9 +133,38 @@ def format_captions(lines: list[tuple[str, str]]) -> list[str]:
     return messages
 
 
+# ------------------------------------------------------------------ org default
+_CAP = r"(?:คำบรรยาย|ซับ|captions?|subtitles?)"
+_DEFAULT_ON_RE = re.compile(
+    rf"แสดง{_CAP}(?:สด)?ทุก(?:ครั้ง|ประชุม)"
+    rf"|(?:show|display)\s+(?:live\s+)?{_CAP}\s+in\s+every\s+meeting"
+    rf"|{_CAP}\s+on\s+by\s+default|(?:show|turn\s+on)\s+{_CAP}\s+by\s+default",
+    re.I,
+)
+_DEFAULT_OFF_RE = re.compile(
+    rf"(?:ซ่อน|ปิด){_CAP}(?:สด)?ทุก(?:ครั้ง|ประชุม)"
+    rf"|(?:hide|stop\s+showing)\s+(?:live\s+)?{_CAP}\s+(?:in\s+every\s+meeting|by\s+default)"
+    rf"|{_CAP}\s+off\s+by\s+default|(?:turn\s+off|hide)\s+{_CAP}\s+by\s+default",
+    re.I,
+)
+
+
+def parse_captions_default_command(text: str) -> bool | None:
+    """True / False from "แสดงคำบรรยายทุกประชุม" / "captions on by default" and "ซ่อนคำบรรยายทุกประชุม"
+    / "hide captions by default"; else None."""
+    s = " ".join((text or "").split()).strip(" \t/,.:;!-")
+    if not s or len(s) > 100:
+        return None
+    if _DEFAULT_OFF_RE.search(s):
+        return False
+    return True if _DEFAULT_ON_RE.search(s) else None
+
+
 # ------------------------------------------------------------------ agent tool
 def captions_tools(
-    session_of: Callable[[], Any], set_captions: Callable[[Any, bool, str], dict]
+    session_of: Callable[[], Any],
+    set_captions: Callable[[Any, bool, str], dict],
+    set_default: Callable[[bool], dict] | None = None,
 ) -> list[Callable]:
     """The `set_captions` agent tool for chat and voice. `session_of()` returns the meeting the
     asker is sitting in (their voice channel) or None; the scope is decided in code."""
@@ -142,7 +172,8 @@ def captions_tools(
     def set_captions_tool(on: bool, language: str = "original") -> dict:
         """Turn live captions (subtitles) of the voice meeting the asker is in on or off, optionally
         translated. Call it when someone asks e.g. "เปิดซับ", "เปิดซับให้หน่อย", "แปลเป็นอังกฤษให้ด้วย",
-        "turn on captions in Thai", "ปิดซับ", "captions off". Captions are posted in the meeting's
+        "turn on captions in Thai", "แสดงคำบรรยาย", "ซ่อนคำบรรยาย", "hide captions", "ปิดซับ",
+        "captions off". Captions are posted in the meeting's
         text chat. Only works for someone who is in the meeting's voice channel. Confirm in one
         short sentence.
 
@@ -159,4 +190,19 @@ def captions_tools(
         return set_captions(session, bool(on), lang)
 
     set_captions_tool.__name__ = "set_captions"
-    return [set_captions_tool]
+    if set_default is None:
+        return [set_captions_tool]
+
+    def set_captions_default_tool(on: bool) -> dict:
+        """Executives and admins only: make every future voice meeting of this server start with
+        live captions in its chat (on) or without them (off, as before). Call it for "แสดงคำบรรยาย
+        ทุกประชุม", "captions on by default", "ซ่อนคำบรรยายทุกประชุม", "hide captions by default".
+        Not for the meeting happening now (that is set_captions). Confirm in one short sentence.
+
+        Args:
+            on: true to start meetings with captions, false to stop doing that.
+        """
+        return set_default(bool(on))
+
+    set_captions_default_tool.__name__ = "set_captions_default"
+    return [set_captions_tool, set_captions_default_tool]

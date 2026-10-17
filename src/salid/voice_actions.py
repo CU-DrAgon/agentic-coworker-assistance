@@ -23,6 +23,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "deliver_minutes",
         "meeting_document",  # sends the file to the speaker only
         "set_my_notifications",
+        "set_captions_default",  # executives only (checked in code)
         # coordinator
         "update_task",
         "add_task",

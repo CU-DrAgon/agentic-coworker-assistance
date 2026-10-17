@@ -766,6 +766,9 @@ class MeetingSession:
     language_mode: str = ""
     langs: list[str] = field(default_factory=list)
     mode_spoken: bool = False  # the answering mode was said aloud once
+    captions_defaulted: bool = (
+        False  # the server default was applied (or the resume record says so)
+    )
 
     @property
     def key(self) -> tuple[int, int]:
@@ -1030,6 +1033,7 @@ class MeetingManager:
         far; nothing is logged to memory and no summary is posted while it lasts."""
         if recording:
             s.recording = "recording"
+            self._captions_from_default(s)
             return {"status": "recording"}
         if s.leaving:  # leaving is the system's job, not "stop taking notes"
             return {"status": "ignored", "reason": "leaving the meeting; say only a short goodbye"}
@@ -1051,7 +1055,23 @@ class MeetingManager:
             s.captions.turn_on(language, self._now())
             return {"status": "on", "language": language}
         s.captions.turn_off()
+        if s.captions_defaulted:  # remember the hide, so a restart does not undo it
+            with contextlib.suppress(Exception):
+                asyncio.run_coroutine_threadsafe(self._persist(s), s.loop)
         return {"status": "off"}
+
+    def _captions_from_default(self, s: MeetingSession) -> bool:
+        """The server's "captions in every meeting" setting: once, at start / resume, while notes
+        are on. Per-meeting commands override it afterwards. Fails quiet (captions stay off)."""
+        if s.captions_defaulted or s.recording != "recording":
+            return False
+        try:
+            if not self.bot.team.captions_default(s.guild_id):
+                return False
+        except Exception:
+            return False
+        s.captions_defaulted = True  # once per meeting: a later hide stays hidden
+        return self.set_captions(s, True).get("status") == "on"
 
     async def _caption_flush(self, s: MeetingSession) -> None:
         """Post the buffered lines as "**Name:** text" (translated in one cheap call when a
@@ -1416,10 +1436,12 @@ class MeetingManager:
             == "company_only",
         )
         await self._notice(session, t(announce, session.lang))
-        await self._post_state(
-            session,
-            t("voice_state_join", session.lang) + ("\n" + mode_text if aud.MODE_NOTICES else ""),
-        )
+        hello = t("voice_state_join", session.lang)
+        if self._captions_from_default(session):
+            hello += " " + t("captions_suffix", session.lang)
+        if aud.MODE_NOTICES:
+            hello += "\n" + mode_text
+        await self._post_state(session, hello)
         await self._attend_start(session, self._humans(channel))
         logger.info(
             "meeting started in guild %s channel %s on voice body %d (%s)",
@@ -1433,6 +1455,7 @@ class MeetingManager:
         s.meeting_id, s.on_end, s.origin = meeting_id, on_end, "scheduled"
         if s.recording == "unknown":
             s.recording = "recording"  # the schedule says it is a meeting
+            self._captions_from_default(s)
         await self._persist(s)
 
     # ---- auto-join: Salid joins by itself when people are in a voice channel
@@ -1665,6 +1688,7 @@ class MeetingManager:
             "first_grace": s.first_grace,
             "minutes_channel_id": s.minutes_channel_id,
             "recording": s.recording,
+            "captions_hidden": s.captions_defaulted and not s.captions.on,
             "transcript_from": s.transcript_from.isoformat(timespec="seconds")
             if s.transcript_from
             else None,
@@ -1809,6 +1833,9 @@ class MeetingManager:
         ]
         session.tasks.append(asyncio.create_task(self._ticker(session)))
         self._start_live(session)
+        if rec.get("captions_hidden"):
+            session.captions_defaulted = True  # hidden in this meeting before the restart
+        self._captions_from_default(session)
         await self._notice(session, t("meet_rejoined", session.lang))
         logger.info("meeting resumed in guild %s channel %s", gid, channel.id)
 
@@ -1960,6 +1987,7 @@ class MeetingManager:
             s.consent = "assumed"
             if s.recording == "unknown":
                 s.recording = "recording"
+                self._captions_from_default(s)
         if (
             s.voice_mode != "live"
             and s.recording != "not_recording"
@@ -2005,6 +2033,7 @@ class MeetingManager:
             if self._YES_RE.search(text):  # "ใช่ จดเลย" / "yes": it is a meeting
                 s.consent = "answered"
                 s.recording = "recording"
+                self._captions_from_default(s)
         if s.recording != "not_recording":
             s.transcript.add(self.bot.s.now(), name, text)
             s.attendee_ids.add(seg.user_id)

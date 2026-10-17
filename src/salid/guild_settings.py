@@ -21,6 +21,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     default_tone         tone of channels with no entry above (default "cheerful")
     tone_note            str <= 200 chars, owner's extra wording note appended to every tone
     task_confirm_mode    notify (default) | approve: who signs off a task heard in chat
+    captions_default     off (default) | on: live captions in every voice meeting's chat from the start
     personal_settings    bool (default true): members may keep their own language / tone / task mode
     language_mode        audience (default: company language + the personal languages of the people
                          involved) | company_only (an executive forced one language), see salid.audience
@@ -132,6 +133,7 @@ TASK_CONFIRM_MODES = (
     "notify",
     "approve",
 )  # task handshake: the doer confirms | the giver signs off
+CAPTIONS_DEFAULTS = ("off", "on")  # meeting captions: hidden as before | shown from the start
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
 MAX_CHANNEL_LANGUAGES = 500
@@ -270,6 +272,7 @@ class GuildSettingsUpdate(BaseModel):
     task_confirm_mode: str = "notify"  # notify | approve, see salid.task_handshake
     personal_settings: bool = True  # members may keep their own language / tone / task mode
     language_mode: str = "audience"  # audience (company + personal languages) | company_only
+    captions_default: str = "off"  # off | on, see salid.captions
     memory_retention_days: int = Field(default_factory=default_retention_days)
 
     @field_validator("language_mode", mode="before")
@@ -325,6 +328,11 @@ class GuildSettingsUpdate(BaseModel):
     @classmethod
     def _task_confirm_mode(cls, v):
         return v if v in TASK_CONFIRM_MODES else "notify"
+
+    @field_validator("captions_default", mode="before")
+    @classmethod
+    def _captions_default(cls, v):
+        return v if v in CAPTIONS_DEFAULTS else "off"
 
     @field_validator("default_tone", mode="before")
     @classmethod
@@ -657,6 +665,9 @@ class GuildStore:
         if mode not in ("audience", "company_only"):
             raise ValueError(f"unknown language mode {mode!r}")
         self._ref(guild_id).set({"language_mode": mode}, merge=True)
+
+    def set_captions_default(self, guild_id: int, on: bool) -> None:
+        self._ref(guild_id).set({"captions_default": "on" if on else "off"}, merge=True)
 
     def set_tone_note(self, guild_id: int, note: str) -> None:
         """Set (or, with "", clear) the guild's wording note. Validated like the hub field."""
@@ -1065,6 +1076,16 @@ class BotGuildSettings:
 
     def task_confirm_mode(self, guild_id: int) -> str:
         return self.current(guild_id).task_confirm_mode
+
+    def captions_default(self, guild_id: int) -> bool:
+        """Whether meetings of this server start with live captions on."""
+        return self.current(guild_id).captions_default == "on"
+
+    def set_captions_default(self, guild_id: int, on: bool) -> None:
+        try:
+            self.store.set_captions_default(guild_id, on)
+        finally:
+            self._cache.pop(guild_id, None)
 
     def personal_allowed(self, guild_id: int) -> bool:
         """Whether members may keep personal settings (language, tone, task mode)."""

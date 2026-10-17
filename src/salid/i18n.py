@@ -1358,6 +1358,22 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "end_empty": {"th": "ทุกคนออกจากห้องแล้ว", "en": "everyone left the channel"},
     "end_timeout": {"th": "ประชุมครบ 6 ชั่วโมง", "en": "the meeting reached 6 hours"},
+    "captions_suffix": {
+        "th": "📝 คำบรรยายเปิดอยู่ · พูด “ซ่อนคำบรรยาย” เพื่อปิด",
+        "en": "📝 captions on · say “hide captions” to stop",
+    },
+    "captions_default_on": {
+        "th": "ได้ค่ะ ประชุมครั้งต่อไปสลิดจะแสดงคำบรรยายสดในแชตให้ทุกครั้ง (ซ่อนเฉพาะรอบได้ด้วย “ซ่อนคำบรรยาย”)",
+        "en": "Done: every meeting from now on starts with live captions in the chat (say “hide captions” to hide them in one meeting).",
+    },
+    "captions_default_off": {
+        "th": "ได้ค่ะ ประชุมครั้งต่อไปจะไม่แสดงคำบรรยายสดเอง (สั่งเปิดเฉพาะรอบได้ด้วย “แสดงคำบรรยาย”)",
+        "en": "Done: meetings no longer start with live captions (say “show captions” to turn them on in one meeting).",
+    },
+    "captions_default_denied": {
+        "th": "เฉพาะแอดมินหรือผู้บริหารที่ตั้งค่าคำบรรยายของทุกประชุมได้ค่ะ",
+        "en": "Only admins and executives can change the captions default for every meeting.",
+    },
     "meet_rejoined": {
         "th": "สลิดกลับเข้ามาจดประชุมต่อแล้วค่ะ (หลุดไปครู่หนึ่ง)",
         "en": "Salid is back and taking notes again (it dropped out for a moment).",

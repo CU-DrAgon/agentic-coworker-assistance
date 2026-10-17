@@ -125,9 +125,9 @@ async def test_chat_tool_only_for_someone_in_the_voice_channel(env):
     s = await start(env)
     a = env.guild.members[10]
     outsider = make_member(env.guild, 99, "ซี", None)
-    (tool,) = env.bot._captions_tools(a)
+    (tool, *_) = env.bot._captions_tools(a)
     assert tool(True, "en")["status"] == "on" and s.captions.language == "en"
-    (tool,) = env.bot._captions_tools(outsider)
+    (tool, *_) = env.bot._captions_tools(outsider)
     assert tool(False)["error"] == "not_in_meeting_voice_channel" and s.captions.on
     await env.mgr.end((1000, 77), "shutdown")
 

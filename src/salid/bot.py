@@ -28,7 +28,7 @@ from .bizfin_bot import BizfinMixin
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
 from .broadcast_bot import BroadcastMixin
-from .captions import captions_tools
+from .captions import captions_tools, parse_captions_default_command
 from .catchup_bot import CatchupMixin
 from .channel_access import (
     access_flags,
@@ -901,6 +901,8 @@ class SecretaryBot(
         if called and await self._tone_command(message):
             return
         if called and await self._task_mode_command(message):
+            return
+        if called and await self._captions_default_command(message):
             return
         if called and await self._help_command(message):
             return
@@ -2338,7 +2340,30 @@ class SecretaryBot(
             gid = getattr(getattr(asker, "guild", None), "id", None)
             return self.meetings.session_in(gid, ch.id) if ch is not None else None
 
-        return captions_tools(session_of, self.meetings.set_captions)
+        def set_default(on: bool) -> dict:
+            if not self._may_configure(asker):
+                return {"error": "only admins and executives"}
+            self.team.set_captions_default(asker.guild.id, on)
+            return {"status": "on" if on else "off"}
+
+        return captions_tools(session_of, self.meetings.set_captions, set_default)
+
+    async def _captions_default_command(self, message) -> bool:
+        """ "แสดงคำบรรยายทุกประชุม" / "captions on by default" (and the hide forms): admins and
+        executives set whether meetings start with live captions."""
+        on = parse_captions_default_command(self._command_text(message))
+        if on is None or message.guild is None:
+            return False
+        gid, user = message.guild.id, message.author
+        lang = self._person_lang(gid, user.id, message.content or "")
+        if not self._may_configure(user):
+            await message.reply(t("captions_default_denied", lang), mention_author=False)
+            return True
+        await asyncio.to_thread(self.team.set_captions_default, gid, on)
+        await message.reply(
+            t(f"captions_default_{'on' if on else 'off'}", lang), mention_author=False
+        )
+        return True
 
     @staticmethod
     def room_message(guild, asker, channel, room=None):
