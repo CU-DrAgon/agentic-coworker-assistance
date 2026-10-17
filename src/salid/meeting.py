@@ -1093,9 +1093,14 @@ class MeetingManager:
 
     # ---- live captions (off unless asked; see salid.captions)
     def _remember_captions(self, s: MeetingSession, on: bool) -> None:
-        """A show/hide asked for in a meeting becomes the server default (remembered next time)."""
+        """A show/hide asked for in a meeting is remembered for this room (next time here)."""
         try:
-            self._spawn(s, asyncio.to_thread(self.bot.team.set_captions_default, s.guild_id, on))
+            self._spawn(
+                s,
+                asyncio.to_thread(
+                    self.bot.team.remember_room_captions, s.guild_id, s.voice_channel.id, on
+                ),
+            )
         except Exception:
             logger.warning("could not remember the captions setting", exc_info=True)
 
@@ -1123,7 +1128,9 @@ class MeetingManager:
         if s.captions_defaulted or s.recording != "recording":
             return False
         try:
-            if not self.bot.team.captions_default(s.guild_id):
+            room = self.bot.team.room_captions(s.guild_id, s.voice_channel.id)
+            wanted = room if room is not None else self.bot.team.captions_default(s.guild_id)
+            if not wanted:
                 return False
         except Exception:
             return False
@@ -1976,7 +1983,8 @@ class MeetingManager:
         if own in ("may_talk", "listen_only"):
             return own
         try:
-            return self.bot.team.voice_talk(s.guild_id)
+            room = self.bot.team.room_voice_talk(s.guild_id, s.voice_channel.id)
+            return room or self.bot.team.voice_talk(s.guild_id)
         except Exception:
             return "may_talk"
 
@@ -2002,10 +2010,12 @@ class MeetingManager:
             self._start_live(s)
         await self._post(s, t(f"voice_talk_{'listen' if mode == 'listen_only' else 'may'}", s.lang))
         await self._persist(s, s.starter_id)
-        # Remembered: what the chair asked for once stays the server's default until someone
-        # asks for the other mode (a person would remember "last time they said listen only").
+        # Remembered for THIS room: next time in the same room she starts in this mode; another
+        # room starts from the server default (the owner's rule).
         try:
-            await asyncio.to_thread(self.bot.team.set_voice_talk, s.guild_id, mode)
+            await asyncio.to_thread(
+                self.bot.team.remember_room_voice_talk, s.guild_id, s.voice_channel.id, mode
+            )
         except Exception:
             logger.warning("could not remember the voice mode", exc_info=True)
 

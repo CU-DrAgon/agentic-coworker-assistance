@@ -283,6 +283,11 @@ class GuildSettingsUpdate(BaseModel):
     language_mode: str = "audience"  # audience (company + personal languages) | company_only
     captions_default: str = "off"  # off | on, see salid.captions
     voice_talk: str = "may_talk"  # may_talk | listen_only, see salid.meeting
+    # Remembered per voice room: what people asked for in that room last time ("listen only",
+    # "show captions") applies again next time in the same room; a new room starts from the
+    # server defaults above. {channel_id: value}
+    room_voice_talk: dict[str, str] = {}
+    room_captions: dict[str, str] = {}
     memory_retention_days: int = Field(default_factory=default_retention_days)
 
     @field_validator("language_mode", mode="before")
@@ -688,6 +693,12 @@ class GuildStore:
     def set_voice_talk(self, guild_id: int, mode: str) -> None:
         mode = mode if mode in VOICE_TALKS else "may_talk"
         self._ref(guild_id).set({"voice_talk": mode}, merge=True)
+
+    def set_room_memory(self, guild_id: int, field: str, mapping: dict[str, str]) -> None:
+        """Replace one of the per-room maps (room_voice_talk / room_captions) as a whole."""
+        if field not in ("room_voice_talk", "room_captions"):
+            raise ValueError(field)
+        self._ref(guild_id).set({field: dict(mapping)}, merge=True)
 
     def set_tone_note(self, guild_id: int, note: str) -> None:
         """Set (or, with "", clear) the guild's wording note. Validated like the hub field."""
@@ -1114,6 +1125,33 @@ class BotGuildSettings:
     def set_voice_talk(self, guild_id: int, mode: str) -> None:
         try:
             self.store.set_voice_talk(guild_id, mode)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    # ---- remembered per voice room
+    def room_voice_talk(self, guild_id: int, channel_id: int) -> str | None:
+        """The mode people asked for in this room last time, else None (server default)."""
+        v = (self.current(guild_id).room_voice_talk or {}).get(str(channel_id))
+        return v if v in ("may_talk", "listen_only") else None
+
+    def remember_room_voice_talk(self, guild_id: int, channel_id: int, mode: str) -> None:
+        m = dict(self.current(guild_id).room_voice_talk or {})
+        m[str(channel_id)] = mode
+        try:
+            self.store.set_room_memory(guild_id, "room_voice_talk", m)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def room_captions(self, guild_id: int, channel_id: int) -> bool | None:
+        """Captions on/off asked for in this room last time, else None (server default)."""
+        v = (self.current(guild_id).room_captions or {}).get(str(channel_id))
+        return None if v not in ("on", "off") else v == "on"
+
+    def remember_room_captions(self, guild_id: int, channel_id: int, on: bool) -> None:
+        m = dict(self.current(guild_id).room_captions or {})
+        m[str(channel_id)] = "on" if on else "off"
+        try:
+            self.store.set_room_memory(guild_id, "room_captions", m)
         finally:
             self._cache.pop(guild_id, None)
 
