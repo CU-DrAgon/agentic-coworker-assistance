@@ -146,11 +146,13 @@ def test_the_hub_echoing_auto_does_not_choose_but_a_real_pick_does():
     assert store.get(1).language_chosen and store.get(1).language_setting == "en"
 
 
-def test_a_channel_language_command_on_an_unchosen_server_answers_the_question():
+def test_a_channel_language_command_on_an_unchosen_server_no_longer_answers_the_question():
     store = MemoryGuildStore()
     store.set_channel_language(1, 5, "en")
     g = store.get(1)
-    assert g.language_chosen and g.default_language == "auto" and g.channel_languages == {"5": "en"}
+    # the company language is still to be chosen (salid.audience): only the channel has an override
+    assert not g.language_chosen and g.language_setting == "auto"
+    assert g.channel_languages == {"5": "en"}
     store.set_channel_language(1, 5, None)  # removing an override changes nothing about the choice
     store.set_channel_language(2, 5, None)
     assert not store.get(2).language_chosen
@@ -382,7 +384,7 @@ def test_dm_setting_is_the_persons_language_then_the_chosen_company_language_the
     bot.team._cache.clear()
     assert bot._dm_setting(dm) == "ja"
     bot._profile_of = lambda gid, uid: SimpleNamespace(language="th")
-    assert bot._dm_setting(dm) == "th"
+    assert bot._dm_setting(dm) == "ja"  # a personal language is added next to it, never instead
 
 
 # ------------------------------------------------------------------ prompts
@@ -404,5 +406,6 @@ def test_the_english_persona_defaults_to_english_but_follows_a_request_to_switch
     from salid import qa
 
     en = qa.persona("en")
-    assert "reply in English" in en and "asks you to" in en
+    assert "reply in English" in en and "explicitly ask" in en
+    assert "Switch to Thai" not in en and "writes to you in it" not in en
     assert qa.persona("zzz") == qa.persona("en")  # unknown: English, not Thai

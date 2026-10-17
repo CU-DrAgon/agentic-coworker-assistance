@@ -60,7 +60,7 @@ class MeetingDocMixin:
 
         return MeetingDocCtx(
             asker_id=asker.id,
-            lang=lang if lang in LANGS and lang != "auto" else "en",
+            lang=lang if lang in LANGS and lang != "auto" else self._guild_lang(gid),
             org=getattr(guild, "name", "") or "",
             records=lambda: self.docs.find(MINUTES, gid),
             can_view_voice=can_view_voice,

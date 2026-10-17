@@ -367,3 +367,22 @@ async def test_the_private_note_notice_says_this_private_channel_not_a_dm(bot, g
         "dm_notice_room", "en"
     )
     assert "ทาง DM" in t("dm_notice", "th")  # a real DM keeps its wording
+
+
+async def test_a_private_channel_has_no_language_override_and_welcomes_with_the_mode(
+    bot, g, monkeypatch
+):
+    from salid import audience
+    from salid.profiles import Profile
+
+    monkeypatch.setattr(audience, "MODE_NOTICES", True)
+    bot.guilds_store.save_settings(g.id, GuildSettingsUpdate(default_language="en"), "x")
+    bot.team._cache.clear()
+    bot.profiles.save(g.id, STAFF, Profile(language="th"))
+    ch, created, err = await bot.ensure_private_channel(g, human(g, STAFF))
+    assert created and not err
+    assert bot.team.current(g.id).channel_languages == {}  # no `auto` override any more
+    welcome = ch.sent[0][0]
+    assert "Someone here prefers Thai, so I'll answer in English and then in Thai." in welcome
+    assert "talk to me in Thai" in welcome and "สวัสดีค่ะ" in welcome
+    assert welcome.index("Administrator") < welcome.index("สวัสดีค่ะ")  # English block first

@@ -15,8 +15,8 @@ from datetime import timedelta
 
 import discord
 
+from . import audience as aud
 from . import reminders as R
-from .i18n import resolve_lang
 from .mentions import match_members
 
 logger = logging.getLogger(__name__)
@@ -117,16 +117,18 @@ class ReminderMixin:
             # the bot was down: skip the missed slots, wait for the next future one (no burst)
             await asyncio.to_thread(book.save, R.advance(rec, now))
             return False
-        setting = self._profile_of(guild.id, member.id).language or self._guild_lang(guild.id)
-        lang = resolve_lang(setting, rec["message"])
+        langs = self._deliver_langs(guild.id, member.id, text=rec["message"])
         who = rec["set_by_name"] if rec["set_by"] != rec["user_id"] else ""
         after = R.advance(rec, now)
-        text = R.fire_text(
-            rec, lang, now,
-            nxt=R._from_iso(after["next_at"]) if after["active"] else None,
-            who=who,
-            mention=member.mention if rec["where"] == "here" else "",
-            late_for=due_at if rec["kind"] == "once" and late > R.LATE_GRACE else None,
+        text = aud.render(
+            lambda lang: R.fire_text(
+                rec, lang, now,
+                nxt=R._from_iso(after["next_at"]) if after["active"] else None,
+                who=who,
+                mention=member.mention if rec["where"] == "here" else "",
+                late_for=due_at if rec["kind"] == "once" and late > R.LATE_GRACE else None,
+            ),
+            langs,
         )  # fmt: skip
         ok = await self._reminder_send(guild, member, rec, text)
         if not ok:

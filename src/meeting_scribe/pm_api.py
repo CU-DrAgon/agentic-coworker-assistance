@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from meeting_scribe import hub
 from meeting_scribe.center import Ctx, get_orgs, member_ctx
 from salid import projects as P
+from salid.i18n import LANG_NAMES, lang_name
 from salid.orgs import Member, OrgStore, Workspace
 from salid.tasks import Task, TaskRepo, is_overdue
 
@@ -651,8 +652,18 @@ def delete_risk(project_id: str, rid: str, pm: Pm = Depends(pm_ctx)) -> Response
     return _delete_item(pm, project_id, "risks", rid)
 
 
+def get_pm_guilds():
+    """The Salid guild settings store (the bot reads task_confirm_mode / personal_settings from
+    it); None when it cannot be opened. Tests override this dependency."""
+    try:
+        return hub.get_guild_store()
+    except Exception:
+        logger.warning("guild settings store unavailable for the PM settings", exc_info=True)
+        return None
+
+
 RISK_PROMPT = """You are a careful project manager. Propose up to {n} concrete risks for this project.
-Skip anything already listed under "Known risks". Answer in the language of the project text.
+Skip anything already listed under "Known risks".{language_rule}
 
 Project: {name} ({kind}, {department}, priority {priority}, status {status})
 Goal: {goal}
@@ -666,8 +677,16 @@ Return JSON {{"risks": [{{"title": short, "severity": "high"|"medium"|"low", "no
 on why and what to do}}]}}. Only risks that follow from the facts above; no filler."""
 
 
-def _risk_prompt(p: P.Project, stats: dict) -> str:
+def _risk_prompt(p: P.Project, stats: dict, language: str = "") -> str:
+    """`language`: the company language (salid.audience): documents stay in one language, so the
+    risks are written in it, whatever language the project text is in."""
+    rule = (
+        f" Write the risks in {lang_name(language)}."
+        if language in LANG_NAMES
+        else " Answer in the language of the project text."
+    )
     return RISK_PROMPT.format(
+        language_rule=rule,
         n=P.MAX_PROPOSED_RISKS,
         name=p.name,
         kind=p.kind,
@@ -717,10 +736,13 @@ async def assess_risks(
     project_id: str,
     pm: Pm = Depends(pm_ctx),
     assess: Callable[[str], str] = Depends(get_assessor),
+    guilds=Depends(get_pm_guilds),
 ) -> dict:
     p, ws = await asyncio.to_thread(locate_contributor, pm, project_id)
     tasks = await asyncio.to_thread(pm.tasks.list, ws.memory_id, status=None, project_id=p.id)
-    prompt = _risk_prompt(p, stats_of(pm, p, tasks))
+    prompt = _risk_prompt(
+        p, stats_of(pm, p, tasks), await asyncio.to_thread(company_language, pm, guilds)
+    )
     try:
         text = await asyncio.wait_for(asyncio.to_thread(assess, prompt), ASSESS_TIMEOUT_S)
         return {"proposed": parse_proposed(text, pm.when)}
@@ -898,22 +920,25 @@ def company_insights(pm: Pm = Depends(pm_ctx)) -> dict:
 
 
 # ------------------------------------------------------------------ settings
-def get_pm_guilds():
-    """The Salid guild settings store (the bot reads task_confirm_mode / personal_settings from
-    it); None when it cannot be opened. Tests override this dependency."""
-    try:
-        return hub.get_guild_store()
-    except Exception:
-        logger.warning("guild settings store unavailable for the PM settings", exc_info=True)
-        return None
-
-
 def discord_guild_ids(pm: Pm) -> list[int]:
     out = []
     for ws in pm.wss:
         if ws.platform == "discord" and str(ws.external_id).isdigit():
             out.append(int(ws.external_id))
     return out
+
+
+def company_language(pm: Pm, guilds=None) -> str:
+    """The company language (the linked Discord server's chosen main language), "" when it is not
+    known or not chosen yet. Documents, reports and this page stay in it."""
+    for gid in discord_guild_ids(pm)[:1]:
+        try:
+            g = guilds.find(gid) if guilds is not None else None
+        except Exception:
+            g = None
+        if g is not None and g.language_setting in LANG_NAMES:
+            return g.language_setting
+    return ""
 
 
 def settings_view(pm: Pm, guilds=None) -> dict:
@@ -937,6 +962,7 @@ def settings_view(pm: Pm, guilds=None) -> dict:
         ],
         "templates": P.templates_view(),
         "defaults": defaults,
+        "language": company_language(pm, guilds),  # the page's default UI language
         "company": {"name": org.name, "logo_url": org.logo_url},
     }
 

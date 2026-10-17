@@ -480,6 +480,8 @@ function route() {
 }
 async function loadOrgData() {
   settings = await api(PM("/settings")).catch((e) => { if (e instanceof AuthError) throw e; return null; });
+  /* the company language is the default UI language (a language picked on this page wins) */
+  try { if (!localStorage.getItem("pm_lang") && settings && (settings.language === "th" || settings.language === "en") && settings.language !== lang) { lang = settings.language; if (typeof applyStatic === "function") applyStatic(); } } catch { /* ignore */ }
   const em = (user.email || "").toLowerCase();
   const m = members().find((x) => (x.email || "").toLowerCase() === em);
   myPerson = m ? toPerson(m) : { email: user.email, discord_user_id: null, name: (user.email || "").split("@")[0] };

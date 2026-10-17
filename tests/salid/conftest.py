@@ -193,3 +193,12 @@ class ThaiGuildStore(MemoryGuildStore):
         if g.language_chosen:
             return g
         return g.model_copy(update={"default_language": "th", "language_chosen": True})
+
+
+@pytest.fixture(autouse=True)
+def _no_mode_notices(monkeypatch):
+    """The answering-mode statements (salid.audience) are tested in test_audience.py; the other
+    suites compare exact reply texts, so they run with the statements off."""
+    from salid import audience
+
+    monkeypatch.setattr(audience, "MODE_NOTICES", False)

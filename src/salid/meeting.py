@@ -38,6 +38,7 @@ from pydantic import BaseModel
 from meeting_scribe.audio import to_flac
 
 from . import attendance as att
+from . import audience as aud
 from . import meeting_doc as md
 from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
@@ -655,6 +656,13 @@ class MeetingSession:
     state_at: float = -1e9  # monotonic time of that post
     captions: CaptionState = field(default_factory=CaptionState)  # live subtitles, off by default
     captions_busy: bool = False
+    # Answer languages (salid.audience): company language first, then the personal languages of
+    # the people in the room now. `language_mode` "" follows the org policy; the chair can force
+    # "company_only" / "audience" for this meeting only.
+    starter_id: int = 0  # whoever invited Salid: the chair (with any executive in the room)
+    language_mode: str = ""
+    langs: list[str] = field(default_factory=list)
+    mode_spoken: bool = False  # the answering mode was said aloud once
 
     @property
     def key(self) -> tuple[int, int]:
@@ -821,6 +829,46 @@ class MeetingManager:
                     "could not post to channel %s (%s)", getattr(ch, "id", "?"), type(e).__name__
                 )
         return None
+
+    # ---- answer languages of the room (salid.audience)
+    def _room_langs(self, s: MeetingSession) -> list[str]:
+        """Company language + the personal languages of the people in the voice channel now. An
+        unchosen server keeps the session's own language (the words people use)."""
+        if s.language == "auto":
+            return [s.lang]
+        bot = self.bot
+        try:
+            mode = s.language_mode or bot._audience_mode(s.guild_id)
+            people = [bot._person_extra(s.guild_id, m.id) for m in self._humans(s.voice_channel)]
+        except Exception:
+            return [s.lang]
+        return aud.langs_for(s.language, *people, mode=mode)
+
+    def refresh_langs(self, s: MeetingSession) -> list[str]:
+        """Recompute the room's languages; the ones just added (people joining), [] otherwise."""
+        new = self._room_langs(s)
+        grown = aud.added(s.langs, new) if s.langs else []
+        changed = new != s.langs
+        s.langs = new
+        live = getattr(s, "live", None)
+        if changed and live is not None and hasattr(live, "note_langs") and not s.ending:
+            coro = live.note_langs()
+            if asyncio.iscoroutine(coro):
+                self._spawn(s, coro)
+        return grown
+
+    def set_language_mode(self, s: MeetingSession, mode: str) -> list[str]:
+        """The chair's per-meeting switch (checked by the caller); logged as a state line."""
+        s.language_mode = aud.valid_mode(mode)
+        self.refresh_langs(s)
+        self._spawn(s, self._post(s, aud.mode_line(s.langs, company_only=len(s.langs) == 1)))
+        return s.langs
+
+    async def _langs_changed(self, s: MeetingSession) -> None:
+        """Somebody joined: when a language was added, one text line (not spoken)."""
+        grown = self.refresh_langs(s)
+        if grown and len(s.langs) > 1:
+            await self._post(s, aud.adding_line(grown))
 
     async def _notice(self, session: MeetingSession, text: str):
         """A status line for the meeting's text chat. Meetings stay voice: nothing is posted unless
@@ -1232,6 +1280,8 @@ class MeetingManager:
                 meeting_id=meeting_id, started_at=self.bot.s.now().astimezone(UTC),
                 starter=str(getattr(member, "display_name", "") or ""), body=body, origin=origin,
             )  # fmt: skip
+            session.starter_id = int(getattr(member, "id", 0) or 0)
+            session.langs = self._room_langs(session)
             session.recording = "unknown" if origin == "auto" else "recording"
             session.introduced = origin == "command"
             self.sessions[key] = session
@@ -1257,8 +1307,16 @@ class MeetingManager:
         await self._persist(session, getattr(member, "id", 0))
         for m in self._humans(channel):
             session.attendee_ids.add(m.id)
+        mode_text = aud.mode_line(
+            session.langs,
+            company_only=aud.valid_mode(session.language_mode or self.bot._audience_mode(guild.id))
+            == "company_only",
+        )
         await self._notice(session, t(announce, session.lang))
-        await self._post_state(session, t("voice_state_join", session.lang))
+        await self._post_state(
+            session,
+            t("voice_state_join", session.lang) + ("\n" + mode_text if aud.MODE_NOTICES else ""),
+        )
         await self._attend_start(session, self._humans(channel))
         logger.info(
             "meeting started in guild %s channel %s on voice body %d (%s)",
@@ -1306,11 +1364,13 @@ class MeetingManager:
             if s is not None:  # a new arrival may greet Salid without the name
                 s.attendee_ids.add(member.id)
                 self._attend_note(s, member, "joined")
+                await self._langs_changed(s)  # after the join log: "adding Thai from now on"
         gone = getattr(before, "channel", None)
         if gone is not None and gone != entered:  # left or moved out (mute / deafen: no change)
             s = self.sessions.get((gone.guild.id, gone.id))
             if s is not None:
                 self._attend_note(s, member, "left")
+                self.refresh_langs(s)
         left = getattr(before, "channel", None)
         if left is not None and not self._humans(left):
             self._cooldown.pop((left.guild.id, left.id), None)  # a new gathering: a new chance
@@ -1497,6 +1557,7 @@ class MeetingManager:
             "meeting_id": s.meeting_id,
             "starter": s.starter,
             "starter_id": starter_id,
+            "language_mode": s.language_mode,
             "empty_grace": s.empty_grace,
             "first_grace": s.first_grace,
             "minutes_channel_id": s.minutes_channel_id,
@@ -1617,6 +1678,9 @@ class MeetingManager:
                 datetime.fromisoformat(rec["transcript_from"]) if rec.get("transcript_from") else None
             ),
         )  # fmt: skip
+        session.starter_id = int(rec.get("starter_id") or 0)
+        session.language_mode = rec.get("language_mode") or ""
+        session.langs = self._room_langs(session)
         for m in humans:
             session.attendee_ids.add(m.id)
         self._attend_seed(session, humans)  # after a restart: counted from now, nothing posted
@@ -2140,6 +2204,9 @@ class MeetingManager:
                 user_id=member.id,
                 history=history,
                 language=s.language,
+                languages=getattr(s, "langs", None)
+                if aud.multi(getattr(s, "langs", None) or [])
+                else None,
                 memory=memory,
                 spoken=True,
                 **bot._web_kw(s.guild_id),
@@ -2274,13 +2341,32 @@ class MeetingManager:
         s.speech_pending = True
         try:
             # The cheap model: ~1-2 s versus ~8 s for the thinking model, and it is plenty here.
-            spoken = await asyncio.to_thread(
-                spoken_text, bot.llm, bot.s.gate_model, question, text, s.lang
-            )
-            if not spoken:
+            # A bilingual answer (company language, then the personal one) is spoken block by
+            # block, each in its own language's voice; the mode line opens the first reply once.
+            langs = s.langs if aud.multi(s.langs) else [s.lang]
+            pieces = aud.split_blocks(text, langs) if len(langs) > 1 else [(s.lang, text)]
+            particle = str(getattr(bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
+            spoken_parts: list[str] = []
+            pcm = b""
+            if aud.MODE_NOTICES and not s.mode_spoken and s.langs:
+                s.mode_spoken = True
+                company_only = len(s.langs) == 1 and s.language_mode == "company_only"
+                for r in langs:
+                    line = aud.mode_line(s.langs, [r], company_only=company_only)
+                    pcm += await asyncio.to_thread(say, bot.s, bot.llm, line, r)
+                    spoken_parts.append(line)
+            for lang, block in pieces:
+                part = await asyncio.to_thread(
+                    spoken_text, bot.llm, bot.s.gate_model, question, block, lang
+                )
+                if not part:
+                    continue
+                part = with_particle(part, particle)
+                pcm += await asyncio.to_thread(say, bot.s, bot.llm, part, lang)
+                spoken_parts.append(part)
+            if not spoken_parts or not pcm:
                 return
-            spoken = with_particle(spoken, str(getattr(bot.s, "voice_particle", "ค่ะ") or "ค่ะ"))
-            pcm = await asyncio.to_thread(say, bot.s, bot.llm, spoken, s.lang)
+            spoken = "\n".join(spoken_parts)
             s.speech_ready = True
             if not bot.s.voice_reply or s.ending:
                 return

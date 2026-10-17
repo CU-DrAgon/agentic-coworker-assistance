@@ -17,11 +17,13 @@ from types import SimpleNamespace
 import discord
 from discord import app_commands
 
+from . import audience as aud
 from . import data_studio, gate
 from . import dm as dm_module
 from .ack import Ack, ack_flavor, ack_text
 from .approvals_bot import ApprovalButton, ApprovalMixin
 from .archive import make_archive
+from .audience_bot import AudienceMixin
 from .bizfin_bot import BizfinMixin
 from .briefing_bot import BriefingMixin
 from .briefings import DocInfo, split_names
@@ -366,6 +368,7 @@ class SecretaryBot(
     CooMixin,
     BriefingMixin,
     HintsMixin,
+    AudienceMixin,
     ProfileMixin,
     DeliverMixin,
     PromoMixin,
@@ -889,6 +892,8 @@ class SecretaryBot(
             return
         if called and await self._cancel_task_command(message):
             return
+        if called and await self._audience_command(message):  # personal / company-only forms
+            return
         if called and await self._language_command(message):
             return
         if called and await self._tone_command(message):
@@ -957,8 +962,7 @@ class SecretaryBot(
         return self.team.channel_language(guild.id, getattr(channel, "id", 0))
 
     def _dm_setting(self, target) -> str:
-        """A DM's language setting: the person's own language if set, else the main language of the
-        company the DM is about (the only shared server, or the one they picked) when it has
+        """A DM's language setting: the main language of the company the DM is about (the only shared server, or the one they picked) when it has
         chosen one. Otherwise, or when the shared servers disagree: auto (follow their words,
         English when there are none)."""
         user = getattr(target, "author", None) or getattr(target, "user", None)
@@ -974,9 +978,8 @@ class SecretaryBot(
             langs = set()
             for g in shared:
                 # the company's chosen language; `auto` (follow the words they write) until chosen
-                langs.add(
-                    self._profile_of(g.id, uid).language or self.team.current(g.id).language_setting
-                )
+                # the company's language decides (personal languages are added to the audience list)
+                langs.add(self.team.current(g.id).language_setting)
         except Exception:  # a store hiccup must never stop an answer
             return "auto"
         return langs.pop() if len(langs) == 1 else "auto"
@@ -1141,15 +1144,26 @@ class SecretaryBot(
             return True
         try:
             await asyncio.to_thread(
-                self.team.set_channel_language, message.guild.id, message.channel.id, cmd
+                self.team.set_channel_language,
+                message.guild.id,
+                message.channel.id,
+                self._channel_language_value(message.guild.id, cmd),
             )
         except Exception:
             logger.exception("could not save channel language")
             await message.reply(t("lang_failed", new), mention_author=False)
             return True
+        if cmd == "auto" and self.team.language_chosen(message.guild.id):
+            cmd = self.team.channel_language(message.guild.id, message.channel.id)
+            new = resolve_lang(cmd)  # `auto` = the company language once it is chosen
         label = t(f"lang_label_{cmd}", new)
         await message.reply(t("lang_set", new, label=label), mention_author=False)
         return True
+
+    def _channel_language_value(self, gid: int, cmd: str) -> str | None:
+        """What a channel override stores: `auto` is no longer an override once the company has
+        chosen its language (the channel then simply follows the company language)."""
+        return None if cmd == "auto" and self.team.language_chosen(gid) else cmd
 
     async def _apply_server_language(self, guild, language: str, apply_all: bool) -> None:
         """Save the guild default (and clear or restore per-channel overrides), then rename the
@@ -1763,9 +1777,12 @@ class SecretaryBot(
             for name, data in list(getattr(ans, "attachments", ()))[:10]
         ]
         everyone = wants_everyone(q, self._may_configure(member))
-        sent, first, sent_ids = await self._deliver(
-            message, guild, ack, ans.text, uploads, everyone
-        )
+        text = ans.text
+        if not interjection and message.guild is not None:
+            text = self._with_mode_notice(
+                message.channel.id, gid, text, self.langs_for(gid, message.channel.id, member.id)
+            )
+        sent, first, sent_ids = await self._deliver(message, guild, ack, text, uploads, everyone)
         if sent_ids:
             self._answers.add(message.channel.id, message.author.id, sent_ids)
         lines = [
@@ -2263,6 +2280,7 @@ class SecretaryBot(
                 else self._project_tools(message, guild, asker, is_exec, lang, files)
             ),
             *([] if interjection else self._tone_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._audience_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
@@ -2285,7 +2303,14 @@ class SecretaryBot(
             )
         company = self._company_block(message, guild, asker, is_exec, question, interjection, lang)
         tone, tone_note = self._tone_for(message, guild, asker, profile)
+        room = getattr(message, "room", None)  # a voice room: everyone in it is the audience
+        languages = self.langs_for(
+            guild.id,
+            message.channel.id if message.guild is not None else None,
+            *(sorted(room) if room else [asker.id]),
+        )
         return {
+            **({"languages": languages} if aud.multi(languages) else {}),
             "language": setting,
             "tone": tone,
             "tone_note": tone_note,
@@ -2995,11 +3020,18 @@ class SecretaryBot(
             await send(t("lang_denied", lang), ephemeral=True)
             return
         try:
-            await asyncio.to_thread(self.team.set_channel_language, guild.id, channel.id, language)
+            await asyncio.to_thread(
+                self.team.set_channel_language,
+                guild.id,
+                channel.id,
+                self._channel_language_value(guild.id, language),
+            )
         except Exception:
             logger.exception("could not save channel language")
             await send(t("lang_failed", lang), ephemeral=True)
             return
+        if language == "auto" and self.team.language_chosen(guild.id):
+            language = self.team.channel_language(guild.id, channel.id)  # the company language
         new = lang if language == "auto" else language  # confirm in the language just chosen
         await send(t("lang_set", new, label=t(f"lang_label_{language}", new)))
 

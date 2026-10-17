@@ -936,15 +936,15 @@ async def test_meeting_follows_the_text_channels_language(env, monkeypatch):
     assert env.chan.sent[-1].startswith("📝 Meeting summary (someone told Salid to leave)")
 
 
-async def test_auto_meeting_language_uses_the_starters_language_for_fixed_text(env):
+async def test_an_auto_override_is_ignored_once_the_company_language_is_chosen(env):
     env.bot.guilds_store.set_channel_language(1000, env.chan.id, "auto")
     m = make_member(env.guild, 10, "Ann", env.chan)
     await env.mgr.join(m, lang="en")
     s = env.mgr.sessions[(1000, 77)]
-    assert s.language == "auto" and s.lang == "en"
-    assert env.chan.sent == [t("meet_announce", "en")]
+    assert s.language == "th" and s.lang == "th"  # the company language, not the starter's
+    assert env.chan.sent == [t("meet_announce", "th")]
     await env.mgr.end((1000, 77), "empty")
-    assert env.chan.sent[-1] == t("meet_no_transcript", "en")
+    assert env.chan.sent[-1] == t("meet_no_transcript", "th")
 
 
 def test_summary_language_auto_follows_the_transcript(env):

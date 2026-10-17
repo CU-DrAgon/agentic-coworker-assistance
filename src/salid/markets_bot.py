@@ -11,9 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from . import audience as aud
 from . import markets as mk
 from .dm import send_dm
-from .i18n import resolve_lang
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +75,10 @@ class MarketsMixin:
             member = guild.get_member(a.user_id) if guild is not None else None
             if member is None:
                 continue
-            lang = self._profile_of(a.guild_id, a.user_id).language or self._guild_lang(a.guild_id)
-            res = await send_dm(member, mk.format_alert(a, resolve_lang(lang)))
+            text = aud.render(
+                lambda lg, a=a: mk.format_alert(a, lg), self._deliver_langs(a.guild_id, a.user_id)
+            )
+            res = await send_dm(member, text)
             sent += int(res.ok)
         return sent
 
@@ -86,10 +88,9 @@ class MarketsMixin:
         if not (prefs.markets and self._markets_on(guild.id)):
             return ""
         try:
-            lang = self._profile_of(guild.id, member.id).language or self._guild_lang(guild.id)
-            return mk.market_line(
-                self.market_data, prefs.market_items, resolve_lang(lang), now.date()
-            )
+            # a line of the brief: the brief's own text carries the personal language
+            lang = self._person_lang(guild.id, member.id)
+            return mk.market_line(self.market_data, prefs.market_items, lang, now.date())
         except Exception:
             logger.warning("market line failed", exc_info=True)
             return ""

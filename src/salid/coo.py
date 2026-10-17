@@ -24,6 +24,7 @@ from types import SimpleNamespace
 import discord
 from discord import app_commands
 
+from . import audience as aud
 from . import reports
 from .coo_store import STATE, make_doc_store
 from .coo_tools import CooTools, build_coo_tools
@@ -386,9 +387,9 @@ class CooMixin:
         view = discord.ui.View(timeout=None)
         view.add_item(DisclosureButton("ok", doc.id, t("disc_btn_ok", doc.lang)))
         view.add_item(DisclosureButton("no", doc.id, t("disc_btn_no", doc.lang)))
-        text = t(
+        text = aud.tt(
             "disc_ask",
-            doc.lang,
+            self._deliver_langs(guild.id, owner.id),
             asker=asker_name or str(doc.grantee_id),
             topic=doc.topic,
             question=doc.question or doc.topic,
@@ -430,9 +431,9 @@ class CooMixin:
                 await self.deliver_to_person(
                     guild,
                     asker,
-                    t(
+                    aud.tt(
                         "disc_asker_declined",
-                        self._person_lang(doc.guild_id, doc.grantee_id, doc.question),
+                        self._deliver_langs(doc.guild_id, doc.grantee_id, text=doc.question),
                         topic=doc.topic,
                     ),
                 )
@@ -443,7 +444,8 @@ class CooMixin:
         """Answer the asker by DM with exactly the approved records unlocked."""
         from .qa import ask  # late: qa imports a lot
 
-        lang = self._person_lang(guild.id, asker.id, doc.question or doc.topic)
+        langs = self._deliver_langs(guild.id, asker.id, text=doc.question or doc.topic)
+        lang = langs[0]
         await asyncio.to_thread(self.team.current, guild.id)
         memory = await self._memory_tools(SimpleNamespace(guild=None, channel=None), guild, asker)
         q = (
@@ -462,11 +464,12 @@ class CooMixin:
                 user_id=asker.id,
                 language=lang,
                 memory=memory,
+                **({"languages": langs} if aud.multi(langs) else {}),
             )
-            text = t("disc_asker_approved", lang, topic=doc.topic) + ans.text
+            text = aud.tt("disc_asker_approved", langs, topic=doc.topic) + ans.text
         except Exception:
             logger.warning("disclosure answer failed", exc_info=True)
-            text = t("disc_asker_failed", lang)
+            text = aud.tt("disc_asker_failed", langs)
         for i in range(0, len(text), 1900):
             await self.deliver_to_person(guild, asker, text[i : i + 1900])
 
@@ -527,7 +530,12 @@ class CooMixin:
                 # in the member's private channel in a server it is not a DM: say so
                 notice = "dm_notice" if message.guild is None else "dm_notice_room"
                 await message.channel.send(
-                    t(notice, self._person_lang(guild.id, message.author.id, message.content or ""))
+                    aud.tt(
+                        notice,
+                        self._deliver_langs(
+                            guild.id, message.author.id, text=message.content or ""
+                        ),
+                    )
                 )
 
     def _claim(self, guild_id: int, key: str) -> bool:
@@ -585,15 +593,18 @@ class CooMixin:
             member = guild.get_member(uid)
             if member is None or getattr(member, "bot", False):
                 continue
-            lang = self._person_lang(guild.id, uid)
-            lines = [t("fu_header", lang, name=getattr(member, "display_name", ""))]
-            lines += [
-                t("fu_line", lang, id=x.id, title=x.title, due=x.due)
-                + (f" {mark}" if (mark := pending_marker(x, lang)) else "")
-                for x in items[:10]
-            ]
-            lines.append(t("fu_footer", lang, id=items[0].id))
-            text = with_legend(with_hint("\n".join(lines), "task_id", lang=lang), lang)
+
+            def render(lang: str, member=member, items=items) -> str:
+                lines = [t("fu_header", lang, name=getattr(member, "display_name", ""))]
+                lines += [
+                    t("fu_line", lang, id=x.id, title=x.title, due=x.due)
+                    + (f" {mark}" if (mark := pending_marker(x, lang)) else "")
+                    for x in items[:10]
+                ]
+                lines.append(t("fu_footer", lang, id=items[0].id))
+                return with_legend(with_hint("\n".join(lines), "task_id", lang=lang), lang)
+
+            text = aud.render(render, self._deliver_langs(guild.id, uid))
             if (await self.deliver_to_person(guild, member, text)).ok:
                 n += 1
         logger.info("follow-ups: guild=%s dms=%d", guild.id, n)

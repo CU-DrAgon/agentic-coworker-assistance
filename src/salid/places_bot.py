@@ -16,7 +16,8 @@ from functools import partial
 
 import discord
 
-from .i18n import resolve_lang, t
+from . import audience as aud
+from .i18n import t
 from .naming import mentions_name
 from .places import (
     PlaceRepo,
@@ -182,16 +183,18 @@ class PlacesMixin:
                 message.guild.id,
             )
             gid = message.guild.id
-            own = self._profile_of(gid, message.author.id).language
-            lang = resolve_lang(own or self.team.current(gid).language_setting, text)
+            langs = self._deliver_langs(gid, message.author.id, text=text)
             for c in res.offers:  # asked once; nothing is stored until the person says yes
                 with contextlib.suppress(discord.HTTPException):
                     await message.author.send(
-                        t(
-                            "place_offer_dm",
-                            lang,
-                            name=c.name or ("Home" if lang == "en" else "บ้าน"),
-                            address=c.address,
+                        aud.render(
+                            lambda lang, c=c: t(
+                                "place_offer_dm",
+                                lang,
+                                name=c.name or ("Home" if lang == "en" else "บ้าน"),
+                                address=c.address,
+                            ),
+                            langs,
                         )
                     )
         except Exception:

@@ -111,8 +111,9 @@ def _dm(fake):
 def test_dm_language_is_the_company_default_unless_the_person_set_one():
     assert _dm(_dm_fake([1], {1: "en"})) == "en"
     assert _dm(_dm_fake([1], {1: "th"})) == "th"  # a company that chose Thai
-    assert _dm(_dm_fake([1], {1: "en", ("p", 1): "th"})) == "th"  # personal wins
-    assert _dm(_dm_fake([1], {1: "th", ("p", 1): "en"})) == "en"
+    # a personal language never replaces the company's: it is added next to it (salid.audience)
+    assert _dm(_dm_fake([1], {1: "en", ("p", 1): "th"})) == "en"
+    assert _dm(_dm_fake([1], {1: "th", ("p", 1): "en"})) == "th"
     assert _dm(_dm_fake([1], {1: "auto"})) == "auto"
     assert _dm(_dm_fake([], {})) == "auto"
 

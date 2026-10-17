@@ -23,7 +23,7 @@ from google.adk.runners import InMemoryRunner
 from google.adk.tools import FunctionTool
 from google.genai import types
 
-from . import data_studio
+from . import audience, data_studio
 from .bizfin_tools import BIZFIN_PROMPT
 from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
@@ -1056,8 +1056,9 @@ PERSONA_IDENTITY = {
         "(like ka / na ka) or Thai-style honorific endings. English is this room's language: reply in "
         "English, even if the memory, documents and tool results are in Thai (translate or "
         "paraphrase anything you quote; keep only proper names such as people, vendors and "
-        "product names as they are). Switch to Thai, or another language, only when the person "
-        "writes to you in it or asks you to; then use natural Thai with ค่ะ/คะ.\n"
+        "product names as they are). Never switch language because the person writes to you in "
+        "another language: the settings decide. Only when they explicitly ask you to answer in "
+        "Thai (or another language) do that, using natural Thai with ค่ะ/คะ.\n"
     ),
     "auto": (
         "คุณคือ “สลิด” (Salid) เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามงานและรายงาน รักษาความลับตามลำดับชั้น / executive assistant and coordinator) "
@@ -1559,6 +1560,7 @@ def volatile_prompt(
     profile: str = "",
     company: str = "",  # salid.company_brain.company_block
     people: list[str] | None = None,
+    languages: list[str] | None = None,  # salid.audience: the languages of the people addressed
 ) -> str:
     """The per-request tail of the system prompt: date and time, the asker's scope, the
     interjection rule, the file-input rules, the asker's own preferences, the taggable people
@@ -1588,13 +1590,13 @@ def volatile_prompt(
         p += (
             "\nLanguage: this server's main language is English. Write your whole reply in English, "
             "including quoted memory, documents and titles (translate Thai content instead of "
-            "copying it), unless the person writes to you in Thai or asks you to switch to Thai "
-            "(or another language): then answer in that language."
+            "copying it). Do NOT switch language because the person writes in Thai or another "
+            'language; only an explicit request ("answer in Thai") changes it.'
         )
     elif language == "th":
         p += (
             "\nภาษา: ภาษาหลักของเซิร์ฟเวอร์นี้คือภาษาไทย ตอบเป็นภาษาไทย (แปลเนื้อหาภาษาอื่นที่ยกมา) "
-            "เว้นแต่ผู้ใช้พิมพ์มาเป็นภาษาอังกฤษ (หรือภาษาอื่น) หรือขอให้เปลี่ยนภาษา ก็ตอบเป็นภาษานั้น"
+            "ห้ามเปลี่ยนภาษาเองเพราะผู้ใช้พิมพ์มาเป็นภาษาอังกฤษหรือภาษาอื่น เปลี่ยนได้เฉพาะเมื่อผู้ใช้ขอชัดเจน"
         )
     elif language == "auto":
         p += (
@@ -1602,6 +1604,8 @@ def volatile_prompt(
             "English; another language if they write in it or ask for it). English when you "
             "cannot tell."
         )
+    if languages:
+        p += audience.second_language_rule(languages, "th" if language == "th" else "en")
     return apply_particle(p, "ค่ะ" if language in EXTRA else particle_of(settings))
 
 
@@ -1637,6 +1641,7 @@ def system_prompt(
     deck: bool = False,
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
+    languages: list[str] | None = None,
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
     `tone`: a salid.tone preset (how she talks); `tone_note`: the owner's wording note.
@@ -1678,6 +1683,7 @@ def system_prompt(
         profile=profile,
         company=company,
         people=people,
+        languages=languages,
     )
 
 
@@ -2130,6 +2136,7 @@ def build_agent(
     deck: bool = False,
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
+    languages: list[str] | None = None,
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -2165,6 +2172,7 @@ def build_agent(
         deck=deck,
         tone=tone,
         tone_note=tone_note,
+        languages=languages,
     )
     model_calls = 0
 
@@ -2278,6 +2286,8 @@ async def ask_async(
     on_tool_call=None,  # callable(name), for every tool the model calls (from the agent's thread)
     tone: str = DEFAULT_TONE,  # salid.tone preset: how she talks (identity never changes)
     tone_note: str = "",  # the owner's wording note, appended to the tone
+    languages: list[str]
+    | None = None,  # salid.audience list (company first); None = just `language`
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -2372,6 +2382,7 @@ async def ask_async(
         deck=sink is not None,
         tone=tone,
         tone_note=tone_note,
+        languages=languages,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -2473,6 +2484,8 @@ def ask(
     on_tool_call=None,  # callable(name), for every tool the model calls (from the agent's thread)
     tone: str = DEFAULT_TONE,  # salid.tone preset: how she talks (identity never changes)
     tone_note: str = "",  # the owner's wording note, appended to the tone
+    languages: list[str]
+    | None = None,  # salid.audience list (company first); None = just `language`
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -2504,5 +2517,6 @@ def ask(
             on_tool_call=on_tool_call,
             tone=tone,
             tone_note=tone_note,
+            languages=languages,
         )
     )

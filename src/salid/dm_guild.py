@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 import discord
 
 from .coo_store import DocStore
-from .i18n import locale_lang, t
+from .i18n import locale_lang, resolve_lang, t
 
 logger = logging.getLogger(__name__)
 
@@ -286,8 +286,17 @@ class DMGuildMixin:
             self._dm_footers[message.id] = company_footer(guild.name, self._lang(message))
 
     # ------------------------------------------------------------- button and slash command
+    def _pick_lang(self, interaction, guild_id: int) -> str:
+        """The company's language once chosen; before that the Discord locale (as before)."""
+        setting = self.team.current(guild_id).language_setting
+        return (
+            resolve_lang(setting)
+            if setting != "auto"
+            else locale_lang(getattr(interaction, "locale", ""))
+        )
+
     async def handle_company_pick(self, interaction, guild_id: int, user_id: int) -> None:
-        lang = locale_lang(getattr(interaction, "locale", ""))
+        lang = self._pick_lang(interaction, guild_id)
         if interaction.user.id != user_id:
             await interaction.response.send_message(t("dmg_not_yours", lang), ephemeral=True)
             return
@@ -307,7 +316,7 @@ class DMGuildMixin:
                 logger.exception("could not answer the held DM")
 
     async def handle_company_switch(self, interaction, act: str, guild_id: int, user_id: int):
-        lang = locale_lang(getattr(interaction, "locale", ""))
+        lang = self._pick_lang(interaction, guild_id)
         if interaction.user.id != user_id:
             await interaction.response.send_message(t("dmg_not_yours", lang), ephemeral=True)
             return
