@@ -13,21 +13,31 @@ Part 2, the pictures: `scene_stills` makes one 1080x1920 still per scene (AI sce
 scenes through `imagegen.generate_images`, at most 3 at a time, one retry unless blocked, then
 a textless accent `fallback_card`; `photo:N` scenes from the shop photo framed by `frame_photo`,
 or an AI still when that photo is missing or unreadable). `motion_clip` turns a still into a
-slow zoom clip with ffmpeg, and
-`caption_png` draws the scene caption and the "สร้างด้วย AI" label on a transparent overlay,
-inside the Reels / TikTok safe area `SAFE`.
+slow zoom clip with ffmpeg, and `caption_png` draws the scene caption and the "สร้างด้วย AI"
+label on a transparent overlay, inside the Reels / TikTok safe area `SAFE`.
+
+Part 3, sound and the final cut: `narration_wav` lays each scene's spoken line at the scene's
+start, cut to the scene, into one 48 kHz WAV as long as the ad. `assemble` crossfades the
+clips, overlays the captions per scene and one AI label for the whole video, mixes narration
+and optional music, and encodes an H.264 / AAC MP4 under `budget_mib` (from the guild's upload
+limit), re-encoding smaller when the first try is over it.
 
 Never logs the brief, prompts, captions or narration.
 """
 
 from __future__ import annotations
 
+import array
 import io
 import logging
 import re
 import subprocess
+import sys
+import tempfile
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import NamedTuple
 
 from google.genai import types
 from PIL import Image, ImageColor, ImageEnhance, ImageFilter, ImageOps
@@ -462,13 +472,17 @@ FFMPEG_TIMEOUT_S = 120
 ZOOM = 0.10  # a scene zooms between 1.0 and 1.10
 
 
-def _ffmpeg(args: list[str]) -> None:
-    """Run ffmpeg with `args` (no shell). Raises RuntimeError with ffmpeg's last stderr line."""
+def _ffmpeg(args: list[str], *, data: bytes | None = None, timeout: int = FFMPEG_TIMEOUT_S) -> None:
+    """Run ffmpeg with `args` (no shell), feeding `data` to its stdin when given. Raises
+    RuntimeError with ffmpeg's last stderr line."""
     cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *args]
+    kw: dict = {"check": False, "capture_output": True, "timeout": timeout}
+    if data is not None:
+        kw["input"] = data
     try:
-        proc = subprocess.run(cmd, check=False, capture_output=True, timeout=FFMPEG_TIMEOUT_S)
+        proc = subprocess.run(cmd, **kw)
     except subprocess.TimeoutExpired as e:
-        raise RuntimeError(f"ffmpeg timed out after {FFMPEG_TIMEOUT_S} s") from e
+        raise RuntimeError(f"ffmpeg timed out after {timeout} s") from e
     except OSError as e:
         raise RuntimeError(f"ffmpeg could not start ({type(e).__name__})") from e
     if proc.returncode != 0:
@@ -518,3 +532,283 @@ def motion_clip(still: Path, seconds: float, index: int, out: Path) -> None:
             str(out),
         ]
     )
+
+
+# ------------------------------------------------------------------ narration
+VOICE_RATE = 24_000  # speech.say returns 24 kHz mono s16le PCM
+AUDIO_RATE = 48_000
+CUT_FADE_S = 0.05  # a narration line cut at its scene end fades out over this instead of clicking
+
+
+def _cut(pcm: bytes, room: int) -> bytes:
+    """`pcm` (s16le samples) cut to at most `room` samples; a line that was cut fades out over
+    its last CUT_FADE_S."""
+    n = len(pcm) // 2
+    if n <= room:
+        return pcm[: 2 * n]
+    samples = array.array("h", pcm[: 2 * room])
+    if sys.byteorder != "little":
+        samples.byteswap()
+    fade = min(room, round(CUT_FADE_S * VOICE_RATE))
+    for k in range(fade):
+        i = room - fade + k
+        samples[i] = int(samples[i] * (fade - 1 - k) / fade)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    return samples.tobytes()
+
+
+def narration_wav(
+    say: Callable[[str], bytes], lines: list[tuple[float, float, str]], total_s: float, out: Path
+) -> bool:
+    """Write the ad's narration to `out`: a 48 kHz mono WAV exactly `total_s` long. Each line
+    (start, scene seconds, text) is spoken by `say` (24 kHz mono s16le PCM), placed at its start
+    and cut to its scene, so it never runs into the next scene or past the end; everything else
+    is silence. An empty line is not spoken and a line whose speech fails stays silent (logged
+    without its text). False, and no file, when no line produced speech."""
+    total = round(total_s * VOICE_RATE)
+    track = bytearray(2 * total)
+    spoken = 0
+    for i, (start, seconds, text) in enumerate(lines):
+        if not text.strip():
+            continue
+        try:
+            pcm = say(text)
+        except Exception as e:  # a failed line leaves silence; the ad still renders
+            logger.warning("video narration line %d failed: %s", i, type(e).__name__)
+            continue
+        at = max(0, round(start * VOICE_RATE))
+        part = _cut(pcm or b"", max(0, min(round(seconds * VOICE_RATE), total - at)))
+        if part:
+            track[2 * at : 2 * at + len(part)] = part
+            spoken += 1
+    if not spoken:
+        return False
+    _ffmpeg(
+        [
+            *("-f", "s16le", "-ar", str(VOICE_RATE), "-ac", "1", "-i", "pipe:"),
+            *("-ar", str(AUDIO_RATE), str(out)),
+        ],
+        data=bytes(track),
+    )
+    return True
+
+
+# ------------------------------------------------------------------ assembly
+XFADE_S = 0.4  # crossfade between scenes
+CAPTION_FADE_S = 0.2
+MUSIC_DB = -18  # music sits this far under the voice
+LOUDNESS_LUFS = -16
+AUDIO_KBPS = 128
+MAX_BUDGET_MIB = 19.0
+# An unknown upload limit is taken as discord.py's 10 MiB: what it reports for an unboosted
+# guild (and for DMs), the smallest limit a delivery can meet.
+DEFAULT_UPLOAD_LIMIT = 10 * 2**20
+RETRY_RATE = 0.8  # second and third encodes, when the first is over the budget
+SMALL = (720, 1280)  # frame size of the third encode
+X264_PRESET = "veryfast"  # the Salid bot runs on 1 vCPU
+ASSEMBLE_TIMEOUT_S = 600  # one full encode of a 30 s ad
+
+
+class _Overlay(NamedTuple):
+    path: Path  # the visible part of a 1080x1920 overlay
+    x: int
+    y: int
+    start: float
+    seconds: float
+    fade_in: bool
+    fade_out: bool
+    eof: str  # "pass": gone after its time (captions); "repeat": kept to the end (AI label)
+
+
+def budget_mib(guild_limit_bytes: int | None) -> float:
+    """The MiB a finished ad may take: 1 MiB under the guild's upload limit (DEFAULT_UPLOAD_LIMIT
+    when unknown), never more than MAX_BUDGET_MIB."""
+    limit = DEFAULT_UPLOAD_LIMIT if guild_limit_bytes is None else guild_limit_bytes
+    return min(MAX_BUDGET_MIB, limit / 2**20 - 1)
+
+
+def video_kbps(budget_mib: float, seconds: float, audio_kbps: int = AUDIO_KBPS) -> int:
+    """The video bitrate that fills `budget_mib` over `seconds` next to `audio_kbps` of audio
+    (1 MiB = 8388.6 kbit)."""
+    return int(budget_mib * 8388.6 / seconds - audio_kbps)
+
+
+def label_png(fonts: CardFonts) -> Image.Image:
+    """A transparent 1080x1920 overlay with only the AI_LABEL badge (top-left inside SAFE)."""
+    return caption_png("", fonts)[0]
+
+
+def _visible(img: Image.Image, path: Path) -> tuple[int, int] | None:
+    """Save the visible part of the RGBA overlay `img` to `path` and return its top-left corner;
+    None (nothing saved) when it is fully transparent. A small overlay decodes and blends faster
+    on every frame than a full-frame one."""
+    box = img.getchannel("A").getbbox()
+    if box is None:
+        return None
+    img.crop(box).save(path)
+    return box[0], box[1]
+
+
+def _overlays(
+    captions: list[Path], seconds: list[float], fonts: CardFonts, tmp: Path
+) -> list[_Overlay]:
+    """Scene captions (each shown during its scene, fading at scene changes only, so the first
+    frame shows the opening caption and the last frame the closing one; empty ones skipped),
+    then the AI label for the whole video, never fading."""
+    out = []
+    start, last = 0.0, len(captions) - 1
+    for i, (cap, s) in enumerate(zip(captions, seconds, strict=True)):
+        with Image.open(cap) as im:
+            corner = _visible(im.convert("RGBA"), tmp / f"caption{i}.png")
+        if corner is not None:
+            out.append(
+                _Overlay(
+                    tmp / f"caption{i}.png",
+                    *corner,
+                    start=start,
+                    seconds=s,
+                    fade_in=i > 0,
+                    fade_out=i < last,
+                    eof="pass",
+                )
+            )
+        start += s
+    corner = _visible(label_png(fonts), tmp / "label.png")
+    if corner is not None:
+        out.append(
+            _Overlay(
+                tmp / "label.png",
+                *corner,
+                start=0.0,
+                seconds=start,
+                fade_in=False,
+                fade_out=False,
+                eof="repeat",
+            )
+        )
+    return out
+
+
+def _assemble_args(
+    clips: list[Path],
+    seconds: list[float],
+    overlays: list[_Overlay],
+    audio: Path | None,
+    music: Path | None,
+    out: Path,
+    kbps: int,
+    size: tuple[int, int],
+) -> list[str]:
+    """The ffmpeg arguments of one encode of the ad (see `assemble`)."""
+    n = len(clips)
+    args: list[str] = []
+    for clip in clips:
+        args += ["-i", str(clip)]
+    for ov in overlays:
+        args += ["-loop", "1", "-framerate", str(FPS)]
+        args += ["-t", f"{ov.seconds:.3f}", "-i", str(ov.path)]
+    graph = []
+    for i in range(n):  # every clip but the last is held 0.4 s longer for the crossfade
+        pad = f",tpad=stop_mode=clone:stop_duration={XFADE_S:g}" if i < n - 1 else ""
+        graph.append(
+            f"[{i}:v]scale={W}:{H},setsar=1,fps={FPS},format=yuv420p,settb=AVTB{pad}[s{i}]"
+        )
+    v, start = "s0", 0.0
+    for i in range(1, n):  # scene i starts fading in at its own start: sum(seconds[:i])
+        start += seconds[i - 1]
+        graph.append(
+            f"[{v}][s{i}]xfade=transition=fade:duration={XFADE_S:g}:offset={start:.3f}[x{i}]"
+        )
+        v = f"x{i}"
+    fade = f"{CAPTION_FADE_S:g}"
+    for j, ov in enumerate(overlays):
+        chain = "format=rgba"
+        if ov.fade_in:
+            chain += f",fade=t=in:st=0:d={fade}:alpha=1"
+        if ov.fade_out:
+            chain += f",fade=t=out:st={ov.seconds - CAPTION_FADE_S:.3f}:d={fade}:alpha=1"
+        graph.append(f"[{n + j}:v]{chain},setpts=PTS-STARTPTS+{ov.start:.3f}/TB[o{j}]")
+        graph.append(f"[{v}][o{j}]overlay={ov.x}:{ov.y}:eof_action={ov.eof}[v{j}]")
+        v = f"v{j}"
+    scale = f"scale={size[0]}:{size[1]}:flags=lanczos," if size != (W, H) else ""
+    graph.append(f"[{v}]{scale}format=yuv420p[vout]")
+    maps, audio_out = ["-map", "[vout]"], []
+    stereo = f"aformat=sample_rates={AUDIO_RATE}:channel_layouts=stereo"
+    k, sounds = n + len(overlays), []
+    if audio is not None:
+        args += ["-i", str(audio)]
+        graph.append(f"[{k}:a]{stereo}[voice]")
+        sounds.append("[voice]")
+        k += 1
+    if music is not None:
+        args += ["-i", str(music)]
+        graph.append(f"[{k}:a]{stereo},volume={MUSIC_DB}dB[music]")
+        sounds.append("[music]")
+    if sounds:
+        mix = sounds[0]
+        if len(sounds) == 2:
+            graph.append("[voice][music]amix=inputs=2:duration=longest:normalize=0[mix]")
+            mix = "[mix]"
+        graph.append(f"{mix}loudnorm=I={LOUDNESS_LUFS},aresample={AUDIO_RATE},apad[aout]")
+        maps += ["-map", "[aout]"]
+        audio_out = ["-c:a", "aac", "-b:a", f"{AUDIO_KBPS}k", "-ar", str(AUDIO_RATE), "-ac", "2"]
+    return [
+        *args,
+        *("-filter_complex", ";".join(graph), *maps),
+        *("-c:v", "libx264", "-profile:v", "high", "-preset", X264_PRESET, "-pix_fmt", "yuv420p"),
+        *("-b:v", f"{kbps}k", "-maxrate", f"{int(kbps * 1.1)}k", "-bufsize", f"{2 * kbps}k"),
+        *audio_out,
+        *("-movflags", "+faststart", "-t", f"{sum(seconds):.3f}", str(out)),
+    ]
+
+
+def assemble(
+    clips: list[Path],
+    seconds: list[float],
+    captions: list[Path],
+    audio: Path | None,
+    out: Path,
+    *,
+    budget_mib: float,
+    music: Path | None = None,
+    fonts: CardFonts | None = None,
+) -> Path:
+    """Render the finished ad to `out` (MP4, at most `budget_mib` MiB) and return `out`.
+
+    The scene `clips` (1080x1920, 30 fps) crossfade over XFADE_S, scene i starting at
+    sum(seconds[:i]), so the ad lasts sum(seconds). Each scene's caption overlay (a 1080x1920
+    RGBA PNG from `caption_png(..., label=False)`) shows during its scene with 0.2 s fades at
+    scene changes; one AI_LABEL overlay (made here with `fonts`) stays on for the whole video,
+    never fading. The narration `audio` and the optional `music` (MUSIC_DB under it) are mixed
+    and loudness-normalised; with neither, the ad has no audio track and the video gets the
+    whole budget. H.264 High yuv420p 30 fps at `video_kbps` (maxrate 1.1x, buffer 2x), AAC 128k
+    48 kHz, faststart. Over the budget: one re-encode at 80 % of the bitrate, then one at
+    720x1280; still over raises RuntimeError and removes `out`. Clips should last at least
+    their scene's seconds (a shorter one is held only XFADE_S)."""
+    if not clips or len(seconds) != len(clips) or len(captions) != len(clips):
+        raise ValueError("assemble needs one length and one caption per clip")
+    total = sum(seconds)
+    has_audio = audio is not None or music is not None
+    kbps = video_kbps(budget_mib, total, AUDIO_KBPS if has_audio else 0)
+    if kbps <= 0:
+        raise RuntimeError(f"a {total:g} s ad cannot fit a {budget_mib:g} MiB budget")
+    retry = int(kbps * RETRY_RATE)
+    limit = budget_mib * 2**20
+    with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
+        overlays = _overlays(captions, seconds, fonts or cards.card_fonts(), Path(tmp))
+        for rate, size in ((kbps, (W, H)), (retry, (W, H)), (retry, SMALL)):
+            args = _assemble_args(clips, seconds, overlays, audio, music, out, rate, size)
+            _ffmpeg(args, timeout=ASSEMBLE_TIMEOUT_S)
+            got = out.stat().st_size
+            if got <= limit:
+                return out
+            logger.info(
+                "video ad %.2f MiB over its %.2f MiB budget at %d kbps, %dx%d",
+                got / 2**20,
+                budget_mib,
+                rate,
+                *size,
+            )
+    out.unlink(missing_ok=True)
+    raise RuntimeError(f"video ad still over its {budget_mib:g} MiB budget after re-encoding")

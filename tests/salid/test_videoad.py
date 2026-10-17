@@ -2,10 +2,21 @@ import io
 import shutil
 import threading
 import time
+import wave
+from pathlib import Path
 
 import pytest
 from PIL import Image, ImageChops
-from promo_helpers import fake_client, json_response, png_bytes, probe, text_response
+from promo_helpers import (
+    fake_client,
+    json_response,
+    png_bytes,
+    probe,
+    silent_wav,
+    text_response,
+    tiny_scene_assets,
+    video_frame,
+)
 from pydantic import ValidationError
 
 from salid import cards, promo, videoad
@@ -460,3 +471,248 @@ def test_motion_clip_runs_ffmpeg_without_a_shell(monkeypatch, tmp_path):
     for flag in ("libx264", "yuv420p", "veryfast", "18", str(tmp_path / "c.mp4")):
         assert flag in cmd
     assert cmd[cmd.index("-t") + 1] == "2.000"
+
+
+# ------------------------------------------------------------------ narration and assembly
+def test_bitrate_formula():
+    assert videoad.video_kbps(19, 30) == 5184 and videoad.budget_mib(None) == 9.0
+    assert videoad.budget_mib(10 * 2**20) == 9.0
+    assert videoad.budget_mib(50 * 2**20) == 19.0  # never above 19 MiB
+    assert videoad.video_kbps(19, 30, audio_kbps=0) == 5312
+
+
+def wav_samples(path: Path) -> tuple[int, list[int]]:
+    with wave.open(str(path)) as w:
+        rate, frames = w.getframerate(), w.readframes(w.getnframes())
+    return rate, [
+        int.from_bytes(frames[i : i + 2], "little", signed=True) for i in range(0, len(frames), 2)
+    ]
+
+
+def pcm(value: int, seconds: float) -> bytes:
+    """`seconds` of 24 kHz mono s16le PCM holding one constant sample value."""
+    return value.to_bytes(2, "little", signed=True) * round(24_000 * seconds)
+
+
+@needs_ffmpeg
+def test_narration_never_runs_past_its_scene(tmp_path):  # Review Focus 1
+    long_pcm = b"\x00\x01" * 24_000 * 6  # 6 s of audio
+    ok = videoad.narration_wav(
+        lambda text: long_pcm, [(0.0, 2.0, "a"), (2.0, 2.0, "b")], 4.0, tmp_path / "v.wav"
+    )
+    assert ok and probe(tmp_path / "v.wav")["duration"] == pytest.approx(4.0, abs=0.05)
+
+
+@needs_ffmpeg
+def test_narration_is_48k_with_each_line_at_its_scene_start(tmp_path):
+    lines = [(0.0, 2.0, "a"), (2.0, 2.0, "b"), (4.0, 2.0, "c")]
+    said = []
+
+    def say(text):
+        said.append(text)
+        return pcm(1000, 6.0 if text == "b" else 0.5)
+
+    assert videoad.narration_wav(say, lines, 6.0, tmp_path / "v.wav")
+    rate, s = wav_samples(tmp_path / "v.wav")
+    assert rate == 48_000 and len(s) == pytest.approx(6 * 48_000, abs=48)
+
+    def at(t):
+        return s[round(t * rate)]
+
+    assert at(0.25) == pytest.approx(1000, abs=20) and at(1.0) == 0  # the line, then silence
+    assert at(3.0) == pytest.approx(1000, abs=20)  # the long line fills its scene ...
+    assert abs(at(3.995)) < 200  # ... and fades out at the cut instead of clicking
+    assert at(4.25) == pytest.approx(1000, abs=20) and at(5.0) == 0
+    assert said == ["a", "b", "c"]
+
+
+def test_narration_failures_degrade(tmp_path):
+    assert (
+        videoad.narration_wav(lambda t: 1 / 0, [(0.0, 2.0, "a")], 2.0, tmp_path / "v.wav") is False
+    )
+
+
+@needs_ffmpeg
+def test_failed_and_empty_lines_leave_silence_and_are_not_logged(tmp_path, caplog):
+    said = []
+
+    def say(text):
+        said.append(text)
+        if text == "secret line":
+            raise RuntimeError("tts down")
+        return pcm(1000, 1.0)
+
+    lines = [(0.0, 2.0, "secret line"), (2.0, 2.0, "  "), (4.0, 2.0, "ok")]
+    assert videoad.narration_wav(say, lines, 6.0, tmp_path / "v.wav")
+    assert said == ["secret line", "ok"]  # an empty line is never sent to speech
+    rate, s = wav_samples(tmp_path / "v.wav")
+    assert s[round(1.0 * rate)] == 0 and s[round(4.5 * rate)] != 0
+    assert "secret" not in caplog.text and "RuntimeError" in caplog.text
+    empty = videoad.narration_wav(lambda t: b"", [(0.0, 2.0, "a")], 2.0, tmp_path / "e.wav")
+    assert empty is False and not (tmp_path / "e.wav").exists()
+
+
+@needs_ffmpeg
+def test_assembled_ad_meets_the_delivery_spec(tmp_path):
+    clips, caps = tiny_scene_assets(tmp_path, n=2, seconds=2.0)  # helper: 2 motion clips + captions
+    out = videoad.assemble(
+        clips, [2.0, 2.0], caps, silent_wav(tmp_path, 4.0), tmp_path / "ad.mp4", budget_mib=19
+    )
+    p = probe(out)
+    assert p["size"] == (1080, 1920) and set(p["codecs"]) == {"h264", "aac"}
+    assert p["duration"] == pytest.approx(4.0, abs=0.2) and out.stat().st_size < 19 * 2**20
+
+
+@needs_ffmpeg
+def test_crossfaded_scenes_add_up_and_the_ai_label_never_leaves(tmp_path):
+    clips, caps = tiny_scene_assets(tmp_path, n=3, seconds=2.0)
+    out = videoad.assemble(
+        clips, [2.0, 2.0, 2.0], caps, None, tmp_path / "ad.mp4", budget_mib=19, fonts=FONTS
+    )
+    p = probe(out)
+    assert p["duration"] == pytest.approx(6.0, abs=0.2) and p["codecs"] == ["h264"]
+    box = videoad.label_png(FONTS).getchannel("A").getbbox()
+    assert box is not None and box[3] <= 400  # top-left, above the captions
+    cap_box = videoad.caption_png("ฉากที่ 1", FONTS, label=False)[1]
+    end = p["duration"]
+    frames = {
+        t: video_frame(out, t, tmp_path / f"f{i}.png").convert("L")
+        for i, t in enumerate((0.0, 0.1, 2.0, 2.1, 3.0, 4.2, end - 0.1, end - 0.04))
+    }
+    for t, frame in frames.items():  # the start, both scene changes, the end
+        lo, hi = frame.crop(box).getextrema()
+        assert lo < 90 and hi > 200, t  # the dark badge and its white text over the gray scene
+    caption = {t: frame.crop(cap_box).getextrema()[1] for t, frame in frames.items()}
+    assert caption[0.0] > 200 and caption[end - 0.04] > 200  # first and last frame: captions on
+    assert caption[2.0] < 200 < caption[3.0]  # captions fade at a scene change
+
+
+@needs_ffmpeg
+def test_small_guild_budget_is_respected(tmp_path):  # Review Focus 3
+    clips, caps = tiny_scene_assets(tmp_path, n=2, seconds=2.0, noisy=True)
+    out = videoad.assemble(clips, [2.0, 2.0], caps, None, tmp_path / "ad.mp4", budget_mib=0.5)
+    assert out.stat().st_size <= 0.5 * 2**20
+
+
+def fake_ffmpeg(monkeypatch, sizes: list[int]) -> list[list[str]]:
+    """Stand in for ffmpeg: each call writes a file of the next size to its output path."""
+    calls = []
+
+    class Done:
+        returncode = 0
+        stderr = b""
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        Path(cmd[-1]).write_bytes(b"\0" * sizes.pop(0))
+        return Done()
+
+    monkeypatch.setattr(videoad.subprocess, "run", run)
+    return calls
+
+
+def caption_files(tmp_path, n: int) -> list[Path]:
+    caps = []
+    for i in range(n):
+        caps.append(tmp_path / f"cap{i}.png")
+        videoad.caption_png(f"ฉาก {i}", FONTS, label=False)[0].save(caps[-1])
+    return caps
+
+
+def opt(cmd: list[str], flag: str) -> str:
+    """The value after the first `flag` in an ffmpeg command."""
+    return cmd[cmd.index(flag) + 1]
+
+
+def graph_of(cmd: list[str]) -> str:
+    return opt(cmd, "-filter_complex")
+
+
+def test_assemble_command_follows_the_timeline_and_the_delivery_spec(monkeypatch, tmp_path):
+    calls = fake_ffmpeg(monkeypatch, [1000])
+    clips = [tmp_path / f"c{i}.mp4" for i in range(3)]
+    out = videoad.assemble(
+        clips,
+        [2.0, 3.0, 2.5],
+        caption_files(tmp_path, 3),
+        tmp_path / "voice.wav",
+        tmp_path / "ad.mp4",
+        budget_mib=19,
+        music=tmp_path / "music.m4a",
+        fonts=FONTS,
+    )
+    assert out == tmp_path / "ad.mp4" and len(calls) == 1
+    cmd, graph = calls[0], graph_of(calls[0])
+    assert graph.count("tpad=stop_mode=clone:stop_duration=0.4") == 2  # every clip but the last
+    assert "duration=0.4:offset=2.000" in graph and "duration=0.4:offset=5.000" in graph
+    # captions fade at the two scene changes only; the AI label never fades
+    assert graph.count("fade=t=in:st=0:d=0.2:alpha=1") == 2 and graph.count("fade=t=out") == 2
+    assert "fade=t=out:st=1.800:d=0.2:alpha=1" in graph  # the first caption, a 2 s scene
+    assert "fade=t=out:st=2.800:d=0.2:alpha=1" in graph  # the second, a 3 s scene
+    assert "PTS-STARTPTS+5.000/TB" in graph  # the third caption starts with its scene
+    assert graph.count("overlay=") == 4  # 3 captions + 1 AI label for the whole video
+    assert "volume=-18dB" in graph and "amix=" in graph and "loudnorm=I=-16" in graph
+    assert "scale=720:1280" not in graph
+    for flag in ("libx264", "high", "yuv420p", "aac", "128k", "48000", "+faststart"):
+        assert flag in cmd
+    kbps = videoad.video_kbps(19, 7.5)
+    assert opt(cmd, "-b:v") == f"{kbps}k" and opt(cmd, "-maxrate") == f"{int(kbps * 1.1)}k"
+    assert opt(cmd, "-bufsize") == f"{2 * kbps}k" and cmd[-3:-1] == ["-t", "7.500"]
+    assert [cmd[i + 1] for i, a in enumerate(cmd) if a == "-i"][:3] == [str(c) for c in clips]
+
+
+def test_assemble_without_voice_or_music_is_video_only(monkeypatch, tmp_path):
+    calls = fake_ffmpeg(monkeypatch, [1000])
+    caps = caption_files(tmp_path, 1)
+    videoad.assemble([tmp_path / "a.mp4"], [4.0], caps, None, tmp_path / "o.mp4", budget_mib=9)
+    cmd, graph = calls[0], graph_of(calls[0])
+    assert "xfade" not in graph and "tpad" not in graph and "loudnorm" not in graph
+    assert "aac" not in cmd and opt(cmd, "-b:v") == f"{videoad.video_kbps(9, 4.0, 0)}k"
+
+
+def test_an_empty_caption_is_not_overlaid(monkeypatch, tmp_path):
+    calls = fake_ffmpeg(monkeypatch, [1000])
+    caps = caption_files(tmp_path, 2)
+    videoad.caption_png("", FONTS, label=False)[0].save(caps[1])
+    clips = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
+    videoad.assemble(clips, [2.0, 2.0], caps, None, tmp_path / "o.mp4", budget_mib=9)
+    assert graph_of(calls[0]).count("overlay=") == 2  # the first caption and the label
+
+
+def test_over_budget_reencodes_at_80_percent_then_720p(monkeypatch, tmp_path):
+    big = 2 * 2**20
+    calls = fake_ffmpeg(monkeypatch, [big, big, 1000])
+    clips = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
+    caps = caption_files(tmp_path, 2)
+    out = videoad.assemble(clips, [2.0, 2.0], caps, None, tmp_path / "o.mp4", budget_mib=1)
+    assert out.stat().st_size == 1000 and len(calls) == 3
+    rates = [opt(c, "-b:v") for c in calls]
+    kbps = videoad.video_kbps(1, 4.0, 0)
+    assert rates == [f"{kbps}k", f"{int(kbps * 0.8)}k", f"{int(kbps * 0.8)}k"]
+    assert ["scale=720:1280" in graph_of(c) for c in calls] == [False, False, True]
+
+
+def test_still_over_budget_raises_and_leaves_no_file(monkeypatch, tmp_path):
+    calls = fake_ffmpeg(monkeypatch, [2 * 2**20] * 3)
+    caps = caption_files(tmp_path, 1)
+    with pytest.raises(RuntimeError, match="budget"):
+        videoad.assemble([tmp_path / "a.mp4"], [4.0], caps, None, tmp_path / "o.mp4", budget_mib=1)
+    assert len(calls) == 3 and not (tmp_path / "o.mp4").exists()
+
+
+def test_a_budget_too_small_for_the_audio_fails_before_encoding(monkeypatch, tmp_path):
+    calls = fake_ffmpeg(monkeypatch, [])
+    caps = caption_files(tmp_path, 1)
+    voice = tmp_path / "v.wav"
+    with pytest.raises(RuntimeError, match="budget"):  # 0.4 MiB over 30 s < 128 kbps of audio
+        videoad.assemble(
+            [tmp_path / "a.mp4"], [30.0], caps, voice, tmp_path / "o.mp4", budget_mib=0.4
+        )
+    assert calls == []
+
+
+def test_assemble_needs_one_length_and_caption_per_clip(tmp_path):
+    with pytest.raises(ValueError):
+        videoad.assemble(
+            [tmp_path / "a.mp4"], [2.0, 2.0], [], None, tmp_path / "o.mp4", budget_mib=9
+        )

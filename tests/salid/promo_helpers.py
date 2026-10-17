@@ -2,13 +2,15 @@
 
 import io
 import json
+import random
 import subprocess
+from pathlib import Path
 
 from conftest import FakeClient
 from google.genai import types
 from PIL import Image
 
-from salid import promo
+from salid import cards, promo, videoad
 
 
 def to_png(img: Image.Image) -> bytes:
@@ -91,3 +93,77 @@ def probe(path) -> dict:
         "codecs": [s["codec_name"] for s in streams],
         "size": (video.get("width"), video.get("height")),
     }
+
+
+def tiny_scene_assets(
+    tmp_path, n: int, seconds: float, noisy: bool = False
+) -> tuple[list[Path], list[Path]]:
+    """`n` real motion clips of `seconds` each and their caption overlays (made without the AI
+    label, as `assemble` expects). The stills are flat gray, or with `noisy` random colour noise
+    that no encoder can squeeze, so a small budget forces the bitrate down."""
+    fonts = cards.card_fonts()
+    clips, caps = [], []
+    for i in range(n):
+        if noisy:
+            side = (540, 960)
+            data = random.Random(i).randbytes(side[0] * side[1] * 3)
+            img = Image.frombytes("RGB", side, data).resize((1080, 1920))
+        else:
+            img = Image.new("RGB", (1080, 1920), (128, 128, 128))
+        still, clip, cap = (tmp_path / f"scene{i}.{ext}" for ext in ("png", "mp4", "cap.png"))
+        img.save(still)
+        videoad.motion_clip(still, seconds, i, clip)
+        videoad.caption_png(f"ฉากที่ {i + 1}", fonts, label=False)[0].save(cap)
+        clips.append(clip)
+        caps.append(cap)
+    return clips, caps
+
+
+def silent_wav(tmp_path, seconds: float) -> Path:
+    """A silent 48 kHz mono WAV of `seconds`, made by ffmpeg's anullsrc."""
+    out = tmp_path / "silence.wav"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=48000:cl=mono",
+            "-t",
+            f"{seconds:.3f}",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    return out
+
+
+def video_frame(path, t: float, out) -> Image.Image:
+    """The video frame of `path` at `t` seconds, as RGB."""
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-loglevel",
+            "error",
+            "-y",
+            "-ss",
+            f"{t:.3f}",
+            "-i",
+            str(path),
+            "-frames:v",
+            "1",
+            str(out),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=60,
+    )
+    with Image.open(out) as im:
+        return im.convert("RGB")
