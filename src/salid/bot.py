@@ -17,8 +17,8 @@ from types import SimpleNamespace
 import discord
 from discord import app_commands
 
+from . import data_studio, gate
 from . import dm as dm_module
-from . import gate
 from .ack import Ack, ack_flavor, ack_text
 from .approvals_bot import ApprovalButton, ApprovalMixin
 from .archive import make_archive
@@ -41,6 +41,7 @@ from .config import Settings
 from .contests_bot import ContestsMixin
 from .coo import CooMixin, DisclosureButton
 from .coo_store import make_doc_store
+from .data_bot import DataMixin
 from .deep_task import (
     REPORT_NAME,
     DeepCancelled,
@@ -361,6 +362,7 @@ class SecretaryBot(
     DeliverMixin,
     PromoMixin,
     ConceptMixin,
+    DataMixin,
     MediaMixin,
     discord.Client,
 ):
@@ -1554,8 +1556,12 @@ class SecretaryBot(
             for i, a in enumerate(atts)
         ]
         media_idx = {i for i, _a in media_candidates(message)}
+        data_on = message.guild is None or self.team.enabled(message.guild.id, "data")
         office_idx = {
-            i for i, a in enumerate(atts) if doc_kind(a) in ("docx", "xlsx", "pptx", "doc", "xls")
+            i
+            for i, a in enumerate(atts)
+            if doc_kind(a) in ("docx", "xlsx", "pptx", "doc", "xls")
+            or (data_on and data_studio.is_data_file(a.filename))  # csv / tsv / json too
         }
         for i in media_idx | office_idx:  # read in code (transcript / text), not as raw bytes
             inputs[i].mime, inputs[i].size = "text/plain", 0
@@ -1566,7 +1572,7 @@ class SecretaryBot(
                     await self._fill_media_input(message, f, atts[f.index])
                 continue
             if f.index in office_idx:
-                await self._fill_office_input(f, atts[f.index])
+                await self._fill_office_input(f, atts[f.index], data_on)
                 continue
             try:
                 f.data = await atts[f.index].read()
@@ -2221,6 +2227,11 @@ class SecretaryBot(
             # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
             *([] if interjection else self._concept_tools(message, guild, asker, files, lang)),
+            *(
+                []
+                if interjection
+                else self._data_tools(message, guild, asker, files, lang, is_exec)
+            ),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]

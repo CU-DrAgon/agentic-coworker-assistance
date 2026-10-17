@@ -13,7 +13,7 @@ from functools import partial
 
 import discord
 
-from . import docs, media
+from . import data_studio, docs, media
 from .briefings import DocInfo, split_names
 from .image_memory import describe_image, format_note, image_mime
 from .media import parse_message_ref  # noqa: F401 (re-export)
@@ -96,16 +96,26 @@ class MediaMixin:
         f.size = len(f.data)
         f.label = media.label_for(f.index, f.filename, tr)
 
-    async def _fill_office_input(self, f, att) -> None:
-        """Office / text document sent to Salid: its text (about 30k chars) as a text part."""
+    async def _fill_office_input(self, f, att, data_on: bool = False) -> None:
+        """Office / text document sent to Salid: its text (about 30k chars) as a text part. With
+        the `data` feature a spreadsheet / CSV / JSON also keeps its bytes (`f.raw`) for the data
+        tools and gets one line telling the model to use them."""
         if (getattr(att, "size", 0) or 0) > MAX_DOC_DOWNLOAD:
             f.skip = "over 25 MB"
             return
+        keep_note = None
         try:
             data = await att.read()
-            kind, text, pages = await asyncio.to_thread(
-                docs.extract_document, data, f.filename, getattr(att, "content_type", None)
-            )
+            keep = data_on and data_studio.is_data_file(f.filename)
+            try:
+                kind, text, pages = await asyncio.to_thread(
+                    docs.extract_document, data, f.filename, getattr(att, "content_type", None)
+                )
+            except docs.DocUnreadable as e:
+                if keep and data_studio.file_ext(f.filename) == "xls":  # no text preview possible
+                    kind, text, pages, keep_note = "xls", "", 0, e
+                else:
+                    raise
         except docs.DocUnreadable as e:
             f.skip = str(e)
             return
@@ -113,11 +123,21 @@ class MediaMixin:
             logger.warning("document read failed (%s)", type(e).__name__)
             f.skip = "could not be read"
             return
-        if not text.strip():
+        extra = ""
+        if keep:
+            try:
+                sheets, rows = await asyncio.to_thread(data_studio.quick_counts, data, f.filename)
+                f.raw = data
+                extra = f"\n(use data_load for analysis: {sheets} sheets, {rows} rows)"
+            except Exception:
+                if keep_note is not None:
+                    f.skip = str(keep_note)
+                    return
+        if not text.strip() and not extra:
             f.skip = "no readable text in the file"
             return
         f.mime = "text/plain"
-        f.data = docs.clip_for_agent(text).encode()
+        f.data = (docs.clip_for_agent(text) + extra).encode()
         f.size = len(f.data)
         f.label = f"[ไฟล์ #{f.index}: {f.filename}, {pages} {docs.unit_label(kind)}]"
 

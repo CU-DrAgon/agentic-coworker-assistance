@@ -23,6 +23,7 @@ from google.adk.runners import InMemoryRunner
 from google.adk.tools import FunctionTool
 from google.genai import types
 
+from . import data_studio
 from .bizfin_tools import BIZFIN_PROMPT
 from .chat_tools import ChatActions, build_chat_tools
 from .config import Settings
@@ -932,6 +933,9 @@ class FileInput:
     size: int = 0
     skip: str = ""
     label: str = ""  # replaces the default "[ไฟล์ #N: name]" label (transcripts of audio/video)
+    raw: bytes = (
+        b""  # the original bytes of a data file (xlsx / xls / csv / tsv / json) for data_load
+    )
 
     def __post_init__(self):
         self.size = self.size or len(self.data)
@@ -1287,6 +1291,8 @@ CAPABILITIES_PROMPT = (
     "วาดภาพคอนเซปต์ด้วย AI (concept_image: ภาพสินค้า ภาพตอนใช้งาน หน้าจอ โลโก้ มู้ดบอร์ด และภาพหลายมุมแบบ 3 มิติจำลอง) "
     "เช็คราคาจากเว็บพร้อมแหล่งอ้างอิง (price_check) ถามแค็ตตาล็อกจากหน้าเว็บของซัพพลายเออร์ ช่วยหาข้อมูลเพื่อจัดซื้อ และค้นข้อมูลแล้วทำเป็นเอกสาร PDF/Word ทั้งหมดเก็บในเอกสารโปรเจกต์เดียว "
     "(ภาพเป็นภาพคอนเซปต์จาก AI ไม่ใช่โมเดล 3 มิติหรือแบบวิศวกรรม; ภาพสร้างได้ในแชตเท่านั้น ไม่ใช่ในห้องเสียง)\n"
+    "22) วิเคราะห์ข้อมูลจากไฟล์ Excel/CSV/JSON (data_load, data_sql, data_chart, data_export): อ่านไฟล์แล้วสรุปโครงสร้างและคุณภาพข้อมูล ตอบคำถามด้วย SQL คำนวณสถิติพื้นฐาน "
+    "ทำกราฟ (แท่ง เส้น วงกลม กระจาย ฮิสโตแกรม) ส่งผลเป็น Excel/CSV และเก็บชุดข้อมูลไว้ถามต่อ (Excel/CSV/JSON analysis with SQL, charts and exports)\n"
     "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
     "ถ้าไม่แน่ใจให้ดูสถานะด้วย show_settings (หรือ /โหมด /ภาษา /ความจำ เป็นทางลัด)"
 )
@@ -1466,6 +1472,7 @@ def stable_prompt(
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
     concept: bool = False,
+    data: bool = False,
 ) -> str:
     """The part of the system prompt that is identical for every request in one language, tone and
     tool set (persona, rules, capabilities, duplicate rules, memory guidance, and the guidance of
@@ -1524,6 +1531,8 @@ def stable_prompt(
         p += CONTESTS_PROMPT
     if bizfin:
         p += BIZFIN_PROMPT
+    if data:
+        p += data_studio.playbook()
     if web:
         p += WEB_PROMPT
     if secretary:
@@ -1611,6 +1620,7 @@ def system_prompt(
     concept: bool = False,
     contests: bool = False,
     bizfin: bool = False,
+    data: bool = False,
     deck: bool = False,
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
@@ -1637,6 +1647,7 @@ def system_prompt(
         concept=concept,
         contests=contests,
         bizfin=bizfin,
+        data=data,
         deck=deck,
         web=web,
         secretary=secretary,
@@ -2101,6 +2112,7 @@ def build_agent(
     concept: bool = False,
     contests: bool = False,
     bizfin: bool = False,
+    data: bool = False,
     max_rounds: int = MAX_ROUNDS,
     deck: bool = False,
     tone: str = DEFAULT_TONE,
@@ -2136,6 +2148,7 @@ def build_agent(
         concept=concept,
         contests=contests,
         bizfin=bizfin,
+        data=data,
         deck=deck,
         tone=tone,
         tone_note=tone_note,
@@ -2341,6 +2354,7 @@ async def ask_async(
         concept="concept_image" in tool_names or "price_check" in tool_names,
         contests="contest_add" in tool_names,
         bizfin="unit_economics" in tool_names,
+        data="data_sql" in tool_names,
         max_rounds=max_rounds,
         deck=sink is not None,
         tone=tone,

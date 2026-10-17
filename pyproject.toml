@@ -8,6 +8,7 @@ dependencies = [
     "davey>=0.1.7",
     "discord-ext-voice-recv==0.5.2a179",
     "discord-py[voice]>=2.7.1",
+    "duckdb>=1.5.6",
     "fastapi>=0.141.1",
     "fpdf2>=2.8.9",
     "google-adk==2.11.0",
@@ -16,7 +17,9 @@ dependencies = [
     "google-cloud-storage>=3.17.0",
     "google-genai>=2.29.0",
     "httpx>=0.28.1",
+    "matplotlib>=3.11.2",
     "openpyxl>=3.1.5",
+    "pandas>=3.0.6",
     "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",
     "pypdf>=6.20.1",
@@ -26,6 +29,7 @@ dependencies = [
     "tzdata>=2026.5",
     "uharfbuzz>=0.56.3",
     "uvicorn>=0.54.0",
+    "xlrd>=2.0.2",
 ]
 
 [build-system]
