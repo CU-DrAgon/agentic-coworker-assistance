@@ -163,6 +163,21 @@ stays Thai/English but its language selects list all ten. Adding a catalog key: 
   `email` (web, Google sign-in) must carry their `discord_user_id` (member link), otherwise "my tasks" on
   the web is empty while Discord knows them.
 
+### One brain, every platform (rule for new features)
+
+Salid also runs on Slack, LINE, Telegram and WhatsApp (`src/salid/platforms/`, `python -m salid.platforms`,
+setup in `docs/platforms/`). Every new feature must be reachable from all of them, written once. Design and
+build order: `docs/superpowers/specs/2026-10-18-salid-workspace-parity-design.md`. In short:
+
+- Feature logic lives in a module that does **not import `discord`** (ids, text, a `Workspace`).
+- People, rooms, posts, DMs, files, buttons and schedules go through the `Workspace` interface, never
+  `discord.*` / `slack_sdk` / a platform API inside a tool or feature module. Until `Workspace` lands, keep new
+  Discord glue in a thin `*_bot.py` mixin and the logic in the pure module, so moving it is mechanical.
+- A capability a platform lacks is declared (`supports(...)` False) and the tool is left out; never fake it.
+- Memory scope stays fail-closed: unknown room audience = that room's own memory only.
+- Meetings: Salid's own store + reminders everywhere; Google Calendar (per-user Google OAuth) is the calendar.
+- Platform tenant ids must use the one workspace id scheme (see the design doc; two schemes exist today).
+
 ## Infrastructure that already exists — never recreate
 
 - GCP project `meeting-scribe-hackathon`, region `asia-southeast1`, Vertex Gemini location `global`

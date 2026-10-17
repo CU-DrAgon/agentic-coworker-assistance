@@ -15,7 +15,6 @@ def test_tenant_ids_are_stable_and_distinct():
     assert a == ids.tenant_id("slack", "T123")
     assert a != ids.tenant_id("slack", "T124")
     assert a != ids.tenant_id("line", "T123")  # same key on another platform is another tenant
-    assert ids.platform_of(a) == "slack" and ids.platform_of(ids.tenant_id("line", "U1")) == "line"
 
 
 def test_tenant_ids_never_collide_with_discord_and_fit_int64():
@@ -27,15 +26,15 @@ def test_tenant_ids_never_collide_with_discord_and_fit_int64():
             assert ids.DISCORD_CEILING <= t < 2**63
             assert ids.is_platform_tenant(t)
     assert not ids.is_platform_tenant(far_future)
-    assert ids.platform_of(far_future) is None
 
 
 def test_user_room_message_ids_are_positive_and_scoped():
     u = ids.user_id("slack", "U1")
-    assert 0 < u < ids.DISCORD_CEILING and u == ids.user_id("slack", "U1")
+    assert ids.DISCORD_CEILING <= u < 2**63 and u == ids.user_id("slack", "U1")
     assert u != ids.user_id("line", "U1")
     r = ids.room_id("slack", "T1", "C1")
-    assert r > 0 and r != ids.room_id("slack", "T2", "C1")  # not DM-note scopes (negative)
+    assert r > 0 and r != ids.room_id("slack", "T1", "C2")  # not DM-note scopes (negative)
+    assert r != ids.room_id("line", "T1", "C1")
     m = ids.message_id("slack", "T1", "C1", "1.2")
     assert m > 0 and m != ids.message_id("slack", "T1", "C2", "1.2")
     assert ids.bot_user_id("slack", "T1") != u
@@ -154,3 +153,39 @@ def test_slack_to_plain():
 @pytest.mark.parametrize("text", ["", None])
 def test_slack_to_plain_empty(text):
     assert textfmt.slack_to_plain(text) == ""
+
+
+def test_slack_bot_ids_equal_command_center_ids():
+    """One Slack workspace = one tenant: the bot and `connectors.slack` must agree on every id."""
+    from salid.connectors.base import ConnectorConfig
+    from salid.connectors.slack import SlackConnector
+    from salid.memory_store import SQLiteMemoryStore
+    from salid.orgs import namespaced_id, workspace_memory_id
+
+    assert ids.tenant_id("slack", "T1") == workspace_memory_id("slack", "T1")
+    assert ids.room_id("slack", "T1", "C1") == namespaced_id("slack", "C1", "channel")
+    assert ids.user_id("slack", "U1") == namespaced_id("slack", "U1", "user")
+
+    mem = SQLiteMemoryStore(":memory:")
+    ts = "1700000000.000200"
+    event = {"type": "message", "channel_type": "channel", "user": "U1", "text": "hi", "ts": ts}
+    connector = SlackConnector(ConnectorConfig(), memory=mem)
+    for channel in ("C1", "C2"):  # same ts in two channels: two records, not one overwritten
+        connector.ingest({"team_id": "T1", "event": {**event, "channel": channel}})
+    gid = ids.tenant_id("slack", "T1")
+    rooms = [ids.room_id("slack", "T1", c) for c in ("C1", "C2")]
+    got = mem.messages(gid, rooms, "2023-01-01", "2024-12-31")
+    assert sorted((m.channel_id, m.message_id, m.author_id) for m in got) == sorted(
+        (
+            ids.room_id("slack", "T1", c),
+            ids.message_id("slack", "T1", c, ts),
+            ids.user_id("slack", "U1"),
+        )
+        for c in ("C1", "C2")
+    )
+
+
+def test_tenant_ids_of_the_four_platforms_are_distinct():
+    t = [ids.tenant_id(p, "X1") for p in ("slack", "line", "telegram", "whatsapp")]
+    assert len(set(t)) == 4
+    assert all(ids.DISCORD_CEILING <= x < 2**63 and ids.is_platform_tenant(x) for x in t)
