@@ -1092,6 +1092,13 @@ class MeetingManager:
         return {"status": "not_recording"}
 
     # ---- live captions (off unless asked; see salid.captions)
+    def _remember_captions(self, s: MeetingSession, on: bool) -> None:
+        """A show/hide asked for in a meeting becomes the server default (remembered next time)."""
+        try:
+            self._spawn(s, asyncio.to_thread(self.bot.team.set_captions_default, s.guild_id, on))
+        except Exception:
+            logger.warning("could not remember the captions setting", exc_info=True)
+
     def set_captions(self, s: MeetingSession, on: bool, language: str = "original") -> dict:
         """Switch the room's captions. An explicit request also works while not recording (the
         text is shown, never kept)."""
@@ -1101,8 +1108,10 @@ class MeetingManager:
             # Captions read in the company language + the room's personal languages
             # ("audience"); "original" = as spoken; a named language = only that one.
             s.captions.turn_on(language or "audience", self._now())
+            self._remember_captions(s, True)
             return {"status": "on", "language": language}
         s.captions.turn_off()
+        self._remember_captions(s, False)
         if s.captions_defaulted:  # remember the hide, so a restart does not undo it
             with contextlib.suppress(Exception):
                 asyncio.run_coroutine_threadsafe(self._persist(s), s.loop)
@@ -1993,6 +2002,12 @@ class MeetingManager:
             self._start_live(s)
         await self._post(s, t(f"voice_talk_{'listen' if mode == 'listen_only' else 'may'}", s.lang))
         await self._persist(s, s.starter_id)
+        # Remembered: what the chair asked for once stays the server's default until someone
+        # asks for the other mode (a person would remember "last time they said listen only").
+        try:
+            await asyncio.to_thread(self.bot.team.set_voice_talk, s.guild_id, mode)
+        except Exception:
+            logger.warning("could not remember the voice mode", exc_info=True)
 
     def may_switch_talk(self, s: MeetingSession, member) -> bool:
         """The chair (whoever invited Salid) or an executive."""
