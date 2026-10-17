@@ -22,6 +22,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     tone_note            str <= 200 chars, owner's extra wording note appended to every tone
     task_confirm_mode    notify (default) | approve: who signs off a task heard in chat
     captions_default     off (default) | on: live captions in every voice meeting's chat from the start
+    wake_policy          strict (default) | natural: how Salid wakes in a voice room (name only | name or a direct question)
     voice_talk           may_talk (default) | listen_only: Salid's voice in meetings (human switch only)
     personal_settings    bool (default true): members may keep their own language / tone / task mode
     language_mode        audience (default: company language + the personal languages of the people
@@ -140,6 +141,7 @@ VOICE_TALKS = (
     "may_talk",
     "listen_only",
 )  # Salid's voice in meetings: talks when called | notes only
+WAKE_POLICIES = ("strict", "natural")  # voice wake: her name only | name or a direct question
 CAPTIONS_DEFAULTS = ("off", "on")  # meeting captions: hidden as before | shown from the start
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -283,6 +285,7 @@ class GuildSettingsUpdate(BaseModel):
     language_mode: str = "audience"  # audience (company + personal languages) | company_only
     captions_default: str = "off"  # off | on, see salid.captions
     voice_talk: str = "may_talk"  # may_talk | listen_only, see salid.meeting
+    wake_policy: str = "strict"  # strict | natural, see salid.live_voice (mouth gate, instruction)
     # Remembered per voice room: what people asked for in that room last time ("listen only",
     # "show captions") applies again next time in the same room; a new room starts from the
     # server defaults above. {channel_id: value}
@@ -348,6 +351,11 @@ class GuildSettingsUpdate(BaseModel):
     @classmethod
     def _voice_talk(cls, v):
         return v if v in VOICE_TALKS else "may_talk"
+
+    @field_validator("wake_policy", mode="before")
+    @classmethod
+    def _wake_policy(cls, v):
+        return v if v in WAKE_POLICIES else "strict"
 
     @field_validator("captions_default", mode="before")
     @classmethod
@@ -1117,6 +1125,9 @@ class BotGuildSettings:
             self.store.set_captions_default(guild_id, on)
         finally:
             self._cache.pop(guild_id, None)
+
+    def wake_policy(self, guild_id: int) -> str:
+        return self.current(guild_id).wake_policy
 
     def voice_talk(self, guild_id: int) -> str:
         """may_talk | listen_only: whether Salid may speak in this server's voice meetings."""

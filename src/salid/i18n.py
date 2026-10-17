@@ -1193,6 +1193,17 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "👂 สลิดกลับไปฟังอย่างเดียวแล้วค่ะ",
         "en": "👂 Salid is back to listening only.",
     },
+    # why a live-mode state line changed (appended to the line above)
+    "voice_why_called": {"th": " · เรียกชื่อ", "en": " · called by name"},
+    "voice_why_ended": {"th": " · จบบทสนทนา", "en": " · conversation ended"},
+    "voice_why_each_other": {
+        "th": " · พวกเขากลับไปคุยกันเอง",
+        "en": " · they went back to each other",
+    },
+    "voice_why_thanks": {"th": " · ขอบคุณแล้ว", "en": " · said thanks"},
+    "voice_why_quiet": {"th": " · เงียบไป 90 วินาที", "en": " · quiet 90 s"},
+    "voice_why_bare": {"th": " · ไม่มีใครพูดต่อ", "en": " · no one went on"},
+    "voice_why_hushed": {"th": " · ถูกบอกให้เงียบ", "en": " · told to be quiet"},
     "voice_answer_echo": {"th": "💬 **สลิด:** {text}", "en": "💬 **Salid:** {text}"},
     "voice_tool_failed": {
         "th": "⚠️ สลิดตรวจสอบให้ไม่ได้ค่ะ: {tool} ขัดข้อง ({reason})",

@@ -279,7 +279,7 @@ async def test_classic_decision_log_has_numbers_and_no_text(lv, monkeypatch, cap
     s, live = await lv.join(5)
     monkeypatch.setattr(mt, "transcribe_pcm", lambda c, m, pcm: "สลิด")
     await lv.mgr.handle_segment(s, mt.Segment(5, speechlike(0.8, seed=7), time.monotonic(), 0.8))
-    assert s.engaged is False and 5 in s.pending_wake  # live: a bare name only waits for a request
+    assert s.engaged is False and len(s.name_calls) == 1  # live: one bare name is left to the model
     await lv.mgr.end((1000, 77))
     line = next(r.getMessage() for r in caplog.records if "name hit" in r.getMessage())
     assert re.fullmatch(

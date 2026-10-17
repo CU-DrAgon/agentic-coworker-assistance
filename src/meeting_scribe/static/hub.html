@@ -256,6 +256,7 @@
  },
           <label><input type="checkbox" id="captions-default"> <span data-i18n="captions_default_l"></span><small data-i18n="captions_default_s"></small></label>
           <label><span data-i18n="voice_talk_l"></span> <select class="field" id="voice-talk"><option value="may_talk" data-i18n="voice_talk_may"></option><option value="listen_only" data-i18n="voice_talk_listen"></option></select><small data-i18n="voice_talk_s"></small></label>
+          <label><span data-i18n="wake_policy_l"></span> <select class="field" id="wake-policy"><option value="strict" data-i18n="wake_policy_strict"></option><option value="natural" data-i18n="wake_policy_natural"></option></select></label>
           <fieldset id="task-mode" style="border:0;padding:0;margin:0 0 8px">
             <legend data-i18n="task_mode_l"></legend>
             <label><input type="radio" name="task-confirm" value="notify" checked> <span data-i18n="task_mode_notify_l"></span><small data-i18n="task_mode_notify_s"></small></label>
@@ -701,6 +702,18 @@
  "voice_talk_s": {
   "th": "ฟังและจดอย่างเดียว = สลิดไม่พูดในห้องเลย ถามได้ทางข้อความ ผู้จัดประชุมหรือผู้บริหารสั่งเปลี่ยนเฉพาะประชุมนั้นได้",
   "en": "Listen only = Salid never speaks in the room; people ask in text. The chair or an executive can change it for one meeting."
+ },
+ "wake_policy_l": {
+  "th": "การปลุกสลิดในห้องเสียง",
+  "en": "How Salid wakes in voice"
+ },
+ "wake_policy_strict": {
+  "th": "เฉพาะเรียกชื่อ",
+  "en": "Name only"
+ },
+ "wake_policy_natural": {
+  "th": "เรียกชื่อ หรือคำถามตรง ๆ ถึงสลิด",
+  "en": "Name, or a direct question to Salid"
  },
  "task_mode_l": {
   "th": "โหมดมอบหมายงาน",
@@ -2013,6 +2026,7 @@ function fillSettings(s) {
   $("language-mode").value = s.language_mode === "company_only" ? "company_only" : "audience";
   $("captions-default").checked = s.captions_default === "on";
   $("voice-talk").value = s.voice_talk === "listen_only" ? "listen_only" : "may_talk";
+  $("wake-policy").value = s.wake_policy === "natural" ? "natural" : "strict";
   for (const r of document.querySelectorAll('input[name="task-confirm"]')) r.checked = r.value === (s.task_confirm_mode || "notify");
   $("digest-time").value = s.digest_time || "18:00";
   $("followup-time").value = s.followup_time || "10:00";
@@ -2105,6 +2119,7 @@ async function save() {
     language_mode: $("language-mode").value === "company_only" ? "company_only" : "audience",
     captions_default: $("captions-default").checked ? "on" : "off",
     voice_talk: $("voice-talk").value === "listen_only" ? "listen_only" : "may_talk",
+    wake_policy: $("wake-policy").value === "natural" ? "natural" : "strict",
     task_confirm_mode: (document.querySelector('input[name="task-confirm"]:checked') || {}).value || "notify",
     digest_time: $("digest-time").value || "18:00",
     followup_time: $("followup-time").value || "10:00",

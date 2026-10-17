@@ -800,7 +800,9 @@ class MeetingSession:
     called_by: int = 0  # user id of whoever called her last (informational; no automatic pass)
     hushed_until: float = 0.0  # told to be quiet: silent listening until this (or her name + words)
     hushed_at: float = -1e9
-    engaged_bare: bool = False  # engagement started from the name alone: expires fast (12 s)
+    engaged_bare: bool = False  # engagement started from the name alone: expires fast (10 s)
+    caller: str = ""  # display name of whoever called her (the exchange is theirs); live mode
+    name_calls: list[float] = field(default_factory=list)  # ASR name_called hits (monotonic)
     unaddressed: int = 0  # consecutive utterances, while engaged, not addressed to Salid
     state_msg: Any = None  # the last state line posted to the text chat (edited on a quick flip)
     state_at: float = -1e9  # monotonic time of that post
@@ -2154,7 +2156,8 @@ class MeetingManager:
             if s.live is not None:
                 s.live.unhush()
         if s.engaged and now > s.engaged_until and not s.speaking:
-            self._set_engaged(s, False)  # nobody addressed Salid for a while: back to listening
+            # nobody addressed Salid for a while: back to listening
+            self._set_engaged(s, False, why="bare" if s.engaged_bare else "quiet")
         if s.consent == "pending" and now > s.consent_until:
             s.consent = "assumed"
             if s.recording == "unknown":
@@ -2252,6 +2255,11 @@ class MeetingManager:
             # A bare "Salid" the transcriber itself judges as an address, with real speech
             # behind it (the gate passed): a call. She answers ("Yes?") like a person would.
             logger.info("meeting %s: bare name call (name_called)", s.guild_id)
+            if live:
+                # The Live model decides on a single bare name; only the second one within
+                # NAME_TWICE_S, with her still silent, is forced to a short "Yes?".
+                self._bare_name_backup(s, seg, name, member, text)
+                return
         called = said is not None
         if called:
             self._clear_hush(s)  # the name with words in the hold: a normal call
@@ -2271,7 +2279,7 @@ class MeetingManager:
         if await self._minutes_instruction(s, member, text):
             return
         now = time.monotonic()
-        if s.engaged and not called and self.is_dismissal(text):
+        if s.engaged and not called and not live and self.is_dismissal(text):
             self._set_engaged(s, False)  # "ขอบคุณครับ พอแล้ว": back to listening, not leaving
             if (  # a reply only when she was thanked directly; "ok" / "next" = silence
                 s.voice_mode != "live"
@@ -2285,7 +2293,13 @@ class MeetingManager:
                 s, True, name=name if member is not None else "", by=seg.user_id, bare=bare
             )
         elif s.engaged and not self._is_echo(s, seg):
-            self._engaged_utterance(s, text, now, seg.user_id)
+            if not live:
+                self._engaged_utterance(s, text, now, seg.user_id)
+            elif s.engaged_bare and seg.user_id and seg.user_id == s.called_by:
+                # the caller went on after her "Yes?": the exchange is running (the Live model
+                # decides when it is over; the cap is `engaged_timeout_seconds`)
+                s.engaged_bare = False
+                s.engaged_until = now + self._engage_s()
         if s.voice_mode == "live":
             if called and s.live is not None:
                 # Deterministic: the name was said, so Salid must answer. If the Live model has
@@ -2326,6 +2340,37 @@ class MeetingManager:
 
     is_hush = staticmethod(is_hush)
 
+    NAME_TWICE_S = 15.0
+
+    def _bare_name_backup(self, s: MeetingSession, seg: Segment, name: str, member, text: str):
+        """Live mode, ASR heard her name alone (`name_called`). Twice within NAME_TWICE_S while she
+        has not spoken: one forced "Yes?" cue; once: nothing (the Live model decides)."""
+        now = time.monotonic()
+        s.name_calls = [x for x in s.name_calls if now - x <= self.NAME_TWICE_S] + [now]
+        live = s.live
+        if len(s.name_calls) < 2 or live is None:
+            return
+        first = s.name_calls[0]
+        s.name_calls.clear()
+        if s.speaking or live.spoke_since(first):
+            return
+        self._set_engaged(
+            s, True, name=name if member is not None else "", by=seg.user_id, bare=True
+        )
+        live.ensure_reply(seg.started + seg.duration_s, text, user_id=seg.user_id, question="")
+
+    _END_WHY = (
+        ("thanks", re.compile(r"thank|ขอบคุณ|thx", re.I)),
+        ("each_other", re.compile(r"each\s*other|among|turn|กันเอง|คุยกัน|หัน", re.I)),
+        ("hushed", re.compile(r"quiet|hush|เงียบ", re.I)),
+    )
+
+    def end_conversation(self, s: MeetingSession, reason: str = "") -> dict:
+        """The Live model's tool: the exchange is over. Back to listening, with the reason shown."""
+        why = next((k for k, rx in self._END_WHY if rx.search(reason or "")), "ended")
+        self._set_engaged(s, False, why=why)
+        return {"status": "listening"}
+
     def _hush_hold_s(self) -> float:
         return float(getattr(self.bot.s, "hush_hold_seconds", 90.0))
 
@@ -2344,7 +2389,7 @@ class MeetingManager:
             _stop_playback(s.vc)
         if fresh:
             s.speaking = False
-        self._set_engaged(s, False)
+        self._set_engaged(s, False, why="hushed")
 
     def _clear_hush(self, s: MeetingSession) -> None:
         if s.hushed_until:
@@ -2479,10 +2524,17 @@ class MeetingManager:
             self._set_engaged(s, False)  # people talk among themselves: back to listening
 
     def _set_engaged(
-        self, s: MeetingSession, on: bool, name: str = "", by: int = 0, bare: bool = False
+        self,
+        s: MeetingSession,
+        on: bool,
+        name: str = "",
+        by: int = 0,
+        bare: bool = False,
+        why: str = "",
     ) -> None:
         """listening <-> engaged. The Live model is told the state so it stays silent when
         listening, and the change is shown in the meeting's text chat. `name`: who called her.
+        `why`: (live mode, on=False) the reason shown in the listening line.
         `bare`: the name was said with no question; unless someone addresses her within
         `engaged_bare_timeout_seconds` she goes back to listening (a running conversation is not
         shortened by a bare name)."""
@@ -2494,7 +2546,7 @@ class MeetingManager:
         bare = bare and on and not (s.engaged and not s.engaged_bare)
         s.engaged_bare = bare
         span = (
-            float(getattr(self.bot.s, "engaged_bare_timeout_seconds", 12.0))
+            float(getattr(self.bot.s, "engaged_bare_timeout_seconds", 10.0))
             if bare
             else self._engage_s()
         )
@@ -2504,20 +2556,32 @@ class MeetingManager:
             s.called_at = time.monotonic()
             if by:
                 s.called_by = by
+        if on and name and s.engaged and not s.caller:
+            s.caller = name  # the caller became known after the exchange began
+            if s.live is not None:
+                s.live.note_caller(name)
         if s.engaged == on:
             return
         s.engaged = on
         s.introduced = True if on else s.introduced
+        s.caller = name if on else ""
+        if not on and why and s.live is not None:
+            s.live.forget_grace()
         if s.live is not None:
-            s.live.notify_state(on)
+            s.live.notify_state(on, caller=name)
+        live = s.voice_mode == "live"
         if on:
             text = (
                 t("voice_state_engaged_name", s.lang, name=name)
                 if name
                 else t("voice_state_engaged", s.lang)
             )
+            if live:
+                text += t("voice_why_called", s.lang)
         else:
             text = t("voice_state_listening", s.lang)
+            if live:
+                text += t(f"voice_why_{why or 'ended'}", s.lang)
         with contextlib.suppress(RuntimeError):  # no running loop (sync caller): best effort
             self._spawn(s, self._post_state(s, text))
 

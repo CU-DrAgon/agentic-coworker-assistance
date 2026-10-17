@@ -110,11 +110,12 @@ class Settings(BaseSettings):
     notes_batch_seconds: float = 60.0  # classic mode: how often the gate looks for decisions
     # Two states: listening (speaks only when its name is called) and engaged (answers every
     # utterance). Engaged falls back to listening after this long without anyone addressing it
-    # (or sooner: three utterances in a row that are not addressed to Salid).
-    engaged_timeout_seconds: float = 45.0
+    # and without her speaking (live mode: the Live model decides stay/end via end_conversation,
+    # this is only the cap; classic mode also ends after three unaddressed utterances).
+    engaged_timeout_seconds: float = 90.0
     # Engaged by the name alone (no question): back to listening after this long unless someone
     # addresses Salid (SALID_ENGAGED_BARE_TIMEOUT_SECONDS).
-    engaged_bare_timeout_seconds: float = 12.0
+    engaged_bare_timeout_seconds: float = 10.0
     # "Be quiet" / "เงียบก่อน": Salid says nothing and does not wake on a bare name until someone
     # says her name with words again, like a person would. 0 = no timer (default); a positive value
     # ends the silence after that many seconds instead (SALID_HUSH_HOLD_SECONDS).

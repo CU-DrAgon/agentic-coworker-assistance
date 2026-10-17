@@ -202,6 +202,17 @@ def set_captions(on: bool, language: str = "original") -> dict:
     return {}
 
 
+def end_conversation(reason: str = "") -> dict:
+    """The exchange with the person who called you is over: they are done, thanked you, said ok /
+    next, turned to other people in the room, or stopped talking to you. Call it, then say nothing
+    more. It is not an action: it only puts you back to quiet listening.
+
+    Args:
+        reason: why, in a few words: "thanked", "went back to each other" or "done".
+    """
+    return {}
+
+
 def answer_privately(question: str) -> dict:
     """Answer the person who just asked in a PRIVATE DM, with everything they personally may see.
     Use it when ask_salid says the answer cannot be said in the room (not everyone present may
@@ -263,7 +274,8 @@ FILLER_TOOLS = {
     "ask_salid",
     "answer_privately",
 }  # tools that take seconds: worth a spoken "one moment"
-SPEAKER_NOTE_MIN_S = 1.0  # speaker-change notes are at least this far apart
+NATURAL_WINDOW_S = 8.0  # wake_policy natural: a turn this soon after her own words needs no name
+SPEAKER_NOTE_MIN_S = 3.0  # speaker-change notes are at least this far apart
 BURST_GAP_S = 1.0  # a speaker's frames this close together are one stretch of speech
 SPEAKER_KEEP_S = 120.0  # how long speech stretches are remembered
 ASKER_MAX_AGE_S = 30.0
@@ -335,17 +347,28 @@ _MEETING_TOOLS = {
     "ask_consent": "ask_consent",
     "set_recording": "set_recording",
     "set_captions": "set_captions",
+    "end_conversation": "end_conversation",
 }
 
 STATE_LISTENING = "(สถานะ: กำลังฟังอยู่ ยังไม่มีใครคุยกับคุณ จดบันทึกเงียบ ๆ ห้ามพูดจนกว่าจะมีคนเรียกชื่อสลิด)"
 STATE_ENGAGED = (
     "(สถานะ: กำลังคุยกับคนที่เรียกคุณอยู่ ตอบเฉพาะประโยคที่พูดกับคุณ ไม่ต้องรอให้เรียกชื่อ "
-    "ถ้าเขาบอกโอเค/ต่อไป/พอแล้ว หรือเริ่มคุยกันเอง ให้เงียบแล้วกลับไปฟังโดยไม่พูดอะไร)"
+    "ถ้าเขาเสร็จธุระ ขอบคุณ หรือหันไปคุยกับคนอื่น ให้เรียก end_conversation แล้วเงียบ)"
 )
+CALLER_NOTE = "(คุณ{name} เป็นคนเรียกคุณ: ตอบเขา ส่วนคนอื่นตอบเฉพาะเมื่อเขาพูดกับคุณโดยตรง)"
+CALLER_NOTE_EN = "(Called by {name}: answer them; others only if they address you)"
 STATE_HUSHED = "(สถานะ: ถูกบอกให้เงียบ ห้ามพูดอะไรเลยจนกว่าจะมีคนเรียกชื่อสลิด ไม่ต้องรับทราบ)"
 STATE_HUSHED_EN = (
     "(State: told to be quiet. Say nothing at all until someone calls the name Salid. "
     "No acknowledgement.)"
+)
+NATURAL_EN = (
+    "- You may also answer, without your name, a direct question that is clearly addressed to you, "
+    "for example right after you spoke. Anything else without your name stays unanswered.\n"
+)
+NATURAL_TH = (
+    "- คุณตอบคำถามตรง ๆ ที่ชัดเจนว่าถามคุณได้ แม้ไม่ได้เรียกชื่อ เช่น ถามต่อทันทีหลังคุณเพิ่งพูด "
+    "ส่วนอย่างอื่นที่ไม่เรียกชื่อให้เงียบ\n"
 )
 FORCE_CUE = (
     "(มีคนเรียกชื่อคุณ: ตอบสิ่งที่เขาถามตามบริบท ถ้าเขาแค่เรียกชื่อและไม่ได้ถามอะไร "
@@ -357,8 +380,8 @@ STATE_LISTENING_EN = (
 )
 STATE_ENGAGED_EN = (
     "(State: talking with the person who called you. Answer only what is said to you, with no need "
-    "to hear your name. If they say ok / next / enough, or start talking among themselves, go quiet "
-    "and back to listening without saying anything.)"
+    "to hear your name. If they are done, thank you, or turn to other people, call "
+    "end_conversation and go quiet.)"
 )
 FORCE_CUE_EN = (
     "(Someone called your name. Answer what they asked, in context. If they only said your name "
@@ -575,6 +598,7 @@ def build_instruction_en(
     reply_lang: str | None = None,
     langs: list[str] | None = None,
     company_only: bool = False,
+    wake_policy: str = "strict",
 ) -> str:
     """The English system instruction (guild language "en"): English persona, no Thai particles.
     `reply_lang`: a second-tier language (zh, ja...) to speak instead of English.
@@ -587,18 +611,23 @@ def build_instruction_en(
         "when someone calls your name, then you talk with that person (and whoever joins in). Do not "
         "lecture, do not start conversations and do not recite rules or policies.\n"
         "Speaking rules:\n"
-        "- There are 2 states; the system tells you the state in a bracketed message: (1) Listening "
-        "(default): you listen and take notes silently and never speak, except when someone calls "
-        "the name “Salid” (it may be heard as Salit, Saleed or Sa-lid): then answer "
-        "briefly at once, and if it is a greeting, greet them back. (2) In conversation: talk with "
-        "the person who called you and anyone who turns to you; answer what is said to you, with no "
-        "need for the name, and never ask chit-chat questions yourself.\n"
-        "- When someone says ok / thanks / next person / moving on / that is enough, or people start "
-        "talking among themselves or to someone else about something else, go back to listening "
-        "WITHOUT saying anything (say “Sure.” only if they thanked you directly).\n"
-        "- If people in the room are talking among themselves, stay completely silent: do not reply "
-        "or comment, even if the topic concerns the team or the past (for example “where did we eat "
-        "yesterday”), unless they call your name or turn to ask you.\n"
+        "- You are in a meeting room. Most of the talk is between people, not to you. Speak only when "
+        "someone talks to YOU, which begins with your name “Salid” (it may be heard as Salit, Saleed "
+        "or Sa-lid). Someone mentioning you in the third person (“ask Salid to note that”, “Salid "
+        "wrote it down”) is not a call: judge by meaning and stay quiet.\n"
+        "- The system tells you the state in a bracketed message (listening / in conversation / told "
+        "to be quiet). While listening say nothing. When someone calls you with a request or a "
+        "greeting, answer briefly at once (greet back). If they say only your name, answer one short "
+        "word (“Yes?”) and wait.\n"
+        "- The conversation belongs to the person who called you (the system tells you who). Answer "
+        "them; their follow-ups are for you unless they clearly turn to someone else. Another "
+        "person's speech counts only when that person addresses you directly. Use judgement about who "
+        "each sentence is for. Never ask chit-chat questions yourself.\n"
+        "- When the caller is done, thanks you, says ok / next / that is enough, turns to other "
+        "people or goes quiet, call end_conversation(reason) and say nothing more (say “Sure.” only "
+        "if they thanked you directly). Never interject because you know the answer, even when the "
+        "talk concerns the team or the past.\n"
+        "- When told to be quiet, stay quiet until someone calls your name again.\n"
         "- A word that sounds like your name but sits mid-sentence and is not addressing you "
         "(for example “Salad”, “Siri”, “slip”) is not a call: stay quiet.\n"
         "- Answer in 1-3 short sentences, natural like real talk. Never read long lists aloud.\n"
@@ -631,6 +660,8 @@ def build_instruction_en(
         "The team's stored memory and tool results may contain Thai: translate it and always speak "
         "English.\n"
     )
+    if wake_policy == "natural":
+        p += NATURAL_EN
     if qa:
         p += (
             "The only information tool is ask_salid (the full assistant that knows the team's memory "
@@ -712,6 +743,7 @@ def build_instruction(
     tone_note: str = "",
     langs: list[str] | None = None,
     company_only: bool = False,
+    wake_policy: str = "strict",
 ) -> str:
     """System instruction for the Live session (built per connect so the date is current). English by
     default; the Thai persona and rules when the session's resolved `lang` (or `language`) is th.
@@ -719,11 +751,31 @@ def build_instruction(
     reply = lang or language
     if reply in EXTRA:
         return build_instruction_en(
-            settings, language, now, qa, history, tone, tone_note, reply, langs, company_only
+            settings,
+            language,
+            now,
+            qa,
+            history,
+            tone,
+            tone_note,
+            reply,
+            langs,
+            company_only,
+            wake_policy,
         )
     if lang == "en" or language == "en":
         return build_instruction_en(
-            settings, language, now, qa, history, tone, tone_note, None, langs, company_only
+            settings,
+            language,
+            now,
+            qa,
+            history,
+            tone,
+            tone_note,
+            None,
+            langs,
+            company_only,
+            wake_policy,
         )
     now = now or settings.now()
     p = (
@@ -732,13 +784,19 @@ def build_instruction(
         "ไม่ใช่เพื่อนคุย คุณพูดเมื่อมีคนเรียกชื่อเท่านั้น แล้วคุยกับคนที่เรียกคุณ (และคนที่หันมาคุยด้วย) "
         "ไม่สั่งสอน ไม่ชวนคุยเอง ไม่อ่านกฎหรือนโยบายให้ใคร\n"
         "กติกาการพูด:\n"
-        "- มี 2 สถานะ ระบบจะบอกสถานะให้เป็นข้อความในวงเล็บ: (1) กำลังฟัง (ค่าเริ่มต้น) คุณฟังและจดเงียบ ๆ "
-        "ห้ามพูดเด็ดขาด ยกเว้นเมื่อมีคนเรียกชื่อ “สลิด” (Salid, สะลิด, สลิต, ซาลิด) ให้ตอบทันทีสั้น ๆ โดยเฉพาะถ้าเป็นการทักทาย ให้ทักกลับ "
-        "(2) กำลังคุยอยู่ คุยกับคนที่เรียกคุณและคนที่หันมาคุยกับคุณ ตอบเฉพาะประโยคที่พูดกับคุณ ไม่ต้องรอชื่อ ห้ามชวนคุยเอง\n"
-        "- เมื่อมีคนพูดว่า โอเค ขอบคุณ คนต่อไป ต่อไป พอแล้ว หรือเริ่มคุยกันเอง/คุยกับคนอื่นเรื่องอื่น "
-        "ให้กลับไปฟังเงียบ ๆ โดยไม่พูดอะไรเลย (ตอบ “ได้ค่ะ” สั้น ๆ เฉพาะเมื่อเขาขอบคุณคุณโดยตรง)\n"
-        "- ถ้าคนในห้องคุยกันเอง ให้เงียบสนิท ไม่ต้องตอบหรือแสดงความเห็น แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต "
-        "(เช่น “เมื่อวานกินข้าวที่ไหน”) เว้นแต่เขาเรียกชื่อคุณหรือหันมาถามคุณ\n"
+        "- คุณอยู่ในห้องประชุม คำพูดส่วนใหญ่เป็นการคุยกันระหว่างคน ไม่ใช่คุยกับคุณ ให้พูดเฉพาะเมื่อมีคนคุยกับคุณ "
+        "ซึ่งขึ้นต้นด้วยการเรียกชื่อ “สลิด” (Salid, สะลิด, สลิต, ซาลิด) ถ้าแค่พูดถึงคุณในบุคคลที่สาม "
+        "(เช่น “ให้สลิดจดไว้”, “สลิดจดแล้ว”) ไม่ใช่การเรียก ให้ตัดสินจากความหมายแล้วเงียบ\n"
+        "- ระบบจะบอกสถานะเป็นข้อความในวงเล็บ (กำลังฟัง / กำลังคุย / ถูกบอกให้เงียบ) ตอนกำลังฟังห้ามพูด "
+        "เมื่อมีคนเรียกคุณพร้อมคำขอหรือทักทาย ให้ตอบสั้น ๆ ทันที (ทักกลับ) ถ้าเขาเรียกแค่ชื่อ ให้ตอบคำเดียวสั้น ๆ "
+        "(“คะ?”) แล้วรอ\n"
+        "- บทสนทนาเป็นของคนที่เรียกคุณ (ระบบจะบอกว่าใคร) ตอบเขา ประโยคต่อ ๆ มาของเขาเป็นการคุยกับคุณ "
+        "เว้นแต่เขาหันไปคุยกับคนอื่นอย่างชัดเจน คำพูดของคนอื่นนับก็ต่อเมื่อเขาพูดกับคุณโดยตรง "
+        "ใช้วิจารณญาณว่าแต่ละประโยคพูดกับใคร ห้ามชวนคุยเอง\n"
+        "- เมื่อคนที่เรียกคุณเสร็จธุระ ขอบคุณ พูดว่าโอเค/ต่อไป/พอแล้ว หันไปคุยกับคนอื่น หรือเงียบไป ให้เรียก "
+        "end_conversation(reason) แล้วเงียบ (ตอบ “ได้ค่ะ” สั้น ๆ เฉพาะเมื่อเขาขอบคุณคุณโดยตรง) "
+        "ห้ามแทรกเพราะรู้คำตอบ แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต\n"
+        "- เมื่อถูกบอกให้เงียบ ให้เงียบจนกว่าจะมีคนเรียกชื่อคุณอีกครั้ง\n"
         "- คำที่เสียงคล้ายชื่อคุณแต่อยู่กลางประโยคและไม่ใช่การเรียกคุณ (เช่น “สนิท” ใน “เขาสนิทกันมาก”, “สลิป”, “สิริ”) "
         "ไม่ใช่การเรียกชื่อ ให้เงียบ\n"
         "- ตอบสั้น 1-3 ประโยค เป็นธรรมชาติเหมือนคุยกันจริง ไม่อ่านเป็นรายการยาว ๆ\n"
@@ -760,6 +818,8 @@ def build_instruction(
         "ถ้ามีคนถามว่าวันนี้/พรุ่งนี้/เมื่อวานวันอะไร ให้ตอบจากวันที่นี้เท่านั้น ห้ามเดาจากความจำ. "
         "สัปดาห์เริ่มวันจันทร์. ใช้วันที่นี้แปลง “เดือนนี้”, “สัปดาห์ก่อน” ฯลฯ เป็นช่วงวันที่ YYYY-MM-DD ตอนเรียกเครื่องมือ\n"
     )
+    if wake_policy == "natural":
+        p += NATURAL_TH
     if qa:
         p += (
             "เครื่องมือข้อมูลมีอันเดียวคือ ask_salid (ผู้ช่วยเต็มรูปแบบที่รู้ความจำของทีมและค้นเว็บได้)\n"
@@ -888,6 +948,7 @@ class LiveVoice:
         self._last_audio_at = 0.0  # when the model last produced audio, or a cue was sent
         self._real_audio_at = 0.0  # when the model last really produced audio (monotonic)
         self._engaged = False
+        self._caller = ""
         self._last_engaged_at = -1e9  # monotonic: engaged last (grace window for the gates)
         self._frames: list[tuple[float, float]] = []  # (arrival time, RMS) of the last 3 s
         self._rejected_logged = False
@@ -1060,10 +1121,23 @@ class LiveVoice:
         except Exception:
             return {}
 
+    def _wake_policy(self) -> str:
+        try:
+            return self.bot.team.wake_policy(self.session.guild_id)
+        except Exception:
+            return "strict"
+
     async def build_config(self) -> types.LiveConnectConfig:
         s, sess = self.bot.s, self.session
         qa = await self._qa_enabled()
-        fns = [set_minutes_destination, post_note, ask_consent, set_recording, set_captions]
+        fns = [
+            set_minutes_destination,
+            post_note,
+            ask_consent,
+            set_recording,
+            set_captions,
+            end_conversation,
+        ]
         if qa:
             fns = [ask_salid, answer_privately, *fns]
         decls = [
@@ -1087,6 +1161,7 @@ class LiveVoice:
                 lang=sess.lang,
                 langs=sess.langs or None,
                 company_only=len(sess.langs) == 1 and sess.language_mode == "company_only",
+                wake_policy=self._wake_policy(),
                 **self._tone_kw(),
             ),
             tools=tools,
@@ -1172,9 +1247,11 @@ class LiveVoice:
             await asyncio.gather(*tasks, return_exceptions=True)
 
     # ---- listening / engaged state, forced turns
-    def notify_state(self, engaged: bool) -> None:
-        """Tell the model whether it is engaged in a conversation or only listening."""
+    def notify_state(self, engaged: bool, caller: str = "") -> None:
+        """Tell the model whether it is engaged in a conversation or only listening. `caller`: who
+        called her (the exchange is theirs)."""
         self._engaged = engaged
+        self._caller = caller if engaged else ""
         if engaged:
             self._hushed = False
         elif self._hushed:
@@ -1183,6 +1260,21 @@ class LiveVoice:
             self._last_engaged_at = time.monotonic()
             self._release_held()  # the name arrived while the first words were being held back
         self._spawn(self._send_state())
+
+    def forget_grace(self) -> None:
+        """The exchange was ended on purpose (the model, the cap, a hush): the mouth gate's
+        re-engage grace does not apply, so a strict gate mutes unnamed audio from here on."""
+        self._last_engaged_at = -1e9
+
+    def spoke_since(self, t: float) -> bool:
+        """Did the model produce audio after monotonic time `t`?"""
+        return self._real_audio_at >= t or self._turn_audio
+
+    def note_caller(self, caller: str) -> None:
+        """The caller became known after the exchange began."""
+        if self._engaged and caller and caller != self._caller:
+            self._caller = caller
+            self._spawn(self._send_state())
 
     async def _send_state(self) -> None:
         live = self._live
@@ -1194,6 +1286,9 @@ class LiveVoice:
             text = STATE_ENGAGED_EN if self._engaged else STATE_LISTENING_EN
         else:
             text = STATE_ENGAGED if self._engaged else STATE_LISTENING
+        if self._engaged and self._caller and not self._hushed:
+            note = CALLER_NOTE_EN if self._en() else CALLER_NOTE
+            text += " " + note.format(name=self._caller)
         await live.send_client_content(
             turns=types.Content(role="user", parts=[types.Part(text=text)]), turn_complete=False
         )
@@ -1313,15 +1408,10 @@ class LiveVoice:
         )
 
     def _flush_heard(self) -> None:
-        """The utterance is over: a thank-you / "that's enough" said to Salid while it is engaged
-        puts it back to listening (like the classic path), then start a fresh buffer."""
-        text, hit = self._heard_buf.strip(), self._heard_hit
+        """The utterance is over: start a fresh buffer. (Ending the exchange is the Live model's
+        `end_conversation`, not a word list.)"""
         self._heard_buf, self._heard_hit, self._hush_seen = "", False, False
         self._rejected_logged = False
-        if text and not hit and self._engaged:
-            mgr = self.bot.meetings
-            if mgr.is_dismissal(text):
-                mgr._set_engaged(self.session, False)
 
     def _answering(self, since: float) -> bool:
         return (
@@ -1486,6 +1576,8 @@ class LiveVoice:
                 return await mgr.ask_consent(
                     self.session, str(a.get("text", "")), str(a.get("medium", "text"))
                 )
+            if name == "end_conversation":
+                return mgr.end_conversation(self.session, str(a.get("reason", "")))
             if name == "set_captions":
                 lang = normalize_language(a.get("language", "original"))
                 if lang is None:
@@ -1909,7 +2001,8 @@ class LiveVoice:
         engaged = self._authorize_tools([fc.name for fc in tool_call.function_calls or []])
         self._answer_auth = engaged  # a spoken answer to a call made while engaged may be heard
         if any(
-            self._refusal(fc.name, dict(fc.args or {}), engaged) is None
+            fc.name != "end_conversation"  # no spoken answer follows it
+            and self._refusal(fc.name, dict(fc.args or {}), engaged) is None
             for fc in tool_call.function_calls or []
         ):
             # the turn_complete that follows is not the end of the answer (a call refused below
@@ -1925,8 +2018,14 @@ class LiveVoice:
         `live_reengage_grace_seconds` (a lively room drops the state while a question is open)."""
         if not getattr(self.bot.s, "live_mouth_gate", True) or self.session.engaged:
             return True
-        grace = float(getattr(self.bot.s, "live_reengage_grace_seconds", 60.0))
-        return time.monotonic() - self._last_engaged_at <= grace
+        now = time.monotonic()
+        if now - self._last_engaged_at <= float(
+            getattr(self.bot.s, "live_reengage_grace_seconds", 60.0)
+        ):
+            return True
+        # `natural` policy: a turn that starts right after her own last words (a reply to what she
+        # just said, a direct question) may be heard without the name; `strict` never.
+        return self._wake_policy() == "natural" and now - self._real_audio_at <= NATURAL_WINDOW_S
 
     def _authorize_tools(self, names: list[str]) -> bool:
         """The gate for a tool call batch. Passing only thanks to the grace re-engages in code (the
@@ -1938,7 +2037,9 @@ class LiveVoice:
             if (
                 not self.session.engaged
                 and getattr(self.bot.s, "live_mouth_gate", True)
-                and any(n != "post_note" for n in names)  # a note alone is not a conversation
+                and any(
+                    n not in ("post_note", "end_conversation") for n in names
+                )  # a note alone is not a conversation
             ):
                 self.bot.meetings._set_engaged(self.session, True)
             return True
@@ -2022,6 +2123,13 @@ class LiveVoice:
             or (self._awaiting_answer and self._answer_auth)
             or time.monotonic() < self._announce_until  # a job result the room asked for
         ):
+            if (
+                not self._turn_ok
+                and not self.session.engaged
+                and self._wake_policy() == "natural"
+                and self._gate_open()
+            ):
+                self.bot.meetings._set_engaged(self.session, True)  # a direct reply: engaged again
             self._turn_ok = True
             self._release_held()
             self._on_audio(data)
@@ -2082,6 +2190,9 @@ class LiveVoice:
         self._awaiting_answer = False
         s.introduced = True  # Salid has spoken: the room knows it is there
         self._last_audio_at = self._real_audio_at = time.monotonic()
+        if s.engaged and not s.engaged_bare:  # her own speech keeps the 90 s cap away
+            span = self.bot.meetings._engage_s()
+            s.engaged_until = max(s.engaged_until, self._real_audio_at + span)
         src = self._source
         if src is not None and self._filler_until > self._real_audio_at:
             src.clear()  # the real answer is here: cut the rest of the "one moment" clip

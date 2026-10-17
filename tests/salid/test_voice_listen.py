@@ -63,10 +63,10 @@ async def quiet_session(env, **settings):
     return await start(env)
 
 
-def test_default_engaged_timeout_is_45_seconds():
+def test_default_engaged_timeout_is_90_seconds():
     from salid.config import Settings
 
-    assert Settings.model_fields["engaged_timeout_seconds"].default == 45.0
+    assert Settings.model_fields["engaged_timeout_seconds"].default == 90.0
     assert Settings.model_fields["live_ask_timeout_seconds"].default == 150.0
     assert Settings.model_fields["live_slow_answer_seconds"].default == 40.0
     assert Settings.model_fields["voice_state_posts"].default is True
@@ -131,13 +131,13 @@ async def test_a_question_soon_after_she_spoke_counts_as_addressed(env):
     await env.mgr.end((1000, 77), "shutdown")
 
 
-async def test_engaged_times_out_after_45_seconds_by_default(env):
+async def test_engaged_times_out_after_90_seconds_by_default(env):
     s = await quiet_session(env)
-    assert env.mgr._engage_s() == 45.0
+    assert env.mgr._engage_s() == 90.0
     env.mgr._set_engaged(s, True)
-    env.mgr._consent_tick(s, time.monotonic() + 30)
-    assert s.engaged is True
     env.mgr._consent_tick(s, time.monotonic() + 60)
+    assert s.engaged is True
+    env.mgr._consent_tick(s, time.monotonic() + 100)
     assert s.engaged is False
     await env.mgr.end((1000, 77), "shutdown")
 
@@ -388,17 +388,17 @@ def test_prompts_are_listen_first_in_both_languages():
     s = FixedClockSettings()
     th, en = build_instruction(s, "th"), build_instruction(s, "en")
     assert "ผู้จดบันทึกประจำทีม" in th and "ไม่ใช่เพื่อนคุย" in th
-    assert "โอเค ขอบคุณ คนต่อไป" in th and "โดยไม่พูดอะไรเลย" in th
+    assert "end_conversation" in th and "บุคคลที่สาม" in th
     assert "ตามที่ได้มา" in th and "ห้ามเรียบเรียงใหม่" in th and "say" in th
     assert "ขออภัยค่ะ ตรวจสอบให้ไม่ได้ตอนนี้" in th
     for gone in ("เข้าร่วมบทสนทนาอย่างเป็นธรรมชาติ", "ถามชวนคุย", "เรียบเรียงคำตอบเป็นคำพูดของคุณเอง"):
         assert gone not in th
-    assert "note-taker" in en and "LISTEN" in en and "WITHOUT saying anything" in en
+    assert "note-taker" in en and "LISTEN" in en and "end_conversation" in en
     assert "as it is" in en and "never rewrite" in en and "“say” field" in en
     for gone in ("join the conversation naturally", "ask questions like a good colleague"):
         assert gone not in en
     assert "ได้ค่ะ” สั้น ๆ แล้วกลับไปเงียบฟัง" not in lvm.STATE_ENGAGED
-    assert "without saying anything" in lvm.STATE_ENGAGED_EN
+    assert "end_conversation" in lvm.STATE_ENGAGED_EN
 
 
 # ------------------------------------------------------------------ one memory search per question

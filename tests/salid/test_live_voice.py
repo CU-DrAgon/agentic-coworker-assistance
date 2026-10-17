@@ -150,7 +150,7 @@ def test_instruction_has_date_persona_tools_and_language():
     th = build_instruction(s, "th")
     assert "2026-10-14" in th and "วันพุธ" in th and "สัปดาห์เริ่มวันจันทร์" in th
     assert "สลิด" in th and "Salid" in th and "เงียบ" in th and "ask_salid" in th
-    assert "กำลังฟัง" in th and "กำลังคุยอยู่" in th and "พูดภาษาไทย" in th
+    assert "กำลังฟัง" in th and "end_conversation" in th and "พูดภาษาไทย" in th
     assert "always speak English" in build_instruction(s, "en")
     assert "ภาษาเดียวกับคนที่พูด" in build_instruction(s, "auto")
     assert "ดูข้อมูลของทีมไม่ได้" in build_instruction(s, "th", qa=False)
@@ -345,7 +345,7 @@ async def test_join_connects_live_at_once_and_builds_the_session_config(lv):
     names = [d.name for d in cfg.tools[0].function_declarations]
     assert names == [
         "ask_salid", "answer_privately", "set_minutes_destination", "post_note", "ask_consent",
-        "set_recording", "set_captions",
+        "set_recording", "set_captions", "end_conversation",
     ]  # fmt: skip
     assert "spending_summary" not in names  # no raw ledger tools in Live mode
     assert "2026-10-14" in cfg.system_instruction
@@ -709,6 +709,7 @@ async def test_qa_feature_off_means_no_tools_in_the_config_and_a_refusal(lv):
     names = [d.name for d in lv.connect.configs[0].tools[0].function_declarations]
     assert names == [
         "set_minutes_destination", "post_note", "ask_consent", "set_recording", "set_captions",
+        "end_conversation",
     ]  # fmt: skip
     assert "ดูข้อมูลของทีมไม่ได้" in lv.connect.configs[0].system_instruction
     live.push(tool_msg("ask_salid", {"question": "อะไร"}))
@@ -922,14 +923,6 @@ async def test_other_speech_in_the_input_transcript_does_nothing(lv):
     live.push(heard_msg("เขาสนิทกันมาก"), heard_msg(" แล้วก็ไปกินข้าว"), heard_msg(" สลิด ออกประชุม"))
     await asyncio.sleep(0.25)
     assert sent == [] and s.engaged is False  # leaving is the meeting manager's job
-    await lv.mgr.end((1000, 77))
-
-
-async def test_dismissal_in_the_input_transcript_puts_salid_back_to_listening(lv):
-    s, live = await lv.join(5)
-    lv.mgr._set_engaged(s, True)
-    live.push(heard_msg("ขอบคุณครับ พอแล้ว"), done_msg())
-    await until(lambda: s.engaged is False)
     await lv.mgr.end((1000, 77))
 
 

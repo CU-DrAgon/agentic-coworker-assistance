@@ -52,12 +52,14 @@ async def test_live_bare_name_from_the_transcriber_only_sets_pending(lv, monkeyp
     await lv.mgr.end((1000, 77))
 
 
-async def test_live_bare_name_even_with_name_called_true_is_pending_only(lv, monkeypatch):
+async def test_live_single_bare_name_with_name_called_true_leaves_it_to_the_live_model(
+    lv, monkeypatch
+):
     s, live = await lv.join(5)
     calls = record_replies(s)
     say(monkeypatch, Heard("สลิด", True))
     await lv.mgr.handle_segment(s, seg())
-    assert s.engaged is False and calls == [] and 5 in s.pending_wake
+    assert s.engaged is False and calls == [] and len(s.name_calls) == 1
     await lv.mgr.end((1000, 77))
 
 
@@ -328,16 +330,16 @@ async def test_reply_within_6_seconds_of_her_voice_is_addressed_for_anyone(env):
 
 
 # ------------------------------------------------------------------ bare engagement expires
-async def test_bare_engagement_goes_back_to_listening_after_12_seconds(env):
+async def test_bare_engagement_goes_back_to_listening_after_10_seconds(env):
     env.bot.s.voice_state_posts = False
     s = await start(env)
-    assert Settings(_env_file=None).engaged_bare_timeout_seconds == 12.0
+    assert Settings(_env_file=None).engaged_bare_timeout_seconds == 10.0
     env.mgr._set_engaged(s, True, by=10, bare=True)
     assert s.engaged_bare is True
-    assert 11.0 < s.engaged_until - time.monotonic() <= 12.0
+    assert 9.0 < s.engaged_until - time.monotonic() <= 10.0
     env.mgr._consent_tick(s, time.monotonic() + 5)
     assert s.engaged is True
-    env.mgr._consent_tick(s, time.monotonic() + 13)
+    env.mgr._consent_tick(s, time.monotonic() + 11)
     assert s.engaged is False and s.engaged_bare is False
     await env.mgr.end((1000, 77))
 
