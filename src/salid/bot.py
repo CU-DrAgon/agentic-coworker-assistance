@@ -2402,6 +2402,30 @@ class SecretaryBot(
         key = "voice_talk_listen" if mode == "listen_only" else "voice_talk_may"
         await interaction.followup.send(t(key, s.lang), ephemeral=True)
 
+    async def handle_captions(self, interaction, on: bool) -> None:
+        """/show-captions and /hide-captions for the meeting the person is in (anyone in the room)."""
+        lang = self._interaction_lang(interaction)
+        s = self._meeting_of(interaction)
+        if s is None:
+            await interaction.response.send_message(t("cmd_no_meeting", lang), ephemeral=True)
+            return
+        res = self.meetings.set_captions(s, on)
+        key = "cmd_captions_on" if res.get("status") == "on" else "cmd_captions_off"
+        await interaction.response.send_message(t(key, s.lang), ephemeral=True)
+
+    async def handle_captions_default(self, interaction, on: bool) -> None:
+        """/captions-default on|off: executives and server managers set the org default."""
+        lang = self._interaction_lang(interaction)
+        if not self._may_configure(interaction.user):
+            await interaction.response.send_message(
+                t("captions_default_denied", lang), ephemeral=True
+            )
+            return
+        await asyncio.to_thread(self.team.set_captions_default, interaction.guild.id, on)
+        await interaction.response.send_message(
+            t(f"captions_default_{'on' if on else 'off'}", lang), ephemeral=True
+        )
+
     async def handle_quiet(self, interaction) -> None:
         """/quiet: Salid stops talking now and stays quiet until her name is called again."""
         lang = self._interaction_lang(interaction)
@@ -2799,6 +2823,46 @@ class SecretaryBot(
             self.tree.add_command(
                 app_commands.Command(name=name, description=t("cmd_voice"), callback=voice_cb)
             )
+
+        async def show_captions_cb(interaction: discord.Interaction):
+            await self.handle_captions(interaction, True)
+
+        async def hide_captions_cb(interaction: discord.Interaction):
+            await self.handle_captions(interaction, False)
+
+        show_captions_cb = app_commands.guild_only()(show_captions_cb)
+        hide_captions_cb = app_commands.guild_only()(hide_captions_cb)
+        for name in ("show-captions", "แสดงคำบรรยาย"):
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name, description=t("cmd_show_captions"), callback=show_captions_cb
+                )
+            )
+        for name in ("hide-captions", "ซ่อนคำบรรยาย"):
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name, description=t("cmd_hide_captions"), callback=hide_captions_cb
+                )
+            )
+
+        async def captions_default_cb(interaction: discord.Interaction, mode: str):
+            await self.handle_captions_default(interaction, mode == "on")
+
+        captions_default_cb = app_commands.guild_only()(captions_default_cb)
+        captions_default_cb = app_commands.describe(mode=t("cmd_voice_arg"))(captions_default_cb)
+        captions_default_cb = app_commands.choices(
+            mode=[
+                app_commands.Choice(name="on / เปิดทุกประชุม", value="on"),
+                app_commands.Choice(name="off / ปิด (ค่าเริ่มต้น)", value="off"),
+            ]
+        )(captions_default_cb)
+        self.tree.add_command(
+            app_commands.Command(
+                name="captions-default",
+                description=t("cmd_captions_default"),
+                callback=captions_default_cb,
+            )
+        )
 
         async def quiet_cb(interaction: discord.Interaction):
             await self.handle_quiet(interaction)

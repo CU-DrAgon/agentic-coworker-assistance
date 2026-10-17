@@ -1070,6 +1070,15 @@ CATALOG: dict[str, dict[str, str]] = {
     "cmd_mode_arg": _bi("โหมดใหม่ (ไม่เลือก = ดูโหมดปัจจุบัน)", "New mode (empty = view)"),
     "cmd_language": _bi("ดูหรือตั้งภาษาที่สลิดตอบในห้องนี้", "View or set Salid's language here"),
     "cmd_language_arg": _bi("ภาษาใหม่ (ไม่เลือก = ดูภาษาปัจจุบัน)", "New language (empty = view)"),
+    "cmd_show_captions": _bi(
+        "แสดงข้อความถอดเสียงสดในแชตประชุมนี้", "Show live captions (ASR text) in this meeting"
+    ),
+    "cmd_hide_captions": _bi("หยุดแสดงข้อความถอดเสียงในประชุมนี้", "Hide live captions in this meeting"),
+    "cmd_captions_default": _bi(
+        "ค่าเริ่มต้นคำบรรยายสดของทุกประชุม", "Default for live captions in every meeting"
+    ),
+    "cmd_captions_on": _bi("เปิดคำบรรยายสดแล้วค่ะ", "Live captions are on."),
+    "cmd_captions_off": _bi("ปิดคำบรรยายสดแล้วค่ะ", "Live captions are off."),
     "cmd_voice": _bi(
         "เสียงสลิดในประชุมนี้: ฟังอย่างเดียว/พูดได้",
         "Salid's voice here: listen only / may talk",
