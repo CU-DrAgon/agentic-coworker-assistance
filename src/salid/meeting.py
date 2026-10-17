@@ -43,7 +43,7 @@ from .captions import CaptionState, format_captions, translate_lines
 from .coo_store import MINUTES
 from .fillers import POOL_SIZE, ClipCache, FillerWriter, RecentLines, write_line
 from .gate import GateLine, notes_from_transcript
-from .i18n import resolve_lang, t
+from .i18n import EXTRA, LANGS, lang_name, resolve_lang, t
 from .llm import generate
 from .minutes import (
     can_see,
@@ -445,7 +445,19 @@ def pcm_to_wav(pcm: bytes) -> bytes:
     return buf.getvalue()
 
 
-def transcribe_pcm(client: Any, model: str, pcm: bytes) -> str:
+def transcribe_prompt(language: str | None = None) -> str:
+    """The transcription prompt: Thai or English, plus the session's language when it is one of
+    the second-tier languages. Transcripts stay verbatim (never translated)."""
+    if language not in EXTRA:
+        return TRANSCRIBE_PROMPT
+    return (
+        f"The speaker may also speak {lang_name(language)} ({lang_name(language, 0)}): transcribe "
+        "it verbatim in its own script, do not translate. Languages: Thai, English or "
+        f"{lang_name(language)}.\n" + TRANSCRIBE_PROMPT
+    )
+
+
+def transcribe_pcm(client: Any, model: str, pcm: bytes, language: str | None = None) -> str:
     """Blocking: 48 kHz stereo PCM -> 16 kHz mono FLAC (ffmpeg, in memory) -> Gemini on Vertex.
     Returns the Thai text, "" when there was no speech."""
     flac = to_flac(pcm_to_wav(pcm))
@@ -455,7 +467,7 @@ def transcribe_pcm(client: Any, model: str, pcm: bytes) -> str:
     resp = generate(
         client,
         model,
-        [types.Part.from_bytes(data=flac, mime_type="audio/flac"), TRANSCRIBE_PROMPT],
+        [types.Part.from_bytes(data=flac, mime_type="audio/flac"), transcribe_prompt(language)],
         config,
     )
     raw = (getattr(resp, "text", None) or "").strip()
@@ -470,7 +482,15 @@ def transcribe_pcm(client: Any, model: str, pcm: bytes) -> str:
 def summarize_transcript(client: Any, model: str, transcript: str, language: str = "th") -> str:
     """Blocking: meeting summary (decisions, action items with owners, open questions) in
     `language` (th, en, or auto = the language the transcript is mostly in)."""
-    prompt = SUMMARY_PROMPTS[resolve_lang(language, transcript)]
+    resolved = resolve_lang(language, transcript)
+    prompt = SUMMARY_PROMPTS.get(resolved)
+    if prompt is None:  # second tier: the English prompt, written in that language
+        prompt = SUMMARY_PROMPT_EN.replace(
+            "in English. Use only", f"in {lang_name(resolved)}. Use only"
+        ).replace(
+            "write the whole summary in English only",
+            f"write the whole summary in {lang_name(resolved)} only",
+        )
     resp = generate(
         client,
         model,
@@ -643,7 +663,11 @@ class MeetingSession:
     @property
     def lang(self) -> str:
         """Language of fixed messages (auto has no text to follow, so the starter's language)."""
-        return self.language if self.language in ("th", "en") else self.fallback_lang
+        return (
+            self.language
+            if self.language in LANGS and self.language != "auto"
+            else self.fallback_lang
+        )
 
     def push_threadsafe(self, user_id: int, pcm: bytes, *, is_bot: bool = False) -> None:
         with contextlib.suppress(RuntimeError):  # loop already closed on shutdown
@@ -871,8 +895,8 @@ class MeetingManager:
         if s.ending or s.leaving:
             return {"error": "meeting_ending"}
         if on:
-            if language == "original" and s.lang == "en":
-                language = "en"  # an English guild reads captions in English by default
+            if language == "original" and s.lang != "th":
+                language = s.lang  # an English guild reads captions in English by default
             s.captions.turn_on(language, self._now())
             return {"status": "on", "language": language}
         s.captions.turn_off()
@@ -927,7 +951,7 @@ class MeetingManager:
     # ---- consent: a colleague asking whether this is a meeting
     async def _consent_line(self, s: MeetingSession) -> str:
         p = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
-        lang = "English" if s.lang == "en" else "Thai"
+        lang = "Thai" if s.lang == "th" else lang_name(s.lang)
         prompt = (
             "You are Salid, a friendly team member who just sat in on a voice channel to help "
             "and take meeting notes. Nobody has said what this is. Write ONE short, natural line "
@@ -936,7 +960,7 @@ class MeetingManager:
             + (
                 "A woman speaks it; plain natural English, no Thai words or particles. "
                 "Reply with the line only."
-                if s.lang == "en"
+                if s.lang != "th"
                 else f"A woman speaks it; use the particle {p} (questions: "
                 f"{'คะ' if p == 'ค่ะ' else p}). Reply with the line only."
             )
@@ -1420,7 +1444,7 @@ class MeetingManager:
             await self.join(
                 starter,
                 lang=lang
-                if lang in ("th", "en")
+                if lang in LANGS and lang != "auto"
                 else resolve_lang(self.bot.team.current(guild.id).default_language),
                 announce="meet_announce_auto",
                 first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
@@ -1792,7 +1816,11 @@ class MeetingManager:
             member.display_name if member else t("meet_participant", s.lang, n=seg.user_id % 1000)
         )
         text = await asyncio.to_thread(
-            transcribe_pcm, self.stt_client, self.bot.s.gemini_model, seg.pcm
+            transcribe_pcm,
+            self.stt_client,
+            self.bot.s.gemini_model,
+            seg.pcm,
+            *((s.lang,) if s.lang in EXTRA else ()),
         )
         if not text:
             return
@@ -2162,7 +2190,7 @@ class MeetingManager:
         this meeting) and the generated one is dropped: one acknowledgement only."""
         if not self.bot.s.voice_reply or s.ending or s.speaking:
             return
-        lang = s.lang if s.lang in ACK_TEXT else "th"
+        lang = s.lang if s.lang in ACK_TEXT or s.lang in EXTRA else "th"
         particle = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
         key = getattr(s, "key", id(s))
         recent = self._ack_recent.get(key)
@@ -2469,7 +2497,7 @@ class MeetingManager:
                 self.bot.llm,
                 self.bot.s.gemini_model,
                 s.transcript.full_text(),
-                "en" if s.lang == "en" else s.language,
+                s.lang if s.lang != "th" else s.language,
             )
         except Exception:
             logger.exception("meeting summary failed")

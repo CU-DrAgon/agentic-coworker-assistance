@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 from .geo import parse_when
 from .gmaps import Geocoder, GoogleHttp, MapsError
+from .i18n import map_language_code
 from .places import PlacesCtx
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,7 @@ def norm_day(d: dict) -> dict:
 
 def summarize(c: dict, lang: str) -> str:
     """One natural line from normalised conditions."""
-    th = lang != "en"
+    th = lang == "th"
     bits = [c.get("condition") or ("อากาศ" if th else "Weather")]
     t, f = c.get("temp_c"), c.get("feels_c")
     if t is not None:
@@ -202,7 +203,7 @@ class WeatherService:
     def _loc(lat, lng, lang, **extra) -> dict:
         return {
             "location.latitude": round(lat, 4), "location.longitude": round(lng, 4),
-            "languageCode": "en" if lang == "en" else "th", "unitsSystem": "METRIC", **extra,
+            "languageCode": map_language_code(lang), "unitsSystem": "METRIC", **extra,
         }  # fmt: skip
 
     def current(self, lat, lng, lang) -> dict:
@@ -290,7 +291,7 @@ class WeatherTools:
                     logger.info("could not store coordinates", exc_info=True)
             return p.name, p.lat, p.lng
         if not place.strip():
-            return ("กรุงเทพฯ" if c.lang != "en" else "Bangkok"), *BANGKOK
+            return ("กรุงเทพฯ" if c.lang == "th" else "Bangkok"), *BANGKOK
         got = c.service.geo.locate(place.strip(), c.lang)
         if got is None:
             raise MapsError("place_not_found", "geocode")

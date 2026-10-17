@@ -18,7 +18,7 @@ from pathlib import Path
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
-from .i18n import t
+from .i18n import lang_name, t
 from .models import Receipt
 from .store import LOW_CONF, cur_of
 
@@ -44,11 +44,69 @@ LATIN_FALLBACKS = [
 ]
 
 
+# Second-tier languages with their own script need their own font: CJK (Noto Sans CJK, a .ttc that
+# fpdf2 cannot load, so the face is extracted once into a cache dir) and Devanagari for Hindi.
+# th / en / vi / ms / id use the Latin + Thai fonts above (Kanit / Sarabun cover Vietnamese).
+CJK_DIR = "/usr/share/fonts/opentype/noto"
+CJK_FACES = {"zh": "Noto Sans CJK SC", "ja": "Noto Sans CJK JP", "ko": "Noto Sans CJK KR"}
+DEVANAGARI_FONT = (
+    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
+)
+SCRIPT_LANGS = ("zh", "ja", "ko", "hi")
+# python-pptx / PowerPoint font names per language (None = the deck's Latin font + Thai slot).
+DECK_FONTS = {
+    "zh": "Noto Sans CJK SC",
+    "ja": "Noto Sans CJK JP",
+    "ko": "Noto Sans CJK KR",
+    "hi": "Noto Sans Devanagari",
+}
+
+
+def font_cache_dir() -> Path:
+    try:
+        from platformdirs import user_cache_dir
+
+        return Path(user_cache_dir("salid")) / "fonts"
+    except ImportError:
+        return Path.home() / ".cache" / "salid" / "fonts"
+
+
+_cjk_logged: set[str] = set()
+
+
+def cjk_face_file(lang: str, bold: bool = False, directory: str = CJK_DIR) -> str | None:
+    """Path to a single-face font file for zh / ja / ko, extracted once from the Noto Sans CJK
+    collection (fpdf2 cannot load a .ttc). None when the collection is not installed."""
+    face = CJK_FACES.get(lang)
+    ttc = Path(directory) / f"NotoSansCJK-{'Bold' if bold else 'Regular'}.ttc"
+    if not face or not ttc.is_file():
+        return None
+    out = font_cache_dir() / f"{face.replace(' ', '')}-{'Bold' if bold else 'Regular'}.otf"
+    if out.is_file() and out.stat().st_size > 0:
+        return str(out)
+    try:
+        from fontTools.ttLib import TTCollection
+
+        for f in TTCollection(str(ttc)).fonts:
+            if f["name"].getDebugName(1) == face:
+                out.parent.mkdir(parents=True, exist_ok=True)
+                f.save(str(out))
+                if lang not in _cjk_logged:
+                    _cjk_logged.add(lang)
+                    logger.info("extracted %s (%s) to %s", face, ttc.name, out)
+                return str(out)
+    except Exception:
+        logger.warning("could not extract %s from %s", face, ttc, exc_info=True)
+    return None
+
+
 @dataclass
 class FontSet:
     regular: str | None
     bold: str | None
     thai: bool
+    script: str | None = None  # the language this font was picked for (zh ja ko hi), else None
 
     @property
     def family(self) -> str:
@@ -66,10 +124,40 @@ def supports_thai(path: str) -> bool:
         return False
 
 
-def find_fonts(configured: str = "") -> FontSet:
+def script_fonts(lang: str | None) -> FontSet | None:
+    """The font for a language with its own script (zh ja ko hi), None when it is not installed
+    (or `lang` needs no special font)."""
+    if lang in CJK_FACES:
+        reg = cjk_face_file(lang)
+        if reg:
+            return FontSet(reg, cjk_face_file(lang, bold=True), False, lang)
+    elif lang == "hi":
+        reg, bold = DEVANAGARI_FONT
+        if Path(reg).is_file():
+            return FontSet(reg, bold if Path(bold).is_file() else None, False, "hi")
+    return None
+
+
+def fonts_missing(lang: str | None) -> bool:
+    """True when `lang` needs a script font that this machine does not have."""
+    return lang in SCRIPT_LANGS and script_fonts(lang) is None
+
+
+def font_note(lang: str | None) -> str:
+    """One reply line when the document for `lang` had to be made in English for lack of fonts
+    ("" when the fonts are there or `lang` needs none)."""
+    if not fonts_missing(lang):
+        return ""
+    return t("docs_font_missing", lang or "en", language=lang_name(lang, 0 if lang != "th" else 1))
+
+
+def find_fonts(configured: str = "", lang: str | None = None) -> FontSet:
     """`configured` (SALID_PDF_FONT, a regular face; a sibling `-Bold` is used when present)
     first, then the known paths. A configured font without Thai glyphs is still used (the
-    operator chose it) but logged."""
+    operator chose it) but logged. `lang` zh / ja / ko / hi picks the script font instead (the
+    Thai fonts when it is not installed: see `fonts_missing`)."""
+    if lang in SCRIPT_LANGS and (fs := script_fonts(lang)):
+        return fs
     candidates: list[tuple[str, str | None]] = []
     if configured:
         p = Path(configured)
@@ -107,6 +195,11 @@ def fmt_totals_plain(by: dict[str, float]) -> str:
 class _Pdf(FPDF):
     def __init__(self, fonts: FontSet, org: str, lang: str, generated_at: datetime):
         super().__init__(orientation="P", unit="mm", format="A4")
+        if lang in SCRIPT_LANGS and fonts.script != lang:
+            fonts = script_fonts(lang) or fonts
+            if fonts.script != lang:  # fonts not installed: fixed strings in English
+                logger.warning("no %s font installed; PDF labels are in English", lang)
+                lang = "en"
         self.fonts_, self.org, self.lang, self.generated_at = fonts, org, lang, generated_at
         self.family = "Doc"
         if fonts.regular:

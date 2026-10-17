@@ -255,8 +255,8 @@ STATE_EN = {INVITED: "no reply", ANSWERING: "answering", DONE: "done", DECLINED:
 
 def state_label(state: str, lang: str) -> str:
     if state == UNREACHABLE:
-        return "DM ปิด" if lang != "en" else "DMs closed"
-    return (STATE_EN if lang == "en" else STATE_TH).get(state, state)
+        return "DM ปิด" if lang == "th" else "DMs closed"
+    return (STATE_EN if lang != "th" else STATE_TH).get(state, state)
 
 
 def rows(form: dict, lang: str) -> list[list[str]]:

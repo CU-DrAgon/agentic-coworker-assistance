@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-from .i18n import t
+from .i18n import base_lang, t
 
 DEFAULT_TONE = "cheerful"
 TONES: tuple[str, ...] = ("cheerful", "friendly", "professional", "concise", "calm")
@@ -217,6 +217,7 @@ def note_problem(note: str) -> str:
 
 def note_block(note: str, lang: str) -> str:
     """The owner's custom note as quoted data ("" when there is none or it is unsafe)."""
+    lang = lang if lang == "auto" else base_lang(lang)  # second-tier languages: English blocks
     n = clean_note(note)
     if not n or note_problem(n):
         return ""
@@ -234,6 +235,7 @@ def note_block(note: str, lang: str) -> str:
 def tone_block(tone: str, lang: str = "th", note: str = "") -> str:
     """The style part of the persona for `tone` (th / en; auto = both, the reply language follows
     the user), plus the custom note. Replaces the old style sentences of `qa.PERSONA`."""
+    lang = lang if lang == "auto" else base_lang(lang)  # second-tier languages: English blocks
     key = norm(tone)
     if lang == "en":
         return BLOCKS[key]["en"] + note_block(note, "en")
@@ -245,6 +247,7 @@ def tone_block(tone: str, lang: str = "th", note: str = "") -> str:
 def tone_override(tone: str, lang: str = "th") -> str:
     """A one-line reminder placed right after the general style rules, for the tones that differ
     from them (no emoji, a different length), so the later general rules do not win."""
+    lang = lang if lang == "auto" else base_lang(lang)  # second-tier languages: English blocks
     key = norm(tone)
     if key == DEFAULT_TONE:
         return ""
@@ -257,6 +260,7 @@ def tone_override(tone: str, lang: str = "th") -> str:
 
 def voice_line(tone: str, lang: str = "th") -> str:
     """The persona rule of the Live voice instruction. The cheerful line is the original one."""
+    lang = lang if lang == "auto" else base_lang(lang)  # second-tier languages: English blocks
     th_style, th_extra, en_style, en_extra = _VOICE[norm(tone)]
     if lang == "en":
         return (

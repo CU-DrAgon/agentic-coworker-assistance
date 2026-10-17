@@ -9,9 +9,11 @@ FROM python:3.12-slim-bookworm
 # Voice meetings: libopus (decode Discord voice) and ffmpeg (16 kHz FLAC for transcription).
 # PDF documents: fonts-thai-tlwg (Loma etc.) gives Thai glyphs; salid.pdf_report finds it at
 # /usr/share/fonts/opentype/tlwg (override with SALID_PDF_FONT).
+# Other reply languages (zh/ja/ko, hi): fonts-noto-cjk (Noto Sans CJK, faces extracted per language by
+# salid.pdf_report) and fonts-noto-core (Noto Sans Devanagari).
 # Promo kits: libfribidi0 lets Pillow's bundled raqm shape Thai (tone marks), see salid.cards.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libopus0 ffmpeg fonts-thai-tlwg libfribidi0 \
+    && apt-get install -y --no-install-recommends libopus0 ffmpeg fonts-thai-tlwg fonts-noto-cjk fonts-noto-core libfribidi0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Node runtime (same Debian release as the build stage, so shared libs match) + the CLI.

@@ -530,7 +530,7 @@ TOPIC_CODES = {
 
 
 def news_url(query: str, topic: str, lang: str) -> str:
-    th = lang != "en"
+    th = lang == "th"
     loc = "hl=th&gl=TH&ceid=TH:th" if th else "hl=en-US&gl=US&ceid=US:en"
     q = (query or "").strip()
     if q:
@@ -570,7 +570,7 @@ def _src_line(x: dict, lang: str) -> str:
     link = f" {x['url']}" if x.get("url") else ""
     note = ""
     if miss:
-        note = (" [missing: " if lang == "en" else " [ขาด: ") + ", ".join(miss) + "]"
+        note = (" [missing: " if lang != "th" else " [ขาด: ") + ", ".join(miss) + "]"
     return f"{x['name']} {x['value']:,.2f} ({x['as_of']}){link}{note}"
 
 
@@ -584,7 +584,7 @@ def estimate_text(q: dict, lang: str = "th") -> str:
     n = q.get("n_sources", 1)
     parts = "; ".join(_src_line(x, lang) for x in q.get("sources", []))
     if q.get("status") == "web_reference":
-        if lang == "en":
+        if lang != "th":
             return (
                 f"Reference price {q['price']:,.2f} {cur} (median) from {n} web source(s), read from "
                 f"web pages, not an official feed: {parts}."
@@ -593,7 +593,7 @@ def estimate_text(q: dict, lang: str = "th") -> str:
             f"ราคาอ้างอิงจาก {n} แหล่ง (อ่านจากหน้าเว็บ) {q['price']:,.2f} {cur} (ค่ากลาง) "
             f"ไม่ใช่ฟีดทางการ: {parts}"
         )
-    if lang == "en":
+    if lang != "th":
         return (
             f"Estimate ~{q['price']:,.2f} {cur} (range {lo:,.2f}-{hi:,.2f}) from {n} web source(s), "
             f"official price unconfirmed: {parts}."
@@ -824,7 +824,7 @@ GROUNDED_LABELS = {
 
 def gold_summary(g: dict, lang: str = "th") -> str:
     """Ready text with every unit spelled out, Thai section first, world section second."""
-    en = lang == "en"
+    en = lang != "th"
     th, w = g["thai"], g["world"]
     L: list[str] = []
     if th.get("status") == "ok":
@@ -1497,7 +1497,7 @@ def format_alert(a: Alert, lang: str = "th") -> str:
         except ValueError:
             when = a.as_of
     label, cur, src = w.label, a.currency, a.source
-    if lang == "en":
+    if lang != "th":
         label, cur, src = localize_en(label), localize_en(cur), localize_en(src)
     return t_(
         "mk_alert", lang, label=label, cond=cond, price=f"{a.price:,.2f}", cur=cur,
@@ -1693,7 +1693,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
                 price to baht-weight; adds `conversion` (with the FX rate and its source).
         """
         res = ctx.data.gold(bool(compare))
-        if ctx.lang == "en":
+        if ctx.lang != "th":
             res = localize_en(res)
             res["summary"] = res.get("summary_en") or res.get("summary", "")
         return res

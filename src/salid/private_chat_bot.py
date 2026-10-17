@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 import discord
 
 from .dm import DMResult, send_dm
-from .i18n import resolve_lang, t
+from .i18n import base_lang, resolve_lang, t
 from .permissions import guild_missing, permission_message
 from .private_chat import (
     BACKFILL_PACE_S,
@@ -161,6 +161,7 @@ class PrivateChatMixin:
         (paced for Discord's rate limits; every failure is only logged)."""
         try:
             rows = await asyncio.to_thread(self.private_chats.all, guild.id)
+            lang = base_lang(lang)  # channel names exist in Thai and English only
             other = "en" if lang == "th" else "th"
             old_base, new_base = t("pc_category", other), t("pc_category", lang)
             seen: set[int] = set()

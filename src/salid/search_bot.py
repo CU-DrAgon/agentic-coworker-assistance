@@ -167,7 +167,7 @@ class SearchMixin:
                 "a report with a PDF will be posted in this channel",
                 "say “cancel task” to stop it",
             )
-            if lang == "en"
+            if lang != "th"
             else (
                 "ใช้เวลาประมาณ 1-2 นาที",
                 "เสร็จแล้วส่งรายงานพร้อมไฟล์ PDF ที่ห้องนี้",

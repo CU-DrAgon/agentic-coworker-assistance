@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from google.genai import types
 
+from .i18n import lang_name
 from .llm import generate
 
 logger = logging.getLogger(__name__)
@@ -364,7 +365,7 @@ def build_prompt(kind: str, idea: str, context: str, lang: str, existing: str = 
     th, en, pairs = KINDS[kind]
     name = th if lang == "th" else en
     lines = "\n".join(heading_line(p, lang) for p in pairs)
-    language = "Thai" if lang == "th" else "English"
+    language = lang_name(lang) if lang != "th" else "Thai"
     extra = PRICING_DEFAULTS if kind == "pricing_tiers" else KIND_HINTS.get(kind, "")
     if kind in ("bmc", "lean_canvas"):
         extra += (

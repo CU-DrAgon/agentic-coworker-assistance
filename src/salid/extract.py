@@ -116,7 +116,7 @@ CATEGORY_EN = {
 
 def category_label(category: str | None, lang: str = "th") -> str:
     """The stored (Thai) expense category as shown to a person: English names for `en`."""
-    return CATEGORY_EN.get(category or "", category or "") if lang == "en" else category or ""
+    return CATEGORY_EN.get(category or "", category or "") if lang != "th" else category or ""
 
 
 def fmt_money(x: float | None, currency: str = "THB", lang: str = "th") -> str:

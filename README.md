@@ -187,6 +187,17 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   meeting summaries, the daily digest, receipt replies and deep-task reports. Only managers/executives may
   change it; others get a short refusal. A voice meeting uses the language of the voice channel's text chat as
   it was when the meeting started.
+  **Seven more languages / ภาษาอื่นอีก 7 ภาษา** (second tier, after Thai and English): Chinese `zh`, Hindi `hi`,
+  Malay `ms`, Indonesian `id`, Vietnamese `vi`, Korean `ko`, Japanese `ja`. Say "speak Japanese" / `พูดญี่ปุ่น` /
+  `日本語で` / `한국어로` / `nói tiếng Việt` / `हिंदी में`, pick it in `/ภาษา` `/language`, in the hub (the hub itself
+  stays Thai / English), or in a profile. `auto` also detects them by script (kana -> ja, Hangul -> ko, Han -> zh,
+  Devanagari -> hi, Vietnamese letters -> vi); Malay and Indonesian are only set explicitly. Salid's answers, briefs,
+  minutes and spoken replies come out in that language; the fixed system messages are machine-translated catalogs
+  (`src/salid/locales/*.json`, missing keys fall back to English). Voice uses Chirp 3 HD voices (Malay uses the
+  Indonesian voice). PDFs / cards / decks use Noto CJK or Devanagari fonts (`fonts-noto-cjk`, `fonts-noto-core`; if
+  they are missing the document is made in English and Salid says so).
+  ภาษาไทยและอังกฤษยังเป็นสองภาษาหลักที่เขียนเอง; อีก 7 ภาษาใช้ข้อความระบบที่แปลโดยโมเดลและให้สลิดตอบเป็นภาษานั้น
+  (พูด "พูดญี่ปุ่น", "พูดจีน", "พูดเกาหลี", "พูดเวียดนาม", "พูดฮินดี", "พูดมาเลย์", "พูดอินโดนีเซีย").
 - **Tone of voice** (`/โทน` or `/tone`, `@Salid เปลี่ยนโทนเป็นทางการ` / `change tone to professional`,
   `โทนอะไร` / `what tone`, `พูดให้ทางการหน่อย` / `speak formally`, or the hub's server and per-channel tone
   selects): five presets, each in Thai and English: `cheerful` สดใส ร่าเริง (the default), `friendly` เป็นกันเอง

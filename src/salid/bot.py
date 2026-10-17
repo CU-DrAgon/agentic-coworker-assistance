@@ -135,7 +135,7 @@ from .modes import (
     parse_snooze_command,
 )
 from .naming import command_text, mentions_name
-from .pdf_report import find_fonts
+from .pdf_report import find_fonts, font_note
 from .permissions import (
     channel_missing,
     guild_missing,
@@ -1789,7 +1789,7 @@ class SecretaryBot(
         that the result comes here; the catalog wording when the model is slow or fails."""
         facts = (
             ("a big job: it may take 1-5 minutes", "the result will be posted right here")
-            if lang == "en"
+            if lang != "th"
             else ("งานใหญ่ อาจใช้เวลา 1-5 นาที", "เสร็จแล้วจะส่งผลในห้องนี้")
         )
         line = await within(
@@ -1885,6 +1885,8 @@ class SecretaryBot(
     def _long_answer_file(self, text: str, lang: str, guild) -> tuple[str, discord.File]:
         """(short summary, the full answer as a PDF; Markdown when the PDF cannot be built)."""
         summary = summary_of(text)
+        if note := font_note(lang):
+            summary = f"{summary}\n{note}"
         try:
             data = markdown_pdf(
                 org=getattr(guild, "name", "") or "Salid",
@@ -1892,7 +1894,7 @@ class SecretaryBot(
                 markdown=text,
                 lang=lang,
                 generated_at=self.s.now(),
-                fonts=find_fonts(self.s.pdf_font),
+                fonts=find_fonts(self.s.pdf_font, lang),
             )
             name = "salid-answer.pdf"
         except Exception:
@@ -1940,8 +1942,8 @@ class SecretaryBot(
             return {"status": "ok", "channel": target.name, "language": language}
 
         def set_server_lang(language: str, apply_to_all_channels: bool = True) -> dict:
-            if language not in ("th", "en"):
-                return {"error": "unknown language", "languages": ["th", "en"]}
+            if language not in LANGS or language == "auto":
+                return {"error": "unknown language", "languages": [x for x in LANGS if x != "auto"]}
             if not allowed():
                 return {"error": "not_allowed", "needs": "server manager or executive"}
             run(self._apply_server_language(guild, language, bool(apply_to_all_channels)))

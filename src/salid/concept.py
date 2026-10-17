@@ -38,7 +38,7 @@ from PIL import Image
 
 from . import cards
 from .cards import CardFonts
-from .i18n import t
+from .i18n import lang_name, t
 from .ideas import MAX_STORED_IMAGE_BYTES, IdeaRepo, ascii_name
 from .llm import generate
 from .media import DailyBudget
@@ -376,7 +376,7 @@ def price_instruction(
         "row for it. Never estimate or invent a price, model, shop or date. Put the listing date "
         "or a short remark (VAT included or not, shipping) in the last column. After the table "
         "write one line: RANGE: <lowest>-<highest> <currency>. If you found nothing reliable, "
-        f"write only NONE. Write in {'Thai' if lang == 'th' else 'English'}."
+        f"write only NONE. Write in {'Thai' if lang == 'th' else lang_name(lang)}."
     )
 
 

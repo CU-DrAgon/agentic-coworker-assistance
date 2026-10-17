@@ -672,7 +672,7 @@ def check(
 
 def reason_text(rid: str, lang: str) -> str:
     th, en = REASONS.get(rid, (rid, rid))
-    return en if lang == "en" else th
+    return en if lang != "th" else th
 
 
 def render_check(res: CheckResult | None, lang: str = "th") -> str:
@@ -687,7 +687,7 @@ def render_check(res: CheckResult | None, lang: str = "th") -> str:
     hosts = [r.host for r in res.links if r.host]
     if hosts:
         L.append(
-            ("เว็บที่ตรวจ: " if lang != "en" else "Checked hosts: ") + ", ".join(dict.fromkeys(hosts))
+            ("เว็บที่ตรวจ: " if lang == "th" else "Checked hosts: ") + ", ".join(dict.fromkeys(hosts))
         )
     if res.safe_browsing:
         L.append(t("sec_sb_on", lang))

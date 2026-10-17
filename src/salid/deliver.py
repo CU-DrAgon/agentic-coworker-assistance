@@ -23,7 +23,7 @@ import discord
 
 from .coo_store import DELIVERIES, MINUTES
 from .dm import closed_dm_message, send_dm
-from .i18n import t
+from .i18n import LANGS, t
 from .media import parse_message_ref
 from .mentions import MENTION_RE, find_member, match_members, resolve_mentions
 from .minutes import can_see, can_see_and_post, latest_visible, resolve_channel
@@ -488,7 +488,7 @@ class DeliverMixin:
 
     @staticmethod
     def _lang_of_ctx(secretary) -> str:
-        return secretary.lang if secretary.lang in ("th", "en") else "th"
+        return secretary.lang if secretary.lang in LANGS and secretary.lang != "auto" else "th"
 
     # ------------------------------------------------------------- meeting minutes
     def _minutes_actions(self, message, guild, member, lang: str, loop):

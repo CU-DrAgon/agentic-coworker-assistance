@@ -20,7 +20,7 @@ from typing import Any
 from google.genai import types
 
 from . import attendance as att
-from .i18n import t
+from .i18n import LANGS, base_lang, t
 from .ideas_pdf import markdown_docx, markdown_pdf
 from .llm import generate
 from .minutes import latest_visible
@@ -138,7 +138,7 @@ def clean_turns(client: Any, model: str, turns: list[Turn], lang: str = "th") ->
     out = list(turns)
     if client is None:
         return out
-    prompt = _CLEAN_PROMPT["en" if lang == "en" else "th"]
+    prompt = _CLEAN_PROMPT[base_lang(lang)]
     for idx in _chunks(turns):
         try:
             items = json.dumps(
@@ -206,7 +206,7 @@ def render_markdown(
     transcript_note: str = "",
 ) -> str:
     """The minutes document. `transcript_note` replaces the heading note (e.g. "cleaned")."""
-    lang = "en" if lang == "en" else "th"
+    lang = lang if lang in LANGS and lang != "auto" else "th"
     out = [f"# {t('mdoc_title', lang)}", ""]
     meta = []
     if info.room:

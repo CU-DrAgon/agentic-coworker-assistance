@@ -559,7 +559,7 @@ class GuildStore:
         """Set the guild default language. With `apply_to_all_channels` the per-channel overrides
         are cleared (a copy is kept in `previous_channel_languages`); switching back to Thai
         restores that copy."""
-        if language not in ("th", "en"):
+        if language not in LANGS or language == "auto":
             raise ValueError(f"unknown language {language!r}")
         ref = self._ref(guild_id)
 

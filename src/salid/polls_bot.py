@@ -486,7 +486,7 @@ class PollsMixin:
             creator = guild.get_member(form["creator_id"])
             note = (
                 f"ส่งแบบสอบถาม “{form['title']}” ไม่ถึง {', '.join(failed[:10])} (น่าจะปิด DM) ค่ะ"
-                if lang != "en"
+                if lang == "th"
                 else f"I couldn't DM {', '.join(failed[:10])} for “{form['title']}” "
                 "(their DMs are probably closed)."
             )

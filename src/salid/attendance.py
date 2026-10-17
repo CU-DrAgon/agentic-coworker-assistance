@@ -50,7 +50,7 @@ def hm(at: datetime) -> str:
 def label(name: str, lang: str) -> str:
     """Thai gets the polite "คุณ" prefix (not doubled); English uses the name as is."""
     name = (name or "").strip()
-    if lang == "en" or not name or name.startswith("คุณ"):
+    if lang != "th" or not name or name.startswith("คุณ"):
         return name
     return f"คุณ{name}"
 

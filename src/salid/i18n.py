@@ -8,25 +8,97 @@ from __future__ import annotations
 
 import re
 
-LANGS = ("th", "en", "auto")
+PRIMARY = ("th", "en")
+EXTRA = ("zh", "hi", "ms", "id", "vi", "ko", "ja")
+LANGS = PRIMARY + EXTRA + ("auto",)
 DEFAULT_LANGUAGE = "th"
-LANGUAGE_LABELS = {"th": "ไทย · Thai", "en": "English · อังกฤษ", "auto": "อัตโนมัติ · Auto"}
+# lang -> (native name, English name, Thai name). Thai and English are hand-written; the others
+# are the second tier (model-translated catalogs in locales/<lang>.json, model replies).
+LANG_NAMES: dict[str, tuple[str, str, str]] = {
+    "th": ("ไทย", "Thai", "ไทย"),
+    "en": ("English", "English", "อังกฤษ"),
+    "zh": ("中文", "Chinese", "จีน"),
+    "hi": ("हिन्दी", "Hindi", "ฮินดี"),
+    "ms": ("Bahasa Melayu", "Malay", "มาเลย์"),
+    "id": ("Bahasa Indonesia", "Indonesian", "อินโดนีเซีย"),
+    "vi": ("Tiếng Việt", "Vietnamese", "เวียดนาม"),
+    "ko": ("한국어", "Korean", "เกาหลี"),
+    "ja": ("日本語", "Japanese", "ญี่ปุ่น"),
+}
+LANGUAGE_LABELS = {
+    **{k: f"{v[0]} · {v[1]}" if k != "th" else "ไทย · Thai" for k, v in LANG_NAMES.items()},
+    "en": "English · อังกฤษ",
+    "auto": "อัตโนมัติ · Auto",
+}
 _THAI_RE = re.compile(r"[฀-๿]")
+_KANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f]")
+_HANGUL_RE = re.compile(r"[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
+_HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
+_DEVANAGARI_RE = re.compile(r"[\u0900-\u097f]")
+_VI_RE = re.compile(
+    "[ăâđêôơưĂÂĐÊÔƠƯạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ"
+    "ẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼẾỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴỶỸ]"
+)
 
 
 def has_thai(text: str | None) -> bool:
     return _THAI_RE.search(text or "") is not None
 
 
+def base_lang(lang: str | None) -> str:
+    """The hand-written language a resolved language builds on: th for Thai, en for everything
+    else (the second-tier languages use the English prompt blocks, particles and formats)."""
+    return "th" if lang == "th" else "en"
+
+
+def map_language_code(lang: str | None) -> str:
+    """BCP-47 code for Google Maps / Weather APIs (th, en, zh-CN, hi, ms, id, vi, ko, ja)."""
+    return {"zh": "zh-CN"}.get(lang or "", lang if lang in LANG_NAMES else "en")
+
+
+def lang_name(lang: str | None, which: int = 1) -> str:
+    """Name of a language: 0 native, 1 English (default), 2 Thai."""
+    return LANG_NAMES.get(lang or "", LANG_NAMES["en"])[which]
+
+
+def reply_language_line(lang: str | None) -> str:
+    """The mandatory first line of the persona for a second-tier language ("" for th / en)."""
+    if lang not in EXTRA:
+        return ""
+    native, english, _ = LANG_NAMES[lang]
+    return (
+        f"Reply ONLY in {english} ({native}). Keep the name Salid. Polite, natural register for "
+        "that language. Fixed strings the system posts may be in English; do not translate them.\n"
+    )
+
+
+def detect_lang(text: str | None) -> str | None:
+    """The language of `text` by script: Thai -> th, kana -> ja, Hangul -> ko, Han only -> zh,
+    Devanagari -> hi, Latin with Vietnamese diacritics -> vi, other letters -> en, no letters ->
+    None. Malay and Indonesian are never detected (set them explicitly)."""
+    s = text or ""
+    if _THAI_RE.search(s):
+        return "th"
+    if _KANA_RE.search(s):
+        return "ja"
+    if _HANGUL_RE.search(s):
+        return "ko"
+    if _HAN_RE.search(s):
+        return "zh"
+    if _DEVANAGARI_RE.search(s):
+        return "hi"
+    if _VI_RE.search(s):
+        return "vi"
+    return "en" if any(c.isalpha() for c in s) else None
+
+
 def resolve_lang(setting: str | None, text: str | None = None) -> str:
-    """The language to reply in. `auto` follows `text`: Thai characters -> th, other letters ->
-    en, and no text (or no letters, e.g. only emoji) -> th, today's default."""
-    if setting in ("th", "en"):
-        return setting
+    """The language to reply in. `auto` follows `text` by script (see detect_lang); no text (or
+    no letters, e.g. only emoji) -> th, today's default."""
+    if setting in PRIMARY or setting in EXTRA:
+        return setting  # type: ignore[return-value]
     if setting == "auto":
-        if has_thai(text):
-            return "th"
-        return "en" if any(c.isalpha() for c in text or "") else "th"
+        return detect_lang(text) or DEFAULT_LANGUAGE
     return DEFAULT_LANGUAGE
 
 
@@ -43,20 +115,70 @@ def resolve_language(
     return default_language if default_language in LANGS else DEFAULT_LANGUAGE
 
 
-_FILLER = r"(?:\s*(?:ครับ|ค่ะ|คะ|นะ|หน่อย|ด้วย|เถอะ|เลย|please|pls|plz|now|mode))*[\s.!?]*"
+_FILLER = r"(?:\s*(?:ครับ|ค่ะ|คะ|นะ|หน่อย|ด้วย|เถอะ|เลย|please|pls|plz|now|mode|してください|ください|吧|一下|"
+_FILLER += r"해줘|해주세요|하세요|lah|ya|ya|nhé|nha))*[\s.!?]*"
+_VERB_EN = r"(?:please\s+)?(?:speak|reply|answer|talk|respond)(?:\s+in)?"
+# lang -> (Thai names, English names, native phrases). The Thai names are matched after
+# "ภาษา" or a verb (พูด/ตอบ/คุย); English names stand alone or after a verb; native phrases
+# stand alone (the whole message must be the command).
+_LANG_WORDS: dict[str, tuple[str, str, str]] = {
+    "en": (r"อังกฤษ", r"english", r""),
+    "th": (r"ไทย", r"thai", r""),
+    "zh": (
+        r"จีน(?:กลาง)?|แมนดาริน",
+        r"chinese|mandarin",
+        r"(?:说|讲|用|請說|请说)?(?:中文|汉语|漢語|普通话|国语)(?:说|吧)?",
+    ),
+    "hi": (
+        r"ฮินดี|ฮินดู|อินเดีย",
+        r"hindi",
+        r"(?:हिं?दी|हिन्दी)(?:\s+में(?:\s+(?:बोलो|बात\s+करो|जवाब\s+दो))?|\s+बोलो)?",
+    ),
+    "ms": (
+        r"มาเลย์|มลายู|มาเลเซีย",
+        r"malay|bahasa\s+(?:melayu|malaysia)",
+        r"(?:cakap|guna|gunakan|bercakap|balas)\s+(?:dalam\s+)?bahasa\s+(?:melayu|malaysia)"
+        r"|bahasa\s+(?:melayu|malaysia)|cakap\s+melayu|bahasa\s+melayu",
+    ),
+    "id": (
+        r"อินโดนีเซีย|อินโด",
+        r"indonesian|bahasa\s+indonesia|indonesia",
+        r"(?:bicara|pakai|gunakan|balas|jawab)\s+(?:dalam\s+)?bahasa\s+indonesia|bahasa\s+indonesia",
+    ),
+    "vi": (
+        r"เวียดนาม",
+        r"vietnamese",
+        r"(?:nói|trả\s+lời|dùng)\s+(?:bằng\s+)?tiếng\s+việt(?:\s+nhé)?|tiếng\s+việt",
+    ),
+    "ko": (
+        r"เกาหลี",
+        r"korean",
+        r"한국어(?:로|로\s*(?:말해|대답해|답해)(?:줘|주세요)?)?|한국말(?:로)?|한글로",
+    ),
+    "ja": (
+        r"ญี่ปุ่น",
+        r"japanese",
+        r"日本語(?:で(?:話して|答えて|返事して|お願い)?(?:ください)?)?|にほんご(?:で)?",
+    ),
+}
+
+
+def _lang_pattern(lang: str) -> str:
+    th, en, native = _LANG_WORDS[lang]
+    parts = [
+        rf"(?:(?:พูด|ตอบ|คุย|ใช้)\s?)?ภาษา\s?(?:{th})",
+        rf"(?:พูด|ตอบ|คุย|ใช้)\s?(?:{th})",
+        rf"(?:{_VERB_EN}\s+(?:{en}))",
+        rf"(?:in\s+)?(?:{en})",
+        rf"use\s+(?:{en})",
+    ]
+    if native:
+        parts.append(native)
+    return "|".join(parts)
+
+
 _LANG_COMMANDS = (
-    (
-        "en",
-        r"(?:(?:พูด|ตอบ|คุย)\s?)?ภาษา\s?อังกฤษ|(?:พูด|ตอบ|คุย)\s?อังกฤษ"
-        r"|(?:(?:please\s+)?(?:speak|reply|answer|talk|respond)(?:\s+in)?\s+english)"
-        r"|(?:in\s+)?english|use\s+english",
-    ),
-    (
-        "th",
-        r"(?:(?:พูด|ตอบ|คุย)\s?)?ภาษา\s?ไทย|(?:พูด|ตอบ|คุย)\s?ไทย"
-        r"|(?:(?:please\s+)?(?:speak|reply|answer|talk|respond)(?:\s+in)?\s+thai)"
-        r"|(?:in\s+)?thai|use\s+thai",
-    ),
+    *((lang, _lang_pattern(lang)) for lang in ("en", "th", *EXTRA)),
     (
         "auto",
         r"(?:(?:พูด|ตอบ|คุย)\s?)?ภาษา\s?(?:อัตโนมัติ|ออโต้|auto)|อัตโนมัติ"
@@ -73,15 +195,24 @@ _SERVER_SCOPE = re.compile(
     r"|everything|all\s+of\s+salid",
     re.I,
 )
-_SERVER_LANG = re.compile(r"ภาษา\s?อังกฤษ|อังกฤษ|english|ภาษา\s?ไทย|ไทย|thai", re.I)
+_SERVER_LANG_RES = [
+    (
+        lang,
+        re.compile(
+            rf"ภาษา\s?(?:{th})|(?:{th})|\b(?:{en})\b" + (rf"|{native}" if native else ""), re.I
+        ),
+    )
+    for lang, (th, en, native) in _LANG_WORDS.items()
+]
 _SERVER_START = re.compile(rf"^\s*(?:@\S+\s+)?{_SERVER_VERB}", re.I)
 _LANG_RES = [(v, re.compile(rf"^(?:{p})(?:{_FILLER})$", re.I)) for v, p in _LANG_COMMANDS]
 
 
 def parse_language_command(text: str) -> str | None:
-    """ "พูดภาษาอังกฤษ" / "speak English" -> "en", "พูดไทย" / "speak Thai" -> "th", "ภาษาอัตโนมัติ" /
-    "auto language" -> "auto", anything else None. The whole (mention-stripped) message must be
-    the command, so a question that merely starts with "English" is not one."""
+    """ "พูดภาษาอังกฤษ" / "speak English" -> "en", "พูดไทย" / "speak Thai" -> "th", "พูดญี่ปุ่น" /
+    "日本語で" / "한국어로" / "nói tiếng Việt" -> ja / ja / ko / vi (zh hi ms id likewise),
+    "ภาษาอัตโนมัติ" / "auto language" -> "auto", anything else None. The whole (mention-stripped)
+    message must be the command, so a question that merely starts with "English" is not one."""
     s = (text or "").strip().strip(" \t\n/,.:;!-–—…")
     if not s or len(s) > 40:
         return None
@@ -93,18 +224,20 @@ def parse_language_command(text: str) -> str | None:
 
 def parse_server_language_command(text: str) -> str | None:
     """ "ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์" / "switch the whole server to English" -> "en", the same with
-    Thai -> "th", anything else None. Needs a verb at the start, a scope word (server, everywhere,
-    ทั้งหมด...) and a language; the last language named wins ("from Thai to English")."""
+    Thai (or Japanese, Korean...) -> that language, anything else None. Needs a verb at the start,
+    a scope word (server, everywhere, ทั้งหมด...) and a language; the last language named wins
+    ("from Thai to English")."""
     s = (text or "").strip().strip(" \t\n/,.:;!-–—…")
     if not s or len(s) > 90 or not _SERVER_START.match(s) or not _SERVER_SCOPE.search(s):
         return None
     if s.rstrip("?？").lower() != s.lower():
         return None
-    langs = [m.group(0).lower() for m in _SERVER_LANG.finditer(s)]
-    if not langs:
-        return None
-    last = langs[-1]
-    return "en" if ("อังกฤษ" in last or "english" in last) else "th"
+    best: tuple[int, str] | None = None
+    for lang, rx in _SERVER_LANG_RES:
+        for m in rx.finditer(s):
+            if best is None or m.start() >= best[0]:
+                best = (m.start(), lang)
+    return best[1] if best else None
 
 
 def _bi(th: str, en: str) -> dict[str, str]:
@@ -112,16 +245,42 @@ def _bi(th: str, en: str) -> dict[str, str]:
     return {"th": both, "en": both}
 
 
+_LOCALES: dict[str, dict[str, str]] = {}
+
+
+def _locale(lang: str) -> dict[str, str]:
+    """The generated strings of a second-tier language (empty when there is no catalog file)."""
+    if lang not in _LOCALES:
+        import json
+        from pathlib import Path
+
+        path = Path(__file__).parent / "locales" / f"{lang}.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8")).get("strings", {})
+        except (OSError, ValueError, AttributeError):
+            data = {}
+        _LOCALES[lang] = {k: v for k, v in data.items() if isinstance(v, str)}
+    return _LOCALES[lang]
+
+
 def t(key: str, lang: str = "th", **fmt) -> str:
-    """Catalog text for a resolved language (anything but `en` falls back to Thai)."""
+    """Catalog text for a resolved language. th / en are hand-written; the second-tier languages
+    read locales/<lang>.json and fall back to English (never Thai); anything else is Thai."""
     entry = CATALOG[key]
-    text = entry["en"] if lang == "en" else entry["th"]
+    if lang in EXTRA:
+        text = _locale(lang).get(key) or entry["en"]
+    else:
+        text = entry["en"] if lang == "en" else entry["th"]
     return text.format(**fmt) if fmt else text
 
 
 CATALOG: dict[str, dict[str, str]] = {
     # ---------------------------------------------------------------- quotations
     "co_kind_profile": {"th": "ข้อมูลหัวบริษัท", "en": "company details"},
+    "docs_font_missing": {
+        "th": "ฟอนต์ภาษา{language}ยังไม่ได้ติดตั้งบนเซิร์ฟเวอร์ เลยทำเอกสารเป็นภาษาอังกฤษแทนค่ะ",
+        "en": "Fonts for {language} are not installed on this server, so the document was made in English.",
+    },
     "quote_title": {"th": "ใบเสนอราคา", "en": "QUOTATION"},
     "quote_no": {"th": "เลขที่", "en": "No."},
     "quote_rev": {"th": "ฉบับแก้ไขครั้งที่ {n}", "en": "Revision {n}"},
@@ -795,6 +954,13 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "lang_label_th": {"th": "ไทย", "en": "Thai"},
     "lang_label_en": {"th": "อังกฤษ (English)", "en": "English"},
+    "lang_label_zh": {"th": "จีน (中文)", "en": "Chinese (中文)"},
+    "lang_label_hi": {"th": "ฮินดี (हिन्दी)", "en": "Hindi (हिन्दी)"},
+    "lang_label_ms": {"th": "มาเลย์ (Bahasa Melayu)", "en": "Malay (Bahasa Melayu)"},
+    "lang_label_id": {"th": "อินโดนีเซีย (Bahasa Indonesia)", "en": "Indonesian (Bahasa Indonesia)"},
+    "lang_label_vi": {"th": "เวียดนาม (Tiếng Việt)", "en": "Vietnamese (Tiếng Việt)"},
+    "lang_label_ko": {"th": "เกาหลี (한국어)", "en": "Korean (한국어)"},
+    "lang_label_ja": {"th": "ญี่ปุ่น (日本語)", "en": "Japanese (日本語)"},
     "lang_label_auto": {
         "th": "อัตโนมัติ (ตอบตามภาษาที่พิมพ์มา)",
         "en": "Auto (reply in the language you write in)",

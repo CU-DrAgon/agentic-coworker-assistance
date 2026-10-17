@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date
 
+from .i18n import lang_name as _lang_name
 from .research import _json_call, merge_findings
 from .web_search import format_sources, web_search_call
 
@@ -74,7 +75,7 @@ def clean_topic(topic: str) -> str:
 def _synth_prompt(
     topic: str, ours: str, findings: list[dict], sources: list[dict], lang: str, today: date
 ) -> str:
-    lang_name = "Thai" if lang != "en" else "English"
+    lang_name = _lang_name(lang)
     blocks = "\n\n".join(f"### {f['question']}\n{f['answer'][:FINDING_CHARS]}" for f in findings)
     src = format_sources(sources)
     return (
@@ -216,7 +217,7 @@ H = {
 def render(
     topic: str, clean: dict, sources: list[dict], dropped: int, lang: str, today: date
 ) -> str:
-    h = H["en" if lang == "en" else "th"]
+    h = H["en" if lang != "th" else "th"]
     cell = lambda s: (s or "-").replace("|", "/").replace("\n", " ")  # noqa: E731
     L = [f"# {h['title']}: {topic}", ""]
     if clean["summary"]:
@@ -234,7 +235,7 @@ def render(
             "|" + "---|" * len(h["cols"]),
         ]
         for c in clean["competitors"]:
-            thai = THAI[c["thai_support"]] if lang != "en" else c["thai_support"]
+            thai = THAI[c["thai_support"]] if lang == "th" else c["thai_support"]
             L.append(
                 f"| {cell(c['name'])} | {cell(c['pricing'])} | {cell(c['strengths'])} | "
                 f"{cell(c['weaknesses'])} | {thai} | {_refs(c['sources'])} |"

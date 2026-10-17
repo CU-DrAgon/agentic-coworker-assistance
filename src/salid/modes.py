@@ -28,7 +28,7 @@ def mode_choice_name(mode: str) -> str:
 
 
 def chat_channel_name(lang: str = "th") -> str:
-    return CHAT_CHANNEL_NAME_EN if lang == "en" else CHAT_CHANNEL_NAME
+    return CHAT_CHANNEL_NAME_EN if lang != "th" else CHAT_CHANNEL_NAME
 
 
 def is_chat_channel_name(name: str | None) -> bool:

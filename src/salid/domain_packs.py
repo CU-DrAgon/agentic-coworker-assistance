@@ -391,7 +391,7 @@ def get_pack(pack_id: str) -> Pack | None:
 
 
 def pack_name(p: Pack, lang: str = "th") -> str:
-    return p.en if lang == "en" else p.th
+    return p.en if lang != "th" else p.th
 
 
 def _norm(text: str) -> str:
@@ -424,7 +424,7 @@ def pick_packs(text: str, limit: int = MAX_PACKS) -> list[str]:
 
 def pack_text(p: Pack, lang: str = "th") -> str:
     """The full pack as text (for the user: 'what do you know about restaurants?')."""
-    en = lang == "en"
+    en = lang != "th"
     lines = [f"{pack_name(p, lang)}: {p.about}"]
     lines.append(("Vocabulary: " if en else "คำศัพท์: ") + "; ".join(p.vocab))
     lines.append(("Common tasks: " if en else "งานที่พบบ่อย: ") + "; ".join(p.tasks))

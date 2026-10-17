@@ -15,7 +15,7 @@ from salid import bot as botmod
 from salid.bot import SecretaryBot
 from salid.gate import is_join_candidate
 from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
-from salid.i18n import t
+from salid.i18n import LANGS, t
 from salid.modes import (
     CHAT_CHANNEL_NAME,
     MODES,
@@ -885,11 +885,12 @@ def test_language_command_has_three_choices_in_both_languages(bot):
     cmds = {c.name: c for c in bot.tree.get_commands(type=discord.AppCommandType.chat_input)}
     for name in ("ภาษา", "language"):
         (param,) = cmds[name].parameters
-        assert [c.value for c in param.choices] == ["th", "en", "auto"] and not param.required
+        assert [c.value for c in param.choices] == list(LANGS) and not param.required
         assert cmds[name].guild_only
         assert all(len(c.description) <= 100 for c in cmds.values())
     names = [c.name for c in cmds["language"].parameters[0].choices]
-    assert names == ["ไทย · Thai", "English · อังกฤษ", "อัตโนมัติ · Auto"]
+    assert names[:2] == ["ไทย · Thai", "English · อังกฤษ"] and names[-1] == "อัตโนมัติ · Auto"
+    assert "日本語 · Japanese" in names and len(names) == 10
 
 
 def test_mode_choices_are_bilingual(bot):

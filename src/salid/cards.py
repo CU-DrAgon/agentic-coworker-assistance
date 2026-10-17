@@ -20,7 +20,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps, features
 
-from .pdf_report import find_fonts
+from .pdf_report import SCRIPT_LANGS, find_fonts, script_fonts
 
 FONTS_DIR = Path(__file__).parent / "fonts"
 LEADING = 1.0  # line height = (ascent + descent) * LEADING; Kanit's 1.5 em already fits Thai marks
@@ -34,9 +34,12 @@ class CardFonts:
     regular: str
 
 
-@functools.lru_cache(maxsize=1)
-def card_fonts() -> CardFonts:
-    """Bundled Kanit when both files are present, else the PDF fonts (bold falls back to regular)."""
+@functools.lru_cache(maxsize=8)
+def card_fonts(lang: str | None = None) -> CardFonts:
+    """Bundled Kanit when both files are present, else the PDF fonts (bold falls back to
+    regular). zh ja ko hi use Noto CJK / Devanagari when installed (Kanit has no such glyphs)."""
+    if lang in SCRIPT_LANGS and (fs := script_fonts(lang)) and fs.regular:
+        return CardFonts(bold=fs.bold or fs.regular, regular=fs.regular)
     bold, regular = FONTS_DIR / "Kanit-Bold.ttf", FONTS_DIR / "Kanit-Regular.ttf"
     if bold.is_file() and regular.is_file():
         return CardFonts(bold=str(bold), regular=str(regular))

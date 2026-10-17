@@ -557,7 +557,7 @@ class CooMixin:
         me = getattr(guild, "me", None)
         perms = getattr(me, "guild_permissions", None)
         lang = resolve_lang(self.team.current(guild.id).default_language)
-        report_name = REPORT_CHANNEL_NAME_EN if lang == "en" else REPORT_CHANNEL_NAME
+        report_name = REPORT_CHANNEL_NAME_EN if lang != "th" else REPORT_CHANNEL_NAME
         if getattr(perms, "manage_channels", False) or getattr(perms, "administrator", False):
             names = self.team.exec_role_names(guild.id, self.s.exec_role_names)
             try:

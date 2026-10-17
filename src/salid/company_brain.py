@@ -368,7 +368,7 @@ def company_block(
     nudge). Body <= BLOCK_CHARS (persona and rules first, then glossary / FAQ / SOP by keyword
     match with the question), domain-pack summary <= 600. Unsafe stored items are skipped.
     `lang` "en" writes the labels in English (and the nudge sentence Salid says)."""
-    en = lang == "en"
+    en = lang != "th"
     lines: list[str] = []
     if pb.industry:
         lines.append(f"{'Business' if en else 'ธุรกิจ'}: {_q(pb.industry)}")

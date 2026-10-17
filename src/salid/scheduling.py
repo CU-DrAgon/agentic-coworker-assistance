@@ -77,7 +77,7 @@ def fmt_when(dt: datetime, lang: str, tz=None) -> str:
     """ "จันทร์ 2026-10-19 14:00" in the guild's zone (weekday included so a wrong date is seen)."""
     if tz is not None:
         dt = dt.astimezone(tz)
-    day = (THAI_DAYS if lang != "en" else EN_DAYS)[dt.weekday()]
+    day = (THAI_DAYS if lang == "th" else EN_DAYS)[dt.weekday()]
     return f"{day} {dt:%Y-%m-%d %H:%M}"
 
 

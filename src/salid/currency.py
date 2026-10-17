@@ -124,7 +124,7 @@ class Converter:
 
 def label(converted: float, to: str, source: str, day: str, lang: str = "th") -> str:
     src = "ECB" if source == "ECB" else source
-    if lang == "en":
+    if lang != "th":
         return f"≈ {_fmt(converted)} {to} ({src} rate on {day})"
     return f"≈ {_fmt(converted)} {to} (อัตรา {src} วันที่ {day})"
 
@@ -163,7 +163,7 @@ def convert(
         "label": label(converted, to, r["source"], r["date"], lang),
         "disclaimer": (
             "อัตรากลาง (reference mid-market) ธนาคารรับซื้อ/ขายคนละอัตรา ตัวเลขจริงอาจต่างเล็กน้อย"
-            if lang != "en"
+            if lang == "th"
             else "Reference mid-market rate; banks and card issuers buy/sell at different rates."
         ),
     }

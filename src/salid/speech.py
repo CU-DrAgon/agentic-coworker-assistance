@@ -18,6 +18,7 @@ from typing import Any
 import discord
 from google.genai import types
 
+from .i18n import EXTRA, lang_name
 from .llm import generate
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,20 @@ def with_particle(text: str, particle: str) -> str:
     return text.replace("ค่ะ", particle).replace("คะ", particle)
 
 
+def spoken_prompt(lang: str) -> str:
+    """The prompt turning an answer into speech: Thai, English, or the English one with the
+    second-tier language swapped in."""
+    if lang in EXTRA:
+        name = lang_name(lang)
+        return SPOKEN_PROMPT_EN.replace(
+            "Speak English only, even if the answer or question contains Thai: translate it. "
+            "Never output Thai characters or Thai particles.",
+            f"Speak {name} only, even if the answer or question is in another language: translate "
+            "it. Never output Thai characters or Thai particles.",
+        )
+    return SPOKEN_PROMPT_EN if lang == "en" else SPOKEN_PROMPT
+
+
 def spoken_text(client: Any, model: str, question: str, answer: str, lang: str = "th") -> str:
     """Blocking. One short Gemini call turning the written answer into 1-2 spoken sentences.
     Any failure (API error, empty reply) falls back to the markdown-stripped, clipped answer."""
@@ -125,7 +140,7 @@ def spoken_text(client: Any, model: str, question: str, answer: str, lang: str =
             client,
             model,
             [
-                (SPOKEN_PROMPT_EN if lang == "en" else SPOKEN_PROMPT).format(
+                spoken_prompt(lang).format(
                     max_chars=SPOKEN_MAX_CHARS, question=question.strip(), answer=answer.strip()
                 )
             ],
@@ -171,12 +186,26 @@ def synthesize(client: Any, model: str, voice: str, text: str) -> bytes:
 
 
 CLOUD_TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize"
-_LANG_CODES = {"th": "th-TH", "en": "en-US"}
+_LANG_CODES = {
+    "th": "th-TH",
+    "en": "en-US",
+    "zh": "cmn-CN",
+    "hi": "hi-IN",
+    "ms": "ms-MY",
+    "id": "id-ID",
+    "vi": "vi-VN",
+    "ko": "ko-KR",
+    "ja": "ja-JP",
+}
+# Chirp 3 HD has no ms-MY voices (checked with Cloud TTS list_voices, 2026-10-17); Malay is spoken
+# with the Indonesian Chirp 3 HD voice of the same name (the languages are close). All other
+# locales have the same voice names as th-TH (Leda...).
+_VOICE_FALLBACK = {"ms": "id-ID"}
 
 
 def _cloud_voice(voice: str, lang: str) -> tuple[str, str]:
     """('th-TH', 'th-TH-Chirp3-HD-Leda') from a short voice name ('Leda') and a language."""
-    code = _LANG_CODES.get(lang, "th-TH")
+    code = _VOICE_FALLBACK.get(lang) or _LANG_CODES.get(lang, "th-TH")
     return code, voice if "-" in voice else f"{code}-Chirp3-HD-{voice}"
 
 

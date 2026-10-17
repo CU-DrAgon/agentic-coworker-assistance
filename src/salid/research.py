@@ -25,7 +25,7 @@ from datetime import date, datetime
 from google.genai import types
 
 from . import llm
-from .i18n import t
+from .i18n import base_lang, lang_name, t
 from .pdf_report import FontSet, _finish, _Pdf
 from .web_search import format_sources, web_search_call
 
@@ -152,7 +152,7 @@ def synth_prompt(
     heads = {
         "th": ("สรุป", "ประเด็นสำคัญ", "ตารางเปรียบเทียบ", "คำถามที่ยังไม่มีคำตอบ"),
         "en": ("Summary", "Key findings", "Comparison table", "Open questions"),
-    }[lang if lang in ("th", "en") else "en"]
+    }[base_lang(lang)]
     body = "\n\n".join(
         f"### Sub-question {i}: {f['question']}\n{f['answer'][:FINDING_CHARS]}"
         for i, f in enumerate(findings, 1)
@@ -163,7 +163,7 @@ def synth_prompt(
         if internal
         else ""
     )
-    language = "Thai (use ค่ะ/คะ sparingly, formal report tone)" if lang == "th" else "English"
+    language = "Thai (use ค่ะ/คะ sparingly, formal report tone)" if lang == "th" else lang_name(lang)
     return (
         f"Today is {today.isoformat()}. Write a research report in {language} answering the research "
         f"question, using ONLY the findings below ({depth} depth).\n"

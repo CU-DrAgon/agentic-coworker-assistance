@@ -26,13 +26,20 @@ from pathlib import Path
 
 from google.genai import types
 
-from .i18n import has_thai, t
+from .i18n import EXTRA, has_thai, lang_name, t
 from .llm import generate
 from .speech import with_particle
 
 logger = logging.getLogger(__name__)
 
 KINDS = ("doc", "image", "audio", "link", "deep", "research", "slow", "voice")
+
+
+def _norm(lang: str | None) -> str:
+    """th, en or a second-tier language; anything else is Thai."""
+    return lang if lang == "en" or lang in EXTRA else "th"
+
+
 POOL_SIZE = 8  # ack_<kind>_1 .. 8 in the catalog; the "again" pool is ack_again_1 .. 8
 QUESTION_CHARS = 300
 MAX_CHARS = {"th": 90, "en": 120}
@@ -135,12 +142,12 @@ def clean_line(
     text = text.strip(_QUOTES + " ")
     text = _MD.sub("", text).strip(_QUOTES + " ")
     facts = [f for f in facts if f]
-    limit = (MAX_CHARS_FACTS if facts else MAX_CHARS).get(lang, 90)
+    limit = (MAX_CHARS_FACTS if facts else MAX_CHARS).get(lang, 120)
     if not text or len(text) > limit:
         return None
     if lang == "th" and not has_thai(text):
         return None
-    if lang == "en" and has_thai(text):
+    if lang != "th" and has_thai(text):
         return None
     if stage == "again" and any(b in text.lower() for b in _BANNED_AGAIN):
         return None
@@ -189,7 +196,7 @@ def pick_fallback(
     """A hand-written line (`ack_<kind>_1..8`, kind "again" for the second line) that is not in
     `avoid`; Thai lines end with the configured particle. The whole pool when all were used."""
     kind = kind if kind in KINDS or kind == "again" else "slow"
-    lang = "en" if lang == "en" else "th"
+    lang = _norm(lang)
     lines = [t(f"ack_{kind}_{n}", lang) for n in range(1, POOL_SIZE + 1)]
     if lang == "th":
         lines = [with_particle(x, particle) for x in lines]
@@ -225,7 +232,7 @@ class Line:
 
 def pool_key(kind: str, lang: str, stage: str, particle: str = "ค่ะ") -> str:
     """One pool per kind, language and stage (Thai with another particle gets its own pool)."""
-    lang = "en" if lang == "en" else "th"
+    lang = _norm(lang)
     tail = f"-{particle}" if lang == "th" and particle not in ("", "ค่ะ") else ""
     return f"{kind}_{lang}_{stage}{tail}"
 
@@ -365,10 +372,10 @@ class FillerWriter:
         facts = [f for f in facts if f]
         q = " ".join((question or "").split())[:QUESTION_CHARS] or "-"
         what = _WHAT.get(kind, _WHAT["slow"])
-        limit = (MAX_CHARS_FACTS if facts else MAX_CHARS)[lang]
+        limit = (MAX_CHARS_FACTS if facts else MAX_CHARS).get(lang, 120)
         av = [a for a in avoid if a][:RECENT_KEEP]
-        if lang == "en":
-            return PROMPT_EN.format(
+        if lang != "th":
+            text = PROMPT_EN.format(
                 who=f"{asker} asked; Salid" if asker else "Someone asked; Salid",
                 what=what[0],
                 limit_words=45 if facts else 12,
@@ -384,6 +391,12 @@ class FillerWriter:
                 ),
                 question=q,
             )
+            if lang in EXTRA:  # second tier: same prompt, the line is written in that language
+                text = text.replace(
+                    "natural, friendly English, no Thai particles",
+                    f"natural, friendly, polite {lang_name(lang)} ({lang_name(lang, 0)}), no Thai particles",
+                )
+            return text
         return PROMPT_TH.format(
             who=f"{asker} ถามมา สลิด" if asker else "มีคนถามมา สลิด",
             what=what[1],
@@ -416,7 +429,7 @@ class FillerWriter:
         stage: str = "first",
         avoid: Iterable[str] = (),
     ) -> Line | None:
-        lang = "en" if lang == "en" else "th"
+        lang = _norm(lang)
         facts = tuple(facts)
         try:
             if not self.enabled():
