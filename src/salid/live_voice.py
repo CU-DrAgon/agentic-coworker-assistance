@@ -203,9 +203,10 @@ def set_captions(on: bool, language: str = "original") -> dict:
 
 
 def end_conversation(reason: str = "") -> dict:
-    """The exchange with the person who called you is over: they are done, thanked you, said ok /
-    next, turned to other people in the room, or stopped talking to you. Call it, then say nothing
-    more. It is not an action: it only puts you back to quiet listening.
+    """The person who called you has CLEARLY closed the exchange in words ("thanks, that's all",
+    "I'll talk with my team now", "goodbye"). Call it only then, and say nothing more. Not for a
+    bare "ok", a pause or a topic change. It is not an action: it only puts you back to quiet
+    listening.
 
     Args:
         reason: why, in a few words: "thanked", "went back to each other" or "done".
@@ -353,7 +354,8 @@ _MEETING_TOOLS = {
 STATE_LISTENING = "(สถานะ: กำลังฟังอยู่ ยังไม่มีใครคุยกับคุณ จดบันทึกเงียบ ๆ ห้ามพูดจนกว่าจะมีคนเรียกชื่อสลิด)"
 STATE_ENGAGED = (
     "(สถานะ: กำลังคุยกับคนที่เรียกคุณอยู่ ตอบเฉพาะประโยคที่พูดกับคุณ ไม่ต้องรอให้เรียกชื่อ "
-    "ถ้าเขาเสร็จธุระ ขอบคุณ หรือหันไปคุยกับคนอื่น ให้เรียก end_conversation แล้วเงียบ)"
+    "จบการคุยเฉพาะเมื่อเขาบอกชัดเจนว่าจบ เช่น “ขอบคุณครับ แค่นี้นะ” “ขอคุยกับทีมต่อนะ” จึงเรียก end_conversation แล้วเงียบ "
+    "ถ้าไม่ชัด ให้คุยต่อแต่เงียบไว้)"
 )
 CALLER_NOTE = "(คุณ{name} เป็นคนเรียกคุณ: ตอบเขา ส่วนคนอื่นตอบเฉพาะเมื่อเขาพูดกับคุณโดยตรง)"
 CALLER_NOTE_EN = "(Called by {name}: answer them; others only if they address you)"
@@ -380,8 +382,8 @@ STATE_LISTENING_EN = (
 )
 STATE_ENGAGED_EN = (
     "(State: talking with the person who called you. Answer only what is said to you, with no need "
-    "to hear your name. If they are done, thank you, or turn to other people, call "
-    "end_conversation and go quiet.)"
+    "to hear your name. End only when they clearly close it, e.g. “thanks, that's all” or “I'll "
+    "talk with my team now”: then call end_conversation and go quiet. If unclear, stay but keep quiet.)"
 )
 FORCE_CUE_EN = (
     "(Someone called your name. Answer what they asked, in context. If they only said your name "
@@ -623,10 +625,13 @@ def build_instruction_en(
         "them; their follow-ups are for you unless they clearly turn to someone else. Another "
         "person's speech counts only when that person addresses you directly. Use judgement about who "
         "each sentence is for. Never ask chit-chat questions yourself.\n"
-        "- When the caller is done, thanks you, says ok / next / that is enough, turns to other "
-        "people or goes quiet, call end_conversation(reason) and say nothing more (say “Sure.” only "
-        "if they thanked you directly). Never interject because you know the answer, even when the "
-        "talk concerns the team or the past.\n"
+        "- End the exchange ONLY when the caller closes it clearly and explicitly, in words that "
+        "confirm they are done with you: “thank you, that's all”, “ok thanks, that's it for now "
+        "Salid”, “I'll talk with my team now”, “goodbye”. Then call end_conversation(reason) and say "
+        "nothing more (a short “Sure.” only if they thanked you directly). A bare “ok”, a pause, a "
+        "change of topic or a sentence to someone else is NOT an ending: stay in the exchange but "
+        "keep quiet until they speak to you again. Never interject because you know the answer, "
+        "even when the talk concerns the team or the past.\n"
         "- When told to be quiet, stay quiet until someone calls your name again.\n"
         "- A word that sounds like your name but sits mid-sentence and is not addressing you "
         "(for example “Salad”, “Siri”, “slip”) is not a call: stay quiet.\n"
@@ -793,8 +798,10 @@ def build_instruction(
         "- บทสนทนาเป็นของคนที่เรียกคุณ (ระบบจะบอกว่าใคร) ตอบเขา ประโยคต่อ ๆ มาของเขาเป็นการคุยกับคุณ "
         "เว้นแต่เขาหันไปคุยกับคนอื่นอย่างชัดเจน คำพูดของคนอื่นนับก็ต่อเมื่อเขาพูดกับคุณโดยตรง "
         "ใช้วิจารณญาณว่าแต่ละประโยคพูดกับใคร ห้ามชวนคุยเอง\n"
-        "- เมื่อคนที่เรียกคุณเสร็จธุระ ขอบคุณ พูดว่าโอเค/ต่อไป/พอแล้ว หันไปคุยกับคนอื่น หรือเงียบไป ให้เรียก "
-        "end_conversation(reason) แล้วเงียบ (ตอบ “ได้ค่ะ” สั้น ๆ เฉพาะเมื่อเขาขอบคุณคุณโดยตรง) "
+        "- จบการคุยเฉพาะเมื่อคนที่เรียกคุณบอกจบอย่างชัดเจนด้วยคำที่ยืนยันว่าเสร็จธุระกับคุณแล้ว เช่น “ขอบคุณครับ แค่นี้นะ” "
+        "“โอเคครับ ขอบคุณมาก งั้นแค่นี้นะคะสลิด” “ขอคุยกับทีมต่อนะ” “บ๊ายบาย” แล้วจึงเรียก end_conversation(reason) "
+        "แล้วเงียบ (ตอบ “ได้ค่ะ” สั้น ๆ เฉพาะเมื่อเขาขอบคุณคุณโดยตรง) คำว่า “โอเค” เฉย ๆ การหยุดพูด การเปลี่ยนเรื่อง "
+        "หรือประโยคที่พูดกับคนอื่น ไม่ใช่การจบ: ยังอยู่ในบทสนทนาแต่เงียบไว้จนกว่าเขาจะพูดกับคุณอีก "
         "ห้ามแทรกเพราะรู้คำตอบ แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต\n"
         "- เมื่อถูกบอกให้เงียบ ให้เงียบจนกว่าจะมีคนเรียกชื่อคุณอีกครั้ง\n"
         "- คำที่เสียงคล้ายชื่อคุณแต่อยู่กลางประโยคและไม่ใช่การเรียกคุณ (เช่น “สนิท” ใน “เขาสนิทกันมาก”, “สลิป”, “สิริ”) "
