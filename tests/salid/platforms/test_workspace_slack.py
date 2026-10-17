@@ -58,7 +58,10 @@ class WsSlack(FakeSlack):
     ):
         who = user or BOT
         rows = [
-            {k: v for k, v in c.items() if k != "members"}
+            {
+                **{k: False for k in ("is_shared", "is_ext_shared", "is_org_shared")},
+                **{k: v for k, v in c.items() if k != "members"},
+            }
             for c in self.channels.values()
             if who in c["members"]
         ]
@@ -159,7 +162,7 @@ async def test_room_view_private_exact_public_and_shared_unknown(fx):
     names = {r.name: r.viewers for r in v.rooms}
     assert names["leads"] == frozenset({uid("U1"), uid("U2"), uid("U3")})
     assert "partners" not in names and "general" not in names  # shared / the room itself
-    assert "town" in names  # public rooms are listed with their (partial) members
+    assert "town" not in names  # a public room's readers are unknown: never in cross-room scope
     assert (await ws.room_view(rid("C9"))).audience is None  # public: unknown
     assert (await ws.room_view(rid("C8"))).audience is None  # Slack Connect: unknown
     assert (await ws.room_view(123)).audience is None  # never seen
@@ -262,11 +265,139 @@ async def test_edit_always_sends_blocks_so_buttons_can_be_removed(fx):
     assert [b["type"] for b in client.updates[1]["blocks"]] == ["section", "actions"]
 
 
-async def test_mention(fx):
-    _, ws = fx
+async def test_mention_pings_only_through_the_sentinel_of_a_local_human(fx):
+    client, ws = fx
     await ws.people()
-    assert ws.mention(uid("U2")) == "<@U2>"
+    await ws.rooms()
     assert ws.mention(5) == "@someone"
+    assert ws.mention(uid("UX")) == "@someone"  # never a local human
+    await ws.post(
+        rid("C1"),
+        f"hi {ws.mention(uid('U2'))} and <@U3> <!channel> <!here> <!everyone> <@UX>",
+    )
+    text = client.posts[0]["text"]
+    assert "hi <@U2> and" in text  # Salid's own mention pings
+    assert "&lt;@U3&gt;" in text and "&lt;@UX&gt;" in text  # user-supplied raw tokens do not
+    for tok in ("channel", "here", "everyone"):
+        assert f"&lt;!{tok}&gt;" in text and f"<!{tok}>" not in text
+    await ws.edit(MsgRef("slack", rid("C1"), "91.000"), f"{ws.mention(uid('U2'))} <@U3>")
+    assert client.updates[0]["text"] == "<@U2> &lt;@U3&gt;"
+    await ws.dm(uid("U3"), f"psst {ws.mention(uid('U1'))}")
+    assert "<@U1>" in client.posts[1]["text"]
+
+
+async def test_a_sentinel_for_an_unknown_id_is_not_a_ping(fx):
+    client, ws = fx
+    await ws.rooms()
+    await ws.post(rid("C1"), "x \ue000UX\ue001 y")
+    assert "<@UX>" not in client.posts[0]["text"]
+
+
+async def test_omitted_share_flags_make_the_audience_unknown(fx):
+    client, ws = fx
+    await ws.rooms()
+    client.omit_share_fields = {"is_org_shared"}  # Slack left one flag out: not provably private
+    assert (await ws.room_view(rid("C1"))).audience is None
+    client.omit_share_fields = {"is_shared", "is_ext_shared", "is_org_shared"}
+    assert (await ws.room_view(rid("C1"))).audience is None
+    client.omit_share_fields = set()
+    ws.port.forget_room("C1")
+    assert (await ws.room_view(rid("C1"))).audience == frozenset({uid("U1"), uid("U2")})
+
+
+async def test_other_rooms_with_omitted_or_set_share_flags_are_excluded(fx):
+    client, ws = fx
+    await ws.rooms()
+    client.channels["C2"]["is_org_shared"] = True  # leads: shared
+
+    client.omit_share_fields = {"is_ext_shared"}  # ... and every conversations.info omits one
+    view = await ws.room_view(rid("C1"))
+    assert view.audience is None  # even the answering room is no longer provable
+    client.omit_share_fields = set()
+    ws.port.forget_room("C1")
+    view = await ws.room_view(rid("C1"))
+    assert {r.name for r in view.rooms} == {"secret"}  # leads is shared, town public, partners ext
+
+
+async def test_rooms_with_missing_share_flags_are_reported_shared(fx):
+    client, ws = fx
+    rows = await ws.rooms()
+    assert not any(r.shared for r in rows if r.name != "partners")
+
+    async def bare(**kw):
+        return {"channels": [{"id": "C1", "name": "general", "is_private": True}]}
+
+    client.users_conversations = bare
+    ws._rooms = None
+    assert (await ws.rooms())[0].shared is True  # flags omitted: unknown, treated as shared
+
+
+async def test_group_dm_and_dm_need_explicit_flags_and_validated_members(fx):
+    client, ws = fx
+    client.channels["G1"] = {
+        "id": "G1",
+        "name": "mpdm-u1--u2",
+        "is_private": True,
+        "is_mpim": True,
+        "members": ["U1", "U2", BOT],
+    }
+    client.channels["G2"] = {**client.channels["G1"], "id": "G2", "members": ["U1", "UX", BOT]}
+    client.channels["D1"] = {
+        "id": "D1",
+        "name": "",
+        "is_im": True,
+        "user": "U2",
+        "members": ["U2", BOT],
+    }
+    client.channels["D2"] = {
+        "id": "D2",
+        "name": "",
+        "is_im": True,
+        "user": "UB",
+        "members": ["UB", BOT],
+    }
+    client.channels["D3"] = {"id": "D3", "name": "", "user": "U2", "members": ["U2", BOT]}
+    for c in ("G1", "G2", "D1", "D2", "D3"):
+        ws.learn_room(c)
+    assert (await ws.room_view(rid("G1"))).audience == frozenset({uid("U1"), uid("U2")})
+    assert (await ws.room_view(rid("G2"))).audience is None  # an outsider is a member
+    assert (await ws.room_view(rid("D1"))).audience == frozenset({uid("U2")})
+    assert (await ws.room_view(rid("D2"))).audience is None  # a bot peer
+    assert (await ws.room_view(rid("D3"))).audience is None  # not explicitly an im
+
+
+async def test_name_collisions_across_alias_fields_are_never_guessed(fx):
+    client, ws = fx
+    client.users["U6"] = {
+        "id": "U6",
+        "team_id": TEAM,
+        "real_name": "Zed",
+        "name": "mia",
+        "profile": {},
+    }
+    client.users["U7"] = {
+        "id": "U7",
+        "team_id": TEAM,
+        "real_name": "Mia Q",
+        "name": "mq",
+        "profile": {"display_name": "mia"},
+    }
+    assert await ws.person("mia") is None  # A's username == B's display name
+    assert (await ws.person("zed")).platform_id == "U6"
+    assert (await ws.person("mq")).platform_id == "U7"
+
+
+async def test_a_failed_explicit_id_never_falls_back_to_names(fx):
+    client, ws = fx
+    client.users["U8"] = {
+        "id": "U8",
+        "team_id": TEAM,
+        "real_name": "U404",
+        "name": "x",
+        "profile": {},
+    }
+    assert await ws.person("U404") is None  # users.info fails; not matched by real name
+    assert await ws.person("<@U404>") is None
 
 
 def test_blocks_truncates_label_and_skips_empty_actions():

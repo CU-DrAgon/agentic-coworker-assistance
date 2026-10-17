@@ -39,6 +39,7 @@ class FakeChannel:
         self.id, self.name = cid, name
         self.readers = readers  # None = everyone; else a set of member ids
         self.public, self.bot_reads = public, bot_reads
+        self.bot_history = True
         self.history = True
         self.sent: list[dict] = []
         self.edits: list = []
@@ -47,7 +48,7 @@ class FakeChannel:
         if who is DEFAULT_ROLE:
             return NS(read_messages=self.public, read_message_history=self.public)
         if who.id == ME:
-            return NS(read_messages=self.bot_reads, read_message_history=self.bot_reads)
+            return NS(read_messages=self.bot_reads, read_message_history=self.bot_history)
         ok = self.readers is None or who.id in self.readers
         return NS(read_messages=ok, read_message_history=ok and self.history)
 
@@ -82,6 +83,7 @@ class FakeGuild:
     me = NS(id=ME)
     default_role = DEFAULT_ROLE
     filesize_limit = 26214400
+    chunked = True
 
     def __init__(self):
         self.members = {
@@ -98,6 +100,7 @@ class FakeGuild:
         self.hidden = FakeChannel(12, "hidden", {BEN}, bot_reads=False)
         self.text_channels = [self.general, self.secret, self.hidden]
         self.fetched: list[int] = []
+        self.member_count = len(self.members)
 
     def get_member(self, uid):
         return self.members.get(uid)
@@ -248,3 +251,94 @@ async def test_dm_sends_in_the_dm_channel_and_handles_closed_dms(ws, guild):
 def test_mention_and_render_view():
     assert DiscordWorkspace.mention(NS(), 5) == "<@5>"
     assert render_view([]) is None
+
+
+# ------------------------------------------------------------------ review fixes
+
+
+async def test_room_view_unknown_when_the_member_cache_is_incomplete(ws, guild):
+    guild.chunked = False
+    guild.member_count = len(guild.members) + 5  # members we never received
+    assert (await ws.room_view(11)).audience is None
+    assert (await ws.room_view(11)).rooms == []
+    guild.member_count = len(guild.members)  # the cache is whole again (not chunked)
+    assert (await ws.room_view(11)).audience == frozenset({ANA})
+
+
+async def test_room_view_needs_the_bot_to_read_history_too(ws, guild):
+    guild.secret.bot_history = False  # the bot sees the channel but cannot read its history
+    assert (await ws.room_view(11)).audience is None
+    assert 11 not in [r.id for r in await ws.rooms()]
+    guild.secret.bot_history = True
+    assert (await ws.room_view(11)).audience == frozenset({ANA})
+    guild.general.bot_history = False  # unreadable rooms are not offered as other rooms either
+    assert "general" not in {c.name for c in (await ws.room_view(11)).rooms}
+
+
+async def test_room_view_permission_errors_fail_closed(ws, guild):
+    def boom(who):
+        raise RuntimeError("permissions")
+
+    guild.secret.permissions_for = boom
+    assert (await ws.room_view(10)).audience is None
+
+
+async def test_overwrite_driven_reader_is_included_when_the_cache_is_complete(ws, guild):
+    guild.secret.readers = {ANA, BEN2}  # a per-member overwrite grants Ben2 access
+    view = await ws.room_view(11)
+    assert view.audience == frozenset({ANA, BEN2})
+
+
+async def test_name_lookups_refuse_but_id_lookups_work_when_the_cache_is_incomplete(ws, guild):
+    guild.chunked = False
+    guild.member_count = 99
+    assert await ws.person("ana") is None and await ws.person("@Ana G") is None
+    assert await ws.people() == []
+    assert (await ws.person("<@100>")).id == 100 and (await ws.person("100")).id == 100
+
+
+async def test_person_name_matches_across_all_aliases(ws, guild):
+    guild.members[BEN] = member(BEN, "Ben", user="shared")
+    guild.members[BEN2] = member(BEN2, "Shared", user="ben2")  # display of one == username of other
+    assert await ws.person("shared") is None
+    assert (await ws.person("ben2")).id == BEN2
+
+
+async def test_failed_explicit_id_does_not_fall_back_to_a_name(ws, guild):
+    guild.members[ANA].display_name = "777"  # a name that looks like an id
+    assert await ws.person("777") is None
+    assert await ws.person("<@777>") is None
+
+
+def _foreign(guild_id):
+    ch = FakeChannel(555, "elsewhere", None, public=True)
+    ch.guild = NS(id=guild_id)
+    return ch
+
+
+async def test_channels_of_another_guild_or_dms_are_refused(guild):
+    foreign = _foreign(1)
+    dm = FakeChannel(556, "dm", None)  # no .guild at all
+    mine = _foreign(guild.id)
+    chans = {555: foreign, 556: dm, 557: mine}
+
+    async def fetch(cid):
+        return chans[cid]
+
+    client = NS(get_channel=lambda cid: None, fetch_channel=fetch)
+    ws = DiscordWorkspace(client, guild, exec_check=lambda m: False, rank_fn=lambda g, m: 0)
+    with pytest.raises(WorkspaceError):
+        await ws.post(555, "secret")
+    with pytest.raises(WorkspaceError):
+        await ws.post(556, "secret")
+    with pytest.raises(WorkspaceError):
+        await ws.edit(MsgRef("discord", 555, "9"), "x")
+    assert foreign.sent == [] and dm.sent == [] and foreign.edits == []
+    await ws.post(557, "ok")  # a thread / channel that does belong to this guild
+    assert mine.sent[0]["content"] == "ok"
+
+
+async def test_edit_refuses_a_ref_of_another_platform(ws, guild):
+    with pytest.raises(WorkspaceError):
+        await ws.edit(MsgRef("slack", 10, "1.2"), "x")
+    assert guild.general.edits == []

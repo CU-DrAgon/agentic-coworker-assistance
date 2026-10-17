@@ -51,6 +51,15 @@ def _humans(guild) -> list:
     return [m for m in members if not getattr(m, "bot", False)]
 
 
+def _cache_complete(guild) -> bool:
+    """True when `guild.members` is the whole member list (chunked, or as many as the guild
+    reports). Name lookups and reader sets are only trustworthy then."""
+    if getattr(guild, "chunked", False) is True:
+        return True
+    count = getattr(guild, "member_count", None)
+    return isinstance(count, int) and len(guild.members) == count
+
+
 def _can_read(channel, member) -> bool:
     perms = channel.permissions_for(member)
     return bool(
@@ -110,20 +119,25 @@ class DiscordWorkspace:
         if found or text.isdigit():
             m = await self._member(int(found.group(1) if found else text))
             return _person(m) if m is not None and not getattr(m, "bot", False) else None
+        if not _cache_complete(self.guild):
+            return None  # an incomplete member cache could hide a second match: refuse names
         key = text.lstrip("@").strip().casefold()
-        # Display name, then global name, then username: the first tier with exactly one hit
-        # wins. Two people with the same name are never guessed between (returns None).
-        for attr in ("display_name", "global_name", "name"):
-            hits = [
-                m for m in _humans(self.guild) if (getattr(m, attr, None) or "").casefold() == key
-            ]
-            if len(hits) == 1:
-                return _person(hits[0])
-            if len(hits) > 1:
-                return None
-        return None
+        # Every alias (display, global, username) of every human is a candidate; a person is
+        # returned only when exactly one human matches. Two people, or one person's display
+        # name equal to another's username, are never guessed between (returns None).
+        hits = {
+            m.id: m
+            for m in _humans(self.guild)
+            if any(
+                (getattr(m, attr, None) or "").strip().casefold() == key
+                for attr in ("display_name", "global_name", "name")
+            )
+        }
+        return _person(next(iter(hits.values()))) if len(hits) == 1 else None
 
     async def people(self) -> list[Person]:
+        if not _cache_complete(self.guild):
+            return []
         return [_person(m) for m in _humans(self.guild)]
 
     async def is_exec(self, user: int) -> bool:
@@ -137,7 +151,7 @@ class DiscordWorkspace:
     # ------------------------------------------------------------------ rooms
     def _readable(self) -> list:
         me = self.guild.me
-        return [c for c in self.guild.text_channels if c.permissions_for(me).read_messages]
+        return [c for c in self.guild.text_channels if _can_read(c, me)]
 
     async def rooms(self) -> list[Room]:
         everyone = self.guild.default_role
@@ -153,27 +167,39 @@ class DiscordWorkspace:
 
     async def room_view(self, room: int) -> RoomView:
         """Who can read `room` (live, never cached), plus every other readable room's viewers.
-        A room that cannot be found or read gives an unknown audience (fail closed)."""
-        channel = self.guild.get_channel(room)
-        if channel is None or channel not in self._readable():
+        Unknown (fail closed) when the member cache is incomplete, the room cannot be found,
+        the bot lacks view AND history there, or any permission lookup raises."""
+        try:
+            if not _cache_complete(self.guild):
+                return RoomView(None, [])
+            channel = self.guild.get_channel(room)
+            readable = self._readable()
+            if channel is None or channel not in readable:
+                return RoomView(None, [])
+            humans = _humans(self.guild)
+            audience = frozenset(m.id for m in humans if _can_read(channel, m))
+            others = [
+                ChannelAccess(c.id, c.name, frozenset(m.id for m in humans if _can_read(c, m)))
+                for c in readable
+                if c.id != room
+            ]
+        except Exception:
             return RoomView(None, [])
-        humans = _humans(self.guild)
-        audience = frozenset(m.id for m in humans if _can_read(channel, m))
-        others = [
-            ChannelAccess(c.id, c.name, frozenset(m.id for m in humans if _can_read(c, m)))
-            for c in self._readable()
-            if c.id != room
-        ]
         return RoomView(audience, others)
 
     # ------------------------------------------------------------------ output
     async def _channel(self, room: int):
-        ch = self.guild.get_channel(room) or self.client.get_channel(room)
+        """A channel or thread of THIS guild only: a foreign guild's channel or a DM is refused."""
+        ch = self.guild.get_channel(room)
         if ch is None:
-            try:
-                ch = await self.client.fetch_channel(room)
-            except (discord.NotFound, discord.HTTPException, discord.Forbidden):
-                ch = None
+            ch = self.client.get_channel(room)
+            if ch is None:
+                try:
+                    ch = await self.client.fetch_channel(room)
+                except (discord.NotFound, discord.HTTPException, discord.Forbidden):
+                    ch = None
+            if ch is not None and getattr(getattr(ch, "guild", None), "id", None) != self.guild.id:
+                ch = None  # another guild, or a DM (no guild)
         if ch is None:
             raise WorkspaceError(f"unknown room {room}")
         return ch
@@ -234,8 +260,14 @@ class DiscordWorkspace:
             return None
 
     async def edit(self, ref: MsgRef, text: str, *, buttons: Sequence[Button] = ()) -> None:
+        if ref.platform != PLATFORM:
+            raise WorkspaceError(f"not a Discord message: {ref.platform}")
         channel = await self._channel(ref.room_id)
-        await channel.get_partial_message(int(ref.platform_ref)).edit(
+        try:
+            mid = int(ref.platform_ref)
+        except ValueError:
+            raise WorkspaceError(f"bad message reference {ref.platform_ref!r}") from None
+        await channel.get_partial_message(mid).edit(
             content=text[:CHUNK], view=render_view(buttons), allowed_mentions=NO_BROADCAST
         )
 

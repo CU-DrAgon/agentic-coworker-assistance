@@ -36,7 +36,7 @@ from ..workspace import (
 )
 from . import ids, textfmt
 from .core import safe_exc
-from .slack import CHUNK, LIST_TTL_S, MAX_ROOMS, PLATFORM, SlackPort
+from .slack import CHUNK, LIST_TTL_S, MAX_ROOMS, PLATFORM, SlackPort, share_state
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,11 @@ UPLOAD_LIMIT = 100 * 1024 * 1024
 USERS_TTL_S = 600.0
 MENTION = re.compile(r"^<@([UW][A-Z0-9]+)(?:\|[^>]*)?>$")
 RAW_ID = re.compile(r"^[UW][A-Z0-9]+$")
+# `mention()` hands out a sentinel, not "<@U..>": the Slack formatter escapes `<`/`>` (so the
+# model or a user cannot ping anyone), and only the sentinel of a local human is turned into a
+# real mention after formatting.
+MENTION_OPEN, MENTION_CLOSE = "\ue000", "\ue001"
+_SENTINEL = re.compile(f"{MENTION_OPEN}([UW][A-Z0-9]+){MENTION_CLOSE}")
 _STYLES = {
     "primary": "primary",
     "success": "primary",
@@ -86,6 +91,7 @@ class SlackWorkspace:
         self.tenant_id = ids.tenant_id(PLATFORM, port.team_id)
         self._user_ids: dict[int, str] = {}
         self._room_ids: dict[int, str] = {}
+        self._humans: set[str] = set()  # Slack ids of this workspace's own humans (seen so far)
         self._users: tuple[float, list[dict]] | None = None
         self._rooms: tuple[float, list[dict]] | None = None
 
@@ -133,11 +139,13 @@ class SlackWorkspace:
         ]
         for u in keep:
             self.learn_user(u["id"])
+            self._humans.add(u["id"])
         self._users = (now, keep)
         return keep
 
     def _make(self, u: dict) -> Person:
         email = (u.get("profile") or {}).get("email") or None
+        self._humans.add(u["id"])
         return Person(self.learn_user(u["id"]), _name(u), u["id"], email, bool(u.get("is_bot")))
 
     async def people(self) -> list[Person]:
@@ -150,37 +158,31 @@ class SlackWorkspace:
         found = MENTION.match(text)
         uid = found.group(1) if found else (text if RAW_ID.match(text) else None)
         if uid is not None:
+            # An explicit mention / platform id never falls through to name matching.
             u = await self.port.user(uid)  # users.info, cached
-            if u:
-                # Same fail-closed rule as the admin check: this workspace's own humans only.
-                own = u.get("team_id") == self.port.team_id
-                if u.get("is_bot") or u.get("deleted") or not own:
-                    return None
-                return self._make({**u, "id": u.get("id") or uid})
-            if found:
+            if not u:
                 return None
-            # not a user id after all (a name that looks like one): fall through to names
-        everyone = await self._user_list()
-        if "@" in text and not text.startswith("@") and " " not in text:  # an email
-            key = text.casefold()
-            hits = [
-                u
-                for u in everyone
-                if ((u.get("profile") or {}).get("email") or "").casefold() == key
-            ]
-        else:
-            key = text.lstrip("@").strip().casefold()
-            hits = []
-            for pick in (
-                lambda u: (u.get("profile") or {}).get("display_name"),
-                lambda u: u.get("real_name") or (u.get("profile") or {}).get("real_name"),
-                lambda u: u.get("name"),
-            ):
-                hits = [u for u in everyone if (pick(u) or "").casefold() == key]
-                if hits:
-                    break
-        # Ambiguous names are never guessed between.
-        return self._make(hits[0]) if len(hits) == 1 else None
+            # Same fail-closed rule as the admin check: this workspace's own humans only.
+            own = u.get("team_id") == self.port.team_id
+            if u.get("is_bot") or u.get("deleted") or not own:
+                return None
+            return self._make({**u, "id": u.get("id") or uid})
+        key = text.lstrip("@").strip().casefold()
+        # Every alias of every local human is a candidate; a person is returned only when
+        # exactly one human matches (the display name of A equal to the username of B: None).
+        hits: dict[str, dict] = {}
+        for u in await self._user_list():
+            prof = u.get("profile") or {}
+            aliases = (
+                prof.get("display_name"),
+                u.get("real_name"),
+                prof.get("real_name"),
+                u.get("name"),
+                prof.get("email"),
+            )
+            if any((a or "").strip().casefold() == key for a in aliases):
+                hits[u["id"]] = u
+        return self._make(next(iter(hits.values()))) if len(hits) == 1 else None
 
     async def is_exec(self, user: int) -> bool:
         uid = await self._slack_user(user)
@@ -214,7 +216,8 @@ class SlackWorkspace:
 
     @staticmethod
     def _shared(row: dict) -> bool:
-        return any(bool(row.get(k)) for k in ("is_shared", "is_ext_shared", "is_org_shared"))
+        """Shared, or not provably non-shared (flags omitted): the audience is unknown."""
+        return share_state(row) is not False
 
     async def rooms(self) -> list[Room]:
         """Conversations Salid is in (public, private, group DMs)."""
@@ -229,20 +232,49 @@ class SlackWorkspace:
             for r in await self._room_list()
         ]
 
+    async def _local_human(self, uid: str) -> bool:
+        u = await self.port.user(uid)
+        return (
+            bool(u)
+            and u.get("team_id") == self.port.team_id
+            and not (u.get("is_bot") or u.get("deleted"))
+        )
+
+    async def _audience(self, channel: str) -> frozenset[str] | None:
+        """The exact readers of one conversation, or None (unknown). The only way a room's
+        audience enters a `RoomView`, for the answering room and for every other room.
+
+        - 1:1 DM: only after an explicit `is_im` and a validated (own, human) peer.
+        - group DM: only after an explicit `is_mpim`, not shared, every member validated.
+        - channels: `SlackPort.room_audience` (private and explicitly non-shared only)."""
+        info = await self.port._conversation_info(channel)
+        if info is None:
+            return None
+        if info.get("is_im") is True:
+            peer = info.get("user")
+            return frozenset({peer}) if peer and await self._local_human(peer) else None
+        if info.get("is_mpim") is True:
+            if share_state(info) is True:
+                return None
+            members = await self.port.members(channel, fresh=True)
+            if members is None:
+                return None
+            for m in members:
+                if not await self._local_human(m):
+                    return None
+            return members
+        return await self.port.room_audience(channel)
+
     async def room_view(self, room: int) -> RoomView:
-        """Same rules as `SlackPort.room_view`: exact audience only for a private, non-shared
-        conversation; anything else (public, Slack Connect, error) is unknown = fail closed.
-        `rooms` lists the other non-shared conversations Salid is in whose members are known."""
+        """Same rules as `SlackPort.room_view`: exact audience only for a private, explicitly
+        non-shared conversation (or a validated DM); anything else (public, Slack Connect,
+        omitted share flags, error) is unknown = fail closed. `rooms` lists the OTHER
+        conversations Salid is in whose audience is exact by the same rule."""
         channel = await self._slack_room(room)
         if channel is None:
             return RoomView(None, [])
         try:
-            if channel.startswith("D"):  # a 1:1 DM: its audience is the other person
-                info = await self.port._conversation_info(channel)
-                peer = (info or {}).get("user")
-                audience = frozenset({peer}) if peer else None
-            else:
-                audience = await self.port.room_audience(channel)
+            audience = await self._audience(channel)
         except Exception as e:
             logger.warning("room audience failed (%s)", safe_exc(e))
             audience = None
@@ -250,9 +282,13 @@ class SlackWorkspace:
             return RoomView(None, [])
         others: list[ChannelAccess] = []
         for r in (await self._room_list())[: MAX_ROOMS + 1]:
-            if r["id"] == channel or self._shared(r):
+            if r["id"] == channel:
                 continue
-            members = await self.port.members(r["id"])
+            try:
+                members = await self._audience(r["id"])
+            except Exception as e:
+                logger.warning("room audience failed (%s)", safe_exc(e))
+                members = None
             if members is not None:
                 others.append(
                     ChannelAccess(
@@ -266,13 +302,18 @@ class SlackWorkspace:
         return RoomView(frozenset(self.learn_user(m) for m in audience), others)
 
     # ------------------------------------------------------------------ output
+    def _format(self, text: str) -> str:
+        """mrkdwn for `text`; only `mention()` sentinels of local humans become real pings."""
+        out = textfmt.to_slack(text)
+        return _SENTINEL.sub(lambda m: f"<@{m[1]}>" if m[1] in self._humans else "@someone", out)
+
     async def _send(
         self, channel: str, text: str, thread_ts, files: Sequence[FileOut], buttons
     ) -> MsgRef:
         if self.port.revoked:
             raise WorkspaceError("the Slack app was uninstalled from this workspace")
         check_buttons(buttons)
-        parts = textfmt.split_text(textfmt.to_slack(text), CHUNK) or [""]
+        parts = textfmt.split_text(self._format(text), CHUNK) or [""]
         resp: dict = {}
         for i, part in enumerate(parts):
             last = i == len(parts) - 1
@@ -336,7 +377,7 @@ class SlackWorkspace:
         if channel is None:
             raise WorkspaceError(f"unknown room {ref.room_id}")
         check_buttons(buttons)
-        body = textfmt.to_slack(text)[:CHUNK]
+        body = self._format(text)[:CHUNK]
         # Always send blocks: chat.update keeps the old ones when none are given, so an empty
         # button list would not remove them.
         await self.port._call(
@@ -350,7 +391,7 @@ class SlackWorkspace:
 
     def mention(self, user: int) -> str:
         uid = self._user_ids.get(user)
-        return f"<@{uid}>" if uid else "@someone"
+        return f"{MENTION_OPEN}{uid}{MENTION_CLOSE}" if uid in self._humans else "@someone"
 
     def supports(self, feature: str) -> bool:
         return feature in CAPABILITIES and feature not in UNSUPPORTED

@@ -68,6 +68,20 @@ def retry_after(e: BaseException) -> float | None:
     return 1.0
 
 
+SHARE_FIELDS = ("is_shared", "is_ext_shared", "is_org_shared")
+
+
+def share_state(info: dict) -> bool | None:
+    """Tri-state Slack Connect / org-share flag of a conversation (users.conversations row or
+    conversations.info): True when any flag is set, False ONLY when all three flags are present
+    and explicitly False, None (unknown) when Slack omitted any of them."""
+    if any(bool(info.get(k)) for k in SHARE_FIELDS):
+        return True
+    if all(info.get(k) is False for k in SHARE_FIELDS):
+        return False
+    return None
+
+
 class SlackPort:
     """`core.Port` for one Slack workspace. `client` is a `slack_sdk.web.async_client.AsyncWebClient`."""
 
@@ -106,7 +120,7 @@ class SlackPort:
         self._users: dict[str, tuple[float, dict]] = {}
         self._room_names: dict[str, tuple[float, str]] = {}
         self._room_private: dict[str, tuple[float, bool]] = {}
-        self._room_shared: dict[str, tuple[float, bool]] = {}
+        self._room_shared: dict[str, tuple[float, bool | None]] = {}
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
@@ -165,8 +179,7 @@ class SlackPort:
             self._room_private[channel] = (self._clock(), private)
         # Slack Connect / org-shared: people of other workspaces or orgs are in the room, so its
         # audience cannot be listed from this workspace.
-        shared = any(bool(info.get(k)) for k in ("is_shared", "is_ext_shared", "is_org_shared"))
-        self._room_shared[channel] = (self._clock(), shared)
+        self._room_shared[channel] = (self._clock(), share_state(info))
         if info.get("name"):
             self._room_names[channel] = (self._clock(), info["name"])
         return info
@@ -240,12 +253,15 @@ class SlackPort:
         the full audience only for private conversations (a public channel is readable by people
         who have not joined)."""
         private = self._fresh(self._room_private, channel)
-        shared = self._fresh(self._room_shared, channel)
-        if private is None or shared is None:
+        hit = self._room_shared.get(channel)
+        fresh = hit is not None and self._clock() - hit[0] < ROOM_TTL_S
+        if private is None or not fresh:
             await self._conversation_info(channel)
             private = self._fresh(self._room_private, channel)
-            shared = self._fresh(self._room_shared, channel)
-        if shared is not False or not private:  # shared, unknown or public
+            hit = self._room_shared.get(channel)
+            fresh = hit is not None and self._clock() - hit[0] < ROOM_TTL_S
+        shared = hit[1] if fresh and hit is not None else None
+        if shared is not False or not private:  # shared, unknown (fields omitted) or public
             return None
         return await self.members(channel, fresh=True)
 
