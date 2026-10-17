@@ -242,7 +242,7 @@ const S = /*I18N-START*/{
   p_created:["สร้างโครงการแล้ว","Project created"], back:["โครงการทั้งหมด","All projects"], p_none_owner:["เลือกเจ้าของ","Choose an owner"],
   /* project page */
   t_overview:["ภาพรวม","Overview"], t_tasks:["งาน","Tasks"], t_milestones:["เหตุการณ์สำคัญ","Milestones"], t_risks:["ความเสี่ยงและปัญหา","Risks & Issues"], t_links:["ไฟล์และลิงก์","Files & Links"], t_hackathon:["แฮ็กกาธอน","Hackathon"], t_budget:["งบประมาณ","Budget"], t_changes:["ประวัติการเปลี่ยนแปลง","Changes"],
-  md_edit:["เขียน (markdown)","Write (markdown)"], md_preview:["ตัวอย่าง","Preview"], md_empty:["ยังไม่มีรายละเอียด","No description yet."],
+  md_edit:["เขียน (markdown)","Write (markdown)"], md_preview:["ตัวอย่าง","Preview"], md_empty:["ยังไม่มีรายละเอียด","No description yet."], upd_title:["ความเคลื่อนไหวล่าสุด (สลิดฟังจากแชต)","Latest updates (heard in chat)"],
   rd_title:["เหตุผลและผลกระทบ","Reason & impact"], rd_reason:["เหตุผล (จำเป็น)","Reason (required)"], rd_impact:["ผลกระทบ (ไม่บังคับ)","Impact (optional)"], rd_note:["ไม่ต้องรออนุมัติ ระบบจะบันทึกประวัติไว้","No approval step; this is recorded in the change log."],
   f_status:["สถานะ","Status"], f_owner:["เจ้าของ","Owner"], f_priority:["ความสำคัญ","Priority"], f_deadline:["กำหนดเสร็จ","Deadline"],
   tk_title:["ชื่องาน","Task title"], tk_assignee:["ผู้รับผิดชอบ","Assignee"], tk_due:["กำหนดส่ง","Due"], tk_milestone:["เหตุการณ์สำคัญ","Milestone"], tk_none:["ยังไม่มีงานในโครงการนี้","No tasks in this project yet."], tk_unassigned_warn:["งานที่ยังไม่มีผู้รับผิดชอบ","Open task without an assignee"], tk_empty_title:["ใส่ชื่องานก่อน","Enter a task title first"],
@@ -649,7 +649,11 @@ const TABS = {
     return [el("label", { class: "f" }, t("p_outcome"), outcome), el("div", { class: "split" }, el("label", { class: "f" }, t("md_edit"), ta), el("div", {}, el("h3", { text: t("md_preview") }), prev)),
       el("div", {}, el("button", { class: "btn", type: "button", onclick: async () => {
         const old = [P.overview, P.target_outcome]; P.overview = ta.value; P.target_outcome = outcome.value.trim();
-        const r = await guarded(() => api(PP(P.id), J("PATCH", { overview: P.overview, target_outcome: P.target_outcome })), () => { [P.overview, P.target_outcome] = old; }); if (r) toast(t("saved")); } }, t("save")))];
+        const r = await guarded(() => api(PP(P.id), J("PATCH", { overview: P.overview, target_outcome: P.target_outcome })), () => { [P.overview, P.target_outcome] = old; }); if (r) toast(t("saved")); } }, t("save"))),
+      (P.updates || []).length ? el("div", {}, el("h3", { text: t("upd_title") }), (P.updates || []).slice(-5).reverse().map((u) => el("div", { class: "li" }, el("div", { class: "grow" },
+        el("div", { text: u.text }),
+        el("div", { class: "small muted", text: fmtDateTime(u.at) + (u.by ? " · " + pn(u.by) : "") }),
+        u.quote ? el("div", { class: "small muted", text: "“" + u.quote + "”" }) : null)))) : null];
   },
   tasks(P, redraw) {
     const taskUrl = (tk) => PP(P.id, "/tasks/" + encodeURIComponent(tk.id));
@@ -874,6 +878,7 @@ const DEMO_DATA = /*DEMO-START*/{
      "owner": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "target_outcome": "Launch the new site with 2x faster load time", "deadline": "@-3", "visibility": "team",
      "members": [{"person": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "role": "dev"}], "tags": ["web"],
      "overview": "## Goal\nRebuild the **marketing website**.\n- New design\n- Faster pages\n- Thai and English", "created_at": "@-30T09:00", "updated_at": "@-1T10:00",
+     "updates": [{"at": "@-1T10:00", "by": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "text": "Design handed to dev, beta on track", "quote": "design ส่งให้ dev แล้ว beta ยังทัน", "channel_id": 0, "jump_url": ""}],
      "created_by": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"},
      "milestones": [{"id": "m1", "title": "Design sign-off", "due": "@-10", "status": "done", "owner": null}, {"id": "m2", "title": "Beta release", "due": "@2", "status": "pending", "owner": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}}],
      "risks": [{"id": "r1", "title": "Vendor API may change", "severity": "high", "status": "open", "owner": null, "note": "Payment provider announced v3", "source": "team", "created_at": "@-5T09:00"}],

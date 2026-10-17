@@ -79,6 +79,9 @@ def test_demo_dataset_parses_and_has_the_sample_items():
     assert {t["project_id"] for t in data["tasks"]} >= {p["id"] for p in projects}
     assert any(not t["assignee"] for t in data["tasks"])
     assert data["settings"]["members"] and data["ai_proposals"]
+    heard = [u for p in projects for u in p.get("updates", [])]
+    assert heard and all(u["text"] and u["at"] for u in heard)  # "Latest updates" on the overview
+    assert "upd_title" in html() and "P.updates" in html()
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

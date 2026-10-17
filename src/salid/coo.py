@@ -141,9 +141,23 @@ class CooMixin:
                 and (self.team.enabled(gid, "followups") or self.team.enabled(gid, "reports"))
             ),
         )
-        self.memory.scheduler.on_summary = self.task_tracker.on_summary
+        self.memory.scheduler.on_summary = self._on_summary_all
         self._ranks_cache: dict[int, tuple[float, dict[int, int]]] = {}
         self._coo_last = float("-inf")
+
+    def _on_summary_all(self, guild_id, channel_id, day, summary, messages) -> None:
+        """The memory scheduler's hook (worker thread): tasks first, then projects heard in chat.
+        Each part is guarded so one failing never blocks the other."""
+        try:
+            self.task_tracker.on_summary(guild_id, channel_id, day, summary, messages)
+        except Exception:
+            logger.warning("task tracking failed", exc_info=True)
+        listener = getattr(self, "project_listener", None)
+        if listener is not None:
+            try:
+                listener.on_summary(guild_id, channel_id, day, summary, messages)
+            except Exception:
+                logger.warning("project listening failed", exc_info=True)
 
     def _guild(self, guild_id: int):
         return next((g for g in self.guilds if g.id == guild_id), None)
