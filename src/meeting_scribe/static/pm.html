@@ -245,7 +245,7 @@ const S = /*I18N-START*/{
   md_edit:["เขียน (markdown)","Write (markdown)"], md_preview:["ตัวอย่าง","Preview"], md_empty:["ยังไม่มีรายละเอียด","No description yet."], upd_title:["ความเคลื่อนไหวล่าสุด (สลิดฟังจากแชต)","Latest updates (heard in chat)"],
   rd_title:["เหตุผลและผลกระทบ","Reason & impact"], rd_reason:["เหตุผล (จำเป็น)","Reason (required)"], rd_impact:["ผลกระทบ (ไม่บังคับ)","Impact (optional)"], rd_note:["ไม่ต้องรออนุมัติ ระบบจะบันทึกประวัติไว้","No approval step; this is recorded in the change log."],
   f_status:["สถานะ","Status"], f_owner:["เจ้าของ","Owner"], f_priority:["ความสำคัญ","Priority"], f_deadline:["กำหนดเสร็จ","Deadline"],
-  tk_title:["ชื่องาน","Task title"], tk_assignee:["ผู้รับผิดชอบ","Assignee"], tk_due:["กำหนดส่ง","Due"], tk_milestone:["เหตุการณ์สำคัญ","Milestone"], tk_none:["ยังไม่มีงานในโครงการนี้","No tasks in this project yet."], tk_unassigned_warn:["งานที่ยังไม่มีผู้รับผิดชอบ","Open task without an assignee"], tk_empty_title:["ใส่ชื่องานก่อน","Enter a task title first"],
+  tk_title:["ชื่องาน","Task title"], tk_pending:["รอยืนยัน","Awaiting confirmation"], tk_awaiting:["รออนุมัติ","Awaiting approval"], task_mode:["โหมดมอบหมายงาน","Task assignment mode"], tm_notify:["แบบแจ้ง","Notify"], tm_approve:["แบบอนุมัติ","Approve"], personal:["สมาชิกตั้งค่าส่วนตัวได้","Members may keep personal settings"], on:["เปิด","On"], off:["ปิด","Off"], tk_assignee:["ผู้รับผิดชอบ","Assignee"], tk_due:["กำหนดส่ง","Due"], tk_milestone:["เหตุการณ์สำคัญ","Milestone"], tk_none:["ยังไม่มีงานในโครงการนี้","No tasks in this project yet."], tk_unassigned_warn:["งานที่ยังไม่มีผู้รับผิดชอบ","Open task without an assignee"], tk_empty_title:["ใส่ชื่องานก่อน","Enter a task title first"],
   ms_title:["ชื่อเหตุการณ์สำคัญ","Milestone title"], ms_none:["ยังไม่มีเหตุการณ์สำคัญ","No milestones yet."],
   rk_title:["ความเสี่ยง / ปัญหา","Risk / issue"], rk_severity:["ความรุนแรง","Severity"], rk_note:["หมายเหตุ","Note"], rk_none:["ยังไม่มีความเสี่ยง","No risks recorded."], rk_ai:["ให้ AI ช่วยประเมิน","Ask AI to assess"], rk_ai_busy:["AI กำลังประเมิน…","AI is assessing…"], rk_ai_none:["AI ไม่พบความเสี่ยงเพิ่ม","AI found nothing to add."], rk_ai_h:["ข้อเสนอจาก AI","AI proposals"], rk_accept:["รับไว้","Accept"], rk_dismiss:["ไม่รับ","Dismiss"], rk_src_ai:["โดย AI","by AI"],
   lk_title:["ชื่อลิงก์","Link title"], lk_url:["ที่อยู่ (URL)","URL"], lk_none:["ยังไม่มีไฟล์หรือลิงก์","No files or links yet."], lk_bad:["ใส่ URL ที่ขึ้นต้นด้วย https://","Enter a URL starting with https://"],
@@ -490,6 +490,7 @@ function taskRow(tk, { onTick, showProject } = {}) {
   return el("div", { class: "li" + (open ? "" : " done") },
     el("input", { type: "checkbox", checked: !open, disabled: !canTick, "aria-label": tk.title, onchange: (e) => onTick(tk, e.target.checked, e.target) }),
     el("span", { class: "grow" }, tk.title, showProject && tk.project_name ? el("span", { class: "muted small", text: "  · " + tk.project_name }) : null),
+    tk.confirm === "pending" || tk.confirm === "awaiting_approval" ? el("span", { class: "badge warn", text: t(tk.confirm === "pending" ? "tk_pending" : "tk_awaiting") }) : null,
     tk.assignee ? who(tk.assignee) : null, dueBadge(tk.due, open));
 }
 async function tickTask(tk, done, box, redraw) {
@@ -827,6 +828,13 @@ async function viewInsights(root, _id, stale) {
 }
 
 /* ======================= 05 SETTINGS ======================= */
+function defaultSel(settings, admin, root, stale, field, labelKey, opts, fallback) {
+  const cur = String((settings.defaults || {})[field] ?? fallback);
+  return el("label", { class: "f" }, t(labelKey), sel(opts.map(([v, k]) => [v, t(k)]), cur, async (v) => {
+    const val = typeof fallback === "boolean" ? v === "true" : v;
+    const prev = (settings.defaults || {})[field]; settings.defaults = { ...(settings.defaults || {}), [field]: val };
+    const r = await guarded(() => api(PM("/settings"), J("PATCH", { defaults: { [field]: val } })), () => { settings.defaults[field] = prev; viewSettings(root, null, stale); }); if (r) toast(t("saved")); }, { disabled: !admin }));
+}
 async function viewSettings(root, _id, stale) {
   settings = await api(PM("/settings")); if (stale()) return;
   const admin = isAdmin(), org = curOrg();
@@ -843,7 +851,9 @@ async function viewSettings(root, _id, stale) {
       el("div", { class: "card" }, el("h2", { text: t("s_depts") }), (depts.length ? depts : DEPTS.map((k) => ({ key: k, label_th: t("d_" + k), label_en: t("d_" + k) }))).map((d) => el("div", { class: "li" }, el("span", { class: "badge info", text: d.key }), el("span", { class: "grow", text: lang === "th" ? d.label_th : d.label_en })))),
       el("div", { class: "card" }, el("h2", { text: t("s_defaults") }), el("label", { class: "f" }, t("visibility"), sel(["team", "members"].map((x) => [x, t("v_" + x)]), (settings.defaults || {}).visibility || "team", async (v) => {
         const prev = (settings.defaults || {}).visibility; settings.defaults = { ...(settings.defaults || {}), visibility: v };
-        const r = await guarded(() => api(PM("/settings"), J("PATCH", { defaults: { visibility: v } })), () => { settings.defaults.visibility = prev; viewSettings(root, null, stale); }); if (r) toast(t("saved")); }, { disabled: !admin })))),
+        const r = await guarded(() => api(PM("/settings"), J("PATCH", { defaults: { visibility: v } })), () => { settings.defaults.visibility = prev; viewSettings(root, null, stale); }); if (r) toast(t("saved")); }, { disabled: !admin })),
+        defaultSel(settings, admin, root, stale, "task_confirm_mode", "task_mode", [["notify", "tm_notify"], ["approve", "tm_approve"]], "notify"),
+        defaultSel(settings, admin, root, stale, "personal_settings", "personal", [["true", "on"], ["false", "off"]], true))),
     el("div", { class: "card" }, el("h2", { text: t("s_templates") }), el("div", { class: "split" }, tpls.map((tp) => el("div", { class: "card" }, el("h3", { text: t("tpl_" + tp.kind) }),
       el("ul", { class: "small" }, arr(tp, "sections").map((s) => el("li", { text: t(s) === s ? s : t(s) }))))))),
     el("div", { class: "card" }, el("h2", { text: t("s_company") }), el("div", { class: "li" }, co.logo_url ? el("img", { src: co.logo_url, alt: t("s_logo"), width: "48", height: "48", style: "border-radius:10px;object-fit:cover" }) : el("span", { class: "mark", "aria-hidden": "true", text: ((co.name || (org && org.name) || "S")[0] || "S").toUpperCase() }),
@@ -870,7 +880,7 @@ const DEMO_DATA = /*DEMO-START*/{
       {"kind": "standard", "sections": ["sec_overview", "sec_tasks", "sec_milestones", "sec_risks", "sec_links"], "defaults": {}},
       {"kind": "hackathon", "sections": ["sec_overview", "sec_tasks", "sec_milestones", "sec_risks", "sec_links", "sec_h1", "sec_h2", "sec_h3", "sec_h4", "sec_h5", "sec_h6"], "defaults": {}}
     ],
-    "defaults": {"visibility": "team"},
+    "defaults": {"visibility": "team", "task_confirm_mode": "notify", "personal_settings": true},
     "company": {"name": "บริษัท ตัวอย่าง จำกัด", "logo_url": ""}
   },
   "projects": [
@@ -908,7 +918,7 @@ const DEMO_DATA = /*DEMO-START*/{
   ],
   "tasks": [
     {"id": "t1", "project_id": "p-web001", "title": "Fix checkout page bug", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@-2", "status": "open", "note": "", "url": "", "milestone_id": "m2"},
-    {"id": "t2", "project_id": "p-web001", "title": "Write Thai copy", "assignee": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "due": "@3", "status": "open", "note": "", "url": "", "milestone_id": null},
+    {"id": "t2", "project_id": "p-web001", "title": "Write Thai copy", "assignee": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "due": "@3", "status": "open", "note": "", "url": "", "milestone_id": null, "confirm": "pending", "assigner": {"discord_user_id": "111", "name": "Toey"}},
     {"id": "t3", "project_id": "p-web001", "title": "Set up analytics", "assignee": null, "due": "@6", "status": "open", "note": "", "url": "", "milestone_id": null},
     {"id": "t4", "project_id": "p-web001", "title": "Approve final design", "assignee": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "due": "@-12", "status": "done", "note": "", "url": "", "milestone_id": "m1"},
     {"id": "t5", "project_id": "p-crm002", "title": "Interview sales team", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@5", "status": "open", "note": "", "url": "", "milestone_id": "m1"},

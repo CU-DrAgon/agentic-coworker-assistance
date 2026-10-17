@@ -6,11 +6,21 @@ schema. `build_coo_tools` returns plain functions that ADK wraps; errors come ba
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
 from datetime import date
 
 from .memory_access import Scope
-from .tasks import STATUSES, Task, TaskRepo, is_overdue, match_person, task_visible
+from .tasks import (
+    STATUSES,
+    Task,
+    TaskRepo,
+    is_overdue,
+    match_person,
+    parse_due,
+    split_who,
+    task_visible,
+)
 
 MAX_TASKS = 40
 
@@ -29,10 +39,16 @@ class CooTools:
         memory=None,  # MemoryTools: `hidden` holds what was withheld in this request
         request_disclosure: Callable[[str], dict] | None = None,
         my_day: Callable[[date], dict] | None = None,
+        reassigned: Callable[[Task], None] | None = None,
+        created: Callable[[list[Task]], None] | None = None,
+        find_project: Callable[[str], tuple[str, str]] | None = None,
+        channel_id: int = 0,
     ):
         self.guild_id, self.asker_id, self.is_exec, self.scope = guild_id, asker_id, is_exec, scope
         self.tasks, self.people, self.today, self.memory = tasks, people, today, memory
         self._request, self._my_day = request_disclosure, my_day
+        self._reassigned = reassigned
+        self._created, self._find_project, self.channel_id = created, find_project, channel_id
 
     def _view(self, t: Task) -> dict:
         return {
@@ -44,6 +60,10 @@ class CooTools:
             "overdue": is_overdue(t, self.today()),
             "link": t.source_link or None,
             "note": t.note or None,
+            "confirm": t.confirm or None,
+            "awaiting_confirmation": t.confirm == "pending",
+            "assigned_by": t.assigner_name or None,
+            "group": t.group_id or None,
         }
 
     def _can_see(self, t: Task) -> bool:
@@ -75,16 +95,109 @@ class CooTools:
             out["note"] = "no matching tasks that this person may see"
         return out
 
-    def update_task(self, task_id: str, status: str, note: str = "") -> dict:
+    def add_task(
+        self, title: str, assignee: str = "", due: str = "", project: str = "", note: str = ""
+    ) -> dict:
+        """A task the asker hands out now (tag or reply): one task per named person, the asker as
+        the giver. Each assignee gets a card to confirm (taking it yourself needs none)."""
+        title = " ".join((title or "").split())[:300]
+        if not title:
+            return {"error": "give the task a title"}
+        when = ""
+        if (due or "").strip():
+            when = parse_due(due, self.today())
+            if not when:
+                return {"error": f"cannot read the due date {due!r}; use YYYY-MM-DD or a weekday"}
+        pid = ""
+        if (project or "").strip():
+            if self._find_project is None:
+                return {"error": "projects are not available here"}
+            pid, err = self._find_project(project)
+            if err:
+                return {"error": err}
+        ids: list[int] = []
+        unresolved: list[str] = []
+        for part in split_who(assignee):
+            uid = match_person(part, self.people)
+            if uid and uid not in ids:
+                ids.append(uid)
+            elif not uid:
+                unresolved.append(part)
+        group = uuid.uuid4().hex[:8] if len(ids) > 1 else ""
+        giver = self.people.get(self.asker_id, "")
+        rows, fresh = [], []
+        for uid in ids or [0]:
+            task = Task(
+                guild_id=self.guild_id,
+                assignee_id=uid,
+                assignee_name=self.people.get(uid) or (assignee or "").strip()[:120],
+                assigner_id=self.asker_id,
+                assigner_name=giver,
+                title=title,
+                due=when,
+                note=(note or "")[:500],
+                project_id=pid,
+                source_channel_id=self.channel_id,
+                source_day=self.today().isoformat(),
+                created_from="manual",
+                group_id=group,
+                confirm="accepted" if uid == self.asker_id else "",
+            )
+            saved, new = self.tasks.add(task)
+            rows.append(saved)
+            if new:
+                fresh.append(saved)
+        if fresh and self._created is not None:
+            self._created(fresh)
+        views = [self._view(x) for x in rows]
+        out: dict = {"task": views[0], "tasks": views, "unresolved": unresolved}
+        if fresh:
+            out["asked_to_confirm"] = [
+                x.assignee_name for x in fresh if x.assignee_id and not x.confirm
+            ]
+        return out
+
+    def update_task(
+        self, task_id: str, status: str = "", note: str = "", assignee: str = ""
+    ) -> dict:
         task = self.tasks.get(self.guild_id, (task_id or "").lstrip("#").strip())
         if task is None:
             return {"error": "no such task"}
-        if not (self.is_exec or task.assignee_id == self.asker_id):
-            return {"error": "not allowed: a member may only update their own tasks"}
-        if status not in STATUSES:
-            return {"error": "status must be open or done"}
+        if not status and not (assignee or "").strip():
+            return {"error": "give a status (done / open) or an assignee"}
+        if status:
+            if not (self.is_exec or task.assignee_id == self.asker_id):
+                return {"error": "not allowed: a member may only update their own tasks"}
+            if status not in STATUSES:
+                return {"error": "status must be open or done"}
+        if (assignee or "").strip():
+            return self._reassign(task, assignee, status, note)
         done = self.tasks.set_status(self.guild_id, task.id, status, note)
         return {"updated": self._view(done)} if done else {"error": "could not update"}
+
+    def _reassign(self, task: Task, assignee: str, status: str, note: str) -> dict:
+        """Move a task to another member. Executives and the person who gave the task may. The new
+        assignee gets the confirmation card (nobody, when the asker takes it themself)."""
+        if not (self.is_exec or (task.assigner_id and task.assigner_id == self.asker_id)):
+            return {"error": "not allowed: only the person who gave the task or an executive"}
+        uid = match_person(assignee, self.people)
+        if not uid:
+            return {"error": f"cannot tell who {assignee!r} is; use the member's name or @mention"}
+        if uid == task.assignee_id and task.confirm != "declined":
+            return {"updated": self._view(task), "note": "already assigned to this person"}
+        task.assignee_id, task.assignee_name = uid, self.people[uid]
+        task.assigner_id, task.assigner_name = self.asker_id, self.people.get(self.asker_id, "")
+        task.handshake_message, task.confirm_at = "", ""
+        task.confirm = "accepted" if uid == self.asker_id else ""
+        if note:
+            task.note = note[:500]
+        self.tasks.save(task)
+        if status:
+            self.tasks.set_status(self.guild_id, task.id, status, note)
+            task = self.tasks.get(self.guild_id, task.id) or task
+        if task.confirm == "" and self._reassigned is not None:
+            self._reassigned(task)
+        return {"updated": self._view(task)}
 
     def request_disclosure(self, topic: str) -> dict:
         if self._request is None or self.memory is None or not self.memory.hidden:
@@ -127,16 +240,37 @@ def build_coo_tools(c: CooTools, calls: list | None = None) -> list:
         a = dict(person=person, status=status)
         return safe("list_tasks", a, lambda: c.list_tasks(**a))
 
-    def update_task(task_id: str, status: str, note: str = "") -> dict:
-        """Mark a task done or reopen it, with a short note (for example what was delivered).
-        Members may only update their own tasks; executives may update any.
+    def add_task(
+        title: str, assignee: str = "", due: str = "", project: str = "", note: str = ""
+    ) -> dict:
+        """Create a task the asker is handing out right now (they tagged Salid on a message that
+        gives work, or replied to one). The asker is the giver; each named person gets a card to
+        confirm. Call once per task (several names for the SAME task are fine: one task each).
+
+        Args:
+            title: what has to be done, short.
+            assignee: who does it: a name, @mention, or several joined by "and" / comma; empty if
+                nobody is named.
+            due: date such as 2026-10-30, "ศุกร์", "tomorrow", optional.
+            project: part of a project name, optional.
+            note: extra detail, optional.
+        """
+        a = dict(title=title, assignee=assignee, due=due, project=project, note=note)
+        return safe("add_task", a, lambda: c.add_task(**a))
+
+    def update_task(task_id: str, status: str = "", note: str = "", assignee: str = "") -> dict:
+        """Mark a task done or reopen it, with a short note (for example what was delivered), or
+        hand it to someone else. Members may only update their own tasks; executives may update
+        any. Only an executive or the person who gave a task may reassign it; the new assignee
+        then gets a card to confirm.
 
         Args:
             task_id: the task id from list_tasks.
-            status: done or open.
+            status: done or open; empty to leave it as it is.
             note: short note, optional.
+            assignee: member name or @mention to hand the task to, optional.
         """
-        a = dict(task_id=task_id, status=status, note=note)
+        a = dict(task_id=task_id, status=status, note=note, assignee=assignee)
         return safe("update_task", a, lambda: c.update_task(**a))
 
     def request_disclosure(topic: str) -> dict:
@@ -161,4 +295,4 @@ def build_coo_tools(c: CooTools, calls: list | None = None) -> list:
         a = dict(day=date)
         return safe("my_day", a, lambda: c.my_day(**a))
 
-    return [list_tasks, update_task, request_disclosure, my_day]
+    return [list_tasks, add_task, update_task, request_disclosure, my_day]

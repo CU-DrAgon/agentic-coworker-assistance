@@ -109,6 +109,7 @@ class ProjectsMixin:
                 now=self.s.now,
                 resolve=resolve,
                 workspace=f"discord-{guild.id}",
+                on_assigned=lambda task: self._handshake_new_tasks(guild.id, [task]),
             )
             return project_tools(ctx)
         except Exception:

@@ -375,8 +375,18 @@ def test_task_repo_project_filter_and_for_person(docs):
 
 def test_pm_settings_default_and_validation(docs):
     s = P.PmSettings(docs)
-    assert s.get("org1") == {"visibility": "team"}
-    assert s.set_visibility("org1", "members") == {"visibility": "members"}
+    base = {"visibility": "team", "task_confirm_mode": "notify", "personal_settings": True}
+    assert s.get("org1") == base
+    assert s.set_visibility("org1", "members") == {**base, "visibility": "members"}
+    assert s.set_task_confirm_mode("org1", "approve")["task_confirm_mode"] == "approve"
+    assert s.set_personal_settings("org1", False)["personal_settings"] is False
+    assert s.get("org1")["visibility"] == "members"  # the others are kept
+    with pytest.raises(ValueError):
+        s.set_task_confirm_mode("org1", "boss")
+    s.set_visibility("org1", "team")
+    s.set_task_confirm_mode("org1", "notify")
+    s.set_personal_settings("org1", True)
+    s.set_visibility("org1", "members")
     assert (
         P.PmSettings(docs).get("org1")["visibility"] == "members"
         and s.get("org2")["visibility"] == "team"

@@ -18,6 +18,7 @@ from meeting_scribe import center, hub, pm_api  # noqa: E402
 from meeting_scribe.app import app  # noqa: E402
 from meeting_scribe.config import get_settings  # noqa: E402
 from salid.coo_store import FirestoreDocStore, SQLiteDocStore  # noqa: E402
+from salid.guild_settings import MemoryGuildStore  # noqa: E402
 from salid.orgs import Member, OrgStore, Workspace  # noqa: E402
 from salid.tasks import Task, TaskRepo  # noqa: E402
 
@@ -97,6 +98,8 @@ def w(docs, monkeypatch):
     app.dependency_overrides[hub.google_token_verifier] = verifier
     app.dependency_overrides[center.get_orgs] = lambda: w.orgs
     app.dependency_overrides[pm_api.get_assessor] = assessor
+    w.guilds = MemoryGuildStore()
+    app.dependency_overrides[pm_api.get_pm_guilds] = lambda: w.guilds
     w.c = TestClient(app)
     w.tasks = TaskRepo(docs)
     yield w
@@ -352,7 +355,10 @@ def test_task_create_and_patch_permissions(w):
         "milestone_id",
         "created_from",
         "updated_at",
+        "confirm",
+        "assigner",
     }
+    assert t["confirm"] == "" and t["assigner"] == {"discord_user_id": None, "name": ""}
     assert call(w, "other", "POST", f"/projects/{pid}/tasks", {"title": "x"}).status_code == 403
     assert (
         call(
@@ -723,7 +729,11 @@ def test_settings_shape(w):
     assert [d["key"] for d in s["departments"]] == ["tech", "business", "finance", "other"]
     assert s["departments"][0] == {"key": "tech", "label_th": "เทค", "label_en": "Tech"}
     assert [t["kind"] for t in s["templates"]] == ["standard", "hackathon"]
-    assert s["defaults"] == {"visibility": "team"} and s["company"] == {
+    assert s["defaults"] == {
+        "visibility": "team",
+        "task_confirm_mode": "notify",
+        "personal_settings": True,
+    } and s["company"] == {
         "name": "Acme",
         "logo_url": "",
     }
@@ -741,7 +751,7 @@ def test_settings_patch_is_admin_only_and_validated(w):
     s = call(w, "adm", "PATCH", "/settings", body).json()
     peat = next(m for m in s["members"] if m["email"] == "peat@example.com")
     assert (peat["department"], peat["finance"], peat["role"]) == ("tech", True, "admin")
-    assert s["defaults"] == {"visibility": "members"}
+    assert s["defaults"]["visibility"] == "members"
     assert w.orgs.get(w.org_id).role_of("peat@example.com") == "admin"
     assert (
         call(w, "peat", "PATCH", "/settings", {"defaults": {"visibility": "team"}}).status_code
@@ -797,3 +807,33 @@ def test_updates_heard_in_chat_are_served_on_the_project_not_on_the_card(w):
     # a normal edit keeps them
     assert call(w, "mem", "PATCH", f"/projects/{pid}", {"overview": "hi"}).status_code == 200
     assert len(call(w, "mem", "GET", f"/projects/{pid}").json()["updates"]) == 1
+
+
+def test_task_json_carries_the_handshake_state(w):
+    p = make(w, "adm")
+    w.tasks.save(
+        Task(guild_id=GUILD, id="hs000001", project_id=p["id"], title="x", assigner_id=77,
+             assigner_name="Boss", confirm="pending")
+    )  # fmt: skip
+    rows = call(w, "adm", "GET", f"/projects/{p['id']}/tasks").json()["tasks"]
+    row = next(r for r in rows if r["id"] == "hs000001")
+    assert row["confirm"] == "pending" and row["assigner"] == {
+        "discord_user_id": "77",
+        "name": "Boss",
+    }
+
+
+def test_task_mode_and_personal_settings_are_admin_only_and_reach_the_guild(w):
+    body = {"defaults": {"task_confirm_mode": "approve", "personal_settings": False}}
+    assert call(w, "mem", "PATCH", "/settings", body).status_code == 403
+    s = call(w, "adm", "PATCH", "/settings", body).json()
+    assert (
+        s["defaults"]["task_confirm_mode"] == "approve"
+        and s["defaults"]["personal_settings"] is False
+    )
+    g = w.guilds.get(GUILD)  # the bot reads it from the guild settings
+    assert g.task_confirm_mode == "approve" and g.personal_settings is False
+    w.guilds.set_task_confirm_mode(GUILD, "notify")  # a change made in the hub / by chat shows here
+    assert call(w, "other", "GET", "/settings").json()["defaults"]["task_confirm_mode"] == "notify"
+    bad = {"defaults": {"task_confirm_mode": "dictator"}}
+    assert call(w, "adm", "PATCH", "/settings", bad).status_code == 422

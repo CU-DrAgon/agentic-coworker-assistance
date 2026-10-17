@@ -592,6 +592,11 @@ def task_json(task: Task, project_name: str | None = None) -> dict:
         "milestone_id": task.milestone_id,
         "created_from": task.created_from,
         "updated_at": task.updated_at,
+        "confirm": task.confirm,
+        "assigner": {
+            "discord_user_id": str(task.assigner_id) if task.assigner_id > 0 else None,
+            "name": task.assigner_name or "",
+        },
     }
     if project_name is not None:
         out["project_name"] = project_name
@@ -893,13 +898,31 @@ class PmSettings:
     def get(self, org_id: str) -> dict:
         d = self.docs.get(PM_SETTINGS, 0, org_id) or {}
         vis = d.get("visibility")
-        return {"visibility": vis if vis in VISIBILITIES else "team"}
+        mode = d.get("task_confirm_mode")
+        return {
+            "visibility": vis if vis in VISIBILITIES else "team",
+            "task_confirm_mode": mode if mode in ("notify", "approve") else "notify",
+            "personal_settings": d.get("personal_settings") is not False,
+        }
+
+    def _put(self, org_id: str, **changes) -> dict:
+        d = dict(self.docs.get(PM_SETTINGS, 0, org_id) or {})
+        d.update(changes)
+        self.docs.put(PM_SETTINGS, 0, org_id, d)
+        return self.get(org_id)
 
     def set_visibility(self, org_id: str, visibility: str) -> dict:
         if visibility not in VISIBILITIES:
             raise ValueError("visibility must be team or members")
-        self.docs.put(PM_SETTINGS, 0, org_id, {"visibility": visibility})
-        return self.get(org_id)
+        return self._put(org_id, visibility=visibility)
+
+    def set_task_confirm_mode(self, org_id: str, mode: str) -> dict:
+        if mode not in ("notify", "approve"):
+            raise ValueError("task_confirm_mode must be notify or approve")
+        return self._put(org_id, task_confirm_mode=mode)
+
+    def set_personal_settings(self, org_id: str, allowed: bool) -> dict:
+        return self._put(org_id, personal_settings=bool(allowed))
 
 
 # ------------------------------------------------------------------ finding projects by words
@@ -990,6 +1013,7 @@ class ProjectsCtx:
     now: Callable[[], datetime]
     resolve: Callable[[str], list[Person]]  # members matching a name / @mention
     workspace: str = ""
+    on_assigned: Callable[[Task], None] | None = None  # task handshake: card for the assignee
 
 
 STRINGS = {
@@ -1346,9 +1370,21 @@ def project_tools(ctx: ProjectsCtx) -> list:
             if len(hit) != 1:
                 return _err(ctx, "bad_value", "pm_bad_value", field="milestone", value=milestone)
             mid = hit[0].id
-        task = ctx.tasks.save(
-            make_task(ctx.guild_id, p.id, title, assignee=who, due=dl, milestone_id=mid)
+        task = make_task(ctx.guild_id, p.id, title, assignee=who, due=dl, milestone_id=mid)
+        asker_id = (
+            int(ctx.asker.discord_user_id) if (ctx.asker.discord_user_id or "").isdigit() else 0
         )
+        if task.assignee_id > 0 and asker_id:
+            if task.assignee_id == asker_id:
+                task.confirm = "accepted"  # taking a task yourself needs no card
+            else:
+                task.assigner_id, task.assigner_name = asker_id, ctx.asker.name
+        task = ctx.tasks.save(task)
+        if task.assignee_id > 0 and task.assigner_id and ctx.on_assigned is not None:
+            try:
+                ctx.on_assigned(task)
+            except Exception:
+                logger.warning("task handshake hook failed", exc_info=True)
         res = {
             "ok": True,
             "id": task.id,

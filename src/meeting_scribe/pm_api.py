@@ -880,22 +880,52 @@ def company_insights(pm: Pm = Depends(pm_ctx)) -> dict:
 
 
 # ------------------------------------------------------------------ settings
-def settings_view(pm: Pm) -> dict:
+def get_pm_guilds():
+    """The Salid guild settings store (the bot reads task_confirm_mode / personal_settings from
+    it); None when it cannot be opened. Tests override this dependency."""
+    try:
+        return hub.get_guild_store()
+    except Exception:
+        logger.warning("guild settings store unavailable for the PM settings", exc_info=True)
+        return None
+
+
+def discord_guild_ids(pm: Pm) -> list[int]:
+    out = []
+    for ws in pm.wss:
+        if ws.platform == "discord" and str(ws.external_id).isdigit():
+            out.append(int(ws.external_id))
+    return out
+
+
+def settings_view(pm: Pm, guilds=None) -> dict:
     org = pm.ctx.org
+    defaults = P.PmSettings(pm.orgs.docs).get(org.id)
+    for gid in discord_guild_ids(pm)[:1]:  # the bot's own setting is the truth when it is known
+        try:
+            g = guilds.find(gid) if guilds is not None else None
+        except Exception:
+            g = None
+        if g is not None:
+            defaults = {
+                **defaults,
+                "task_confirm_mode": g.task_confirm_mode,
+                "personal_settings": g.personal_settings,
+            }
     return {
         "members": [{**m.model_dump(), "name": m.email.split("@")[0]} for m in org.members],
         "departments": [
             {"key": k, "label_th": th, "label_en": en} for k, (th, en) in DEPARTMENT_LABELS.items()
         ],
         "templates": P.templates_view(),
-        "defaults": P.PmSettings(pm.orgs.docs).get(org.id),
+        "defaults": defaults,
         "company": {"name": org.name, "logo_url": org.logo_url},
     }
 
 
 @router.get("/settings")
-def get_pm_settings(pm: Pm = Depends(pm_ctx)) -> dict:
-    return settings_view(pm)
+def get_pm_settings(pm: Pm = Depends(pm_ctx), guilds=Depends(get_pm_guilds)) -> dict:
+    return settings_view(pm, guilds)
 
 
 class MemberPatch(BaseModel):
@@ -909,6 +939,8 @@ class MemberPatch(BaseModel):
 class DefaultsPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
     visibility: P.Visibility | None = None
+    task_confirm_mode: Literal["notify", "approve"] | None = None
+    personal_settings: bool | None = None
 
 
 class SettingsPatch(BaseModel):
@@ -918,7 +950,9 @@ class SettingsPatch(BaseModel):
 
 
 @router.patch("/settings")
-def patch_pm_settings(body: SettingsPatch, pm: Pm = Depends(pm_ctx)) -> dict:
+def patch_pm_settings(
+    body: SettingsPatch, pm: Pm = Depends(pm_ctx), guilds=Depends(get_pm_guilds)
+) -> dict:
     if not pm.admin:
         raise forbid("Admin only")
     org_id = pm.ctx.org.id
@@ -945,4 +979,18 @@ def patch_pm_settings(body: SettingsPatch, pm: Pm = Depends(pm_ctx)) -> dict:
         pm.ctx.org = org
     if body.defaults and body.defaults.visibility:
         P.PmSettings(pm.orgs.docs).set_visibility(org_id, body.defaults.visibility)
-    return settings_view(pm)
+    d = body.defaults
+    if d and d.task_confirm_mode:
+        P.PmSettings(pm.orgs.docs).set_task_confirm_mode(org_id, d.task_confirm_mode)
+    if d and d.personal_settings is not None:
+        P.PmSettings(pm.orgs.docs).set_personal_settings(org_id, d.personal_settings)
+    if guilds is not None and d and (d.task_confirm_mode or d.personal_settings is not None):
+        for gid in discord_guild_ids(pm):  # the bot reads these from the guild settings
+            try:
+                if d.task_confirm_mode:
+                    guilds.set_task_confirm_mode(gid, d.task_confirm_mode)
+                if d.personal_settings is not None:
+                    guilds.set_personal_settings(gid, d.personal_settings)
+            except Exception:
+                logger.warning("could not mirror PM defaults to guild %s", gid, exc_info=True)
+    return settings_view(pm, guilds)

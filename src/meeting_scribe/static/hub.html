@@ -251,6 +251,12 @@
           <label><span data-i18n="default_lang_l"></span> <select class="field" id="default-language"></select><small data-i18n="default_lang_s"></small></label>
           <label><span data-i18n="default_tone_l"></span> <select class="field" id="default-tone"></select><small data-i18n="default_tone_s"></small></label>
           <label><span data-i18n="tone_note_l"></span> <input type="text" id="tone-note" maxlength="200" data-i18n-attr="placeholder:tone_note_ph"><small data-i18n="tone_note_s"></small></label>
+          <label><input type="checkbox" id="personal-settings" checked> <span data-i18n="personal_l"></span><small data-i18n="personal_s"></small></label>
+          <fieldset id="task-mode" style="border:0;padding:0;margin:0 0 8px">
+            <legend data-i18n="task_mode_l"></legend>
+            <label><input type="radio" name="task-confirm" value="notify" checked> <span data-i18n="task_mode_notify_l"></span><small data-i18n="task_mode_notify_s"></small></label>
+            <label><input type="radio" name="task-confirm" value="approve"> <span data-i18n="task_mode_approve_l"></span><small data-i18n="task_mode_approve_s"></small></label>
+          </fieldset>
           <div id="channel-modes" class="fields"></div>
         </div>
         <small class="hint" data-i18n="modes_hint"></small>
@@ -643,6 +649,34 @@
  "mode_chat": {
   "th": "💬 ตอบทุกข้อความ",
   "en": "💬 Chat"
+ },
+ "personal_l": {
+  "th": "สมาชิกตั้งค่าส่วนตัวได้",
+  "en": "Members may keep personal settings"
+ },
+ "personal_s": {
+  "th": "ปิดแล้วทุกคนใช้การตั้งค่าขององค์กร (ภาษา โทน โหมดมอบหมายงาน)",
+  "en": "When off, everyone uses the organisation's settings (language, tone, task mode)."
+ },
+ "task_mode_l": {
+  "th": "โหมดมอบหมายงาน",
+  "en": "Task assignment mode"
+ },
+ "task_mode_notify_l": {
+  "th": "แบบแจ้ง",
+  "en": "Notify"
+ },
+ "task_mode_notify_s": {
+  "th": "ผู้รับงานกดรับ/แก้ไข งานถูกบันทึก แล้วสลิดแจ้งคนมอบงาน",
+  "en": "The assignee accepts or edits, the task is recorded and the giver is told."
+ },
+ "task_mode_approve_l": {
+  "th": "แบบอนุมัติ",
+  "en": "Approve"
+ },
+ "task_mode_approve_s": {
+  "th": "หลังผู้รับงานตอบรับ หัวหน้า (คนมอบงาน) ต้องอนุมัติ แก้ หรือส่งกลับก่อนงานถูกบันทึก",
+  "en": "After the assignee accepts, the boss (the giver) approves, edits or sends it back before it is recorded."
  },
  "default_tone_l": {
   "th": "โทนการพูดของสลิด (เริ่มต้นของเซิร์ฟเวอร์)",
@@ -1424,6 +1458,18 @@
   "th": "ภาพ AI ไม่เกิน 20 ภาพต่อวันต่อเซิร์ฟเวอร์ เป็นภาพคอนเซปต์ ไม่ใช่โมเดล 3 มิติหรือแบบวิศวกรรม ราคาต้องตรวจซ้ำก่อนซื้อจริง",
   "en": "Up to 20 AI images per server per day; they are concept renders, not 3D models or engineering drawings; prices must be re-checked before buying"
  },
+ "f_task_handshake_n": {
+  "th": "ส่งงานให้ผู้รับผิดชอบยืนยัน",
+  "en": "Task confirmation"
+ },
+ "f_task_handshake_d": {
+  "th": "เมื่อสลิดได้ยินว่ามีงานในแชต จะส่งการ์ดงานให้คนที่ต้องทำกด รับงาน / แก้ไข / ไม่ใช่ของฉัน แล้วแจ้งคนที่มอบงานว่าบันทึกแล้ว ถ้ายังไม่ตอบใน 24 ชั่วโมงจะเตือนหนึ่งครั้ง",
+  "en": "When Salid hears a task in chat she sends the person who has to do it a card to Accept, Edit or say Not mine, then tells whoever gave the task that it was recorded. One reminder after 24 hours without an answer."
+ },
+ "f_task_handshake_w": {
+  "th": "พูดถึงงานในแชตตามปกติ หรือบอกสลิดว่า “งาน #รหัส ให้ ...” เพื่อย้ายงาน",
+  "en": "Just talk about tasks in chat, or tell Salid “task #id to ...” to reassign"
+ },
  "f_data_n": {
   "th": "วิเคราะห์ข้อมูลจากไฟล์ Excel / CSV",
   "en": "Spreadsheet and CSV analysis"
@@ -1629,9 +1675,10 @@ const FEATURES = [
   { id: "promo" },
   { id: "concept" },
   { id: "data" },
+  { id: "task_handshake" },
   { id: "link_guard" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, promo: true, concept: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, promo: true, concept: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, task_handshake: true };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -1881,7 +1928,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, concept: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, concept: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, task_handshake: true, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -1892,6 +1939,8 @@ function fillSettings(s) {
   renderDigestSelect(channels, s.report_channel_id, "report-id", "report_auto");
   renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language, s.channel_tones, s.default_tone);
   $("tone-note").value = s.tone_note || "";
+  $("personal-settings").checked = s.personal_settings !== false;
+  for (const r of document.querySelectorAll('input[name="task-confirm"]')) r.checked = r.value === (s.task_confirm_mode || "notify");
   $("digest-time").value = s.digest_time || "18:00";
   $("followup-time").value = s.followup_time || "10:00";
   $("report-time").value = s.report_time || "18:30";
@@ -1967,7 +2016,7 @@ async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
     features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, quotations: features.quotations },
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, votes: features.votes, vote_offers: features.vote_offers, reminders: features.reminders, projects: features.projects, project_notes: features.project_notes, data: features.data },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, votes: features.votes, vote_offers: features.vote_offers, reminders: features.reminders, projects: features.projects, project_notes: features.project_notes, data: features.data, task_handshake: features.task_handshake },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
@@ -1980,6 +2029,8 @@ async function save() {
     channel_tones: collectTones(),
     default_tone: $("default-tone").value || "cheerful",
     tone_note: $("tone-note").value.trim(),
+    personal_settings: $("personal-settings").checked,
+    task_confirm_mode: (document.querySelector('input[name="task-confirm"]:checked') || {}).value || "notify",
     digest_time: $("digest-time").value || "18:00",
     followup_time: $("followup-time").value || "10:00",
     report_time: $("report-time").value || "18:30",

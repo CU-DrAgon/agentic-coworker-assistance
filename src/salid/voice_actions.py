@@ -25,6 +25,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "set_my_notifications",
         # coordinator
         "update_task",
+        "add_task",
         "request_disclosure",
         # feature branches (approvals, broadcast, freetime, polls/forms, captions)
         "request_approval",

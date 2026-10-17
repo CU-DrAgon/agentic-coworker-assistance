@@ -169,6 +169,7 @@ from .summary import (
     message_summary_question,
     summary_question,
 )
+from .task_handshake_bot import TaskButton, TaskHandshakeMixin
 from .tone import RESET as TONE_RESET
 from .tone import TONES
 from .tone import label as tone_label
@@ -352,6 +353,7 @@ class SecretaryBot(
     MarketsMixin,
     ReminderMixin,
     ProjectsMixin,
+    TaskHandshakeMixin,
     ToneMixin,
     IdeasMixin,
     QuotationMixin,
@@ -523,6 +525,7 @@ class SecretaryBot(
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._reminders_init()  # personal reminders, once and recurring (salid.reminders_bot)
         self._projects_init()  # PM dashboard projects (salid.projects_bot)
+        self._handshake_init()  # task cards the assignee confirms (salid.task_handshake_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
         self._quotation_init()  # quotations (salid.quotation_bot)
         self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
@@ -549,6 +552,7 @@ class SecretaryBot(
         self.add_dynamic_items(ApprovalButton)  # same for approval requests
         self.add_dynamic_items(PlaybookButton)  # company-playbook suggestions for admins
         self.add_dynamic_items(VoteButton, VoteOfferButton)  # vote ballots + offers
+        self.add_dynamic_items(TaskButton)  # task cards: accept / edit / not mine
         self.add_dynamic_items(SwitchButton)
         self.add_dynamic_items(CompanyButton)  # the "which company?" DM buttons
         self.add_dynamic_items(LanguageSelect)  # the main-language menu (salid.language_ask)
@@ -881,6 +885,8 @@ class SecretaryBot(
         if called and await self._language_command(message):
             return
         if called and await self._tone_command(message):
+            return
+        if called and await self._task_mode_command(message):
             return
         if called and await self._private_command(message, message.guild, message.author):
             return
@@ -1239,6 +1245,8 @@ class SecretaryBot(
         if await self._private_command(message, guild, member):
             return
         if await self._personal_tone_command(message, guild, member):  # their own tone
+            return
+        if await self._task_mode_command(message, guild, member):  # their own task mode
             return
         await asyncio.to_thread(self.team.current, guild.id)
         ack = await self.scheduler.handle_dm_reply(
@@ -2195,7 +2203,15 @@ class SecretaryBot(
             )
         )
         coo_tools = (
-            self._coo_tools(guild, asker, is_exec, memory, question, lang)
+            self._coo_tools_in(
+                message.channel.id if message.guild is not None else 0,
+                guild,
+                asker,
+                is_exec,
+                memory,
+                question,
+                lang,
+            )
             if memory is not None and not interjection
             else []
         )

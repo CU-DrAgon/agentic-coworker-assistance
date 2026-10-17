@@ -351,7 +351,13 @@ def person_day(
             for m in mine[-MAX_PERSONAL_MESSAGES:]
         ],
         "tasks_open": [
-            {"id": x.id, "title": x.title, "due": x.due, "overdue": is_overdue(x, day)}
+            {
+                "id": x.id,
+                "title": x.title,
+                "due": x.due,
+                "overdue": is_overdue(x, day),
+                "pending": x.confirm == "pending",
+            }
             for x in own
             if x.status == "open"
         ],
@@ -381,7 +387,8 @@ def render_personal(data: dict, lang: str = "en") -> str:
         for x in data["tasks_open"][:10]:
             due = f" ({x['due']})" if x["due"] else ""
             late = " ⚠" if x["overdue"] else ""
-            lines.append(f"- #{x['id']} {x['title']}{due}{late}")
+            wait = " ⏳" if x.get("pending") else ""
+            lines.append(f"- #{x['id']} {x['title']}{due}{late}{wait}")
     return "\n".join(lines)
 
 

@@ -49,6 +49,7 @@ from .reminders import REMINDERS_PROMPT
 from .search import SEARCH_PROMPT
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
+from .task_handshake import HANDSHAKE_PROMPT
 from .tone import DEFAULT_TONE, tone_block, tone_override
 from .web_read import make_read_web
 from .wiki import WIKI_PROMPT
@@ -1201,7 +1202,7 @@ COO_PROMPT = (
     "DM กับสลิด: เมื่อสมาชิกทัก DM มาบอกเรื่องงาน (เช่น พรุ่งนี้ลา ลูกค้าขอเลื่อนส่งของ งานที่ทำอยู่) "
     "ระบบจดไว้ให้อัตโนมัติ (ผู้ที่ตำแหน่งสูงกว่าเห็นได้ เว้นแต่เจ้าตัวบอกว่า “เรื่องนี้เก็บเป็นความลับ” / private) "
     "ให้ตอบยืนยันสั้นๆ ว่าจดอะไรไว้ และถ้าเห็นว่ากระทบงานหรือคนอื่น ให้ถามหรือเสนอขั้นตอนต่อไป. "
-    "ถ้าในข้อความมีหมายเหตุว่าเป็นความลับ ให้ยืนยันว่าเก็บไว้เป็นความลับ."
+    "ถ้าในข้อความมีหมายเหตุว่าเป็นความลับ ให้ยืนยันว่าเก็บไว้เป็นความลับ." + HANDSHAKE_PROMPT
 )
 
 

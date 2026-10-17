@@ -20,6 +20,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     channel_tones        {channel id str: cheerful|friendly|professional|concise|calm}, see salid.tone
     default_tone         tone of channels with no entry above (default "cheerful")
     tone_note            str <= 200 chars, owner's extra wording note appended to every tone
+    task_confirm_mode    notify (default) | approve: who signs off a task heard in chat
+    personal_settings    bool (default true): members may keep their own language / tone / task mode
     receipt_home_channel_id  str main receipt channel ("" = auto-pick), see salid.receipt_forward
     receipt_forward      bool copy receipts posted in other channels to the home channel (default true)
     digest_channel_id    str ("" = no daily digest)
@@ -122,7 +124,12 @@ FEATURES = (
     "projects",
     "project_notes",
     "data",
+    "task_handshake",
 )
+TASK_CONFIRM_MODES = (
+    "notify",
+    "approve",
+)  # task handshake: the doer confirms | the giver signs off
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
 MAX_CHANNEL_LANGUAGES = 500
@@ -216,6 +223,9 @@ class Features(BaseModel):
     data: bool = (
         True  # data_load / data_sql / data_chart & co: spreadsheet analysis (salid.data_studio)
     )
+    task_handshake: bool = (
+        True  # tasks heard in chat go to the assignee to confirm (salid.task_handshake)
+    )
 
 
 class Channel(BaseModel):
@@ -255,6 +265,8 @@ class GuildSettingsUpdate(BaseModel):
     channel_tones: dict[str, str] = Field(default_factory=dict)
     default_tone: str = DEFAULT_TONE
     tone_note: str = ""
+    task_confirm_mode: str = "notify"  # notify | approve, see salid.task_handshake
+    personal_settings: bool = True  # members may keep their own language / tone / task mode
     memory_retention_days: int = Field(default_factory=default_retention_days)
 
     @field_validator("memory_retention_days", mode="before")
@@ -300,6 +312,11 @@ class GuildSettingsUpdate(BaseModel):
             return {}
         out = {str(k).strip(): m for k, m in v.items() if _ID.match(str(k).strip()) and m in TONES}
         return dict(list(out.items())[:MAX_CHANNEL_TONES])
+
+    @field_validator("task_confirm_mode", mode="before")
+    @classmethod
+    def _task_confirm_mode(cls, v):
+        return v if v in TASK_CONFIRM_MODES else "notify"
 
     @field_validator("default_tone", mode="before")
     @classmethod
@@ -619,6 +636,15 @@ class GuildStore:
         if tone not in TONES:
             raise ValueError(f"unknown tone {tone!r}")
         self._ref(guild_id).set({"default_tone": tone}, merge=True)
+
+    def set_task_confirm_mode(self, guild_id: int, mode: str) -> None:
+        """notify | approve: who signs off tasks heard in chat (see salid.task_handshake)."""
+        if mode not in TASK_CONFIRM_MODES:
+            raise ValueError(f"unknown task confirm mode {mode!r}")
+        self._ref(guild_id).set({"task_confirm_mode": mode}, merge=True)
+
+    def set_personal_settings(self, guild_id: int, allowed: bool) -> None:
+        self._ref(guild_id).set({"personal_settings": bool(allowed)}, merge=True)
 
     def set_tone_note(self, guild_id: int, note: str) -> None:
         """Set (or, with "", clear) the guild's wording note. Validated like the hub field."""
@@ -1018,6 +1044,25 @@ class BotGuildSettings:
     def set_server_tone(self, guild_id: int, tone: str) -> None:
         try:
             self.store.set_server_tone(guild_id, tone)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def task_confirm_mode(self, guild_id: int) -> str:
+        return self.current(guild_id).task_confirm_mode
+
+    def personal_allowed(self, guild_id: int) -> bool:
+        """Whether members may keep personal settings (language, tone, task mode)."""
+        return bool(self.current(guild_id).personal_settings)
+
+    def set_personal_settings(self, guild_id: int, allowed: bool) -> None:
+        try:
+            self.store.set_personal_settings(guild_id, allowed)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def set_task_confirm_mode(self, guild_id: int, mode: str) -> None:
+        try:
+            self.store.set_task_confirm_mode(guild_id, mode)
         finally:
             self._cache.pop(guild_id, None)
 

@@ -18,12 +18,20 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field
 
 from .coo_store import PROFILES, DocStore
-from .i18n import LANG_NAMES, LANGS, resolve_lang
+from .i18n import CATALOG, LANG_NAMES, LANGS, resolve_lang, t
 from .tone import RESET as TONE_RESET
 from .tone import label as tone_label
 from .tone import resolve_tone
 from .tone import valid as valid_tone
 
+CATALOG.update(
+    {
+        "personal_off": {
+            "th": "องค์กรนี้ใช้การตั้งค่ากลาง ถามแอดมินได้ค่ะ",
+            "en": "This organisation uses one shared setting; ask an admin.",
+        }
+    }
+)
 MAX_NICKNAME = 40
 MAX_ROLE = 120
 MAX_NOTE = 120
@@ -40,7 +48,17 @@ KINDS = (
     "style_add",
     "style_remove",
     "tone",
+    "task_confirm_mode",
 )
+PERSONAL_KINDS = (
+    "language",
+    "tone",
+    "task_confirm_mode",
+)  # off when the org turns personal settings off
+TASK_MODE_WORDS = {
+    "notify": "notify", "แจ้ง": "notify", "แค่แจ้ง": "notify", "inform": "notify",
+    "approve": "approve", "approval": "approve", "อนุมัติ": "approve", "ขออนุมัติ": "approve",
+}  # fmt: skip
 LENGTHS = ("short", "normal", "detailed")
 LANGUAGES = tuple(x for x in LANGS if x != "auto")
 _LANG_ALIASES = {
@@ -71,6 +89,7 @@ class Profile(BaseModel):
     reply_length: str | None = None  # short | normal | detailed
     language: str | None = None  # th | en
     tone: str | None = None  # a salid.tone preset; used only in their private channel and DMs
+    task_confirm_mode: str = ""  # notify | approve for tasks THEY give; "" = follow the org
     dm_delivery: bool = False  # proactive messages by DM instead of the private Salid channel
     focus: list[str] = Field(default_factory=list)
     role_note: str = ""
@@ -83,6 +102,7 @@ class Profile(BaseModel):
             or self.reply_length
             or self.language
             or self.tone
+            or self.task_confirm_mode
             or self.dm_delivery
             or self.focus
             or self.role_note
@@ -147,6 +167,14 @@ def apply_change(p: Profile, kind: str, value) -> str:
             p.tone = v
         else:
             return "tone must be cheerful, friendly, professional, concise or calm"
+    elif kind == "task_confirm_mode":
+        v = TASK_MODE_WORDS.get(raw.casefold(), raw.casefold())
+        if v in _CLEAR:
+            p.task_confirm_mode = ""
+        elif v in ("notify", "approve"):
+            p.task_confirm_mode = v
+        else:
+            return "task_confirm_mode must be notify or approve"
     elif kind == "delivery":
         v = raw.casefold()
         if v in ("dm", "ดีเอ็ม") or v.startswith("dm") or "ส่วนตัว" in v and "ห้อง" not in v:
@@ -183,10 +211,13 @@ def apply_change(p: Profile, kind: str, value) -> str:
 class ProfileTools:
     """The three agent tools' behaviour, bound to one guild and one speaker."""
 
-    def __init__(self, repo: ProfileRepo, guild_id: int, user_id: int):
+    def __init__(self, repo: ProfileRepo, guild_id: int, user_id: int, allowed=None):
         self.repo, self.gid, self.uid = repo, guild_id, user_id
+        self.allowed = allowed  # () -> bool: may members keep personal settings here?
 
     def remember(self, kind: str, value: str = "") -> dict:
+        if kind in PERSONAL_KINDS and self.allowed is not None and not self.allowed():
+            return {"error": f"{t('personal_off', 'en')} ({t('personal_off', 'th')})"}
         p = self.repo.get(self.gid, self.uid)
         err = apply_change(p, kind, value)
         if err:
@@ -272,11 +303,22 @@ class ProfileMixin:
     def _profile_init(self) -> None:
         self.profiles = ProfileRepo(self.docs)
 
-    def _profile_of(self, gid: int, uid: int) -> Profile:
+    def _personal_allowed(self, gid: int) -> bool:
         try:
-            return self.profiles.get(gid, uid)
+            return self.team.personal_allowed(gid)
+        except Exception:
+            return True
+
+    def _profile_of(self, gid: int, uid: int) -> Profile:
+        """The person's preferences. When the organisation turned personal settings off, their
+        language, tone and task mode are ignored (everything reads through here)."""
+        try:
+            p = self.profiles.get(gid, uid)
         except Exception:  # a store hiccup must never stop an answer
             return Profile()
+        if not self._personal_allowed(gid):
+            p = p.model_copy(update={"language": None, "tone": None, "task_confirm_mode": ""})
+        return p
 
     def _person_lang(self, guild_id: int, user_id: int, text: str | None = None) -> str:
         """th / en for a private message to one person: their own language if set, else the
@@ -286,7 +328,7 @@ class ProfileMixin:
 
     def _profile_actions(self, gid: int, uid: int) -> dict:
         """ChatActions fields, bound to this guild and this speaker."""
-        tools = ProfileTools(self.profiles, gid, uid)
+        tools = ProfileTools(self.profiles, gid, uid, lambda: self._personal_allowed(gid))
         return {
             "remember_my_preference": tools.remember,
             "show_my_preferences": tools.show,

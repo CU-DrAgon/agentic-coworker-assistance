@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import logging
 import re
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
 from types import SimpleNamespace
@@ -37,11 +38,13 @@ from .memory_access import (
     hierarchy_authors,
     member_rank,
 )
+from .task_handshake import pending_marker
 from .tasks import TaskRepo, TaskTracker, due_for_followup
 from .tone import tone_block
 
 logger = logging.getLogger(__name__)
 
+COO_CHANNEL: ContextVar[int] = ContextVar("coo_channel", default=0)
 REPORT_CHANNEL_NAME = "รายงานจากสลิด"
 REPORT_CHANNEL_NAME_EN = "reports-from-salid"  # in guilds whose default language is English
 COO_TICK_S = 30.0
@@ -140,6 +143,7 @@ class CooMixin:
                 self.team.enabled(gid, "memory")
                 and (self.team.enabled(gid, "followups") or self.team.enabled(gid, "reports"))
             ),
+            role_members_of=self._role_members,
         )
         self.memory.scheduler.on_summary = self._on_summary_all
         self._ranks_cache: dict[int, tuple[float, dict[int, int]]] = {}
@@ -149,7 +153,8 @@ class CooMixin:
         """The memory scheduler's hook (worker thread): tasks first, then projects heard in chat.
         Each part is guarded so one failing never blocks the other."""
         try:
-            self.task_tracker.on_summary(guild_id, channel_id, day, summary, messages)
+            created = self.task_tracker.on_summary(guild_id, channel_id, day, summary, messages)
+            self._handshake_new_tasks(guild_id, created or [])
         except Exception:
             logger.warning("task tracking failed", exc_info=True)
         listener = getattr(self, "project_listener", None)
@@ -158,6 +163,26 @@ class CooMixin:
                 listener.on_summary(guild_id, channel_id, day, summary, messages)
             except Exception:
                 logger.warning("project listening failed", exc_info=True)
+
+    def _role_members(self, guild_id: int, text: str) -> list[int] | None:
+        """Human member ids of the guild role a text names ("ทีม tech", "@Tech", "<@&id>");
+        None when no role matches."""
+        guild = self._guild(guild_id)
+        if guild is None:
+            return None
+        raw = (text or "").strip()
+        m = re.fullmatch(r"<@&(\d+)>", raw)
+        roles = list(getattr(guild, "roles", ()))
+        if m:
+            role = next((r for r in roles if r.id == int(m[1])), None)
+        else:
+            name = re.sub(r"^(?:ทีม|team|แผนก)\s*|\s*team$", "", raw.lstrip("@"), flags=re.I)
+            name = name.strip().casefold()
+            hits = [r for r in roles if name and r.name.casefold() == name]
+            role = hits[0] if len(hits) == 1 else None
+        if role is None or role == getattr(guild, "default_role", None):
+            return None
+        return [x.id for x in self._members(guild) if role in getattr(x, "roles", ())]
 
     def _guild(self, guild_id: int):
         return next((g for g in self.guilds if g.id == guild_id), None)
@@ -247,6 +272,14 @@ class CooMixin:
         return allowed, Visibility(scope, read, people, dm_names)
 
     # ------------------------------------------------------------- agent tools
+    def _coo_tools_in(self, channel_id: int, *args) -> list:
+        """`_coo_tools` for a request made in `channel_id` (tasks made by add_task remember it)."""
+        token = COO_CHANNEL.set(channel_id)
+        try:
+            return self._coo_tools(*args)
+        finally:
+            COO_CHANNEL.reset(token)
+
     def _coo_tools(self, guild, member, is_exec: bool, memory, question: str, lang: str) -> list:
         loop = asyncio.get_running_loop()
         vis = memory.vis if memory is not None else None
@@ -263,8 +296,30 @@ class CooMixin:
                 self._request_disclosure, guild, member, question, memory, loop
             ),
             my_day=partial(self._my_day, guild, member),
+            reassigned=partial(self._handshake_reassigned, guild.id),
+            created=partial(self._handshake_new_tasks, guild.id),
+            find_project=partial(self._task_project, guild, member, is_exec),
+            channel_id=COO_CHANNEL.get(),
         )
         return build_coo_tools(c)
+
+    def _task_project(self, guild, member, is_exec: bool, fragment: str) -> tuple[str, str]:
+        """(project id, "") for a project named in words, or ("", why not). The asker must be
+        allowed to add work to it."""
+        from . import projects as P
+
+        try:
+            found = P.find_projects(self.project_repo.list(guild.id), fragment)
+        except Exception:
+            return "", "projects are not available here"
+        if not found:
+            return "", f"no project matches {fragment!r}"
+        if len(found) > 1:
+            return "", "several projects match: " + "; ".join(p.name for p in found[:5])
+        who = P.Person(discord_user_id=str(member.id), name=getattr(member, "display_name", ""))
+        if not P.can_contribute(found[0], who, is_exec):
+            return "", "not allowed to add tasks to that project"
+        return found[0].id, ""
 
     def _memory_day_retained(self, guild_id: int, day: date) -> bool:
         """Whether a memory day is inside the guild's current retention window."""
@@ -488,6 +543,7 @@ class CooMixin:
         self._coo_last = self._clock()
         now = self.s.now()
         await self._followups_due(now)
+        await self._handshake_tick(now)
         await self._reports_due(now)
         await self._briefings_due(now)
         await self._asks_due(now)
@@ -528,7 +584,11 @@ class CooMixin:
                 continue
             lang = self._person_lang(guild.id, uid)
             lines = [t("fu_header", lang, name=getattr(member, "display_name", ""))]
-            lines += [t("fu_line", lang, id=x.id, title=x.title, due=x.due) for x in items[:10]]
+            lines += [
+                t("fu_line", lang, id=x.id, title=x.title, due=x.due)
+                + (f" {mark}" if (mark := pending_marker(x, lang)) else "")
+                for x in items[:10]
+            ]
             lines.append(t("fu_footer", lang, id=items[0].id))
             if (await self.deliver_to_person(guild, member, "\n".join(lines))).ok:
                 n += 1

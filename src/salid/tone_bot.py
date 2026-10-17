@@ -113,7 +113,9 @@ class ToneMixin:
         else:
             from .profiles import ProfileTools
 
-            res = ProfileTools(self.profiles, gid, user.id).remember("tone", key)
+            res = ProfileTools(
+                self.profiles, gid, user.id, lambda: self._personal_allowed(gid)
+            ).remember("tone", key)
             if "error" in res:
                 raise ValueError(res["error"])
         if reset and scope != "server":

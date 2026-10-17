@@ -18,7 +18,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 
 from google.genai import types
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from .coo_store import TASKS, DocStore
 from .llm import generate
@@ -62,6 +62,21 @@ class Task(BaseModel):
     project_id: str = ""  # PM dashboard: the project this task belongs to (salid.projects)
     assignee_email: str = ""  # web members are assigned by email (assignee_id stays a Discord id)
     milestone_id: str = ""
+    # task handshake (salid.task_handshake): the assignee confirms, the giver is told
+    assigner_id: int = 0  # who gave / asked for the task (0 = unknown)
+    assigner_name: str = ""
+    confirm: str = ""  # "" | pending | accepted | declined
+    confirm_at: str = ""  # when `confirm` last changed (the 24 h nudge counts from "pending")
+    handshake_message: str = ""  # "channel_id:message_id:index" of the card, for editing it
+    group_id: str = ""  # tasks made from one action item that named several people
+    # approve mode: the giver signs off after the assignee accepts (confirm = awaiting_approval)
+    approver_id: int = 0
+    approval_message: str = ""  # "channel_id:message_id" of the giver's approval card
+    approval_rounds: int = 0  # how many times it was sent back
+    edit_from: str = ""  # JSON {title, due, note} before the assignee's edits (before -> after)
+    send_back_note: str = ""
+    # not stored: a team / several people were named but nobody could be picked (giver is asked)
+    _needs_owner: bool = PrivateAttr(default=False)
 
 
 def _now_iso() -> str:
@@ -117,6 +132,41 @@ def match_person(name: str, people: dict[int, str]) -> int:
         if len(low) >= 2 and (low in n.casefold() or (len(n) >= 2 and n.casefold() in low))
     ]
     return loose[0] if len(loose) == 1 else 0
+
+
+_WHO_SPLIT = re.compile(
+    r"\s*กับ\s*|\s*และ\s*|\s*,\s*|\s+and\s+|\s*&\s*|\s*/\s*|\s+(?=@)|(?<=>)\s*(?=<@)", re.I
+)
+MAX_GROUP = 5  # a team larger than this is not split into one task per member
+
+
+def split_who(who: str) -> list[str]:
+    """The people named in an action item's `who` ("เตยกับบี", "A, B and C", "<@1> <@2>")."""
+    return [p.strip() for p in _WHO_SPLIT.split(who or "") if p and p.strip()]
+
+
+def _words(text: str) -> list[str]:
+    return [w for w in re.findall(r"\w+", (text or "").casefold()) if len(w) >= 3]
+
+
+def guess_assigner(
+    messages, people: dict[int, str], assignee_id: int, assignee_name: str, title: str
+) -> int:
+    """Who asked for a task nobody named a giver for: the author of the newest message in the
+    batch that names the assignee (name or mention) AND shares a word with the title; else 0."""
+    if not assignee_id:
+        return 0
+    name = (assignee_name or people.get(assignee_id) or "").casefold().strip()
+    words = _words(title)
+    for m in reversed(list(messages)):  # oldest first in, so newest first here
+        if getattr(m, "kind", "chat") == "salid" or getattr(m, "author_id", 0) not in people:
+            continue
+        text = (getattr(m, "text", "") or "").casefold()
+        named = f"<@{assignee_id}>" in text or f"<@!{assignee_id}>" in text
+        named = named or (len(name) >= 2 and name in text)
+        if named and any(w in text for w in words):
+            return m.author_id
+    return 0
 
 
 def project_in_text(projects: list, text: str) -> str:
@@ -232,7 +282,7 @@ class TaskRepo:
                     old.due, changed = task.due, True
                 if task.project_id and not old.project_id:
                     old.project_id, changed = task.project_id, True
-                if task.assignee_id and not old.assignee_id:
+                if task.assignee_id and not old.assignee_id and old.confirm != "declined":
                     old.assignee_id, old.assignee_name, changed = (
                         task.assignee_id,
                         task.assignee_name,
@@ -287,9 +337,12 @@ class TaskTracker:
         people_of: Callable[[int], dict[int, str]] = lambda gid: {},
         kind_of: Callable[[int, int], str] = lambda gid, cid: "summary",
         enabled: Callable[[int], bool] = lambda gid: True,
+        role_members_of: Callable[[int, str], list[int] | None] = lambda gid, name: None,
     ):
         self.repo, self.s, self.llm = repo, settings, llm
         self.people_of, self.kind_of, self.enabled = people_of, kind_of, enabled
+        # member ids of the guild role / team a text names; None = no such role
+        self.role_members_of = role_members_of
 
     def on_summary(
         self,
@@ -298,12 +351,14 @@ class TaskTracker:
         day: str,
         summary: dict,
         messages: list[MemoryMessage],
-    ) -> None:
+    ) -> list[Task]:
+        """Tasks and done-marks for one summary update. Returns the newly created tasks."""
         if not self.enabled(guild_id):
-            return
-        self.ingest(guild_id, channel_id, day, summary, messages)
+            return []
+        created = self.ingest(guild_id, channel_id, day, summary, messages)
         if messages:
             self.mark_done(guild_id, messages)
+        return created
 
     def ingest(
         self, guild_id: int, channel_id: int, day: str, summary: dict, messages
@@ -323,26 +378,43 @@ class TaskTracker:
         project_ids = None  # loaded once, only if there is an item
         for a in items[:MAX_TASKS_PER_SUMMARY]:
             who = (a.get("who") or "").strip()
-            uid = match_person(who, people)
-            if not uid and is_dm_scope(channel_id) and not who:
-                uid = -channel_id  # a note someone gave about their own work
-            task = Task(
-                guild_id=guild_id,
-                assignee_id=uid,
-                assignee_name=people.get(uid) or who,
-                title=a["what"].strip()[:300],
-                due=parse_due(a.get("due"), today),
-                source_link="" if is_dm_scope(channel_id) else link,
-                source_channel_id=channel_id,
-                source_day=day,
-                created_from=kind,
-            )
+            by = (a.get("by") or "").strip()
+            title = a["what"].strip()[:300]
+            due = parse_due(a.get("due"), today)
+            uids, overflow = self._assignees(guild_id, who, people)
+            if not uids and not who and is_dm_scope(channel_id):
+                uids = [-channel_id]  # a note someone gave about their own work
+            group = uuid.uuid4().hex[:8] if len(uids) > 1 else ""
+            batch = []
+            for uid in uids or [0]:
+                giver = match_person(by, people)
+                if not by and uid > 0:
+                    giver = guess_assigner(messages, people, uid, people.get(uid) or who, title)
+                task = Task(
+                    guild_id=guild_id,
+                    assignee_id=uid,
+                    assignee_name=people.get(uid) or who,
+                    assigner_id=giver,
+                    assigner_name=people.get(giver) or by,
+                    title=title,
+                    due=due,
+                    source_link="" if is_dm_scope(channel_id) else link,
+                    source_channel_id=channel_id,
+                    source_day=day,
+                    created_from=kind,
+                    group_id=group,
+                )
+                task._needs_owner = overflow
+                batch.append(task)
             if project_ids is None:
                 project_ids = self._projects(guild_id)
-            task.project_id = project_in_text(project_ids, task.title) or ""
-            t, new = self.repo.add(task)
-            if new:
-                created.append(t)
+            pid = project_in_text(project_ids, title) or ""
+            for task in batch:
+                task.project_id = pid
+                t, new = self.repo.add(task)
+                if new:
+                    t._needs_owner = task._needs_owner
+                    created.append(t)
         if created:
             logger.info(
                 "tasks: %d new from guild=%s channel=%s day=%s",
@@ -352,6 +424,31 @@ class TaskTracker:
                 day,
             )
         return created
+
+    def _assignees(self, guild_id: int, who: str, people: dict[int, str]) -> tuple[list[int], bool]:
+        """(member ids, overflow): everyone `who` names. Several people -> all that resolve (if
+        2+); one role / team of up to MAX_GROUP members -> its members; a bigger team, or several
+        names of which fewer than 2 resolve -> ([], overflow=True when several/team were named)."""
+        parts = split_who(who)
+        if len(parts) >= 2:
+            ids = list(dict.fromkeys(i for i in (match_person(p, people) for p in parts) if i))
+            return (ids, False) if len(ids) >= 1 else ([], True)
+        uid = match_person(who, people)
+        if uid:
+            return [uid], False
+        if not who:
+            return [], False
+        try:
+            members = self.role_members_of(guild_id, who)
+        except Exception:
+            logger.warning("role lookup for tasks failed", exc_info=True)
+            members = None
+        if members is None:
+            return [], False
+        members = [m for m in dict.fromkeys(members) if m in people]
+        if 1 <= len(members) <= MAX_GROUP:
+            return members, False
+        return [], True
 
     def _projects(self, guild_id: int) -> list:
         """The guild's running projects (for "โปรเจกต์ X" in an action item); [] on any trouble."""
