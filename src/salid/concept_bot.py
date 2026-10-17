@@ -4,7 +4,7 @@
 (`_concept_tools`, appended to `extra_tools` by `_agent_kwargs`). Needs the `concept` and `ideas`
 flags (the work lands in the idea document); `price_check` also needs `web`. Voice gets
 `price_check` only: an image cannot be spoken. Guild, channel and author are bound here, never
-model input. The daily cap and the revision memory live in this process (one bot process).
+model input. The daily cap is kept in the DocStore (field `concept_images`, `_init_concept` after `self.docs`); the revision memory lives in this process.
 """
 
 from __future__ import annotations
@@ -13,15 +13,18 @@ import logging
 
 from . import cards
 from .concept import ConceptCtx, ConceptMemory, concept_tools
-from .media import DailyBudget
+from .imagegen_bot import StoredDailyBudget
 from .promo import PHOTO_MIMES
+from .videoad import MediaUsage
 
 logger = logging.getLogger(__name__)
 
 
 class ConceptMixin:
     def _init_concept(self) -> None:
-        self.concept_budget = DailyBudget(self.s.concept_images_per_day)
+        self.concept_budget = StoredDailyBudget(
+            MediaUsage(self.docs), self.s.concept_images_per_day, field="concept_images"
+        )
         self.concept_memory = ConceptMemory()
 
     def _concept_tools(self, message, guild, asker, files, lang: str) -> list:

@@ -434,11 +434,84 @@ spending many tokens and without leaking channels. Three layers (code in `src/sa
   scene around the unchanged product; the model never draws text. Headline, price, call to action and shop name are
   typeset by Salid with the bundled Kanit font (Pillow RAQM shaping, which needs the system `libfribidi`:
   `libfribidi0` in `Dockerfile.salid`, `brew install fribidi` locally). `SALID_PROMO_KITS_PER_DAY` (20 per guild,
-  counted before each call; 0 = AI scenes off). Blocked, failed or over-the-cap requests still get a kit built from
+  counted before each call in the DocStore, `salid_media_usage` field `promo_kits`, so a restart keeps it; 0 = AI
+  scenes off). Blocked, failed or over-the-cap requests still get a kit built from
   the original photo, and the reply says why. Changes within 30 minutes ("ขอโทนอุ่นกว่านี้", "เปลี่ยนราคาเป็น 49")
   reuse the remembered photo (process memory only, never stored). Check the look with
   `uv run python scripts/salid_sample_promo.py <photo>` (offline; `--live` makes one billed call) and the live test
   `pytest tests/salid/test_salid_live.py -m live -k promo -s`.
+- **Images from a description** (`src/salid/imagegen.py`, `imagegen_bot.py`, feature flag `images`, default on):
+  "วาดรูปแมวในร้านกาแฟ สไตล์สีน้ำ" and the `create_image` tool returns 1-4 PNGs (`image-1.png` ...; the whole batch
+  as `image-N.jpg` when the PNGs would not fit the server's upload limit: 1 MiB under it, at most 20 MiB; still too
+  big: lower quality, then smaller, then the last images are left out and the reply says so) in 1:1, 4:5,
+  9:16 or 16:9, 1K or 2K, made with Nano Banana (`SALID_IMAGE_MODEL`, default `gemini-nano-banana-2.1`, location
+  `global`, one call per image, no retry). The agent writes the prompt in English (a Thai prompt is refused before
+  any call, because the model would draw the Thai); Thai or English text the user wants on the image goes in
+  `headline` / `subtitle` and is typeset by Salid on a scrim band (top for 9:16, bottom otherwise, subtitle in an
+  accent pill), so it needs `libfribidi` like promo kits. An attached product photo can be the reference
+  (`file_index`; only photos of products, logos, food or places: a photo of a real person is refused and an
+  illustration offered), and "เอาแบบที่ 2 แต่โทนอุ่นขึ้น" edits a result of the last batch (`revise`; the clean images
+  are kept 30 minutes per person and channel in process memory, never stored). Limits `SALID_IMAGES_PER_DAY` (20
+  per guild) and `SALID_IMAGES_PER_USER_DAY` (5 per person in a server), counted per image before the calls
+  (blocked, timed-out or failed images count too; only a request that never reaches the model is given back) in
+  the DocStore (`salid_media_usage`, key = the day, fields `images` and
+  `images_user_<id>`), so a restart does not reset them; a bigger request is trimmed to what is left and the
+  reply says so. The reply says the images were made with AI. Logs carry guild, counts and time only, never the
+  prompt or the images.
+- **Video ads** (`src/salid/videoad.py`, `videoad_bot.py`, feature flag `video_ads`, **default off**: each ad costs
+  money, so an admin turns it on in the hub): "ทำวิดีโอโฆษณาลาเต้เย็น ลด 20% ยาว 20 วิ" (product photos welcome)
+  and the `create_video_ad` tool starts a background job; the agent answers in one line and Salid posts a progress
+  message with a Cancel button (the requester or an admin; the message says "cancelling…" at once, the job
+  stops before the next paid step, queued scene pictures included, and nothing is posted after a cancel). The
+  job plans a storyboard (4-6 scenes, 15/20/30 s), makes a 9:16 still per scene (Nano Banana, or the shop's own photo), turns
+  each into a slow-zoom clip, adds Thai narration (`speech.say`; if it fails the ad keeps captions only), captions
+  and one AI label in the reply language ("สร้างด้วย AI" / "Made with AI"), and encodes an H.264 MP4 under the server's upload limit (1 MiB under it, at most
+  19 MiB; DMs 9 MiB). The MP4 comes back as a reply with the scene list and a suggested caption ending in
+  `#สร้างด้วยAI` (`#MadeWithAI` in English); if Discord refuses the file, the reply says so and the job ends failed.
+  Needs ffmpeg and `libfribidi`. Limits: `SALID_VIDEO_ADS_PER_MONTH` (10 per guild, taken when the job starts and
+  given back only when the job fails or is cancelled before any paid image, clip or music was made), one job per guild and `SALID_VIDEO_MAX_JOBS` (1) across the bot; renders run in
+  their own thread pool of that size, and every ffmpeg run is niced (`nice -n 10`) and the x264 encodes use 2 threads so the
+  bot stays responsive (measure render time on the production image before raising it). Job records
+  (`salid_video_jobs`: state, times, cost estimate, failure reason; never the brief, storyboard or media) and
+  monthly usage (`salid_media_usage`, key `YYYY-MM`) live in the DocStore, with one index of the running jobs
+  (`salid_video_jobs`, guild 0, key `_active`) so the start-up check reads only those; jobs cut off by a restart are
+  marked failed (a hero clip one left running, its record's `hero_id`, is cancelled; the ad is given back only when
+  the job stopped while planning its storyboard, before any paid call) and the requester is asked to try again. Logs: one line per step (guild, step, ms, cost estimate).
+- **Video ad add-ons: hero clips and music** (`src/salid/videogen.py`, both **off** while their settings are empty,
+  which is the default; with both empty an ad is exactly the slideshow above). Both go through the google-genai
+  Interactions API and are **unverified on this project**: nobody with project access has run them yet.
+  Their paid requests go through a separate client with no SDK retry on 5xx / 408 / 409 (a retry after the
+  service accepted the job would start, and bill, a second one); only a 429 is retried once, and the SDK
+  still retries a connection error or timeout once. Polls and cancels use the normal client.
+  - *Hero clips* (`SALID_VIDEO_HERO_MODEL`, e.g. `gemini-omni-1.1-flash-preview` as in the spec; the installed SDK
+    lists `gemini-omni-1.1-flash` and `gemini-omni-flash-preview`, so let the probe decide the id): a storyboard
+    scene with source `hero` becomes a generated Gemini Omni clip of its still (image-to-video, 9:16, 720p, 4-6 s,
+    inline delivery, background job polled every 10 s for up to 8 minutes, cancelled with the ad). The English
+    prompt loses its quote characters and gets "Slow cinematic camera push-in. Single continuous shot, no
+    on-screen text, no dialogue."; a Thai prompt is never sent. A scene whose still fell back to the plain
+    accent card gets no hero call, and once the service refuses one hero request the other hero scenes keep
+    their slow-zoom clips without spending their seconds. The clip is cover-cropped to 1080x1920 30 fps (never stretched), its last frame held to
+    the scene's length, and its sound dropped. The seconds requested (the scene rounded up, 4 to 6) are taken from
+    `SALID_VIDEO_HERO_SECONDS_PER_MONTH` (60 per guild) before each call and given back only when the service
+    definitely refuses the request (a 4xx other than 408 / 409; a timeout or 5xx stays charged); blocked, failed, timed out or over the budget, the scene keeps its slow-zoom clip.
+  - *Music* (`SALID_VIDEO_MUSIC_MODEL`, e.g. `lyria-3-clip-preview`; only when the request asks for music): one
+    instrumental Lyria clip per ad from a fixed English prompt, counted as `music_clips` in `salid_media_usage`
+    before the call (cap `SALID_VIDEO_ADS_PER_MONTH`), turned into a 48 kHz stereo WAV cut to the ad with fades and
+    mixed 18 dB under the narration. The call shape (`interactions.create(model, input=<text>)`, audio in
+    `output_audio`) follows the Gemini API docs and the SDK; any failure means an ad without music.
+  - *Probe* (live, billed, **only with human approval** and ADC for `SALID_GCP_PROJECT`):
+    `uv run python scripts/salid_media_probe.py --image --video [--music]` makes one 1K image, one 4 s 360p Omni
+    clip and optionally one Lyria clip, writes them to `/tmp/salid-media-probe/` only, and prints latency, status
+    and usage (never credentials; errors as type, HTTP status code and status text only). Its paid
+    requests use the same no-retry client as the bot. It refuses to run when
+    `GOOGLE_APPLICATION_CREDENTIALS` points to a key of another project (unset it and run
+    `gcloud auth application-default login`). Live tests: `uv run pytest -m live -k "create_image or omni or
+    slideshow"` (one image; one Omni probe that skips when the service answers 403 / PERMISSION_DENIED, read
+    from either SDK error family, since Interactions errors carry `status_code` rather than `code`; one full
+    15 s slideshow ad saved under a printed temp folder).
+  - *Human gates* (never without approval and GCP project access): the probe `--image --video`, the live tests
+    above, a visual check of a real ad, push and PR, the deploy, and setting `SALID_VIDEO_HERO_MODEL` /
+    `SALID_VIDEO_MUSIC_MODEL` (after the probe shows the model works on this project).
 - **UX**: `/โหมด` off to anything else posts a one-time notice in that channel; modes are described with the
   retention in `/โหมด`; `/ความจำ` shows on/off, retention, recorded modes and import progress; the hub shows the
   same progress. Feature flags `memory` and `image_memory` per guild. `listen` mode now answers when tagged.
@@ -667,6 +740,46 @@ Add-to-Discord button, `HUB_ADMIN_EMAILS` for super admins. `SALID_GUILD_COLLECT
 `salid_guilds`) must match between the web service and the bot. The web service reads the same
 `SALID_STORE` settings as the bot, so set `SALID_STORE=firestore` there to see the real ledger.
 Deep tasks are Discord-only.
+
+## Salid on Slack, LINE, Telegram and WhatsApp
+
+The same Salid brain (`salid.qa.ask`, ADK agent) in Slack workspaces, LINE chats, Telegram chats and WhatsApp chats, as a separate
+process that shares the Discord bot's stores and memory: `uv run python -m salid.platforms`. A platform
+starts only when its secrets are set (`SALID_SLACK_BOT_TOKEN` + `SALID_SLACK_APP_TOKEN`; `SALID_LINE_CHANNEL_SECRET`
++ `SALID_LINE_CHANNEL_ACCESS_TOKEN`; `SALID_TELEGRAM_BOT_TOKEN`; `SALID_WHATSAPP_ACCESS_TOKEN` + `SALID_WHATSAPP_APP_SECRET` +
+`SALID_WHATSAPP_VERIFY_TOKEN` + `SALID_WHATSAPP_PHONE_NUMBER_ID`). Setup guides: [Slack](docs/platforms/slack.md),
+[LINE](docs/platforms/line.md), [Telegram](docs/platforms/telegram.md), [WhatsApp](docs/platforms/whatsapp.md).
+`uv run python scripts/platforms_smoke.py` shows what would start and checks the tokens read-only.
+
+Phase 1 covers Q&A (chat, links and web search, ledger questions), files (images and PDFs, receipts into
+the ledger), team memory with per-room access rules, addressing (DM / 1:1, @mention, name, thread,
+follow-up window), per-tenant feature switches and executives. Not available yet (Discord-only): meetings and
+scheduling, PDFs and email, deliver-file, the assistant/COO tools, broadcasts, polls, voice, deep tasks, audio
+and video, image descriptions in memory.
+
+- **Tenant ids.** Every Slack workspace (`team_id`), LINE channel (the bot's user id), Telegram bot (its id from
+  `getMe`) and WhatsApp business number (its phone number id) is a tenant. Its
+  `guild_id` is `2**62 | platform << 60 | sha256(key)[:60 bits]` (`salid/platforms/ids.py`): stable, nothing to
+  persist, and always at or above `2**62`, which Discord snowflakes do not reach before 2049, so it can never
+  collide with a Discord guild. Users, rooms and messages get stable positive ints the same way (unique inside
+  a tenant; negative ids stay reserved for DM notes). The settings document is `salid_guilds/{tenant id}`.
+- **Who sees what.** Ledger: same rule as Discord (non-executives see only their own receipts; executives are
+  `SALID_SLACK_EXEC_USER_IDS` / `SALID_LINE_EXEC_USER_IDS` / `SALID_TELEGRAM_EXEC_USER_IDS` / `SALID_WHATSAPP_EXEC_NUMBERS` plus Slack workspace
+  owners and admins; Telegram group admins do not count). Memory: a room's
+  memory is readable only if the asker is in that room and everyone who can read the answering room can too;
+  any doubt means that room alone or none. Slack computes it from conversation members; LINE and Telegram cannot know who is
+  in a group, so a group uses its own memory and a 1:1 chat only its own history; WhatsApp is 1:1 only (no groups in the
+  official API), so every chat sees only itself.
+- **Security.** LINE (`X-Line-Signature`) and WhatsApp (`X-Hub-Signature-256`) webhooks: the signature is checked in
+  constant time before parsing and unsigned requests get 401; the
+  reply is 200 at once and work runs in the background. Slack uses Socket Mode and Telegram long polling (no public endpoint; the Telegram token sits in API URLs, which are
+  never logged; WhatsApp phone numbers are PII and are never logged either). Tokens are
+  `repr=False`; logs carry ids and timings only, never message text, tokens or file bytes. Bot and self messages are
+  ignored and each room is limited to 8 answers a minute.
+- **Shared store.** Both processes can use the same Firestore project or SQLite file. The platform process purges old
+  memory only for its own tenants; the Discord bot's daily purge still applies its default retention to every
+  guild id it does not know, so platform tenants with a retention above the default (90 days) need the Discord bot
+  to learn about them first.
 
 ## Limitations
 

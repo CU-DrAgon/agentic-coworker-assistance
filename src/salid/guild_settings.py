@@ -5,8 +5,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, concept, decks, votes, vote_offers, reminders, projects, project_notes, data}: bool, all
-                         default true
+                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, images, video_ads, concept, decks, votes, vote_offers, reminders, projects, project_notes, data}: bool, all
+                         default true except video_ads (paid video generation: off until an admin turns it on)
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
@@ -119,6 +119,8 @@ FEATURES = (
     "attendance_log",
     "promo",
     "concept",
+    "images",
+    "video_ads",
     "decks",
     "quotations",
     "votes",
@@ -213,6 +215,8 @@ class Features(BaseModel):
     concept: bool = (
         True  # concept images + price checks for product / marketing concepts (needs ideas)
     )
+    images: bool = True  # create_image: images from a description (Nano Banana + typeset text)
+    video_ads: bool = False  # create_video_ad: finished MP4 ads (paid per ad; admins turn it on)
     decks: bool = True  # the chat agent may build .pptx slide decks (salid.deck)
     quotations: bool = True  # quotations as PDF + Word with running numbers (salid.quotation)
     votes: bool = (

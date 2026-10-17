@@ -297,6 +297,8 @@ def test_settings_defaults_round_trip_and_layout(client):
         attendance_log=True,
         promo=True,
         concept=True,
+        images=True,
+        video_ads=False,
         decks=True,
         quotations=True,
         votes=True,
@@ -763,11 +765,16 @@ def test_saved_feature_flags_win_over_the_page_defaults():
     import re
     from pathlib import Path
 
-    from salid.guild_settings import FEATURES
+    from salid.guild_settings import FEATURES, Features
 
     html = (Path(__file__).parent.parent / "src/meeting_scribe/static/hub.html").read_text()
+    off = {f for f in FEATURES if not getattr(Features(), f)}  # default-off flags (video_ads)
+    assert "video_ads" in off
+    page = re.search(r"let features = \{(.*?)\};", html).group(1)
     body = html.split("function fillSettings(s) {", 1)[1]
     literal = re.search(r"features = \{(.*?)\};", body).group(1)
     defaults, _, after = literal.partition("...s.features")
     assert not re.search(r"\w+:", after), f"defaults after the saved flags: {after.strip()}"
-    assert set(FEATURES) <= set(re.findall(r"(\w+): true", defaults))  # every flag defaults on
+    for text in (page, defaults):  # the page defaults match the server's
+        assert set(FEATURES) - off <= set(re.findall(r"(\w+): true", text))
+        assert off <= set(re.findall(r"(\w+): false", text))

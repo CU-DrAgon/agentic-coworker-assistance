@@ -84,6 +84,32 @@ async def test_kit_is_bound_to_guild_channel_author_and_budget(bot, world):
     assert bot.llm.models.calls[0][0] == "gemini-nano-banana-2.1"
 
 
+async def test_the_daily_kit_cap_survives_a_restart(bot, world):
+    m, day = world.staff, bot.s.today().isoformat()
+    bot.docs.put("salid_media_usage", GUILD, day, {"promo_kits": bot.s.promo_kits_per_day})
+    bot._init_promo()  # a restart: fresh process state, the same DocStore
+    bot.llm = fake_client(RuntimeError("must not be called"))
+    [tool] = bot._promo_tools(TMsg(world.g, world.pub, m, "x"), world.g, m, [img_input()])
+    out = tool(headline="ลาเต้", scene="cafe")
+    assert (out["status"], out["ai_scene"], out["reason"]) == ("ok", False, "daily_limit")
+    assert bot.llm.models.calls == [] and out["kits_left_today"] == 0
+
+
+async def test_a_remembered_kit_can_still_be_revised_by_voice(bot, world):
+    """Voice passes files=[] on purpose (origin/main): the spoken flag does not hide the kit."""
+    m = world.staff
+    bot.promo_memory.put(
+        (GUILD, world.pub.id, m.id),
+        promo.prepare_photo(png_bytes((900, 900))),
+        promo.merge_spec(None, headline="h", scene="cafe"),
+    )
+    room = bot.room_message(world.g, m, world.pub, room={m.id})
+    kw = dict(setting="th", lang="th", question="x", memory=None, profile=None)
+    voice = bot._agent_kwargs(room, world.g, m, False, files=[], spoken=True, **kw)
+    assert "make_promo_kit" in names(voice["extra_tools"])
+    assert bot._promo_tools(room, world.g, m, None) == []  # no file list at all: still none
+
+
 def test_promo_flag_defaults_on_and_capability_line():
     assert "promo" in FEATURES and Features().promo is True
     assert "โพสต์โปรโมทจากรูปสินค้า" in qa.CAPABILITIES_PROMPT

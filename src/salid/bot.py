@@ -100,6 +100,7 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .imagegen_bot import ImageMixin
 from .language_ask import LanguageAskMixin, LanguageSelect
 from .licensing import Licensing, make_licensing
 from .longtext import needs_attachment, split_sections, summary_of
@@ -181,6 +182,7 @@ from .tone import label as tone_label
 from .tone_bot import TONE_COMMANDS, ToneMixin
 from .translate_bot import TranslateMixin
 from .travel_bot import TravelMixin
+from .videoad_bot import VideoAdMixin
 from .voice_pool import VoicePool
 from .votes_bot import VoteButton, VoteOfferButton, VotesMixin
 from .wiki_bot import WikiMixin
@@ -373,6 +375,8 @@ class SecretaryBot(
     AudienceMixin,
     ProfileMixin,
     DeliverMixin,
+    ImageMixin,
+    VideoAdMixin,
     PromoMixin,
     ConceptMixin,
     DataMixin,
@@ -495,8 +499,6 @@ class SecretaryBot(
         self._image_notes: dict[int, dict[int, str]] = {}  # message id -> attachment idx -> note
         self.image_stats = {"described": 0, "failed": 0, "skipped": 0}  # cost visibility
         self._init_media()
-        self._init_promo()
-        self._init_concept()  # concept_image + price_check (salid.concept_bot)
         self.importer = MemoryImporter(
             self.memory_store,
             settings,
@@ -529,6 +531,10 @@ class SecretaryBot(
         dm_module.ROUTER = self._private_route
         dm_module.SENT_HOOK = self._dm_sent_hook  # every Salid DM is tagged with its company
         self._search_init()  # search_everything / web_search / deep_research (salid.search_bot)
+        self._init_promo()  # promo kit daily cap in the DocStore, after self.docs
+        self._init_concept()  # concept_image + price_check cap in the DocStore, after self.docs
+        self._init_images()  # create_image daily caps in the DocStore, after self.docs
+        self._init_video_ads()  # create_video_ad jobs, after self.docs (salid.videoad_bot)
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._reminders_init()  # personal reminders, once and recurring (salid.reminders_bot)
@@ -582,6 +588,7 @@ class SecretaryBot(
         self._start_import()
         await self.meetings.resume_all()  # rejoin meetings a restart cut off
         self.meetings.scan_all()  # people already in voice channels: join by importance
+        await self._sweep_video_jobs()  # video ads a restart cut off: failed, requester told
 
     async def on_resumed(self):
         self.recent.reset()  # a gateway outage may have dropped events
@@ -2224,11 +2231,15 @@ class SecretaryBot(
         interjection: bool = False,
         people=(),
         files: list | None = None,
+        spoken: bool = False,
     ) -> dict:
         """Everything `ask` gets besides the question, history and files: memory, the secretary,
         COO and settings tools, tag candidates, profile, web, language. The ONE place chat and
         voice build their agent, so they cannot drift apart. `message` is a Discord message, or
-        a room stand-in (`room_message`) for a voice meeting; `asker` acts for the requester."""
+        a room stand-in (`room_message`) for a voice meeting; `asker` acts for the requester.
+        `spoken`: a voice answer (voice callers pass True); create_image and create_video_ad
+        stay out of it, and also when `imagegen_bot.looks_spoken` says so (voice code that does
+        not pass it). make_promo_kit is gated on `files is None` only (voice revisions)."""
         secretary = (
             None
             if interjection
@@ -2293,6 +2304,20 @@ class SecretaryBot(
             # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
             *([] if interjection else self._concept_tools(message, guild, asker, files, lang)),
+            # create_image: chat only, with or without a photo; never in a voice room (`spoken`,
+            # else files None or a `room_message` stand-in: imagegen_bot.looks_spoken)
+            *(
+                []
+                if interjection
+                else self._image_tools(message, guild, asker, files, spoken=spoken)
+            ),
+            # create_video_ad: chat only (same voice gate), flag video_ads (default off); a
+            # background job, in the answer's language `lang`
+            *(
+                []
+                if interjection
+                else self._video_tools(message, guild, asker, files, lang=lang, spoken=spoken)
+            ),
             *(
                 []
                 if interjection

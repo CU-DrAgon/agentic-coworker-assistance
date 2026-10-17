@@ -40,13 +40,12 @@ from . import cards
 from .cards import CardFonts
 from .i18n import lang_name, t
 from .ideas import MAX_STORED_IMAGE_BYTES, IdeaRepo, ascii_name
+from .imagegen import BLOCKED, IMAGE_TIMEOUT_MS
 from .llm import generate
-from .media import DailyBudget
 from .promo import (
-    BLOCKED,
     PHOTO_MIMES,
-    PROMO_TIMEOUT_MS,
     PhotoTooLarge,
+    UnitBudget,
     clean,
     prepare_photo,
     take_unit,
@@ -188,7 +187,7 @@ def generate_concept(
     config = types.GenerateContentConfig(
         response_modalities=["TEXT", "IMAGE"],
         image_config=types.ImageConfig(aspect_ratio=aspect, image_size=size),
-        http_options=types.HttpOptions(timeout=PROMO_TIMEOUT_MS),
+        http_options=types.HttpOptions(timeout=IMAGE_TIMEOUT_MS),
     )  # no sampling params: an API error on Nano Banana 2.1
     contents: list[Any] = []
     if reference:
@@ -510,7 +509,7 @@ class ConceptCtx:
     image_client: Any
     image_model: str
     image_size: str
-    budget: DailyBudget
+    budget: UnitBudget
     memory: ConceptMemory
     repo: IdeaRepo | None
     photos: list[tuple[int, bytes]] = field(default_factory=list)

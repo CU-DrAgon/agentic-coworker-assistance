@@ -4,7 +4,8 @@ The image model (Nano Banana, `settings.promo_image_model`) only restyles the sc
 product: the product stays as photographed and the model is told never to draw text. All text
 (headline, price, call to action, shop name) is typeset here with `salid.cards`, because Thai is
 not a language the image models render reliably. One image-model call per kit at most; the daily
-unit is taken before the call (blocked calls are billed too). When the call is blocked, fails or
+unit is taken before the call (blocked calls are billed too) from a count kept in the DocStore
+(`UnitBudget`), so a restart keeps it. When the call is blocked, fails or
 the cap is reached, the kit is built from the original photo instead, so the user always gets
 images. The photo and request of the last kit are kept in process memory only (revisions).
 """
@@ -19,17 +20,13 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
-import httpx
-from google.genai import types
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel
 
-from . import cards
+from . import cards, imagegen
 from .cards import CardFonts
-from .llm import generate
-from .media import DailyBudget
 
 logger = logging.getLogger(__name__)
 
@@ -44,21 +41,20 @@ ACCENTS: dict[str, tuple[str, str]] = {  # badge fill, badge text
 LIMITS = {"headline": 40, "scene": 300, "price": 20, "call_to_action": 24, "shop_name": 30}
 MIN_SCENE = 3
 PHOTO_MIMES = {"image/png", "image/jpeg", "image/webp"}
+
+
+def usable_photos(files) -> list[tuple[int, bytes]]:
+    """(attachment index, data) of the files a media tool may use as a photo: PNG, JPEG or WebP,
+    read, and not skipped (`qa.FileInput`). Shared by the promo, image and video tools; `files`
+    None (a voice answer) has none."""
+    return [
+        (f.index, f.data) for f in files or () if f.mime in PHOTO_MIMES and f.data and not f.skip
+    ]
+
+
 MAX_PHOTO_SIDE = 2048
-MAX_PIXELS = 50_000_000  # bigger canvases are refused before decoding (bot memory is 2 GiB)
-_THAI = re.compile("[฀-๿]")
+MAX_PIXELS = imagegen.MAX_DECODE_PIXELS  # bigger canvases are refused before decoding
 LOW_QUALITY_SIDE = 400
-PROMO_TIMEOUT_MS = 60_000
-PROMO_RETRY_DELAYS: tuple[float, ...] = ()  # no retry: exactly one image call (and bill) per kit
-BLOCKED = {
-    types.FinishReason.IMAGE_SAFETY,
-    types.FinishReason.IMAGE_PROHIBITED_CONTENT,
-    types.FinishReason.NO_IMAGE,
-    types.FinishReason.IMAGE_RECITATION,
-    types.FinishReason.IMAGE_OTHER,
-    types.FinishReason.PROHIBITED_CONTENT,
-    types.FinishReason.SAFETY,
-}
 SCENE_PROMPT = (
     "Edit this product photo into a professional advertising photo.\n"
     "Keep the product exactly as it is: same shape, colours, label, logo, packaging, text printed "
@@ -128,7 +124,7 @@ def merge_spec(
         raise ValueError("headline is required (the main line on the image)")
     if len(out["scene"]) < MIN_SCENE:
         raise ValueError("scene is required: describe the setting around the product in English")
-    if _THAI.search(out["scene"]):  # the image model must never get Thai text (it would draw it)
+    if not imagegen.english_only(out["scene"]):  # the image model would draw Thai text
         raise ValueError("scene must be written in English; keep Thai for the headline")
     return PromoSpec(**out)
 
@@ -140,8 +136,7 @@ class Photo:
     short_side: int
 
 
-class PhotoTooLarge(ValueError):
-    """More than MAX_PIXELS: refused from the header, before anything is decoded."""
+PhotoTooLarge = imagegen.ImageTooLarge  # more than MAX_PIXELS, refused before decoding
 
 
 def prepare_photo(data: bytes) -> Photo | None:
@@ -149,12 +144,12 @@ def prepare_photo(data: bytes) -> Photo | None:
     Raises PhotoTooLarge from the header alone (a tiny file can claim a huge canvas), and shrinks
     before any mode conversion so memory stays bounded in the shared bot process."""
     try:
-        im = Image.open(io.BytesIO(data))
-    except Exception:
+        im = imagegen.open_capped(data, max_pixels=MAX_PIXELS)
+    except PhotoTooLarge:
+        raise
+    except ValueError:
         return None
     with im:
-        if im.width * im.height > MAX_PIXELS:
-            raise PhotoTooLarge(f"photo is larger than {MAX_PIXELS // 1_000_000} megapixels")
         try:
             im.draft("RGB", (MAX_PHOTO_SIDE, MAX_PHOTO_SIDE))  # JPEG: decode at a reduced scale
             im.thumbnail((MAX_PHOTO_SIDE, MAX_PHOTO_SIDE), Image.Resampling.LANCZOS)
@@ -177,45 +172,32 @@ def scene_prompt(scene: str) -> str:
 
 
 def generate_scene(client, model: str, photo: Photo, scene: str) -> tuple[Image.Image | None, str]:
-    """One Nano Banana edit of the photo into the new scene: (image, "") or (None, reason) with
-    reason "blocked" (safety / no image), "timeout" or "error"."""
-    if client is None:
-        return None, "error"
-    config = types.GenerateContentConfig(
-        response_modalities=["TEXT", "IMAGE"],
-        image_config=types.ImageConfig(aspect_ratio="9:16", image_size="2K"),
-        http_options=types.HttpOptions(timeout=PROMO_TIMEOUT_MS),
-    )  # no temperature / top_p / top_k / seed / logprobs: an API error on Nano Banana 2.1
-    contents = [types.Part.from_bytes(data=photo.jpeg, mime_type="image/jpeg"), scene_prompt(scene)]
-    try:
-        resp = generate(client, model, contents, config, delays=PROMO_RETRY_DELAYS)
-    except httpx.TimeoutException:
-        logger.warning("promo scene timed out")
-        return None, "timeout"
-    except Exception as e:  # never log contents
-        logger.warning("promo scene failed (%s)", type(e).__name__)
-        return None, "error"
-    cand = (resp.candidates or [None])[0]
-    if cand is None or cand.finish_reason in BLOCKED:
-        return None, "blocked"
-    for part in (cand.content.parts if cand.content else None) or []:
-        blob = part.inline_data
-        if blob is not None and blob.data and (blob.mime_type or "").startswith("image/"):
-            try:
-                return Image.open(io.BytesIO(blob.data)).convert("RGB"), ""
-            except Exception:
-                logger.warning("promo scene image could not be decoded")
-                return None, "error"
-    return None, "blocked"
+    """One Nano Banana edit of the photo into the new scene (one call, so one bill, per kit):
+    (image, "") or (None, reason) with reason "blocked" (safety / no image), "timeout" or
+    "error"."""
+    imgs, reason = imagegen.generate_images(
+        client, model, scene_prompt(scene), refs=[photo.jpeg], aspect="9:16", size="2K"
+    )
+    return (imgs[0] if imgs else None), reason
 
 
-def take_unit(budget: DailyBudget, guild_id: int, day: str) -> str:
+class UnitBudget(Protocol):
+    """Units per guild per day with an atomic check-and-take (`imagegen_bot.StoredDailyBudget`,
+    field `promo_kits`: kept in the DocStore, so a restart keeps the count)."""
+
+    cap: float
+
+    def used(self, key: int, day: str) -> float: ...
+
+    def take(self, key: int, day: str, amount: float) -> bool: ...
+
+
+def take_unit(budget: UnitBudget, guild_id: int, day: str) -> str:
     """Take one AI-scene unit before the call: "" when taken, else "disabled" / "daily_limit"."""
     if budget.cap <= 0:
         return "disabled"
-    if not budget.available(guild_id, day):
+    if not budget.take(guild_id, day, 1):
         return "daily_limit"
-    budget.add(guild_id, day, 1)
     return ""
 
 
@@ -418,7 +400,7 @@ class PromoCtx:
     key: Key
     client: Any
     model: str
-    budget: DailyBudget
+    budget: UnitBudget
     fonts: CardFonts
     outbox: list[tuple[str, bytes]] = field(default_factory=list)
 

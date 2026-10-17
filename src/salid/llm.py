@@ -26,6 +26,31 @@ def make_client(s: Settings) -> genai.Client:
     )
 
 
+def media_http_options(**kw) -> types.HttpOptions:
+    """HttpOptions for paid media creates (Omni hero clips, Lyria music): the request timeout
+    and no SDK retry on 5xx / 408 / 409, because a retry after the service accepted the job would
+    start (and bill) a second one. Only 429 (refused before any work) is retried, once:
+    `attempts=1` is the fewest the SDK allows (0 is rewritten to 1). The SDK's Interactions
+    client still retries a connection error or timeout once; that cannot be switched off here.
+    `kw` goes to HttpOptions (tests pass an `httpx_client`)."""
+    return types.HttpOptions(
+        timeout=REQUEST_TIMEOUT_MS,
+        retry_options=types.HttpRetryOptions(attempts=1, http_status_codes=[429]),
+        **kw,
+    )
+
+
+def make_media_client(s: Settings) -> genai.Client:
+    """The client for paid media creates (see `media_http_options`); polls and everything else
+    use `make_client`."""
+    return genai.Client(
+        vertexai=True,
+        project=s.gcp_project,
+        location=s.gemini_location,
+        http_options=media_http_options(),
+    )
+
+
 def with_retry(fn, delays=None):
     """Call `fn()`, retrying transient Vertex errors (429/5xx) after each delay in `delays`
     (None = `RETRY_DELAYS`, read at call time)."""

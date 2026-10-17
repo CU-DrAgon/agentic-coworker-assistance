@@ -69,6 +69,8 @@ def test_missing_document_means_defaults(gstore):
         attendance_log=True,
         promo=True,
         concept=True,
+        images=True,
+        video_ads=False,
         decks=True,
         quotations=True,
         votes=True,
