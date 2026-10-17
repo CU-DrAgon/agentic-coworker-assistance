@@ -2371,6 +2371,11 @@ class MeetingManager:
         # The owner's rule: the exchange ends only on an explicit closing said by the caller
         # ("thanks, that's all", "I'll talk with my team now", "bye"). The model was eager to end
         # right after each answer, so the recent words must confirm it; otherwise stay engaged.
+        live = getattr(s, "live", None)
+        last_voice = float(getattr(live, "_last_voice", 0.0) or 0.0)
+        if last_voice and time.monotonic() - last_voice < 2.0:
+            # they are still talking ("thanks… and also…"): not an ending yet
+            return {"status": "engaged", "note": "they are still talking: wait, then answer them"}
         recent = " ".join(
             ln.text for ln in s.transcript.recent(self.bot.s.now(), 25.0) if ln.speaker != "Salid"
         )

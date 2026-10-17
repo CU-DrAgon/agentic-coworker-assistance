@@ -90,7 +90,9 @@ class Settings(BaseSettings):
     )
     # Voice meetings stay voice: no "🔊" echoes, per-answer text or join announcement in the text
     # chat (the end-of-meeting summary and replies to messages typed to Salid are always posted).
-    meeting_text_echo: bool = False
+    meeting_text_echo: bool = (
+        True  # her spoken answers also appear as text in the meeting chat (owner, 2026-10-18)
+    )
     # ONE person, ONE voice: the politeness particle of Salid's typed replies AND spoken lines
     # (female: ค่ะ, questions use คะ; ครับ also works). SALID_VOICE_PARTICLE is the old name.
     persona_particle: str = Field(

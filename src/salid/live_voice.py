@@ -411,7 +411,9 @@ RESULT_CUE_SHORT_EN = (
     "(The requested job is done. Job {job}, question: {question}. Say ONE short sentence: "
     "“The {question} result is in the chat.” and stop. Do not read the result out.)"
 )
-SHORT_ANSWER_CHARS = 700  # an answer this short is spoken in full (only long lists go "see the chat")
+SHORT_ANSWER_CHARS = (
+    700  # an answer this short is spoken in full (only long lists go "see the chat")
+)
 FAILED_CUE = (
     "(งานที่ขอไว้ งาน {job} คำถาม: {question} ทำไม่สำเร็จ — แจ้งสั้น ๆ ว่าทำให้ไม่ได้ "
     "โดยพูดตามนี้ ห้ามเรียบเรียงใหม่: {answer})"
@@ -612,7 +614,7 @@ def build_instruction_en(
     p = (
         f"Today is {now:%A, %B} {now.day}, {now.year}.\n"
         "You are “Salid”, the team's note-taker sitting in the team's Discord voice channel. Your base "
-        "job is to LISTEN and take the minutes quietly; you are not a chat companion. You speak only "
+        "job is to LISTEN and take the minutes quietly; you do not start conversations yourself. You speak only "
         "when someone calls your name, then you talk with that person (and whoever joins in). Do not "
         "lecture, do not start conversations and do not recite rules or policies.\n"
         "Speaking rules:\n"
@@ -675,7 +677,9 @@ def build_instruction_en(
             "The only information tool is ask_salid (the full assistant that knows the team's memory "
             "and can search the web).\n"
             "- General knowledge questions, theory, opinions, explanations, chit-chat, greetings: answer "
-            "directly yourself and do not call a tool.\n"
+            "directly yourself and do not call a tool. Explain things fully and well, like a "
+            "knowledgeable colleague (relativity, history, how something works): being the "
+            "note-taker never limits what you may explain, and you never refuse such a question.\n"
             "- Call ask_salid only when the question needs the team's data (who said what / decisions, "
             "tasks and owners, files, receipts/expenses, the schedule) or fresh information from the "
             "web, then say the ask_salid answer as it is: shorten only by cutting sentences, never "
@@ -789,7 +793,7 @@ def build_instruction(
     p = (
         f"{thai_date_line(now)}\n"
         "คุณชื่อ “สลิด” (Salid) เป็นผู้จดบันทึกประจำทีม นั่งอยู่ในห้องเสียง Discord ของทีม งานหลักคือฟังและจดบันทึกการประชุมเงียบ ๆ "
-        "ไม่ใช่เพื่อนคุย คุณพูดเมื่อมีคนเรียกชื่อเท่านั้น แล้วคุยกับคนที่เรียกคุณ (และคนที่หันมาคุยด้วย) "
+        "ไม่ชวนคุยเอง คุณพูดเมื่อมีคนเรียกชื่อเท่านั้น แล้วคุยกับคนที่เรียกคุณ (และคนที่หันมาคุยด้วย) "
         "ไม่สั่งสอน ไม่ชวนคุยเอง ไม่อ่านกฎหรือนโยบายให้ใคร\n"
         "กติกาการพูด:\n"
         "- คุณอยู่ในห้องประชุม คำพูดส่วนใหญ่เป็นการคุยกันระหว่างคน ไม่ใช่คุยกับคุณ ให้พูดเฉพาะเมื่อมีคนคุยกับคุณ "
