@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salid Projects</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@500&amp;display=swap">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+:root {
+  --bg:#F3F4F7; --card:#fff; --ink:#171A21; --muted:#545B6E; --faint:#6A7183;
+  --line:#DCDFE8; --line-soft:#ECEEF3; --navy:#1D2140; --accent:#4752C4; --link:#3F49B8;
+  --on-accent:#fff; --nav-active:#E3E5F6;
+  --ok-bg:#DDF3E8; --ok-ink:#0B6B45; --warn-bg:#FFF1D6; --warn-ink:#8A5A00;
+  --err-bg:#FDE7E4; --err-ink:#A12315; --soon-bg:#ECEEF3; --chip:#EEF0FB; --shadow:0 8px 30px rgba(20,24,50,.18);
+  --c1:#4752C4; --c2:#2B7A78; --c3:#C77D0A; --c4:#A12315; --c5:#7B68EE; --c6:#6A7183;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#10121A; --card:#181B27; --ink:#E9EBF5; --muted:#A5ACC4; --faint:#8E96B0;
+    --line:#2C3045; --line-soft:#232739; --navy:#0B0D16; --accent:#7C87F0; --link:#9CA6FF;
+    --on-accent:#10121A; --nav-active:#252A47;
+    --ok-bg:#12382A; --ok-ink:#7AE0B0; --warn-bg:#40300D; --warn-ink:#F3C969;
+    --err-bg:#46201B; --err-ink:#FFA99B; --soon-bg:#232739; --chip:#232A4A; --shadow:0 8px 30px rgba(0,0,0,.5);
+    --c1:#7C87F0; --c2:#5BC3BF; --c3:#F3C969; --c4:#FFA99B; --c5:#A99CFF; --c6:#8E96B0;
+  }
+}
+* { box-sizing:border-box; }
+html { -webkit-text-size-adjust:100%; }
+body { margin:0; background:var(--bg); color:var(--ink); line-height:1.55; overflow-x:hidden; font-family:"IBM Plex Sans Thai","Noto Sans Thai",Tahoma,sans-serif; }
+a { color:var(--link); }
+[hidden] { display:none !important; }
+h1,h2,h3,p { margin:0; }
+button,input,select,textarea { font:inherit; color:inherit; }
+button { cursor:pointer; }
+:focus-visible { outline:3px solid var(--accent); outline-offset:2px; border-radius:6px; }
+.sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+.mark { width:34px; height:34px; border-radius:10px; background:#5865F2; color:#fff; display:grid; place-items:center; font-weight:700; font-size:17px; flex:none; }
+.btn { background:var(--accent); color:var(--on-accent); border:1px solid var(--accent); border-radius:9px; padding:8px 16px; font-weight:600; min-height:40px; }
+.btn.ghost { background:transparent; color:var(--ink); border-color:var(--line); }
+.btn.danger { background:transparent; color:var(--err-ink); border-color:var(--err-ink); }
+.btn.sm { min-height:32px; padding:4px 12px; font-size:14px; }
+.btn[disabled] { opacity:.55; cursor:not-allowed; }
+label.f { display:flex; flex-direction:column; gap:4px; font-size:14px; color:var(--muted); min-width:0; }
+input[type=text],input[type=email],input[type=search],input[type=date],input[type=number],input[type=url],input[type=datetime-local],select,textarea {
+  background:var(--card); border:1px solid var(--line); border-radius:9px; padding:8px 12px; min-height:40px; width:100%; color:var(--ink); }
+input[disabled],select[disabled],textarea[disabled] { opacity:.7; }
+textarea { resize:vertical; min-height:90px; }
+.row { display:flex; flex-wrap:wrap; gap:10px; align-items:flex-end; }
+.row > * { flex:1 1 150px; min-width:0; }
+.row > .btn, .row > .fixed { flex:0 0 auto; }
+.notice { padding:10px 14px; border-radius:10px; font-size:14px; background:var(--warn-bg); color:var(--warn-ink); }
+.notice.error { background:var(--err-bg); color:var(--err-ink); }
+.notice.ok { background:var(--ok-bg); color:var(--ok-ink); }
+.badge { display:inline-block; padding:1px 10px; border-radius:99px; font-size:13px; font-weight:600; background:var(--soon-bg); color:var(--muted); white-space:nowrap; }
+.badge.ok { background:var(--ok-bg); color:var(--ok-ink); } .badge.warn { background:var(--warn-bg); color:var(--warn-ink); } .badge.err { background:var(--err-bg); color:var(--err-ink); } .badge.info { background:var(--chip); color:var(--link); }
+.muted { color:var(--muted); } .small { font-size:14px; }
+.txt-err { color:var(--err-ink); font-weight:600; } .txt-warn { color:var(--warn-ink); font-weight:600; }
+
+#login { min-height:100vh; display:flex; flex-wrap:wrap; }
+#login .pitch { flex:1 1 420px; background:var(--navy); color:#EEF0FA; padding:48px 20px; display:flex; flex-direction:column; gap:22px; }
+#login .pitch h1 { font-size:30px; line-height:1.3; max-width:520px; }
+#login .pitch p { font-size:17px; color:#C5CAE8; max-width:500px; }
+#login .panel { flex:1 1 360px; display:grid; place-items:center; padding:40px 16px; }
+#login .box { width:100%; max-width:400px; background:var(--card); border:1px solid var(--line); border-radius:16px; padding:28px 22px; display:flex; flex-direction:column; gap:14px; }
+#gsi-button { min-height:44px; display:flex; justify-content:center; }
+.brand { display:flex; align-items:center; gap:10px; } .brand strong { font-size:18px; }
+
+#topbar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:8px 16px; background:var(--navy); color:#EEF0FA; position:sticky; top:0; z-index:30; }
+#topbar .sp { flex:1; }
+#topbar select { width:auto; max-width:200px; min-height:34px; padding:3px 10px; }
+#topbar .btn { color:#EEF0FA; border-color:#4a5080; }
+#topbar a.btn { text-decoration:none; display:inline-flex; align-items:center; }
+#shell { display:flex; min-height:calc(100vh - 52px); }
+#nav { width:220px; flex:none; background:var(--card); border-right:1px solid var(--line); padding:14px 10px; display:flex; flex-direction:column; gap:2px; position:sticky; top:52px; height:calc(100vh - 52px); }
+#nav a { display:flex; align-items:center; gap:10px; padding:9px 12px; border-radius:8px; color:var(--ink); text-decoration:none; }
+#nav a:hover { background:var(--line-soft); }
+#nav a[aria-current=page] { background:var(--nav-active); font-weight:600; }
+#nav .ic { width:22px; text-align:center; }
+#content { flex:1 1 auto; min-width:0; padding:22px 24px 90px; max-width:1200px; margin:0 auto; width:100%; }
+h1.pt { font-size:26px; margin-bottom:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap; justify-content:space-between; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:16px; display:flex; flex-direction:column; gap:10px; min-width:0; margin-bottom:16px; }
+.card h2 { font-size:18px; }
+.card h3 { font-size:15px; color:var(--muted); font-weight:600; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:16px; margin-bottom:16px; }
+.grid > .card { margin-bottom:0; }
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }
+.grid2 > .card { margin-bottom:16px; }
+.stat { font-size:30px; font-weight:700; line-height:1.2; }
+.empty { text-align:center; color:var(--muted); padding:22px 12px; border:1px dashed var(--line); border-radius:12px; }
+.skeleton { height:18px; border-radius:6px; background:linear-gradient(90deg,var(--line-soft),var(--line),var(--line-soft)); background-size:200% 100%; animation:sk 1.2s linear infinite; }
+@keyframes sk { to { background-position:-200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation:none; } }
+.li { display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--line-soft); min-width:0; flex-wrap:wrap; }
+.li:last-child { border-bottom:0; }
+.li .grow { flex:1 1 180px; min-width:0; overflow-wrap:anywhere; }
+.li.warnrow { background:var(--warn-bg); border-radius:8px; padding-left:8px; padding-right:8px; }
+.li input[type=date], .li select { width:auto; min-height:34px; padding:3px 8px; }
+.li.done .grow { text-decoration:line-through; color:var(--muted); }
+.check { display:inline-flex; align-items:center; gap:6px; min-height:32px; }
+input[type=checkbox] { width:20px; height:20px; accent-color:var(--accent); flex:none; }
+.tabs { display:flex; gap:6px; overflow-x:auto; padding-bottom:6px; margin-bottom:12px; }
+.tabs button, .chips button { background:transparent; border:1px solid var(--line); border-radius:99px; padding:5px 14px; white-space:nowrap; min-height:34px; }
+.tabs button[aria-selected=true], .chips button[aria-pressed=true] { background:var(--accent); color:var(--on-accent); border-color:var(--accent); }
+.chips { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.tbl { width:100%; border-collapse:collapse; font-size:15px; }
+.tbl th { text-align:left; color:var(--muted); font-weight:500; font-size:13px; padding:6px 8px; border-bottom:1px solid var(--line); }
+.tbl td { padding:8px; border-bottom:1px solid var(--line-soft); vertical-align:middle; overflow-wrap:anywhere; }
+.tbl tr.click { cursor:pointer; } .tbl tr.click:hover td { background:var(--line-soft); }
+.tblwrap { overflow-x:auto; }
+.avatar { width:26px; height:26px; border-radius:50%; background:var(--chip); color:var(--accent); display:inline-grid; place-items:center; font-weight:700; font-size:13px; flex:none; }
+.who { display:inline-flex; align-items:center; gap:6px; min-width:0; }
+.dot { width:10px; height:10px; border-radius:50%; display:inline-block; flex:none; background:var(--c6); }
+.dot.high { background:var(--c4); } .dot.medium { background:var(--c3); } .dot.low { background:var(--c2); }
+.bar { height:10px; border-radius:99px; background:var(--line-soft); overflow:hidden; } .bar > i { display:block; height:100%; background:var(--accent); border-radius:99px; }
+.bar.ok > i { background:var(--c2); } .bar.warn > i { background:var(--c3); }
+.pgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:14px; }
+.pcard { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px; display:flex; flex-direction:column; gap:8px; text-decoration:none; color:var(--ink); min-width:0; }
+.pcard:hover { border-color:var(--accent); }
+.pcard.review { border-color:var(--err-ink); }
+.pcard .nm { font-weight:600; font-size:17px; overflow-wrap:anywhere; }
+.meta { display:flex; gap:8px; flex-wrap:wrap; align-items:center; font-size:14px; color:var(--muted); }
+.bc { font-size:14px; margin-bottom:8px; }
+.proj-hd { display:flex; flex-direction:column; gap:12px; }
+.proj-hd input.title { font-size:22px; font-weight:700; border-color:transparent; background:transparent; padding-left:0; }
+.proj-hd input.title:hover, .proj-hd input.title:focus { border-color:var(--line); background:var(--card); padding-left:12px; }
+.md p { margin:0 0 8px; } .md ul { margin:0 0 8px; padding-left:20px; } .md h3,.md h4 { margin:8px 0 4px; } .md code { background:var(--line-soft); padding:1px 5px; border-radius:5px; }
+.split { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+.donutwrap { display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+.legend { display:flex; flex-direction:column; gap:4px; font-size:14px; }
+.legend i { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:6px; vertical-align:middle; }
+dialog { border:1px solid var(--line); border-radius:14px; background:var(--card); color:var(--ink); padding:20px; width:min(480px,calc(100% - 32px)); }
+dialog::backdrop { background:rgba(10,12,25,.5); }
+dialog form { display:flex; flex-direction:column; gap:12px; }
+details > summary { cursor:pointer; color:var(--link); font-size:14px; }
+details[open] > summary { margin-bottom:8px; }
+details .inner { display:flex; flex-direction:column; gap:12px; }
+#toast { position:fixed; bottom:76px; left:50%; transform:translateX(-50%); z-index:70; max-width:calc(100% - 32px); }
+#demobar { background:var(--warn-bg); color:var(--warn-ink); text-align:center; font-size:13px; padding:3px; }
+
+@media (max-width:760px) {
+  #shell { flex-direction:column; }
+  #nav { position:fixed; z-index:40; bottom:0; left:0; right:0; top:auto; width:100%; height:auto; flex-direction:row; justify-content:space-around; padding:4px 4px calc(4px + env(safe-area-inset-bottom)); border-right:0; border-top:1px solid var(--line); gap:0; }
+  #nav a { flex:1 1 0; flex-direction:column; gap:0; padding:5px 2px; font-size:11px; text-align:center; min-width:0; line-height:1.25; }
+  #nav a span.lb { overflow:hidden; text-overflow:ellipsis; max-width:100%; display:block; }
+  #content { padding:14px 14px 90px; }
+  h1.pt { font-size:22px; }
+  #login .pitch { padding:32px 16px; } #login .pitch h1 { font-size:25px; }
+  .tbl.stack thead { display:none; }
+  .tbl.stack tr { display:block; border-bottom:1px solid var(--line); padding:6px 0; }
+  .tbl.stack td { display:block; border:0; padding:2px 4px; }
+}
+</style>
+</head>
+<body>
+<div id="demobar" hidden>DEMO</div>
+<section id="login" hidden>
+  <div class="pitch">
+    <div class="brand"><div class="mark" aria-hidden="true">S</div><strong>Salid Projects</strong></div>
+    <h1 data-i="login_h"></h1>
+    <p data-i="login_p"></p>
+  </div>
+  <div class="panel"><div class="box">
+    <h2 data-i="login_title"></h2>
+    <div id="login-msg" class="notice" role="alert" hidden></div>
+    <div id="not-configured" class="notice error" hidden data-i="not_configured"></div>
+    <div id="gsi-button"></div>
+    <p class="muted small" data-i="login_note"></p>
+    <button class="btn ghost sm" id="login-lang" type="button"></button>
+  </div></div>
+</section>
+
+<div id="app" hidden>
+  <header id="topbar">
+    <div class="brand"><div class="mark" aria-hidden="true">S</div><strong data-i="app_name"></strong></div>
+    <span class="sp"></span>
+    <label class="sr" for="org-switch" data-i="org"></label>
+    <select id="org-switch"></select>
+    <a class="btn ghost sm" href="/center" data-i="to_center"></a>
+    <button class="btn ghost sm" id="lang" type="button"></button>
+    <button class="btn ghost sm" id="signout" type="button" data-i="signout"></button>
+  </header>
+  <div id="shell">
+    <nav id="nav" aria-label="Main"></nav>
+    <main id="content" tabindex="-1">
+      <section id="page-home" hidden></section>
+      <section id="page-projects" hidden></section>
+      <section id="page-mytasks" hidden></section>
+      <section id="page-insights" hidden></section>
+      <section id="page-settings" hidden></section>
+    </main>
+  </div>
+</div>
+
+<dialog id="dlg" aria-labelledby="dlg-t"><form method="dialog" id="dlg-form"></form></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
+const DEMO = (() => { try { return new URLSearchParams(location.search).get("demo") === "1"; } catch { return false; } })();
+const TZ = "Asia/Bangkok";
+
+/* ---------- i18n: every label in Thai [0] and English [1] ---------- */
+const S = /*I18N-START*/{
+  app_name:["โปรเจกต์ Salid","Salid Projects"], to_center:["ศูนย์ควบคุม","Command Center"], signout:["ออกจากระบบ","Sign out"], org:["องค์กร","Organization"],
+  login_h:["ดูแลโครงการทั้งบริษัทในที่เดียว","All your company's projects in one place"], login_p:["โครงการ งาน เหตุการณ์สำคัญ และความเสี่ยง รวมกันที่เดียว งานที่ Salid ติดตามคือข้อมูลชุดเดียวกัน","Projects, tasks, milestones and risks together. The tasks Salid tracks are the same source of truth."],
+  login_title:["เข้าสู่ระบบ","Sign in"], login_note:["เฉพาะบัญชี Google ที่อยู่ในองค์กรเท่านั้น","Only Google accounts that belong to an organization can enter."],
+  not_configured:["ยังไม่ได้ตั้งค่าการเข้าสู่ระบบ โปรดติดต่อผู้ดูแล","Sign-in is not configured yet. Please contact the administrator."],
+  err_expired:["เซสชันหมดอายุ โปรดเข้าสู่ระบบใหม่","Session expired, please sign in again."], err_generic:["เกิดข้อผิดพลาด ({status})","Something went wrong ({status})"], err_net:["เชื่อมต่อไม่ได้ ลองอีกครั้ง","Could not connect. Try again."],
+  err_forbidden:["บัญชีนี้ไม่มีสิทธิ์เข้าถึง","This account has no access."], no_access:["คุณไม่มีสิทธิ์ดูหน้านี้","You do not have access to this page."], not_found:["ไม่พบโครงการนี้","Project not found."],
+  reason_required:["ต้องระบุเหตุผลของการเปลี่ยนแปลง","A reason is required for this change."],
+  no_org_h:["ยังไม่มีองค์กร","No organization yet"], no_org_p:["สร้างองค์กรที่ศูนย์ควบคุมก่อน แล้วกลับมาที่นี่","Create an organization in the Command Center first, then come back."],
+  n_home:["หน้าหลัก","Home"], n_projects:["โครงการ","Projects"], n_mytasks:["งานของฉัน","My Tasks"], n_insights:["ภาพรวมบริษัท","Company Insights"], n_settings:["ตั้งค่าพื้นที่ทำงาน","Workspace Settings"],
+  loading:["กำลังโหลด…","Loading…"], retry:["ลองอีกครั้ง","Try again"], save:["บันทึก","Save"], saved:["บันทึกแล้ว","Saved"], cancel:["ยกเลิก","Cancel"], create:["สร้าง","Create"], add:["เพิ่ม","Add"], remove:["ลบ","Remove"], confirm_rm:["ลบรายการนี้?","Remove this item?"],
+  open:["เปิด","Open"], close:["ปิด","Close"], none:["ไม่มี","None"], unassigned:["ยังไม่มีผู้รับผิดชอบ","Unassigned"], me:["ฉัน","Me"], other:["อื่นๆ","Other"], all:["ทั้งหมด","All"], yes:["ใช่","Yes"], no:["ไม่","No"], locked:["เฉพาะการเงิน","Finance only"],
+  /* enums */
+  d_tech:["เทคโนโลยี","Tech"], d_business:["ธุรกิจ","Business"], d_finance:["การเงิน","Finance"], d_other:["อื่นๆ","Other"],
+  pr_high:["สูง","High"], pr_medium:["กลาง","Medium"], pr_low:["ต่ำ","Low"], priority:["ความสำคัญ","Priority"],
+  st_draft:["ร่าง","Draft"], st_planned:["วางแผน","Planned"], st_in_progress:["กำลังทำ","In progress"], st_on_hold:["พักไว้","On hold"], st_completed:["เสร็จสิ้น","Completed"], st_cancelled:["ยกเลิก","Cancelled"],
+  k_standard:["ทั่วไป","Standard"], k_hackathon:["แฮ็กกาธอน","Hackathon"], kind:["ประเภท","Kind"], hackathons:["แฮ็กกาธอน","Hackathons"],
+  v_team:["ทุกคนในองค์กร","Everyone in the organization"], v_members:["เฉพาะสมาชิกโครงการ","Project members only"], visibility:["การมองเห็น","Visibility"],
+  sev_high:["สูง","High"], sev_medium:["กลาง","Medium"], sev_low:["ต่ำ","Low"], rs_open:["เปิดอยู่","Open"], rs_mitigated:["บรรเทาแล้ว","Mitigated"], rs_closed:["ปิดแล้ว","Closed"],
+  sub_not_started:["ยังไม่เริ่ม","Not started"], sub_in_progress:["กำลังเตรียม","In progress"], sub_submitted:["ส่งแล้ว","Submitted"], sub_results_pending:["รอผล","Results pending"], sub_won:["ชนะ","Won"], sub_lost:["ไม่ผ่าน","Lost"],
+  lk_doc:["เอกสาร","Doc"], lk_repo:["รีโป","Repo"], lk_demo:["เดโม","Demo"], lk_video:["วิดีโอ","Video"], lk_deck:["สไลด์","Deck"], lk_other:["อื่นๆ","Other"],
+  role_owner:["เจ้าของ","Owner"], role_admin:["ผู้ดูแล","Admin"], role_member:["สมาชิก","Member"], role_super:["ผู้ดูแลระบบ","Super admin"],
+  /* time */
+  left_dh:["เหลือ {d} วัน {h} ชม.","{d} d {h} h left"], left_h:["เหลือ {h} ชม.","{h} h left"], left_m:["เหลือไม่ถึงชั่วโมง","under 1 h left"], overdue_d:["เลยกำหนด {d} วัน","overdue {d} d"], overdue_h:["เลยกำหนดแล้ว","overdue"],
+  today:["วันนี้","Today"], tomorrow:["พรุ่งนี้","Tomorrow"], due:["กำหนดส่ง","Due"], no_deadline:["ไม่มีกำหนด","No deadline"],
+  /* home */
+  h_overview:["ภาพรวมบริษัท","Company overview"], c_projects:["โครงการทั้งหมด","Projects"], c_active:["กำลังดำเนินการ","Active"], c_review:["ต้องทบทวน","Needs review"], c_mytasks:["งานของฉันที่ค้างอยู่","My open tasks"],
+  h_mytasks:["งานของฉัน","My tasks"], h_urgent:["เร่งด่วน","Urgent"], h_review:["โครงการที่ต้องทบทวน","Projects needing review"], h_deadlines:["กำหนดการใน 14 วัน","Upcoming deadlines (14 days)"],
+  e_mytasks:["ไม่มีงานค้าง พักหายใจได้เลยค่ะ","No open tasks. Enjoy the calm."], e_urgent:["ไม่มีงานเร่งด่วน เยี่ยมมาก","Nothing urgent. Nice."], e_review:["ทุกโครงการเรียบร้อยดี","All projects look healthy."], e_deadlines:["ไม่มีกำหนดการใน 14 วันข้างหน้า","No deadlines in the next 14 days."],
+  dl_project:["โครงการ","Project"], dl_milestone:["เหตุการณ์สำคัญ","Milestone"], dl_hackathon:["แฮ็กกาธอน","Hackathon"], see_all:["ดูทั้งหมด","See all"],
+  /* projects */
+  p_title:["โครงการ","Projects"], p_new:["+ โครงการใหม่","+ New project"], p_search:["ค้นหาโครงการ","Search projects"], p_mine:["ของฉัน","Mine"], p_cards:["การ์ด","Cards"], p_table:["ตาราง","Table"], p_status:["สถานะ","Status"], p_dept:["แผนก","Department"],
+  p_empty:["ยังไม่มีโครงการที่ตรงกัน ลองสร้างโครงการแรกได้เลย","No matching projects yet. Create the first one."], p_name:["ชื่อโครงการ","Project name"], p_owner:["เจ้าของโครงการ","Owner"], p_deadline:["กำหนดเสร็จ","Deadline"],
+  p_more:["ตัวเลือกเพิ่มเติม","More options"], p_outcome:["ผลลัพธ์ที่ต้องการ","Target outcome"], p_tasks:["งาน","Tasks"], p_next:["กำหนดถัดไป","Next deadline"], p_checklist:["รายการส่งมอบ","Checklist"], p_needs_review:["ต้องทบทวน","Needs review"],
+  p_created:["สร้างโครงการแล้ว","Project created"], back:["โครงการทั้งหมด","All projects"], p_none_owner:["เลือกเจ้าของ","Choose an owner"],
+  /* project page */
+  t_overview:["ภาพรวม","Overview"], t_tasks:["งาน","Tasks"], t_milestones:["เหตุการณ์สำคัญ","Milestones"], t_risks:["ความเสี่ยงและปัญหา","Risks & Issues"], t_links:["ไฟล์และลิงก์","Files & Links"], t_hackathon:["แฮ็กกาธอน","Hackathon"], t_budget:["งบประมาณ","Budget"], t_changes:["ประวัติการเปลี่ยนแปลง","Changes"],
+  md_edit:["เขียน (markdown)","Write (markdown)"], md_preview:["ตัวอย่าง","Preview"], md_empty:["ยังไม่มีรายละเอียด","No description yet."],
+  rd_title:["เหตุผลและผลกระทบ","Reason & impact"], rd_reason:["เหตุผล (จำเป็น)","Reason (required)"], rd_impact:["ผลกระทบ (ไม่บังคับ)","Impact (optional)"], rd_note:["ไม่ต้องรออนุมัติ ระบบจะบันทึกประวัติไว้","No approval step; this is recorded in the change log."],
+  f_status:["สถานะ","Status"], f_owner:["เจ้าของ","Owner"], f_priority:["ความสำคัญ","Priority"], f_deadline:["กำหนดเสร็จ","Deadline"],
+  tk_title:["ชื่องาน","Task title"], tk_assignee:["ผู้รับผิดชอบ","Assignee"], tk_due:["กำหนดส่ง","Due"], tk_milestone:["เหตุการณ์สำคัญ","Milestone"], tk_none:["ยังไม่มีงานในโครงการนี้","No tasks in this project yet."], tk_unassigned_warn:["งานที่ยังไม่มีผู้รับผิดชอบ","Open task without an assignee"], tk_empty_title:["ใส่ชื่องานก่อน","Enter a task title first"],
+  ms_title:["ชื่อเหตุการณ์สำคัญ","Milestone title"], ms_none:["ยังไม่มีเหตุการณ์สำคัญ","No milestones yet."],
+  rk_title:["ความเสี่ยง / ปัญหา","Risk / issue"], rk_severity:["ความรุนแรง","Severity"], rk_note:["หมายเหตุ","Note"], rk_none:["ยังไม่มีความเสี่ยง","No risks recorded."], rk_ai:["ให้ AI ช่วยประเมิน","Ask AI to assess"], rk_ai_busy:["AI กำลังประเมิน…","AI is assessing…"], rk_ai_none:["AI ไม่พบความเสี่ยงเพิ่ม","AI found nothing to add."], rk_ai_h:["ข้อเสนอจาก AI","AI proposals"], rk_accept:["รับไว้","Accept"], rk_dismiss:["ไม่รับ","Dismiss"], rk_src_ai:["โดย AI","by AI"],
+  lk_title:["ชื่อลิงก์","Link title"], lk_url:["ที่อยู่ (URL)","URL"], lk_none:["ยังไม่มีไฟล์หรือลิงก์","No files or links yet."], lk_bad:["ใส่ URL ที่ขึ้นต้นด้วย https://","Enter a URL starting with https://"],
+  hk_competition:["ชื่อการแข่งขัน","Competition name"], hk_official:["กำหนดส่งอย่างเป็นทางการ (เวลาไทย)","Official deadline (Bangkok time)"], hk_reg:["วันเปิดรับสมัคร","Registration opens"], hk_rules:["กติกา","Rules"], hk_elig:["คุณสมบัติผู้เข้าแข่งขัน","Eligibility"], hk_judging:["เกณฑ์การตัดสิน","Judging criteria"],
+  hk_team:["ทีมและบทบาท","Team members & roles"], hk_role:["บทบาท","Role"], hk_deliv:["สิ่งที่ต้องส่ง","Deliverables"], hk_url:["ลิงก์","Link"], hk_sub:["สถานะการส่ง","Submission status"], hk_results:["ผลการแข่งขัน","Results"], hk_countdown:["นับถอยหลัง","Countdown"], hk_team_none:["ยังไม่มีสมาชิกทีม","No team members yet."],
+  bg_planned:["งบที่วางไว้","Planned"], bg_spent:["ใช้ไปแล้ว","Spent"], bg_travel:["ค่าเดินทาง","Travel"], bg_notes:["หมายเหตุ","Notes"],
+  ch_none:["ยังไม่มีการเปลี่ยนแปลงสำคัญ","No major changes yet."], ch_by:["โดย","by"], ch_reason:["เหตุผล","Reason"], ch_impact:["ผลกระทบ","Impact"],
+  /* my tasks */
+  mt_open:["ค้างอยู่","Open"], mt_done:["เสร็จแล้ว","Done"], mt_empty:["ไม่มีงานในรายการนี้","No tasks here."], mt_no_project:["ไม่มีโครงการ (งานที่ Salid จดไว้)","No project (tasks Salid noted)"],
+  /* insights */
+  i_progress:["ความคืบหน้าตามแผนก","Progress by department"], i_status:["โครงการตามสถานะ","Projects by status"], i_resources:["ทรัพยากรบุคคล","Resources"], i_hack:["กระดานแฮ็กกาธอน","Hackathon board"], i_budget:["งบประมาณ","Budget"],
+  i_person:["บุคคล","Person"], i_open_tasks:["งานค้าง","Open tasks"], i_projects:["โครงการ","Projects"], i_overload:["งานเยอะเกินไป (> 8)","Heavy load (> 8)"], i_done_total:["งานเสร็จ / ทั้งหมด","Tasks done / total"], i_none:["ยังไม่มีข้อมูล","No data yet."],
+  i_comp:["การแข่งขัน","Competition"], i_planned:["วางแผน","Planned"], i_spent:["ใช้จริง","Spent"], i_total:["รวม","Total"], i_locked:["ข้อมูลงบประมาณเห็นได้เฉพาะฝ่ายการเงินและผู้ดูแล","Budget data is visible to finance and admins only."],
+  /* settings */
+  s_members:["สมาชิก","Members"], s_email:["อีเมล","Email"], s_role:["บทบาท","Role"], s_finance:["ผู้อนุมัติการเงิน","Finance approver"], s_ro:["เฉพาะผู้ดูแลที่แก้ไขได้","Only admins can edit."], s_depts:["แผนก","Departments"], s_defaults:["ค่าเริ่มต้นการเข้าถึง","Access defaults"],
+  s_templates:["เทมเพลตโครงการ","Project templates"], s_sections:["หัวข้อ","Sections"], s_company:["บริษัท","Company"], s_company_edit:["แก้ไขชื่อและโลโก้ที่ศูนย์ควบคุม","Edit name and logo in the Command Center"], s_logo:["โลโก้","Logo"],
+  tpl_standard:["เทมเพลตทั่วไป","Standard template"], tpl_hackathon:["เทมเพลตแฮ็กกาธอน","Hackathon template"],
+  sec_overview:["ภาพรวม","Overview"], sec_tasks:["งาน","Tasks"], sec_milestones:["เหตุการณ์สำคัญ","Milestones"], sec_risks:["ความเสี่ยงและปัญหา","Risks & Issues"], sec_links:["ไฟล์และลิงก์","Files & Links"],
+  sec_h1:["ชื่อการแข่งขันและกำหนดส่งอย่างเป็นทางการ","Competition name & official deadline"], sec_h2:["กติกา คุณสมบัติ และเกณฑ์ตัดสิน","Rules, eligibility & judging criteria"], sec_h3:["ทีมและบทบาท","Team members & roles"], sec_h4:["ต้นแบบ เดโม และสไลด์นำเสนอ","Prototype, demo & pitch deck"], sec_h5:["รายการตรวจสอบและการยืนยันการส่ง","Submission checklist & confirmation"], sec_h6:["งบประมาณ ค่าเดินทาง และผลการแข่งขัน (การเงิน)","Budget, travel costs & results (finance)"]
+}/*I18N-END*/;
+let lang = (() => { try { const s = localStorage.getItem("pm_lang"); if (s === "en" || s === "th") return s; } catch { /* ignore */ } return (navigator.language || "th").toLowerCase().startsWith("th") ? "th" : "en"; })();
+const t = (k, vars) => { const e = S[k]; let s = e ? e[lang === "th" ? 0 : 1] : k; for (const [a, b] of Object.entries(vars || {})) s = s.replaceAll("{" + a + "}", b); return s; };
+
+/* ---------- DOM helpers ---------- */
+const $ = (id) => document.getElementById(id);
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v === false || v == null) continue;
+    if (k === "class") n.className = v;
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
+    else if (k === "text") n.textContent = v;
+    else if (k === "value" || k === "checked" || k === "disabled" || k === "selected") n[k] = v;
+    else n.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(String(c)));
+  return n;
+}
+const clear = (n, ...kids) => { n.replaceChildren(...kids.flat(Infinity).filter((x) => x != null && x !== false)); return n; };
+const arr = (x, k) => Array.isArray(x) ? x : (x && Array.isArray(x[k]) ? x[k] : []);
+const q = (o) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries(o)) if (v !== "" && v != null && v !== false) p.set(k, v); const s = p.toString(); return s ? "?" + s : ""; };
+function toast(msg, kind = "ok") { const n = $("toast"); clear(n, el("div", { class: "notice " + kind, text: msg })); clearTimeout(toast.t); toast.t = setTimeout(() => clear(n), 3500); }
+const debounce = (fn, ms) => { let h; return (...a) => { clearTimeout(h); h = setTimeout(() => fn(...a), ms); }; };
+
+/* ---------- dates (Bangkok time) ---------- */
+const locale = () => lang === "th" ? "th-TH" : "en-GB";
+const todayStr = () => new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date());
+function parseWhen(s) {
+  if (!s) return null;
+  if (/^\d{4}-\d\d-\d\d$/.test(s)) return new Date(s + "T23:59:59+07:00");
+  if (/^\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d)?$/.test(s)) return new Date(s + "+07:00");
+  const d = new Date(s); return isNaN(d) ? null : d;
+}
+const dayOf = (s) => { const d = parseWhen(s); return d ? new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(d) : ""; };
+function fmtDate(s) { const d = parseWhen(s); return d ? d.toLocaleDateString(locale(), { timeZone: TZ, year: "numeric", month: "short", day: "numeric" }) : ""; }
+function fmtDateTime(s) { const d = parseWhen(s); return d ? d.toLocaleString(locale(), { timeZone: TZ, dateStyle: "medium", timeStyle: "short" }) : ""; }
+function leftMs(s) { const d = parseWhen(s); return d ? d.getTime() - Date.now() : null; }
+function countdown(s) {
+  const ms = leftMs(s); if (ms == null) return "";
+  if (ms < 0) { const d = Math.floor(-ms / 864e5); return d > 0 ? t("overdue_d", { d }) : t("overdue_h"); }
+  const d = Math.floor(ms / 864e5), h = Math.floor((ms % 864e5) / 36e5);
+  if (d > 0) return t("left_dh", { d, h }); if (h > 0) return t("left_h", { h }); return t("left_m");
+}
+const urgency = (s) => { const ms = leftMs(s); return ms == null ? "" : ms < 0 ? "err" : ms <= 3 * 864e5 ? "warn" : ""; };
+const dueBadge = (s, open = true) => s ? el("span", { class: "badge " + (open ? urgency(s) : ""), title: fmtDateTime(s), text: fmtDate(s) + (open && urgency(s) ? " · " + countdown(s) : "") }) : null;
+
+/* ---------- small renderers ---------- */
+const pn = (p) => p ? (p.name || p.email || p.discord_user_id || "") : "";
+const who = (p) => p ? el("span", { class: "who" }, el("span", { class: "avatar", "aria-hidden": "true", text: (pn(p).trim()[0] || "?").toUpperCase() }), el("span", { text: pn(p) })) : el("span", { class: "muted", text: t("unassigned") });
+const deptBadge = (d) => d ? el("span", { class: "badge info", text: t("d_" + d) }) : null;
+const prioDot = (p) => el("span", { class: "who", title: t("priority") }, el("span", { class: "dot " + p }), el("span", { class: "small", text: t("pr_" + p) }));
+const STATUS_CLS = { in_progress: "ok", completed: "ok", on_hold: "warn", cancelled: "err" };
+const statusPill = (s) => el("span", { class: "badge " + (STATUS_CLS[s] || ""), text: t("st_" + s) });
+const bar = (done, total, cls = "") => el("div", { class: "bar " + cls, role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total), "aria-valuenow": String(done) }, el("i", { style: "width:" + (total ? Math.round(100 * done / total) : 0) + "%" }));
+const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+const empty = (key) => el("div", { class: "empty", text: t(key) });
+const loadingBox = () => el("div", { class: "card", role: "status", "aria-label": t("loading") }, el("div", { class: "skeleton", style: "width:60%" }), el("div", { class: "skeleton" }), el("div", { class: "skeleton", style: "width:80%" }));
+function sel(options, value, onchange, attrs = {}) {
+  return el("select", { ...attrs, onchange: (e) => onchange(e.target.value) }, options.map(([v, l]) => el("option", { value: v, selected: String(v) === String(value) }, l)));
+}
+function md(src) {
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const inl = (s) => esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  const out = []; let list = false;
+  for (const raw of String(src || "").split(/\r?\n/)) {
+    const line = raw.trimEnd(), li = line.match(/^\s*[-*]\s+(.*)$/), h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (li) { if (!list) { out.push("<ul>"); list = true; } out.push("<li>" + inl(li[1]) + "</li>"); continue; }
+    if (list) { out.push("</ul>"); list = false; }
+    if (h) out.push("<h4>" + inl(h[2]) + "</h4>"); else if (line.trim()) out.push("<p>" + inl(line) + "</p>");
+  }
+  if (list) out.push("</ul>");
+  return out.join("");
+}
+const mdBox = (src) => { const d = el("div", { class: "md" }); d.innerHTML = md(src) || ("<p class='muted'>" + t("md_empty") + "</p>"); return d; };
+
+/* ---------- API ---------- */
+let token = null; // ID token: memory only, never persisted
+class AuthError extends Error {}
+class ApiError extends Error { constructor(d, s) { super(d); this.status = s; } }
+const errText = (e) => e instanceof ApiError ? (e.message === "reason_required" ? t("reason_required") : t("err_generic", { status: e.status }) + (e.message ? " [" + e.message + "]" : "")) : (e instanceof AuthError ? e.message : t("err_net"));
+async function api(path, opts = {}) {
+  if (DEMO) return demoApi(opts.method || "GET", path, opts.body ? JSON.parse(opts.body) : null);
+  let res;
+  try { res = await fetch(path, { ...opts, headers: { ...(opts.body ? { "Content-Type": "application/json" } : {}), Authorization: "Bearer " + token } }); }
+  catch { throw new Error(t("err_net")); }
+  if (res.status === 401) throw new AuthError("expired");
+  if (res.status === 503) throw new AuthError("not_configured");
+  if (!res.ok) {
+    let detail = ""; try { const j = await res.json(); detail = typeof j.detail === "string" ? j.detail : ""; } catch { /* ignore */ }
+    throw new ApiError(detail, res.status);
+  }
+  if (res.status === 204) return null;
+  const ct = res.headers.get("content-type") || ""; return ct.includes("json") ? res.json() : null;
+}
+const J = (method, body) => ({ method, body: JSON.stringify(body) });
+
+/* ---------- state ---------- */
+let user = null, orgId = null, settings = null, myPerson = null, seq = 0;
+const curOrg = () => user && user.orgs.find((o) => o.id === orgId);
+const isAdmin = () => { const o = curOrg(); return !!o && ["owner", "admin", "super"].includes(o.role); };
+const PM = (s = "") => "/api/center/orgs/" + encodeURIComponent(orgId) + "/pm" + s;
+const PP = (id, s = "") => PM("/projects/" + encodeURIComponent(id) + s);
+const members = () => arr(settings, "members");
+const toPerson = (m) => ({ email: m.email || null, discord_user_id: m.discord_user_id || null, name: m.name || (m.email ? m.email.split("@")[0] : "") });
+const sameP = (a, b) => !!a && !!b && ((a.email && b.email && a.email.toLowerCase() === b.email.toLowerCase()) || (a.discord_user_id && b.discord_user_id && a.discord_user_id === b.discord_user_id));
+const isMe = (p) => sameP(p, myPerson);
+function personKey(p) { return p ? (p.email || p.discord_user_id || "n:" + p.name) : ""; }
+function personOptions(extra) {
+  const list = members().map(toPerson);
+  for (const p of [myPerson, extra]) if (p && !list.some((x) => personKey(x) === personKey(p) || sameP(x, p))) list.push(p);
+  return list;
+}
+function personSelect(value, onchange, { allowNone = false, attrs = {} } = {}) {
+  const list = personOptions(value);
+  const opts = (allowNone ? [["", t("unassigned")]] : []).concat(list.map((p, i) => [String(i), pn(p) + (isMe(p) ? " (" + t("me") + ")" : "")]));
+  const cur = value ? list.findIndex((p) => personKey(p) === personKey(value) || sameP(p, value)) : -1;
+  return sel(opts, cur >= 0 ? String(cur) : "", (v) => onchange(v === "" ? null : list[Number(v)]), attrs);
+}
+
+/* ---------- dialogs ---------- */
+function dialog(title, bodyNodes, { submitLabel, onsubmit, oncancel } = {}) {
+  const dlg = $("dlg"), form = $("dlg-form");
+  const err = el("div", { class: "notice error", role: "alert", hidden: true });
+  clear(form, el("h2", { id: "dlg-t", text: title }), bodyNodes, err,
+    el("div", { class: "row" }, el("button", { class: "btn ghost fixed", type: "button", onclick: () => { dlg.close(); if (oncancel) oncancel(); } }, t("cancel")), el("button", { class: "btn fixed", type: "submit" }, submitLabel || t("save"))));
+  form.onsubmit = async (ev) => {
+    ev.preventDefault();
+    try { const ok = await onsubmit(); if (ok !== false) dlg.close(); } catch (e) { err.hidden = false; err.textContent = errText(e); }
+  };
+  dlg.oncancel = () => { if (oncancel) oncancel(); };
+  dlg.showModal();
+}
+/* status / owner / deadline / priority changes ask for a reason (+ impact) */
+function askReason(onconfirm, onabort) {
+  const reason = el("textarea", { required: true, maxlength: "500", rows: "2" }), impact = el("textarea", { maxlength: "500", rows: "2" });
+  dialog(t("rd_title"), [el("p", { class: "muted small", text: t("rd_note") }), el("label", { class: "f" }, t("rd_reason"), reason), el("label", { class: "f" }, t("rd_impact"), impact)],
+    { onsubmit: async () => { if (!reason.value.trim()) { reason.focus(); return false; } await onconfirm(reason.value.trim(), impact.value.trim()); }, oncancel: onabort });
+  reason.focus();
+}
+async function guarded(fn, rollback) {
+  try { return await fn(); } catch (e) { if (rollback) rollback(); if (!handleAuth(e)) toast(errText(e), "error"); return undefined; }
+}
+
+/* ---------- auth & routing ---------- */
+function show(v) { $("login").hidden = v !== "login"; $("app").hidden = v !== "app"; }
+function note(n, msg) { n.hidden = !msg; n.textContent = msg || ""; }
+function toLogin(msgKey) { token = null; user = null; show("login"); note($("login-msg"), msgKey ? t(msgKey) : ""); renderGoogleButton(); }
+let gsiReady = false;
+function renderGoogleButton() {
+  if (!CLIENT_ID || CLIENT_ID.startsWith("__")) { $("not-configured").hidden = false; $("gsi-button").hidden = true; return; }
+  if (!window.google || !google.accounts) { setTimeout(renderGoogleButton, 200); return; }
+  if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: (r) => { token = r.credential; start(); } }); gsiReady = true; }
+  clear($("gsi-button"));
+  google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signin_with", locale: lang, width: 300 });
+}
+function handleAuth(e) {
+  if (!(e instanceof AuthError)) return false;
+  if (e.message === "not_configured") { show("login"); $("not-configured").hidden = false; $("gsi-button").hidden = true; } else toLogin("err_expired");
+  return true;
+}
+const PAGES = [["home", "n_home", "⌂"], ["projects", "n_projects", "▤"], ["mytasks", "n_mytasks", "✓"], ["insights", "n_insights", "◔"], ["settings", "n_settings", "⚙"]];
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-i]").forEach((n) => { n.textContent = t(n.dataset.i); });
+  document.title = t("app_name");
+  $("lang").textContent = lang === "th" ? "EN" : "ไทย";
+  $("lang").setAttribute("aria-label", lang === "th" ? "Switch to English" : "เปลี่ยนเป็นภาษาไทย");
+  $("login-lang").textContent = lang === "th" ? "English" : "ภาษาไทย";
+}
+function setLang(l) { lang = l; try { localStorage.setItem("pm_lang", l); } catch { /* ignore */ } applyStatic(); if (!$("login").hidden) renderGoogleButton(); else { renderNav(); route(); } }
+function parseHash() {
+  const m = location.hash.match(/^#\/(\w+)(?:\/([^/?]+))?/);
+  const page = m && PAGES.some((p) => p[0] === m[1]) ? m[1] : "home";
+  return { page, id: m && m[2] ? decodeURIComponent(m[2]) : null };
+}
+function renderNav() {
+  const cur = parseHash().page;
+  clear($("nav"), PAGES.map(([id, key, ic]) => el("a", { href: "#/" + id, "aria-current": cur === id ? "page" : false }, el("span", { class: "ic", "aria-hidden": "true" }, ic), el("span", { class: "lb", text: t(key) }))));
+  const sw = $("org-switch"); clear(sw, user.orgs.map((o) => el("option", { value: o.id, selected: o.id === orgId }, o.name)));
+  sw.hidden = user.orgs.length < 2;
+}
+function route() {
+  if (!user) return;
+  const { page, id } = parseHash(); renderNav();
+  const my = ++seq;
+  for (const [pid] of PAGES) $("page-" + pid).hidden = pid !== page;
+  const root = $("page-" + page);
+  if (!orgId) { clear(root, el("div", { class: "card" }, el("div", { class: "empty" }, el("h2", { text: t("no_org_h") }), el("p", { text: t("no_org_p") })))); return; }
+  clear(root, loadingBox());
+  Promise.resolve().then(() => VIEWS[page](root, id, () => my !== seq)).catch((e) => {
+    if (my !== seq || handleAuth(e)) return;
+    clear(root, el("div", { class: "card" }, el("div", { class: "notice error", role: "alert", text: e instanceof ApiError && e.status === 403 ? t("no_access") : e instanceof ApiError && e.status === 404 ? t("not_found") : errText(e) }),
+      el("div", {}, el("button", { class: "btn ghost sm", type: "button", onclick: route }, t("retry")))));
+  });
+  $("content").scrollTo && $("content").scrollTo(0, 0);
+}
+async function loadOrgData() {
+  settings = await api(PM("/settings")).catch((e) => { if (e instanceof AuthError) throw e; return null; });
+  const em = (user.email || "").toLowerCase();
+  const m = members().find((x) => (x.email || "").toLowerCase() === em);
+  myPerson = m ? toPerson(m) : { email: user.email, discord_user_id: null, name: (user.email || "").split("@")[0] };
+}
+async function start() {
+  try {
+    user = await api("/api/center/me"); user.orgs = arr(user, "orgs");
+    if (!user.orgs.find((o) => o.id === orgId)) orgId = user.orgs.length ? user.orgs[0].id : null;
+    show("app"); applyStatic();
+    if (orgId) await loadOrgData();
+    renderNav(); route();
+  } catch (e) {
+    if (handleAuth(e)) return;
+    if (e instanceof ApiError && e.status === 403) { toLogin("err_forbidden"); return; }
+    show("login"); note($("login-msg"), errText(e)); renderGoogleButton();
+  }
+}
+
+/* ======================= 01 HOME ======================= */
+function taskRow(tk, { onTick, showProject } = {}) {
+  const open = tk.status !== "done";
+  const canTick = !!tk.project_id && !!onTick;
+  return el("div", { class: "li" + (open ? "" : " done") },
+    el("input", { type: "checkbox", checked: !open, disabled: !canTick, "aria-label": tk.title, onchange: (e) => onTick(tk, e.target.checked, e.target) }),
+    el("span", { class: "grow" }, tk.title, showProject && tk.project_name ? el("span", { class: "muted small", text: "  · " + tk.project_name }) : null),
+    tk.assignee ? who(tk.assignee) : null, dueBadge(tk.due, open));
+}
+async function tickTask(tk, done, box, redraw) {
+  const prev = tk.status; tk.status = done ? "done" : "open"; redraw();
+  const r = await guarded(() => api(PP(tk.project_id, "/tasks/" + encodeURIComponent(tk.id)), J("PATCH", { status: tk.status })), () => { tk.status = prev; redraw(); });
+  if (r) toast(t("saved"));
+}
+function projectMini(p) {
+  return el("a", { class: "pcard review", href: "#/projects/" + encodeURIComponent(p.id) },
+    el("div", { class: "nm", text: p.name }), el("div", { class: "meta" }, deptBadge(p.department), prioDot(p.priority), statusPill(p.status), dueBadge(p.deadline)),
+    el("div", { class: "txt-err small", text: (p.stats && p.stats.review_reasons || []).join(" · ") || t("p_needs_review") }));
+}
+async function viewHome(root, _id, stale) {
+  const d = await api(PM("/home")); if (stale()) return;
+  if (d.me) myPerson = { ...myPerson, ...d.me, name: d.me.name || myPerson.name };
+  const c = d.counts || {};
+  const myTasks = arr(d.my_tasks), urgent = arr(d.urgent_tasks), atRisk = arr(d.at_risk), dl = arr(d.deadlines);
+  const draw = () => {
+    const open = myTasks.filter((x) => x.status !== "done");
+    const byDay = {}; for (const x of dl) (byDay[dayOf(x.when)] ||= []).push(x);
+    const days = Object.keys(byDay).sort(), today = todayStr();
+    const dayLabel = (k) => { const diff = Math.round((new Date(k + "T00:00:00Z") - new Date(today + "T00:00:00Z")) / 864e5); return (diff === 0 ? t("today") + " · " : diff === 1 ? t("tomorrow") + " · " : "") + fmtDate(k); };
+    clear(root,
+      el("h1", { class: "pt", text: t("n_home") }),
+      el("div", { class: "grid", "aria-label": t("h_overview") },
+        [["c_projects", c.projects], ["c_active", c.active], ["c_review", c.needs_review], ["c_mytasks", c.my_open_tasks]].map(([k, v]) => el("div", { class: "card" }, el("h3", { text: t(k) }), el("div", { class: "stat" + (k === "c_review" && v ? " txt-err" : ""), text: String(v ?? 0) })))),
+      el("div", { class: "grid2" },
+        el("div", { class: "card" }, el("h2", { text: t("h_mytasks") }), open.length ? open.map((x) => taskRow(x, { showProject: true, onTick: (tk, v, box) => tickTask(tk, v, box, draw) })) : empty("e_mytasks"),
+          el("a", { href: "#/mytasks", text: t("see_all") })),
+        el("div", { class: "card" }, el("h2", { text: t("h_urgent") }), urgent.length ? urgent.map((x) => taskRow(x, { showProject: true, onTick: (tk, v, box) => tickTask(tk, v, box, draw) })) : empty("e_urgent"))),
+      el("div", { class: "card" }, el("h2", { text: t("h_review") }), atRisk.length ? el("div", { class: "pgrid" }, atRisk.map(projectMini)) : empty("e_review")),
+      el("div", { class: "card" }, el("h2", { text: t("h_deadlines") }), days.length ? days.map((k) => el("div", {}, el("h3", { text: dayLabel(k) }),
+        byDay[k].map((x) => el("div", { class: "li" }, el("span", { class: "badge", text: t("dl_" + x.kind) }), el("a", { class: "grow", href: "#/projects/" + encodeURIComponent(x.project_id) }, x.title || x.project_name, x.kind !== "project" ? el("span", { class: "muted small", text: "  · " + x.project_name }) : null), el("span", { class: "small " + (urgency(x.when) === "err" ? "txt-err" : ""), text: countdown(x.when) }))))) : empty("e_deadlines")));
+  };
+  draw();
+}
+
+/* ======================= 02 PROJECTS ======================= */
+const filt = { department: "", kind: "", statuses: new Set(), mine: false, q: "", view: (() => { try { return localStorage.getItem("pm_view") === "table" ? "table" : "cards"; } catch { return "cards"; } })() };
+const DEPTS = ["tech", "business", "finance", "other"], STATUSES = ["draft", "planned", "in_progress", "on_hold", "completed", "cancelled"];
+async function viewProjects(root, id, stale) {
+  if (id) return viewProject(root, id, stale);
+  const listBox = el("div", { "aria-live": "polite" });
+  let data = [];
+  const draw = () => {
+    const rows = data.filter((p) => !filt.statuses.size || filt.statuses.has(p.status));
+    clear(listBox, !rows.length ? empty("p_empty") : filt.view === "table" ? projTable(rows) : el("div", { class: "pgrid" }, rows.map(projCard)));
+  };
+  const load = async () => {
+    const my = seq; clear(listBox, loadingBox());
+    try { const r = await api(PM("/projects" + q({ department: filt.department, kind: filt.kind, mine: filt.mine ? 1 : "", q: filt.q.trim() }))); if (my !== seq) return; data = arr(r, "projects"); draw(); }
+    catch (e) { if (my === seq && !handleAuth(e)) clear(listBox, el("div", { class: "notice error", role: "alert", text: errText(e) })); }
+  };
+  const chip = (label, on, fn) => el("button", { type: "button", "aria-pressed": String(!!on), onclick: fn }, label);
+  const bar_ = () => {
+    const wrap = el("div", { class: "card" });
+    const render = () => clear(wrap,
+      el("div", { class: "row" },
+        el("label", { class: "f" }, el("span", { class: "sr", text: t("p_search") }), el("input", { type: "search", placeholder: t("p_search"), value: filt.q, oninput: debounce((e) => { filt.q = e.target.value; load(); }, 300) })),
+        el("button", { class: "btn fixed", type: "button", onclick: () => newProjectDialog() }, t("p_new"))),
+      el("div", { class: "chips", role: "group", "aria-label": t("p_dept") }, chip(t("all"), !filt.department, () => { filt.department = ""; render(); load(); }),
+        DEPTS.map((d) => chip(t("d_" + d), filt.department === d, () => { filt.department = filt.department === d ? "" : d; render(); load(); }))),
+      el("div", { class: "chips", role: "group", "aria-label": t("kind") }, chip(t("all"), !filt.kind, () => { filt.kind = ""; render(); load(); }), chip(t("hackathons"), filt.kind === "hackathon", () => { filt.kind = filt.kind ? "" : "hackathon"; render(); load(); }),
+        chip(t("p_mine"), filt.mine, () => { filt.mine = !filt.mine; render(); load(); })),
+      el("div", { class: "chips", role: "group", "aria-label": t("p_status") }, STATUSES.map((s) => chip(t("st_" + s), filt.statuses.has(s), () => { filt.statuses.has(s) ? filt.statuses.delete(s) : filt.statuses.add(s); render(); draw(); }))),
+      el("div", { class: "chips", role: "group" }, chip(t("p_cards"), filt.view === "cards", () => setView("cards")), chip(t("p_table"), filt.view === "table", () => setView("table"))));
+    const setView = (v) => { filt.view = v; try { localStorage.setItem("pm_view", v); } catch { /* ignore */ } render(); draw(); };
+    render(); return wrap;
+  };
+  clear(root, el("h1", { class: "pt", text: t("p_title") }), bar_(), listBox);
+  await load();
+}
+function projCard(p) {
+  const s = p.stats || {}, h = p.hackathon;
+  return el("a", { class: "pcard" + (s.needs_review ? " review" : ""), href: "#/projects/" + encodeURIComponent(p.id) },
+    el("div", { class: "nm", text: p.name }),
+    el("div", { class: "meta" }, deptBadge(p.department), p.kind === "hackathon" ? el("span", { class: "badge warn", text: t("k_hackathon") }) : null, statusPill(p.status), prioDot(p.priority)),
+    el("div", { class: "meta" }, who(p.owner), p.deadline ? dueBadge(p.deadline, !["completed", "cancelled"].includes(p.status)) : el("span", { text: t("no_deadline") })),
+    el("div", { class: "small muted", text: t("p_tasks") + " " + (s.tasks_done || 0) + "/" + (s.tasks_total || 0) }), bar(s.tasks_done || 0, s.tasks_total || 0, s.tasks_overdue ? "warn" : ""),
+    h ? el("div", { class: "small" }, t("p_next") + ": ", h.official_deadline ? el("b", { text: fmtDateTime(h.official_deadline) + " · " + countdown(h.official_deadline) }) : "-", h.checklist_total != null ? el("div", { class: "muted", text: t("p_checklist") + " " + pct(h.checklist_done, h.checklist_total) + "%" }) : null) : null,
+    s.needs_review ? el("div", { class: "txt-err small", text: "⚑ " + t("p_needs_review") + ((s.review_reasons || []).length ? ": " + s.review_reasons.join(" · ") : "") }) : null);
+}
+function projTable(rows) {
+  return el("div", { class: "card tblwrap" }, el("table", { class: "tbl stack" },
+    el("thead", {}, el("tr", {}, [t("p_name"), t("p_dept"), t("p_owner"), t("priority"), t("p_status"), t("p_deadline"), t("p_tasks")].map((h) => el("th", { text: h })))),
+    el("tbody", {}, rows.map((p) => el("tr", { class: "click", tabindex: "0", onclick: () => { location.hash = "#/projects/" + encodeURIComponent(p.id); }, onkeydown: (e) => { if (e.key === "Enter") location.hash = "#/projects/" + encodeURIComponent(p.id); } },
+      el("td", {}, el("b", { text: p.name }), (p.stats || {}).needs_review ? el("span", { class: "txt-err", text: "  ⚑" }) : null), el("td", {}, deptBadge(p.department)), el("td", {}, who(p.owner)), el("td", {}, prioDot(p.priority)), el("td", {}, statusPill(p.status)),
+      el("td", { text: fmtDate(p.deadline) }), el("td", { text: ((p.stats || {}).tasks_done || 0) + "/" + ((p.stats || {}).tasks_total || 0) }))))));
+}
+function newProjectDialog() {
+  const name = el("input", { type: "text", required: true, maxlength: "120", autofocus: true });
+  const dept = sel(DEPTS.map((d) => [d, t("d_" + d)]), "tech", () => {});
+  let owner = myPerson; const ownerSel = personSelect(owner, (p) => { owner = p || myPerson; });
+  const prio = sel(["high", "medium", "low"].map((x) => [x, t("pr_" + x)]), "medium", () => {});
+  const kind = sel(["standard", "hackathon"].map((x) => [x, t("k_" + x)]), "standard", () => {});
+  const outcome = el("input", { type: "text", maxlength: "300" }), deadline = el("input", { type: "date" });
+  const vis = sel(["team", "members"].map((x) => [x, t("v_" + x)]), (settings && settings.defaults && settings.defaults.visibility) || "team", () => {});
+  dialog(t("p_new").replace("+ ", ""), [
+    el("label", { class: "f" }, t("p_name"), name), el("label", { class: "f" }, t("p_dept"), dept), el("label", { class: "f" }, t("p_owner"), ownerSel), el("label", { class: "f" }, t("priority"), prio),
+    el("details", {}, el("summary", { text: t("p_more") }), el("div", { class: "inner" }, el("label", { class: "f" }, t("kind"), kind), el("label", { class: "f" }, t("p_outcome"), outcome), el("label", { class: "f" }, t("p_deadline"), deadline), el("label", { class: "f" }, t("visibility"), vis)))],
+    { submitLabel: t("create"), onsubmit: async () => {
+      if (!name.value.trim()) { name.focus(); return false; }
+      const body = { name: name.value.trim(), department: dept.value, owner, priority: prio.value, kind: kind.value, visibility: vis.value };
+      if (outcome.value.trim()) body.target_outcome = outcome.value.trim();
+      if (deadline.value) body.deadline = deadline.value;
+      const p = await api(PM("/projects"), J("POST", body)); toast(t("p_created")); location.hash = "#/projects/" + encodeURIComponent(p.id);
+    } });
+}
+
+/* ---------- project page ---------- */
+let projTab = "overview";
+async function viewProject(root, id, stale) {
+  const P = await api(PP(id)); if (stale()) return;
+  P.tasks = arr(P.tasks); for (const k of ["milestones", "risks", "links", "changes"]) P[k] = arr(P[k]);
+  const canEdit = isAdmin() || isMe(P.owner);
+  const body = el("div");
+  const tabsOf = () => [["overview", "t_overview"], ["tasks", "t_tasks"], ["milestones", "t_milestones"], ["risks", "t_risks"], ["links", "t_links"]]
+    .concat(P.kind === "hackathon" ? [["hackathon", "t_hackathon"]] : [], P.budget ? [["budget", "t_budget"]] : [], [["changes", "t_changes"]]);
+  const draw = () => {
+    if (!tabsOf().some((x) => x[0] === projTab)) projTab = "overview";
+    clear(body, el("div", { class: "tabs", role: "tablist" }, tabsOf().map(([k, lbl]) => el("button", { type: "button", role: "tab", "aria-selected": String(projTab === k), onclick: () => { projTab = k; draw(); } }, t(lbl) + (k === "tasks" ? " (" + P.tasks.length + ")" : "")))),
+      el("div", { class: "card", role: "tabpanel" }, TABS[projTab](P, draw)));
+  };
+  const hd = () => projectHeader(P, canEdit, () => { clear(head, hd()); draw(); });
+  const head = el("div", { class: "card proj-hd" }, hd());
+  clear(root, el("div", { class: "bc" }, el("a", { href: "#/projects" }, "← " + t("back")), " / ", P.name), head, body);
+  draw();
+}
+function projectHeader(P, canEdit, redraw) {
+  const patch = (field, value, label) => {
+    const prev = P[field];
+    askReason(async (reason, impact) => {
+      P[field] = value; redraw();
+      const body = { [field]: value, reason }; if (impact) body.impact = impact;
+      try { const r = await api(PP(P.id), J("PATCH", body)); Object.assign(P, r, { tasks: P.tasks }); P.milestones = arr(P.milestones); P.risks = arr(P.risks); P.links = arr(P.links); P.changes = arr(P.changes); redraw(); toast(t("saved")); }
+      catch (e) { P[field] = prev; redraw(); if (!handleAuth(e)) toast(errText(e), "error"); throw e; }
+    }, () => redraw());
+  };
+  const name = el("input", { class: "title", type: "text", value: P.name, disabled: !canEdit, "aria-label": t("p_name"), maxlength: "120", onchange: async (e) => {
+    const v = e.target.value.trim(); if (!v) { e.target.value = P.name; return; } const prev = P.name; P.name = v;
+    const r = await guarded(() => api(PP(P.id), J("PATCH", { name: v })), () => { P.name = prev; e.target.value = prev; }); if (r) toast(t("saved")); } });
+  const f = (label, node) => el("label", { class: "f" }, label, node);
+  return [name, el("div", { class: "meta" }, deptBadge(P.department), P.kind === "hackathon" ? el("span", { class: "badge warn", text: t("k_hackathon") }) : null, (P.stats || {}).needs_review ? el("span", { class: "badge err", text: "⚑ " + t("p_needs_review") + ((P.stats.review_reasons || []).length ? ": " + P.stats.review_reasons.join(" · ") : "") }) : null),
+    el("div", { class: "row" },
+      f(t("f_owner"), personSelect(P.owner, (p) => { if (p && !sameP(p, P.owner)) patch("owner", p); }, { attrs: { disabled: !canEdit } })),
+      f(t("f_priority"), sel(["high", "medium", "low"].map((x) => [x, t("pr_" + x)]), P.priority, (v) => { if (v !== P.priority) patch("priority", v); }, { disabled: !canEdit })),
+      f(t("f_status"), sel(STATUSES.map((x) => [x, t("st_" + x)]), P.status, (v) => { if (v !== P.status) patch("status", v); }, { disabled: !canEdit })),
+      f(t("f_deadline"), el("input", { type: "date", value: P.deadline || "", disabled: !canEdit, onchange: (e) => { if (e.target.value !== (P.deadline || "")) patch("deadline", e.target.value); } }))),
+    P.deadline ? el("div", { class: "small " + (urgency(P.deadline) === "err" ? "txt-err" : "muted"), text: countdown(P.deadline) }) : null];
+}
+const TABS = {
+  overview(P) {
+    const outcome = el("input", { type: "text", value: P.target_outcome || "", maxlength: "300" });
+    const ta = el("textarea", { rows: "8" }); ta.value = P.overview || "";
+    const prev = el("div", {}, mdBox(P.overview));
+    ta.addEventListener("input", debounce(() => clear(prev, mdBox(ta.value)), 200));
+    return [el("label", { class: "f" }, t("p_outcome"), outcome), el("div", { class: "split" }, el("label", { class: "f" }, t("md_edit"), ta), el("div", {}, el("h3", { text: t("md_preview") }), prev)),
+      el("div", {}, el("button", { class: "btn", type: "button", onclick: async () => {
+        const old = [P.overview, P.target_outcome]; P.overview = ta.value; P.target_outcome = outcome.value.trim();
+        const r = await guarded(() => api(PP(P.id), J("PATCH", { overview: P.overview, target_outcome: P.target_outcome })), () => { [P.overview, P.target_outcome] = old; }); if (r) toast(t("saved")); } }, t("save")))];
+  },
+  tasks(P, redraw) {
+    const taskUrl = (tk) => PP(P.id, "/tasks/" + encodeURIComponent(tk.id));
+    const upd = async (tk, patch) => { const prev = { ...tk }; Object.assign(tk, patch); redraw(); const r = await guarded(() => api(taskUrl(tk), J("PATCH", patch)), () => { Object.assign(tk, prev); redraw(); }); if (r) toast(t("saved")); };
+    const title = el("input", { type: "text", maxlength: "200", placeholder: t("tk_title") }); let asg = null;
+    const due = el("input", { type: "date" }); const ms = sel([["", "—"]].concat(P.milestones.map((m) => [m.id, m.title])), "", () => {});
+    const add = async () => {
+      if (!title.value.trim()) { toast(t("tk_empty_title"), "error"); title.focus(); return; }
+      const body = { title: title.value.trim() }; if (asg) body.assignee = asg; if (due.value) body.due = due.value; if (ms.value) body.milestone_id = ms.value;
+      const r = await guarded(() => api(PP(P.id, "/tasks"), J("POST", body))); if (r) { P.tasks.push(r); redraw(); }
+    };
+    const msOpts = [["", "—"]].concat(P.milestones.map((m) => [m.id, m.title]));
+    return [P.tasks.length ? P.tasks.map((tk) => {
+      const open = tk.status !== "done", warn = open && !tk.assignee;
+      return el("div", { class: "li" + (open ? "" : " done") + (warn ? " warnrow" : "") },
+        el("input", { type: "checkbox", checked: !open, "aria-label": tk.title, onchange: (e) => upd(tk, { status: e.target.checked ? "done" : "open" }) }),
+        el("span", { class: "grow" }, tk.title, warn ? el("span", { class: "txt-warn small", text: "  ⚠ " + t("tk_unassigned_warn") }) : null),
+        personSelect(tk.assignee, (p) => upd(tk, { assignee: p }), { allowNone: true, attrs: { "aria-label": t("tk_assignee") } }),
+        el("input", { type: "date", value: tk.due || "", "aria-label": t("tk_due"), onchange: (e) => upd(tk, { due: e.target.value }) }),
+        P.milestones.length ? sel(msOpts, tk.milestone_id || "", (v) => upd(tk, { milestone_id: v || null }), { "aria-label": t("tk_milestone") }) : null);
+    }) : empty("tk_none"),
+    el("div", { class: "row" }, el("label", { class: "f" }, t("tk_title"), title), el("label", { class: "f" }, t("tk_assignee"), personSelect(null, (p) => { asg = p; }, { allowNone: true })), el("label", { class: "f" }, t("tk_due"), due), el("label", { class: "f" }, t("tk_milestone"), ms), el("button", { class: "btn", type: "button", onclick: add }, t("add")))];
+  },
+  milestones(P, redraw) {
+    const url = (m) => PP(P.id, "/milestones/" + encodeURIComponent(m.id));
+    const title = el("input", { type: "text", maxlength: "200" }), due = el("input", { type: "date" });
+    return [P.milestones.length ? P.milestones.map((m) => el("div", { class: "li" + (m.status === "done" ? " done" : "") },
+      el("input", { type: "checkbox", checked: m.status === "done", "aria-label": m.title, onchange: async (e) => { const prev = m.status; m.status = e.target.checked ? "done" : "pending"; redraw(); await guarded(() => api(url(m), J("PATCH", { status: m.status })), () => { m.status = prev; redraw(); }); } }),
+      el("span", { class: "grow", text: m.title }), dueBadge(m.due, m.status !== "done"),
+      el("button", { class: "btn danger sm", type: "button", "aria-label": t("remove") + " " + m.title, onclick: async () => { if (!confirm(t("confirm_rm"))) return; const i = P.milestones.indexOf(m); P.milestones.splice(i, 1); redraw(); await guarded(() => api(url(m), { method: "DELETE" }), () => { P.milestones.splice(i, 0, m); redraw(); }); } }, "✕"))) : empty("ms_none"),
+    el("div", { class: "row" }, el("label", { class: "f" }, t("ms_title"), title), el("label", { class: "f" }, t("tk_due"), due), el("button", { class: "btn", type: "button", onclick: async () => {
+      if (!title.value.trim()) { title.focus(); return; } const r = await guarded(() => api(PP(P.id, "/milestones"), J("POST", { title: title.value.trim(), due: due.value || "" }))); if (r) { P.milestones.push(r); redraw(); } } }, t("add")))];
+  },
+  risks(P, redraw) {
+    const url = (r) => PP(P.id, "/risks/" + encodeURIComponent(r.id));
+    const rank = { high: 0, medium: 1, low: 2 };
+    const title = el("input", { type: "text", maxlength: "200" }), note_ = el("input", { type: "text", maxlength: "500" }); let sev = "medium";
+    const sevSel = sel(["high", "medium", "low"].map((x) => [x, t("sev_" + x)]), "medium", (v) => { sev = v; });
+    const proposals = el("div"); const drawProps = (list) => clear(proposals, list.length ? el("div", { class: "card" }, el("h3", { text: t("rk_ai_h") }), list.map((pr) => el("div", { class: "li" },
+      el("span", { class: "badge " + (pr.severity === "high" ? "err" : pr.severity === "medium" ? "warn" : ""), text: t("sev_" + pr.severity) }), el("span", { class: "grow" }, el("b", { text: pr.title }), pr.note ? el("div", { class: "small muted", text: pr.note }) : null),
+      el("button", { class: "btn sm", type: "button", onclick: async () => { const r = await guarded(() => api(PP(P.id, "/risks"), J("POST", { title: pr.title, severity: pr.severity, note: pr.note || "", status: "open", source: "ai" }))); if (r) { P.risks.push(r); list.splice(list.indexOf(pr), 1); drawProps(list); redraw(); } } }, t("rk_accept")),
+      el("button", { class: "btn ghost sm", type: "button", onclick: () => { list.splice(list.indexOf(pr), 1); drawProps(list); } }, t("rk_dismiss"))))) : null);
+    const ask = el("button", { class: "btn ghost", type: "button", onclick: async (e) => {
+      e.target.disabled = true; e.target.textContent = t("rk_ai_busy");
+      const r = await guarded(() => api(PP(P.id, "/risks/assess"), J("POST", {})));
+      e.target.disabled = false; e.target.textContent = t("rk_ai");
+      if (r) { const list = arr(r, "proposed"); if (!list.length) toast(t("rk_ai_none")); drawProps(list); } } }, t("rk_ai"));
+    return [el("div", {}, ask), proposals,
+      P.risks.length ? P.risks.slice().sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3)).map((r) => el("div", { class: "li" + (r.status === "closed" ? " done" : "") },
+        el("span", { class: "badge " + (r.severity === "high" ? "err" : r.severity === "medium" ? "warn" : ""), text: t("sev_" + r.severity) }),
+        el("span", { class: "grow" }, el("b", { text: r.title }), r.source === "ai" ? el("span", { class: "badge info", text: " " + t("rk_src_ai") }) : null, r.note ? el("div", { class: "small muted", text: r.note }) : null),
+        sel(["open", "mitigated", "closed"].map((x) => [x, t("rs_" + x)]), r.status, async (v) => { const prev = r.status; r.status = v; redraw(); await guarded(() => api(url(r), J("PATCH", { status: v })), () => { r.status = prev; redraw(); }); }, { "aria-label": t("f_status") }),
+        el("button", { class: "btn danger sm", type: "button", "aria-label": t("remove") + " " + r.title, onclick: async () => { if (!confirm(t("confirm_rm"))) return; const i = P.risks.indexOf(r); P.risks.splice(i, 1); redraw(); await guarded(() => api(url(r), { method: "DELETE" }), () => { P.risks.splice(i, 0, r); redraw(); }); } }, "✕"))) : empty("rk_none"),
+      el("div", { class: "row" }, el("label", { class: "f" }, t("rk_title"), title), el("label", { class: "f" }, t("rk_severity"), sevSel), el("label", { class: "f" }, t("rk_note"), note_), el("button", { class: "btn", type: "button", onclick: async () => {
+        if (!title.value.trim()) { title.focus(); return; }
+        const r = await guarded(() => api(PP(P.id, "/risks"), J("POST", { title: title.value.trim(), severity: sev, note: note_.value.trim(), status: "open", source: "team" }))); if (r) { P.risks.push(r); redraw(); } } }, t("add")))];
+  },
+  links(P, redraw) {
+    const ICON = { doc: "📄", repo: "⌥", demo: "▶", video: "🎬", deck: "▦", other: "🔗" };
+    const title = el("input", { type: "text", maxlength: "200" }), url = el("input", { type: "url", placeholder: "https://" }); let kind = "doc";
+    return [P.links.length ? P.links.map((l) => el("div", { class: "li" }, el("span", { "aria-hidden": "true", text: ICON[l.kind] || ICON.other }), el("span", { class: "badge", text: t("lk_" + (ICON[l.kind] ? l.kind : "other")) }),
+      el("a", { class: "grow", href: /^https?:\/\//i.test(l.url) ? l.url : "#", target: "_blank", rel: "noopener noreferrer", text: l.title || l.url }),
+      el("button", { class: "btn danger sm", type: "button", "aria-label": t("remove") + " " + l.title, onclick: async () => { if (!confirm(t("confirm_rm"))) return; const i = P.links.indexOf(l); P.links.splice(i, 1); redraw(); await guarded(() => api(PP(P.id, "/links/" + encodeURIComponent(l.id)), { method: "DELETE" }), () => { P.links.splice(i, 0, l); redraw(); }); } }, "✕"))) : empty("lk_none"),
+    el("div", { class: "row" }, el("label", { class: "f" }, t("lk_title"), title), el("label", { class: "f" }, t("lk_url"), url), el("label", { class: "f" }, t("kind"), sel(Object.keys(ICON).map((x) => [x, t("lk_" + x)]), "doc", (v) => { kind = v; })),
+      el("button", { class: "btn", type: "button", onclick: async () => {
+        if (!/^https?:\/\//i.test(url.value.trim())) { toast(t("lk_bad"), "error"); url.focus(); return; }
+        const r = await guarded(() => api(PP(P.id, "/links"), J("POST", { title: title.value.trim() || url.value.trim(), url: url.value.trim(), kind }))); if (r) { P.links.push(r); redraw(); } } }, t("add")))];
+  },
+  hackathon(P, redraw) {
+    const H = P.hackathon = P.hackathon || {}; H.deliverables = arr(H.deliverables); H.team_roles = arr(H.team_roles);
+    const hurl = PP(P.id, "/hackathon");
+    const txt = (k, label, rows) => { const ta = el("textarea", { rows: String(rows || 3) }); ta.value = H[k] || ""; ta.addEventListener("change", async () => { const prev = H[k]; H[k] = ta.value; const r = await guarded(() => api(hurl, J("PATCH", { [k]: ta.value })), () => { H[k] = prev; ta.value = prev || ""; }); if (r) toast(t("saved")); }); return el("label", { class: "f" }, label, ta); };
+    const inp = (k, label, type) => el("label", { class: "f" }, label, el("input", { type: type || "text", value: H[k] || "", onchange: async (e) => { const prev = H[k]; H[k] = e.target.value; const r = await guarded(() => api(hurl, J("PATCH", { [k]: e.target.value })), () => { H[k] = prev; e.target.value = prev || ""; }); if (r) { toast(t("saved")); redraw(); } } }));
+    const dChange = async (d, patch) => { const prev = { ...d }; Object.assign(d, patch); const r = await guarded(() => api(hurl, J("PATCH", { deliverables: [{ id: d.id, ...patch }] })), () => { Object.assign(d, prev); redraw(); }); if (r) { toast(t("saved")); redraw(); } };
+    const done = H.deliverables.filter((d) => d.done).length;
+    const roleName = el("input", { type: "text", maxlength: "60" }); let newP = null;
+    const saveRoles = async (list, prev) => { const r = await guarded(() => api(hurl, J("PATCH", { team_roles: list })), () => { H.team_roles = prev; redraw(); }); if (r) { H.team_roles = list; redraw(); } };
+    return [
+      inp("competition", t("hk_competition")),
+      el("div", { class: "row" }, inp("official_deadline", t("hk_official"), "datetime-local"), inp("registration_open", t("hk_reg"), "date")),
+      H.official_deadline ? el("div", { class: "card" }, el("h3", { text: t("hk_countdown") }), el("div", { class: "stat " + (urgency(H.official_deadline) === "err" ? "txt-err" : urgency(H.official_deadline) === "warn" ? "txt-warn" : ""), text: countdown(H.official_deadline) })) : null,
+      txt("rules", t("hk_rules")), txt("eligibility", t("hk_elig"), 2), txt("judging_criteria", t("hk_judging")),
+      el("h3", { text: t("hk_team") }), H.team_roles.length ? H.team_roles.map((tr, i) => el("div", { class: "li" }, who(tr.person), el("span", { class: "badge", text: tr.role }),
+        el("span", { class: "grow" }), el("button", { class: "btn danger sm", type: "button", "aria-label": t("remove") + " " + pn(tr.person), onclick: () => { const prev = H.team_roles.slice(); saveRoles(prev.filter((_, j) => j !== i), prev); } }, "✕"))) : empty("hk_team_none"),
+      el("div", { class: "row" }, el("label", { class: "f" }, t("tk_assignee"), personSelect(null, (p) => { newP = p; }, { allowNone: true })), el("label", { class: "f" }, t("hk_role"), roleName),
+        el("button", { class: "btn", type: "button", onclick: () => { if (!newP || !roleName.value.trim()) return; const prev = H.team_roles.slice(); saveRoles(prev.concat([{ person: newP, role: roleName.value.trim() }]), prev); } }, t("add"))),
+      el("h3", { text: t("hk_deliv") + " " + done + "/" + H.deliverables.length + " (" + pct(done, H.deliverables.length) + "%)" }), bar(done, H.deliverables.length, "ok"),
+      H.deliverables.map((d) => el("div", { class: "li" + (d.done ? " done" : "") }, el("input", { type: "checkbox", checked: !!d.done, "aria-label": d.title, onchange: (e) => dChange(d, { done: e.target.checked }) }), el("span", { class: "grow", text: d.title }),
+        el("input", { type: "url", value: d.url || "", placeholder: "https://", "aria-label": t("hk_url"), style: "max-width:240px", onchange: (e) => dChange(d, { url: e.target.value.trim() }) }),
+        personSelect(d.owner, (p) => dChange(d, { owner: p }), { allowNone: true, attrs: { "aria-label": t("f_owner") } }))),
+      el("div", { class: "row" }, el("label", { class: "f" }, t("hk_sub"), sel(["not_started", "in_progress", "submitted", "results_pending", "won", "lost"].map((x) => [x, t("sub_" + x)]), H.submission_status || "not_started", async (v) => {
+        const prev = H.submission_status; H.submission_status = v; const r = await guarded(() => api(hurl, J("PATCH", { submission_status: v })), () => { H.submission_status = prev; redraw(); });
+        if (r) { toast(t("saved")); if (r.changes) P.changes = arr(r.changes); redraw(); } })), H.submitted_at ? el("span", { class: "small muted fixed", text: fmtDateTime(H.submitted_at) }) : null),
+      txt("results", t("hk_results"), 2)];
+  },
+  budget(P) {
+    const B = P.budget, f = (k, label) => el("label", { class: "f" }, label + " (" + (B.currency || "THB") + ")", el("input", { type: "number", min: "0", step: "any", value: String(B[k] ?? 0), "data-k": k }));
+    const notes = el("textarea", { rows: "3" }); notes.value = B.notes || "";
+    const box = el("div", { class: "row" }, f("planned", t("bg_planned")), f("spent", t("bg_spent")), f("travel", t("bg_travel")));
+    return [box, bar(B.spent || 0, B.planned || 0, (B.spent || 0) > (B.planned || 0) ? "warn" : ""), el("label", { class: "f" }, t("bg_notes"), notes),
+      el("div", {}, el("button", { class: "btn", type: "button", onclick: async () => {
+        const next = { ...B, notes: notes.value }; box.querySelectorAll("input").forEach((i) => { next[i.dataset.k] = Number(i.value) || 0; });
+        const r = await guarded(() => api(PP(P.id, "/budget"), J("PATCH", next))); if (r) { P.budget = r.budget || r; toast(t("saved")); } } }, t("save")))];
+  },
+  changes(P) {
+    const list = P.changes.slice().sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    return list.length ? list.map((c) => el("div", { class: "li" }, el("div", { class: "grow" },
+      el("div", {}, el("b", { text: t("f_" + c.field) === "f_" + c.field ? c.field : t("f_" + c.field) }), ": ", el("span", { class: "muted", text: String(c.from ?? "") }), " → ", el("b", { text: String(c.to ?? "") })),
+      el("div", { class: "small muted", text: fmtDateTime(c.at) + " · " + t("ch_by") + " " + pn(c.by) }),
+      c.reason ? el("div", { class: "small", text: t("ch_reason") + ": " + c.reason }) : null, c.impact ? el("div", { class: "small", text: t("ch_impact") + ": " + c.impact }) : null))) : empty("ch_none");
+  },
+};
+
+/* ======================= 03 MY TASKS ======================= */
+let mtFilter = "open";
+async function viewMyTasks(root, _id, stale) {
+  let tasks = [];
+  const load = async () => { const r = await api(PM("/my-tasks" + q({ status: mtFilter }))); if (stale()) return; tasks = arr(r, "tasks"); draw(); };
+  const draw = () => {
+    const shown = tasks.filter((x) => mtFilter === "done" ? x.status === "done" : x.status !== "done");
+    const groups = new Map(); for (const x of shown) { const k = x.project_id ? x.project_name || x.project_id : ""; if (!groups.has(k)) groups.set(k, { id: x.project_id, items: [] }); groups.get(k).items.push(x); }
+    const byDue = (a, b) => (a.due || "9999").localeCompare(b.due || "9999");
+    const ordered = [...groups.entries()].sort((a, b) => (a[0] === "") - (b[0] === "") || a[0].localeCompare(b[0]));
+    clear(root, el("h1", { class: "pt", text: t("n_mytasks") }),
+      el("div", { class: "chips", role: "group" }, [["open", "mt_open"], ["done", "mt_done"]].map(([k, l]) => el("button", { type: "button", "aria-pressed": String(mtFilter === k), onclick: () => { mtFilter = k; load().catch(() => {}); } }, t(l)))),
+      !ordered.length ? el("div", { class: "card" }, empty("mt_empty")) : ordered.map(([name, g]) => el("div", { class: "card" },
+        el("h2", {}, g.id ? el("a", { href: "#/projects/" + encodeURIComponent(g.id), text: name }) : t("mt_no_project")),
+        g.items.sort(byDue).map((x) => taskRow(x, { onTick: (tk, v) => tickTask(tk, v, null, draw) })))));
+  };
+  await load();
+}
+
+/* ======================= 04 INSIGHTS ======================= */
+const COLORS = ["var(--c1)", "var(--c2)", "var(--c3)", "var(--c4)", "var(--c5)", "var(--c6)"];
+function donut(entries) {
+  const total = entries.reduce((a, [, v]) => a + v, 0), R = 42, C = 2 * Math.PI * R;
+  const NS = "http://www.w3.org/2000/svg", svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100"); svg.setAttribute("width", "140"); svg.setAttribute("height", "140"); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", entries.map(([k, v]) => k + " " + v).join(", "));
+  let off = 0;
+  entries.forEach(([, v], i) => {
+    if (!v) return; const c = document.createElementNS(NS, "circle"), len = C * v / total;
+    for (const [a, b] of [["cx", 50], ["cy", 50], ["r", R], ["fill", "none"], ["stroke", COLORS[i % COLORS.length]], ["stroke-width", 14], ["stroke-dasharray", len + " " + (C - len)], ["stroke-dashoffset", -off], ["transform", "rotate(-90 50 50)"]]) c.setAttribute(a, b);
+    svg.append(c); off += len;
+  });
+  const txt = document.createElementNS(NS, "text"); txt.setAttribute("x", 50); txt.setAttribute("y", 55); txt.setAttribute("text-anchor", "middle"); txt.setAttribute("font-size", "18"); txt.setAttribute("font-weight", "700"); txt.setAttribute("fill", "currentColor"); txt.textContent = String(total); svg.append(txt);
+  return svg;
+}
+const money = (n, cur) => (Number(n) || 0).toLocaleString(locale()) + " " + (cur || "THB");
+async function viewInsights(root, _id, stale) {
+  const d = await api(PM("/insights")); if (stale()) return;
+  const dep = arr(d.progress && d.progress.by_department), bySt = Object.entries((d.progress && d.progress.by_status) || {}), ppl = arr(d.resources && d.resources.people), hk = arr(d.hackathons), bg = d.budget;
+  clear(root, el("h1", { class: "pt", text: t("n_insights") }),
+    el("div", { class: "grid2" },
+      el("div", { class: "card" }, el("h2", { text: t("i_progress") }), dep.length ? dep.map((x) => el("div", {}, el("div", { class: "kv li" }, el("b", { class: "grow", text: t("d_" + x.department) === "d_" + x.department ? x.department : t("d_" + x.department) }),
+        el("span", { class: "small muted", text: x.projects + " " + t("i_projects") + " · " + x.active + " " + t("c_active") + " · " + t("i_done_total") + " " + x.tasks_done + "/" + x.tasks_total })), bar(x.tasks_done, x.tasks_total))) : empty("i_none")),
+      el("div", { class: "card" }, el("h2", { text: t("i_status") }), bySt.length ? el("div", { class: "donutwrap" }, donut(bySt.map(([k, v]) => [t("st_" + k), v])),
+        el("div", { class: "legend" }, bySt.map(([k, v], i) => el("div", {}, el("i", { style: "background:" + COLORS[i % COLORS.length] }), t("st_" + k) + ": " + v)))) : empty("i_none"))),
+    el("div", { class: "card tblwrap" }, el("h2", { text: t("i_resources") }), ppl.length ? el("table", { class: "tbl" }, el("thead", {}, el("tr", {}, [t("i_person"), t("i_open_tasks"), t("i_projects"), ""].map((h) => el("th", { text: h })))),
+      el("tbody", {}, ppl.slice().sort((a, b) => b.open_tasks - a.open_tasks).map((x) => el("tr", {}, el("td", {}, who(x.person)), el("td", { text: String(x.open_tasks) }), el("td", { text: String(Array.isArray(x.projects) ? x.projects.length : x.projects) }),
+        el("td", {}, x.open_tasks > 8 ? el("span", { class: "badge err", text: "⚠ " + t("i_overload") }) : null))))) : empty("i_none")),
+    el("div", { class: "card tblwrap" }, el("h2", { text: t("i_hack") }), hk.length ? el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, [t("p_name"), t("i_comp"), t("p_next"), t("p_checklist"), t("hk_sub")].map((h) => el("th", { text: h })))),
+      el("tbody", {}, hk.map((x) => el("tr", { class: "click", tabindex: "0", onclick: () => { location.hash = "#/projects/" + encodeURIComponent(x.project_id); }, onkeydown: (e) => { if (e.key === "Enter") location.hash = "#/projects/" + encodeURIComponent(x.project_id); } },
+        el("td", {}, el("b", { text: x.name })), el("td", { text: x.competition || "" }), el("td", { class: urgency(x.next_deadline) === "err" ? "txt-err" : "", text: x.next_deadline ? fmtDateTime(x.next_deadline) + " · " + countdown(x.next_deadline) : "-" }),
+        el("td", {}, pct(x.checklist_done, x.checklist_total) + "% (" + x.checklist_done + "/" + x.checklist_total + ")", bar(x.checklist_done, x.checklist_total, "ok")), el("td", {}, el("span", { class: "badge", text: t("sub_" + x.submission_status) })))))) : empty("i_none")),
+    el("div", { class: "card" }, el("h2", { text: t("i_budget") }), bg ? [
+      el("div", { class: "row" }, [[t("i_planned"), bg.total_planned], [t("i_spent"), bg.total_spent]].map(([l, v]) => el("div", { class: "card" }, el("h3", { text: t("i_total") + " " + l }), el("div", { class: "stat", text: money(v, bg.currency) })))),
+      el("div", { class: "tblwrap" }, el("table", { class: "tbl" }, el("thead", {}, el("tr", {}, [t("p_name"), t("i_planned"), t("i_spent")].map((h) => el("th", { text: h })))),
+        el("tbody", {}, arr(bg, "by_project").map((x) => el("tr", {}, el("td", { text: x.name || x.project_name || x.project_id }), el("td", { text: money(x.planned, bg.currency) }), el("td", { class: (x.spent || 0) > (x.planned || 0) ? "txt-err" : "", text: money(x.spent, bg.currency) }))))))] :
+      el("div", { class: "empty", text: "🔒 " + t("i_locked") })));
+}
+
+/* ======================= 05 SETTINGS ======================= */
+async function viewSettings(root, _id, stale) {
+  settings = await api(PM("/settings")); if (stale()) return;
+  const admin = isAdmin(), org = curOrg();
+  const saveMember = async (m, patch) => { const prev = { ...m }; Object.assign(m, patch); const r = await guarded(() => api(PM("/settings"), J("PATCH", { members: [{ email: m.email, ...patch }] })), () => { Object.assign(m, prev); viewSettings(root, null, stale); }); if (r) toast(t("saved")); };
+  const mem = members(), depts = arr(settings, "departments"), tpls = arr(settings, "templates"), co = settings.company || {};
+  clear(root, el("h1", { class: "pt", text: t("n_settings") }),
+    el("div", { class: "card tblwrap" }, el("h2", { text: t("s_members") }), admin ? null : el("div", { class: "muted small", text: t("s_ro") }),
+      mem.length ? el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, [t("s_email"), t("s_role"), t("p_dept"), t("s_finance")].map((h) => el("th", { text: h })))),
+        el("tbody", {}, mem.map((m) => el("tr", {}, el("td", { text: (m.name ? m.name + " · " : "") + m.email }),
+          el("td", {}, admin ? sel(["owner", "admin", "member"].map((x) => [x, t("role_" + x)]), m.role || "member", (v) => saveMember(m, { role: v }), { "aria-label": t("s_role") }) : t("role_" + (m.role || "member"))),
+          el("td", {}, admin ? sel([["", "—"]].concat(DEPTS.map((x) => [x, t("d_" + x)])), m.department || "", (v) => saveMember(m, { department: v }), { "aria-label": t("p_dept") }) : (m.department ? t("d_" + m.department) : "—")),
+          el("td", {}, el("input", { type: "checkbox", checked: !!m.finance, disabled: !admin, "aria-label": t("s_finance"), onchange: (e) => saveMember(m, { finance: e.target.checked }) })))))) : empty("i_none")),
+    el("div", { class: "grid2" },
+      el("div", { class: "card" }, el("h2", { text: t("s_depts") }), (depts.length ? depts : DEPTS.map((k) => ({ key: k, label_th: t("d_" + k), label_en: t("d_" + k) }))).map((d) => el("div", { class: "li" }, el("span", { class: "badge info", text: d.key }), el("span", { class: "grow", text: lang === "th" ? d.label_th : d.label_en })))),
+      el("div", { class: "card" }, el("h2", { text: t("s_defaults") }), el("label", { class: "f" }, t("visibility"), sel(["team", "members"].map((x) => [x, t("v_" + x)]), (settings.defaults || {}).visibility || "team", async (v) => {
+        const prev = (settings.defaults || {}).visibility; settings.defaults = { ...(settings.defaults || {}), visibility: v };
+        const r = await guarded(() => api(PM("/settings"), J("PATCH", { defaults: { visibility: v } })), () => { settings.defaults.visibility = prev; viewSettings(root, null, stale); }); if (r) toast(t("saved")); }, { disabled: !admin })))),
+    el("div", { class: "card" }, el("h2", { text: t("s_templates") }), el("div", { class: "split" }, tpls.map((tp) => el("div", { class: "card" }, el("h3", { text: t("tpl_" + tp.kind) }),
+      el("ul", { class: "small" }, arr(tp, "sections").map((s) => el("li", { text: t(s) === s ? s : t(s) }))))))),
+    el("div", { class: "card" }, el("h2", { text: t("s_company") }), el("div", { class: "li" }, co.logo_url ? el("img", { src: co.logo_url, alt: t("s_logo"), width: "48", height: "48", style: "border-radius:10px;object-fit:cover" }) : el("span", { class: "mark", "aria-hidden": "true", text: ((co.name || (org && org.name) || "S")[0] || "S").toUpperCase() }),
+      el("b", { class: "grow", text: co.name || (org && org.name) || "" }), el("a", { class: "btn ghost sm", href: "/center" }, t("s_company_edit")))));
+}
+const VIEWS = { home: viewHome, projects: viewProjects, mytasks: viewMyTasks, insights: viewInsights, settings: viewSettings };
+
+/* ---------- demo mode (?demo=1): the whole API answered from DEMO ---------- */
+const DEMO_DATA = /*DEMO-START*/{
+  "org": {"id": "org_demo", "name": "บริษัท ตัวอย่าง จำกัด", "role": "owner"},
+  "me": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"},
+  "settings": {
+    "members": [
+      {"email": "toey@example.com", "name": "Toey", "discord_user_id": "111", "role": "owner", "department": "business", "finance": true},
+      {"email": "ploy@example.com", "name": "Ploy", "discord_user_id": "222", "role": "admin", "department": "tech", "finance": false},
+      {"email": "ken@example.com", "name": "Ken", "discord_user_id": null, "role": "member", "department": "tech", "finance": false},
+      {"email": "mild@example.com", "name": "Mild", "discord_user_id": null, "role": "member", "department": "finance", "finance": true}
+    ],
+    "departments": [
+      {"key": "tech", "label_th": "เทคโนโลยี", "label_en": "Tech"}, {"key": "business", "label_th": "ธุรกิจ", "label_en": "Business"},
+      {"key": "finance", "label_th": "การเงิน", "label_en": "Finance"}, {"key": "other", "label_th": "อื่นๆ", "label_en": "Other"}
+    ],
+    "templates": [
+      {"kind": "standard", "sections": ["sec_overview", "sec_tasks", "sec_milestones", "sec_risks", "sec_links"], "defaults": {}},
+      {"kind": "hackathon", "sections": ["sec_overview", "sec_tasks", "sec_milestones", "sec_risks", "sec_links", "sec_h1", "sec_h2", "sec_h3", "sec_h4", "sec_h5", "sec_h6"], "defaults": {}}
+    ],
+    "defaults": {"visibility": "team"},
+    "company": {"name": "บริษัท ตัวอย่าง จำกัด", "logo_url": ""}
+  },
+  "projects": [
+    {"id": "p-web001", "name": "เว็บไซต์ใหม่ / Website revamp", "kind": "standard", "department": "tech", "priority": "high", "status": "in_progress",
+     "owner": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "target_outcome": "Launch the new site with 2x faster load time", "deadline": "@-3", "visibility": "team",
+     "members": [{"person": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "role": "dev"}], "tags": ["web"],
+     "overview": "## Goal\nRebuild the **marketing website**.\n- New design\n- Faster pages\n- Thai and English", "created_at": "@-30T09:00", "updated_at": "@-1T10:00",
+     "created_by": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"},
+     "milestones": [{"id": "m1", "title": "Design sign-off", "due": "@-10", "status": "done", "owner": null}, {"id": "m2", "title": "Beta release", "due": "@2", "status": "pending", "owner": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}}],
+     "risks": [{"id": "r1", "title": "Vendor API may change", "severity": "high", "status": "open", "owner": null, "note": "Payment provider announced v3", "source": "team", "created_at": "@-5T09:00"}],
+     "links": [{"id": "l1", "title": "Design file", "url": "https://example.com/design", "kind": "doc"}, {"id": "l2", "title": "Repo", "url": "https://example.com/repo", "kind": "repo"}],
+     "hackathon": null,
+     "budget": {"currency": "THB", "planned": 250000, "spent": 180000, "notes": "Agency fees", "travel": 0},
+     "changes": [{"at": "@-4T11:00", "by": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "field": "deadline", "from": "@-10", "to": "@-3", "reason": "Vendor delay", "impact": "Launch moves a week"}]},
+    {"id": "p-crm002", "name": "ระบบ CRM ภายใน / Internal CRM", "kind": "standard", "department": "business", "priority": "medium", "status": "planned",
+     "owner": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "target_outcome": "Sales team tracks every lead", "deadline": "@45", "visibility": "members",
+     "members": [], "tags": [], "overview": "", "created_at": "@-8T09:00", "updated_at": "@-8T09:00", "created_by": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"},
+     "milestones": [{"id": "m1", "title": "Requirements", "due": "@7", "status": "pending", "owner": null}], "risks": [], "links": [], "hackathon": null,
+     "budget": {"currency": "THB", "planned": 120000, "spent": 0, "notes": "", "travel": 0}, "changes": []},
+    {"id": "p-hack003", "name": "Hackathon: Agent Cup 2026", "kind": "hackathon", "department": "tech", "priority": "high", "status": "in_progress",
+     "owner": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "target_outcome": "Submit a working demo", "deadline": "@1", "visibility": "team",
+     "members": [{"person": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "role": "dev"}], "tags": ["hack"],
+     "overview": "Build **Salid** for the contest.", "created_at": "@-14T09:00", "updated_at": "@0T08:00", "created_by": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"},
+     "milestones": [{"id": "m1", "title": "Demo video", "due": "@0", "status": "pending", "owner": null}], "risks": [], "links": [],
+     "hackathon": {"competition": "Agent Cup 2026", "official_deadline": "@1T23:59", "registration_open": "@-30", "rules": "Teams of up to 4.", "eligibility": "Open to all students and professionals.", "judging_criteria": "- Impact\n- Technical quality\n- Demo",
+       "team_roles": [{"person": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "role": "pitch"}, {"person": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "role": "dev"}],
+       "deliverables": [
+         {"id": "d1", "title": "GitHub repo", "kind": "github", "url": "https://example.com/repo", "owner": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "done": true},
+         {"id": "d2", "title": "Demo", "kind": "demo", "url": "", "owner": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "done": false},
+         {"id": "d3", "title": "Video", "kind": "video", "url": "", "owner": null, "done": false},
+         {"id": "d4", "title": "Pitch deck", "kind": "deck", "url": "", "owner": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "done": false}],
+       "submission_status": "in_progress", "submitted_at": "", "results": "", "contest_id": null},
+     "budget": {"currency": "THB", "planned": 30000, "spent": 12000, "notes": "Cloud credits", "travel": 8000}, "changes": []}
+  ],
+  "tasks": [
+    {"id": "t1", "project_id": "p-web001", "title": "Fix checkout page bug", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@-2", "status": "open", "note": "", "url": "", "milestone_id": "m2"},
+    {"id": "t2", "project_id": "p-web001", "title": "Write Thai copy", "assignee": {"email": "ken@example.com", "discord_user_id": null, "name": "Ken"}, "due": "@3", "status": "open", "note": "", "url": "", "milestone_id": null},
+    {"id": "t3", "project_id": "p-web001", "title": "Set up analytics", "assignee": null, "due": "@6", "status": "open", "note": "", "url": "", "milestone_id": null},
+    {"id": "t4", "project_id": "p-web001", "title": "Approve final design", "assignee": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "due": "@-12", "status": "done", "note": "", "url": "", "milestone_id": "m1"},
+    {"id": "t5", "project_id": "p-crm002", "title": "Interview sales team", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@5", "status": "open", "note": "", "url": "", "milestone_id": "m1"},
+    {"id": "t6", "project_id": "p-hack003", "title": "Record demo video", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@0", "status": "open", "note": "", "url": "", "milestone_id": "m1"},
+    {"id": "t7", "project_id": "p-hack003", "title": "Polish pitch deck", "assignee": {"email": "ploy@example.com", "discord_user_id": "222", "name": "Ploy"}, "due": "@1", "status": "open", "note": "", "url": "", "milestone_id": null},
+    {"id": "t8", "project_id": "", "title": "Renew domain", "assignee": {"email": "toey@example.com", "discord_user_id": "111", "name": "Toey"}, "due": "@9", "status": "open", "note": "", "url": "", "milestone_id": null}
+  ],
+  "ai_proposals": [
+    {"title": "Launch date depends on one vendor", "severity": "high", "status": "open", "note": "Add a fallback provider.", "source": "ai", "id": ""},
+    {"title": "No QA owner assigned", "severity": "medium", "status": "open", "note": "", "source": "ai", "id": ""}
+  ]
+}/*DEMO-END*/;
+function demoResolve(v) {
+  if (typeof v === "string") {
+    const m = v.match(/^@([+-]?\d+)(T\d\d:\d\d)?$/); if (!m) return v;
+    const base = new Date(todayStr() + "T12:00:00+07:00"); base.setUTCDate(base.getUTCDate() + Number(m[1]));
+    return new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(base) + (m[2] || "");
+  }
+  if (Array.isArray(v)) return v.map(demoResolve);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, demoResolve(x)]));
+  return v;
+}
+let DB = null;
+function demoStats(p) {
+  const tk = DB.tasks.filter((x) => x.project_id === p.id), od = tk.filter((x) => x.status !== "done" && x.due && x.due < todayStr()).length;
+  const review = [];
+  if (p.priority === "high" && p.deadline && p.deadline < todayStr() && !["completed", "cancelled"].includes(p.status)) review.push(lang === "th" ? "ความสำคัญสูงและเลยกำหนด" : "high priority and overdue");
+  return { tasks_total: tk.length, tasks_done: tk.filter((x) => x.status === "done").length, tasks_overdue: od, tasks_unassigned: tk.filter((x) => x.status !== "done" && !x.assignee).length,
+    milestones_done: p.milestones.filter((m) => m.status === "done").length, milestones_total: p.milestones.length, needs_review: review.length > 0, review_reasons: review };
+}
+function demoCard(p) {
+  const { milestones, risks, links, changes, overview, budget, hackathon, ...rest } = p;
+  const c = { ...rest, stats: demoStats(p) };
+  if (hackathon) { const dl = hackathon.deliverables; c.hackathon = { submission_status: hackathon.submission_status, official_deadline: hackathon.official_deadline, checklist_done: dl.filter((d) => d.done).length, checklist_total: dl.length }; }
+  return c;
+}
+const demoProject = (id) => DB.projects.find((p) => p.id === id);
+const demoTask = (x) => { const p = demoProject(x.project_id); return { ...x, project_name: p ? p.name : "" }; };
+const mine = (x) => isMe(x.assignee);
+function demoApi(method, path, body) {
+  return new Promise((resolve, reject) => setTimeout(() => {
+    try { resolve(JSON.parse(JSON.stringify(demoRoute(method, path.replace(/\?.*$/, ""), new URLSearchParams(path.split("?")[1] || ""), body)))); }
+    catch (e) { reject(e instanceof ApiError ? e : new ApiError(String(e.message || e), 500)); }
+  }, 30));
+}
+function demoRoute(method, path, qs, body) {
+  if (!DB) { DB = demoResolve(DEMO_DATA); }
+  if (path === "/api/center/me") return { email: DB.me.email, is_super: false, orgs: [DB.org] };
+  let m = path.match(/^\/api\/center\/orgs\/[^/]+\/pm(\/.*)?$/); if (!m) throw new ApiError("not found", 404);
+  const sub = m[1] || "", today = todayStr(), soon = new Date(Date.now() + 14 * 864e5);
+  const S_ = DB.settings, visible = DB.projects;
+  if (sub === "/settings") { if (method === "PATCH") { for (const u of body.members || []) Object.assign(S_.members.find((x) => x.email === u.email) || {}, u); if (body.defaults) Object.assign(S_.defaults, body.defaults); } return S_; }
+  if (sub === "/home") {
+    const my = DB.tasks.filter((x) => mine(x) && x.status !== "done").sort((a, b) => (a.due || "9").localeCompare(b.due || "9"));
+    const urgent = DB.tasks.filter((x) => x.status !== "done" && x.due && parseWhen(x.due) - Date.now() < 3 * 864e5 && (mine(x) || demoProject(x.project_id)));
+    const cards = visible.map(demoCard), dls = [];
+    for (const p of visible) { if (p.deadline) dls.push({ when: p.deadline, kind: "project", project_id: p.id, project_name: p.name, title: p.name });
+      for (const ms of p.milestones) if (ms.status !== "done" && ms.due) dls.push({ when: ms.due, kind: "milestone", project_id: p.id, project_name: p.name, title: ms.title });
+      if (p.hackathon && p.hackathon.official_deadline) dls.push({ when: p.hackathon.official_deadline, kind: "hackathon", project_id: p.id, project_name: p.name, title: p.hackathon.competition }); }
+    return { me: DB.me, counts: { projects: cards.length, active: cards.filter((c) => c.status === "in_progress").length, needs_review: cards.filter((c) => c.stats.needs_review).length, my_open_tasks: my.length },
+      my_tasks: my.slice(0, 10).map(demoTask), urgent_tasks: urgent.map(demoTask), at_risk: cards.filter((c) => c.stats.needs_review),
+      deadlines: dls.filter((x) => { const d = parseWhen(x.when); return d && dayOf(x.when) >= today && d <= soon; }).sort((a, b) => a.when.localeCompare(b.when)) };
+  }
+  if (sub === "/projects" && method === "GET") {
+    const f = { dep: qs.get("department"), kind: qs.get("kind"), status: qs.get("status"), q: (qs.get("q") || "").toLowerCase(), mine: qs.get("mine") };
+    return { projects: visible.filter((p) => (!f.dep || p.department === f.dep) && (!f.kind || p.kind === f.kind) && (!f.status || p.status === f.status) && (!f.q || p.name.toLowerCase().includes(f.q)) && (!f.mine || isMe(p.owner) || p.members.some((x) => isMe(x.person)))).map(demoCard) };
+  }
+  if (sub === "/projects" && method === "POST") {
+    const id = "p-" + Math.random().toString(16).slice(2, 8), hack = body.kind === "hackathon";
+    const p = { id, workspace: DB.org.id, kind: "standard", status: "planned", target_outcome: "", deadline: "", visibility: "team", members: [], tags: [], overview: "", created_at: new Date().toISOString(), updated_at: new Date().toISOString(), created_by: DB.me, milestones: [], risks: [], links: [], changes: [], hackathon: null, budget: { currency: "THB", planned: 0, spent: 0, notes: "", travel: 0 }, ...body };
+    if (hack) p.hackathon = { competition: "", official_deadline: "", registration_open: "", rules: "", eligibility: "", judging_criteria: "", team_roles: [], submission_status: "not_started", submitted_at: "", results: "", contest_id: null,
+      deliverables: ["GitHub", "Demo", "Video", "Pitch deck"].map((x, i) => ({ id: "d" + (i + 1), title: x, kind: "other", url: "", owner: null, done: false })) };
+    DB.projects.push(p); return p;
+  }
+  if (sub === "/my-tasks") { const st = qs.get("status"); return { tasks: DB.tasks.filter((x) => mine(x) && (!st || (st === "done") === (x.status === "done"))).map(demoTask) }; }
+  if (sub === "/insights") {
+    const cards = visible.map(demoCard), by = {};
+    for (const c of cards) { const k = by[c.department] ||= { department: c.department, projects: 0, active: 0, completed: 0, tasks_done: 0, tasks_total: 0 }; k.projects++; if (c.status === "in_progress") k.active++; if (c.status === "completed") k.completed++; k.tasks_done += c.stats.tasks_done; k.tasks_total += c.stats.tasks_total; }
+    const st = {}; for (const c of cards) st[c.status] = (st[c.status] || 0) + 1;
+    const ppl = new Map(); for (const x of DB.tasks) if (x.status !== "done" && x.assignee) { const k = personKey(x.assignee), e = ppl.get(k) || { person: x.assignee, open_tasks: 0, projects: [] }; e.open_tasks++; if (x.project_id && !e.projects.includes(x.project_id)) e.projects.push(x.project_id); ppl.set(k, e); }
+    return { progress: { by_department: Object.values(by), by_status: st }, resources: { people: [...ppl.values()], by_department_people: {} },
+      hackathons: cards.filter((c) => c.hackathon).map((c) => ({ project_id: c.id, name: c.name, competition: demoProject(c.id).hackathon.competition, next_deadline: c.hackathon.official_deadline, checklist_done: c.hackathon.checklist_done, checklist_total: c.hackathon.checklist_total, submission_status: c.hackathon.submission_status })),
+      budget: { by_project: visible.filter((p) => p.budget).map((p) => ({ project_id: p.id, name: p.name, planned: p.budget.planned, spent: p.budget.spent })), total_planned: visible.reduce((a, p) => a + p.budget.planned, 0), total_spent: visible.reduce((a, p) => a + p.budget.spent, 0), currency: "THB" } };
+  }
+  if (!(m = sub.match(/^\/projects\/([^/]+)(?:\/(\w+)(?:\/([^/]+))?)?$/))) throw new ApiError("not found", 404);
+  const p = demoProject(decodeURIComponent(m[1])); if (!p) throw new ApiError("not found", 404);
+  const [, , what, rid] = m, rec = (list) => list.find((x) => x.id === decodeURIComponent(rid || ""));
+  const full = () => ({ ...p, stats: demoStats(p), tasks: DB.tasks.filter((x) => x.project_id === p.id) });
+  const logChange = (field, from, to) => p.changes.push({ at: new Date().toISOString(), by: DB.me, field, from, to, reason: body.reason || "", impact: body.impact || "" });
+  if (!what) {
+    if (method === "DELETE") { DB.projects.splice(DB.projects.indexOf(p), 1); return null; }
+    if (method === "PATCH") {
+      for (const f of ["status", "owner", "deadline", "priority"]) if (f in body && JSON.stringify(body[f]) !== JSON.stringify(p[f])) { if (!body.reason) throw new ApiError("reason_required", 422); logChange(f, f === "owner" ? pn(p[f]) : p[f], f === "owner" ? pn(body[f]) : body[f]); }
+      for (const f of ["name", "status", "owner", "deadline", "priority", "overview", "target_outcome", "visibility"]) if (f in body) p[f] = body[f];
+    }
+    return full();
+  }
+  const lists = { tasks: DB.tasks, milestones: p.milestones, risks: p.risks, links: p.links };
+  if (what === "tasks") {
+    if (method === "GET") return { tasks: full().tasks };
+    if (method === "POST") { const x = { id: "t" + Date.now(), project_id: p.id, assignee: null, due: "", status: "open", note: "", url: "", milestone_id: null, ...body }; DB.tasks.push(x); return x; }
+    const x = DB.tasks.find((y) => y.id === decodeURIComponent(rid) && y.project_id === p.id); if (!x) throw new ApiError("not found", 404); Object.assign(x, body); return x;
+  }
+  if (what === "risks" && rid === "assess") return { proposed: DB.ai_proposals };
+  if (what in lists) {
+    const L = lists[what];
+    if (method === "POST") { const x = { id: what[0] + Date.now(), owner: null, ...body }; if (what === "milestones") x.status = "pending"; L.push(x); return x; }
+    const x = rec(L); if (!x) throw new ApiError("not found", 404);
+    if (method === "DELETE") { L.splice(L.indexOf(x), 1); return null; }
+    Object.assign(x, body); return x;
+  }
+  if (what === "hackathon") {
+    const H = p.hackathon; if (!H) throw new ApiError("not a hackathon", 422);
+    for (const [k, v] of Object.entries(body)) {
+      if (k === "deliverables") for (const u of v) Object.assign(H.deliverables.find((d) => d.id === u.id) || {}, u);
+      else { if (k === "submission_status" && v !== H[k]) { logChange("submission_status", H[k], v); if (v === "submitted") H.submitted_at = new Date().toISOString(); } H[k] = v; }
+    }
+    return { ...H, changes: p.changes };
+  }
+  if (what === "budget") { p.budget = { ...p.budget, ...body }; return p.budget; }
+  throw new ApiError("not found", 404);
+}
+
+/* ---------- boot ---------- */
+$("lang").addEventListener("click", () => setLang(lang === "th" ? "en" : "th"));
+$("login-lang").addEventListener("click", () => setLang(lang === "th" ? "en" : "th"));
+$("signout").addEventListener("click", () => { if (window.google && google.accounts) google.accounts.id.disableAutoSelect(); toLogin(""); });
+$("org-switch").addEventListener("change", async (e) => { orgId = e.target.value; try { await loadOrgData(); } catch (x) { handleAuth(x); } route(); });
+window.addEventListener("hashchange", route);
+applyStatic();
+if (DEMO) {
+  $("demobar").hidden = false; $("demobar").textContent = "DEMO · ข้อมูลตัวอย่าง / sample data";
+  token = "demo"; start();
+} else { toLogin(""); }
+</script>
+</body>
+</html>
