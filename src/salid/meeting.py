@@ -2486,6 +2486,11 @@ class MeetingManager:
         `bare`: the name was said with no question; unless someone addresses her within
         `engaged_bare_timeout_seconds` she goes back to listening (a running conversation is not
         shortened by a bare name)."""
+        if on and self._listen_only(s):
+            # Listen-only: she takes requests ("Salid, look up X" -> a typed result) but never
+            # opens a conversation, so no engaged state and no "talking with" / "back to
+            # listening" lines (the owner's rule, 2026-10-18).
+            return
         bare = bare and on and not (s.engaged and not s.engaged_bare)
         s.engaged_bare = bare
         span = (
