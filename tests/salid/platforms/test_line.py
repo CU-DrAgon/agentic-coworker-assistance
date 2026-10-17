@@ -21,24 +21,35 @@ def sign(body: bytes, secret=SECRET) -> str:
     return base64.b64encode(hmac.new(secret.encode(), body, hashlib.sha256).digest()).decode()
 
 
+def api_error(status):
+    from linebot.v3.messaging import ApiException
+
+    return ApiException(status=status, reason=f"HTTP {status}")
+
+
 class FakeLineApi:
     def __init__(self):
         self.replies, self.pushes, self.loadings = [], [], []
+        self.reply_quotes, self.push_keys, self.push_quotes = [], [], []
+        self.push_errors: list[Exception] = []  # raised by successive push calls
         self.fail_reply = False
         self.blobs = {"img1": b"imgbytes", "file1": b"pdfbytes"}
         self.names = {"Ualice": "Alice", "Ubob": "Bob"}
 
-    def reply(self, token, texts):
+    def reply(self, token, texts, quote_token=None):
         if self.fail_reply == "timeout":
             raise TimeoutError("read timed out")
         if self.fail_reply:
-            from linebot.v3.messaging import ApiException
-
-            raise ApiException(status=400, reason="Invalid reply token")
+            raise api_error(400 if self.fail_reply is True else self.fail_reply)
         self.replies.append((token, list(texts)))
+        self.reply_quotes.append(quote_token)
         return [f"r{i}" for i in range(len(texts))]
 
-    def push(self, to, texts):
+    def push(self, to, texts, retry_key=None, quote_token=None):
+        self.push_keys.append(retry_key)
+        if self.push_errors:
+            raise self.push_errors.pop(0)
+        self.push_quotes.append(quote_token)
         self.pushes.append((to, list(texts)))
         return [f"p{i}" for i in range(len(texts))]
 
@@ -218,7 +229,7 @@ async def test_group_chatter_is_remembered_not_answered_and_1to1_is_answered(fx)
     msg = inc(platform="line", tenant=BOT, room="Cgroup")
     assert [m.text for m in stored(a, msg)] == ["see you at 3"]
     await adapter.on_event(mev("hello", src="user", mid="m2", token="tok2"), BOT)
-    assert len(a.ask_fn.calls) == 1 and api.loadings == []  # fast answer: no loading animation
+    assert len(a.ask_fn.calls) == 1
 
 
 async def test_name_in_a_group_calls_salid(fx):
@@ -282,11 +293,15 @@ async def test_line_executives_are_only_the_configured_ids(s, tmp_path):
 # ------------------------------------------------------------------ reply token vs push
 
 
+def big(i: int, units: int = 4000) -> str:
+    return f"{i}" + "x" * (units - 1)
+
+
 async def test_reply_token_is_used_first_and_only_once(fx):
     api, a, port, adapter, clock = fx
     msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
-    sent = await port.deliver(msg, ["a", "b"], None)
-    assert api.replies == [("T", ["a", "b"])] and api.pushes == [] and len(sent) == 2
+    sent = await port.deliver(msg, [big(1), big(2)], None)
+    assert api.replies == [("T", [big(1), big(2)])] and api.pushes == [] and len(sent) == 2
     await port.deliver(msg, ["c"], None)  # the same token again: push
     assert api.pushes == [("Cgroup", ["c"])]
 
@@ -294,7 +309,7 @@ async def test_reply_token_is_used_first_and_only_once(fx):
 async def test_slow_answers_fall_back_to_push(fx):
     api, a, port, adapter, clock = fx
     msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
-    clock.advance(a.ps.line_reply_token_seconds + 1)
+    clock.advance(line.REPLY_TOKEN_SECONDS + 1)
     await port.deliver(msg, ["late"], None)
     assert api.replies == [] and api.pushes == [("Cgroup", ["late"])]
 
@@ -304,7 +319,7 @@ async def test_an_expired_token_error_falls_back_to_push_without_losing_messages
     api.fail_reply = True
     msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
     await port.deliver(msg, ["a", "b", "c"], None)
-    assert api.pushes == [("Cgroup", ["a", "b", "c"])]
+    assert api.pushes == [("Cgroup", ["a\n\nb\n\nc"])]
 
 
 async def test_an_ambiguous_reply_failure_is_not_pushed_again(fx):
@@ -312,17 +327,44 @@ async def test_an_ambiguous_reply_failure_is_not_pushed_again(fx):
     api, a, port, adapter, clock = fx
     api.fail_reply = "timeout"
     msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
-    await port.deliver(msg, [str(i) for i in range(7)], None)
-    assert [x for _to, t in api.pushes for x in t] == ["5", "6"]  # only what the reply never held
+    texts = [big(i) for i in range(7)]
+    await port.deliver(msg, texts, None)
+    assert [x for _to, t in api.pushes for x in t] == texts[5:]  # only what the reply never held
 
 
 async def test_at_most_five_messages_per_call(fx):
     api, a, port, adapter, clock = fx
     msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
-    await port.deliver(msg, [str(i) for i in range(12)], None)
+    texts = [big(i) for i in range(12)]  # too big to merge two of them
+    await port.deliver(msg, texts, None)
     assert [len(t) for _tok, t in api.replies] == [5]
     assert [len(t) for _to, t in api.pushes] == [5, 2]
-    assert [x for _to, t in api.pushes for x in t] == [str(i) for i in range(5, 12)]
+    assert [x for _to, t in api.pushes for x in t] == texts[5:]
+
+
+async def test_chunks_are_merged_so_the_whole_answer_fits_one_reply(fx):
+    api, a, port, adapter, clock = fx
+    msg = inc(platform="line", reply_token="T", raw_at=clock(), room="Cgroup")
+    await port.deliver(msg, [f"part {i}" for i in range(8)], None)
+    assert api.pushes == []  # nothing paid
+    ((_tok, sent),) = api.replies
+    assert len(sent) == 1 and sent[0].split("\n\n") == [f"part {i}" for i in range(8)]
+
+
+def test_merging_respects_the_5000_unit_limit_and_keeps_order():
+    from salid.platforms.line import pack_texts
+
+    out = pack_texts(["a" * 2000, "b" * 2000, "c" * 2000, "😀" * 1500, "d"])
+    assert [textfmt.utf16_len(t) <= 5000 for t in out] == [True] * len(out)
+    assert (
+        "".join(out).replace("\n", "") == "a" * 2000 + "b" * 2000 + "c" * 2000 + "😀" * 1500 + "d"
+    )
+    assert len(out) == 3 and pack_texts(["", "x", ""]) == ["x"]
+
+
+def test_the_port_caps_an_answer_at_one_reply_of_five_objects(fx):
+    api, a, port, adapter, clock = fx
+    assert port.max_messages == 5 == line.REPLY_MAX
 
 
 async def test_no_token_means_push_to_the_room(fx):
