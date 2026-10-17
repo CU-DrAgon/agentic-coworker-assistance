@@ -52,14 +52,17 @@ saved the document, `digest_time` and `exec_role_names` *override* the env value
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import secrets
+import sqlite3
 import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -792,6 +795,100 @@ class MemoryGuildStore(GuildStore):
             return fn(MemoryFirestore._Txn())
 
 
+class SqliteFirestore:
+    """`MemoryFirestore`'s interface on one SQLite table, so guild settings and link codes
+    survive restarts in local mode. Rows live in `salid_guild_docs (collection, id, doc json)`
+    in the same file as the ledger / DocStore. One connection, serialised by `_db_lock`;
+    `lock` is the transaction lock (`SqliteGuildStore._in_transaction`)."""
+
+    class _Ref:
+        def __init__(self, db: SqliteFirestore, col: str, doc_id: str):
+            self.db, self.col, self.id = db, col, doc_id
+
+        def get(self, **_):
+            return MemoryFirestore._Snap(self.id, self.db._read(self.col, self.id))
+
+        def set(self, data, merge: bool = False):
+            with self.db._db_lock:
+                cur = self.db._read(self.col, self.id) if merge else None
+                self.db._write(self.col, self.id, {**(cur or {}), **data})
+
+        def update(self, fields):
+            with self.db._db_lock:
+                cur = self.db._read(self.col, self.id)
+                if cur is None:
+                    raise KeyError(self.id)
+                cur.update(fields)
+                self.db._write(self.col, self.id, cur)
+
+    class _Col:
+        def __init__(self, db: SqliteFirestore, name: str, filters=()):
+            self.db, self.name, self.filters = db, name, tuple(filters)
+
+        def document(self, doc_id: str):
+            return SqliteFirestore._Ref(self.db, self.name, doc_id)
+
+        def where(self, *, filter):
+            return SqliteFirestore._Col(self.db, self.name, (*self.filters, filter))
+
+        def stream(self):
+            return iter(
+                MemoryFirestore._Snap(i, d)
+                for i, d in self.db._read_all(self.name)
+                if all(f.value in d.get(f.field_path, []) for f in self.filters)
+            )
+
+    _Txn = MemoryFirestore._Txn
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self.lock = threading.Lock()
+        self._db_lock = threading.RLock()
+        if path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
+        with self._db_lock, self._conn:
+            self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS salid_guild_docs (collection TEXT NOT NULL, "
+                "id TEXT NOT NULL, doc TEXT NOT NULL, PRIMARY KEY (collection, id))"
+            )
+
+    def _read(self, col: str, doc_id: str) -> dict | None:
+        with self._db_lock:
+            row = self._conn.execute(
+                "SELECT doc FROM salid_guild_docs WHERE collection = ? AND id = ?", (col, doc_id)
+            ).fetchone()
+        return None if row is None else json.loads(row[0])
+
+    def _read_all(self, col: str) -> list[tuple[str, dict]]:
+        with self._db_lock:
+            rows = self._conn.execute(
+                "SELECT id, doc FROM salid_guild_docs WHERE collection = ?", (col,)
+            ).fetchall()
+        return [(i, json.loads(d)) for i, d in rows]
+
+    def _write(self, col: str, doc_id: str, data: dict) -> None:
+        with self._db_lock, self._conn:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO salid_guild_docs (collection, id, doc) VALUES (?, ?, ?)",
+                (col, doc_id, json.dumps(data, default=str)),
+            )
+
+    def collection(self, name: str):
+        return SqliteFirestore._Col(self, name)
+
+
+class SqliteGuildStore(GuildStore):
+    """`GuildStore` on `SqliteFirestore`: local mode (SALID_STORE=sqlite), persists across restarts."""
+
+    def __init__(self, path: str, **kw) -> None:
+        super().__init__(client=SqliteFirestore(path), **kw)
+
+    def _in_transaction(self, fn):
+        with self.client.lock:
+            return fn(SqliteFirestore._Txn())
+
+
 class BotGuildSettings:
     """What the bot consults, per guild. Cached for `ttl` seconds and fails open."""
 
@@ -972,7 +1069,11 @@ class BotGuildSettings:
 
 
 def make_guild_store(settings) -> GuildStore:
-    """Firestore only when SALID_STORE=firestore; otherwise an in-memory store."""
-    if settings.store != "firestore":
-        return MemoryGuildStore(collection=settings.guild_collection)
-    return GuildStore(collection=settings.guild_collection, project=settings.gcp_project)
+    """Firestore when SALID_STORE=firestore; else SQLite in the ledger file (`db_path`);
+    in memory only for `:memory:` / no path (tests)."""
+    if settings.store == "firestore":
+        return GuildStore(collection=settings.guild_collection, project=settings.gcp_project)
+    path = getattr(settings, "db_path", None)
+    if path and path != ":memory:":
+        return SqliteGuildStore(path, collection=settings.guild_collection)
+    return MemoryGuildStore(collection=settings.guild_collection)
