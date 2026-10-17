@@ -5,7 +5,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, concept, decks, votes, vote_offers, reminders}: bool, all
+                         private_channels, maps, search, travel, markets, ideas, company_learning, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, concept, decks, votes, vote_offers, reminders, projects}: bool, all
                          default true
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
@@ -112,6 +112,7 @@ FEATURES = (
     "votes",
     "vote_offers",
     "reminders",
+    "projects",
 )
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
@@ -198,6 +199,7 @@ class Features(BaseModel):
         True  # call_vote & co: button ballots in each voter's private channel (salid.votes)
     )
     vote_offers: bool = True  # offer a vote from untagged talk (needs `votes`)
+    projects: bool = True  # project_create & co: PM dashboard projects (salid.projects)
     reminders: bool = True  # set_reminder & co: one-off and recurring reminders (salid.reminders)
 
 

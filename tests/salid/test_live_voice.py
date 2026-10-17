@@ -613,6 +613,7 @@ async def test_chat_and_voice_build_the_same_agent_tools(lv, tool_names, monkeyp
     assert voice == chat - {"concept_image"}  # the one exception: an image cannot be spoken
     assert {"create_deck", "idea_export", "business_framework", "wiki_write"} <= voice
     assert {"send_dm", "deliver_file", "read_web"} <= voice
+    assert {"project_create", "project_show", "my_projects_and_tasks"} <= voice  # PM projects
     await lv.mgr.end((1000, 77))
 
 

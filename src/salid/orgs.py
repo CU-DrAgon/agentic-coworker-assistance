@@ -83,6 +83,8 @@ class Member(BaseModel):
     email: str
     role: str = "member"  # owner | admin | member
     discord_user_id: str | None = None
+    department: str = ""  # PM dashboard: tech | business | finance | other | ""
+    finance: bool = False  # PM dashboard: Authorized Approver, may see budgets
 
 
 class License(BaseModel):

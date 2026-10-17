@@ -38,6 +38,10 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "close_vote",
         # reminders are the speaker's own data and the speaker asked aloud, so they bind to the
         # speaker (unlike the other reads, which stay at the room's scope)
+        "project_create",  # PM projects: the speaker owns / changes them with their own rights
+        "project_update",
+        "project_add_task",
+        "my_projects_and_tasks",
         "set_reminder",
         "cancel_reminder",
         "list_reminders",

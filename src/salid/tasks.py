@@ -59,6 +59,9 @@ class Task(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     done_at: str = ""
+    project_id: str = ""  # PM dashboard: the project this task belongs to (salid.projects)
+    assignee_email: str = ""  # web members are assigned by email (assignee_id stays a Discord id)
+    milestone_id: str = ""
 
 
 def _now_iso() -> str:
@@ -116,6 +119,16 @@ def match_person(name: str, people: dict[int, str]) -> int:
     return loose[0] if len(loose) == 1 else 0
 
 
+def project_in_text(projects: list, text: str) -> str:
+    """Id of the project an action item names ("โปรเจกต์ X" / "project X"), else ""."""
+    if not projects:
+        return ""
+    from .projects import project_in_text as find
+
+    p = find(projects, text)
+    return p.id if p else ""
+
+
 def _norm(s: str) -> str:
     return re.sub(r"[\W_]+", "", s.casefold())
 
@@ -170,6 +183,7 @@ class TaskRepo:
         *,
         status: str | None = "open",
         assignee_id: int | None = None,
+        project_id: str | None = None,
     ) -> list[Task]:
         rows = self.docs.find(TASKS, guild_id)
         out = [
@@ -177,8 +191,26 @@ class TaskRepo:
             for d in rows
             if (status in (None, "all") or d.get("status") == status)
             and (assignee_id is None or d.get("assignee_id") == assignee_id)
+            and (project_id is None or d.get("project_id", "") == project_id)
         ]
         return sorted(out, key=lambda t: (t.due or "9999-99-99", t.created_at, t.id))
+
+    def for_person(
+        self,
+        guild_id: int,
+        email: str | None,
+        discord_id: int | str | None,
+        *,
+        status: str | None = "open",
+    ) -> list[Task]:
+        """Tasks assigned to a person known by web email and / or Discord id."""
+        e = (email or "").strip().lower()
+        d = int(discord_id) if str(discord_id or "").isdigit() else 0
+        return [
+            t
+            for t in self.list(guild_id, status=status)
+            if (e and t.assignee_email.lower() == e) or (d and t.assignee_id == d)
+        ]
 
     def save(self, task: Task) -> Task:
         task.updated_at = _now_iso()
@@ -198,6 +230,8 @@ class TaskRepo:
                 changed = False
                 if task.due and not old.due and old.status == "open":
                     old.due, changed = task.due, True
+                if task.project_id and not old.project_id:
+                    old.project_id, changed = task.project_id, True
                 if task.assignee_id and not old.assignee_id:
                     old.assignee_id, old.assignee_name, changed = (
                         task.assignee_id,
@@ -286,6 +320,7 @@ class TaskTracker:
         link = next((m.jump_url for m in messages if m.jump_url), "")
         kind = "dm" if is_dm_scope(channel_id) else self.kind_of(guild_id, channel_id)
         created = []
+        project_ids = None  # loaded once, only if there is an item
         for a in items[:MAX_TASKS_PER_SUMMARY]:
             who = (a.get("who") or "").strip()
             uid = match_person(who, people)
@@ -302,6 +337,9 @@ class TaskTracker:
                 source_day=day,
                 created_from=kind,
             )
+            if project_ids is None:
+                project_ids = self._projects(guild_id)
+            task.project_id = project_in_text(project_ids, task.title) or ""
             t, new = self.repo.add(task)
             if new:
                 created.append(t)
@@ -314,6 +352,16 @@ class TaskTracker:
                 day,
             )
         return created
+
+    def _projects(self, guild_id: int) -> list:
+        """The guild's running projects (for "โปรเจกต์ X" in an action item); [] on any trouble."""
+        try:
+            from .projects import ProjectRepo
+
+            return ProjectRepo(self.repo.docs).list(guild_id)
+        except Exception:
+            logger.warning("project lookup for tasks failed", exc_info=True)
+            return []
 
     def mark_done(self, guild_id: int, messages: list[MemoryMessage]) -> list[str]:
         """One cheap-model call for the whole batch of new messages. Returns the ids marked."""

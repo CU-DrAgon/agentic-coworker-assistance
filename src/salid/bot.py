@@ -146,6 +146,7 @@ from .polls_bot import PollsMixin
 from .private_chat import PRIVATE_COMMANDS
 from .private_chat_bot import PrivateChatMixin
 from .profiles import ProfileMixin, effective_language, profile_block
+from .projects_bot import ProjectsMixin
 from .promo_bot import PromoMixin
 from .qa import FileActions, FileInput, MemoryTools, ask, file_mime, is_no_reply, select_files
 from .quotation_bot import QuotationMixin
@@ -346,6 +347,7 @@ class SecretaryBot(
     TravelMixin,
     MarketsMixin,
     ReminderMixin,
+    ProjectsMixin,
     ToneMixin,
     IdeasMixin,
     QuotationMixin,
@@ -515,6 +517,7 @@ class SecretaryBot(
         self._travel_init()  # currency + flights (salid.travel_bot)
         self._markets_init()  # stock / gold / news tools and alerts (salid.markets_bot)
         self._reminders_init()  # personal reminders, once and recurring (salid.reminders_bot)
+        self._projects_init()  # PM dashboard projects (salid.projects_bot)
         self._ideas_init()  # idea / project documents (salid.ideas_bot)
         self._quotation_init()  # quotations (salid.quotation_bot)
         self._company_init()  # company playbook + domain packs (salid.company_brain_bot)
@@ -2208,6 +2211,7 @@ class SecretaryBot(
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._reminder_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._project_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._tone_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),

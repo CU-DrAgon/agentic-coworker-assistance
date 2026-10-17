@@ -43,6 +43,7 @@ from .memory_index import entries_for
 from .memory_store import MAX_ROWS, MemoryMessage, MemoryStore
 from .memory_summary import render_summary, summary_items
 from .places import PLACES_PROMPT
+from .projects import PROJECTS_PROMPT
 from .reminders import REMINDERS_PROMPT
 from .search import SEARCH_PROMPT
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
@@ -1206,6 +1207,7 @@ CAPABILITIES_PROMPT = (
     "โหวตด้วยโพลของ Discord (create_poll / poll_results) และสำรวจความเห็นรายคนทาง DM (start_form / form_results) ได้ โดยสลิดยืนยันกับผู้ขอก่อนส่ง DM. "
     "จำสถานที่สำคัญของบริษัท (สำนักงานใหญ่ สาขา โกดัง) และสถานที่ส่วนตัวเมื่อเจ้าตัวขอให้จำ แล้วบอกที่อยู่/ลิงก์แผนที่ตอนมีคนถามว่าที่ไหน (find_place) โดยเห็นได้เฉพาะคนที่มีสิทธิ์. "
     "ตั้งเตือนความจำให้ได้ทั้งครั้งเดียวและเตือนซ้ำ (เช่น “อีก 2 ชั่วโมงเตือนประชุม”, “เตือนออกกำลังกายทุก 2 ชั่วโมง”, “ทุกวันจันทร์ 8 โมงเตือนส่งรายงาน”) แล้วสลิดทักไปที่ห้องส่วนตัวหรือ DM ตามเวลา ดูหรือยกเลิกได้โดยบอกสลิด (set_reminder / list_reminders / cancel_reminder). "
+    "เปิดและดูแลโปรเจกต์ของบริษัทให้ได้ (สร้างโปรเจกต์ใหม่ ดูสถานะ เพิ่มงาน เปลี่ยนสถานะ/กำหนดส่ง/เจ้าของโดยบันทึกเหตุผล, “โปรเจกต์ของฉัน”) ซึ่งเป็นชุดเดียวกับหน้า /pm. "
     "ตอบสั้นๆ ไม่เกิน 3-4 ประโยค (ไม่ใช้ bullet หัวข้อ หรือตัวหนา; ถ้าถามเป็นอังกฤษก็ตอบอังกฤษสั้นๆ แบบเดียวกัน) ไม่ต้องไล่เป็นคู่มือหรือรายการยาว และบอกด้วยว่าอยากเปลี่ยนการตั้งค่าอะไร (ห้องไหนไม่ต้องตอบ ภาษา ความจำกี่วัน) แค่บอกสลิดเป็นคำพูดก็ได้ "
     "ไม่ต้องจำคำสั่ง. อย่าอ้างว่าทำได้มากกว่านี้. รายละเอียด:\n"
     "1) ใบเสร็จและบัญชี: ส่งรูปหรือ PDF ใบเสร็จในห้องไหนก็ได้ สลิดดูจากเนื้อหาเองว่าเป็นใบเสร็จไหม (ไม่ดูชื่อห้อง) หรือแท็กสลิดพร้อมรูป สลิดอ่านร้าน ยอด วันที่ หมวด "
@@ -1452,6 +1454,7 @@ def stable_prompt(
     travel: bool = False,
     markets: bool = False,
     reminders: bool = False,
+    projects: bool = False,
     ideas: bool = False,
     contests: bool = False,
     bizfin: bool = False,
@@ -1511,6 +1514,8 @@ def stable_prompt(
         p += MARKETS_PROMPT
     if reminders:
         p += REMINDERS_PROMPT
+    if projects:
+        p += PROJECTS_PROMPT
     if ideas:
         p += IDEAS_PROMPT
     if concept:
@@ -1601,6 +1606,7 @@ def system_prompt(
     travel: bool = False,
     markets: bool = False,
     reminders: bool = False,
+    projects: bool = False,
     ideas: bool = False,
     concept: bool = False,
     contests: bool = False,
@@ -1626,6 +1632,7 @@ def system_prompt(
         travel=travel,
         markets=markets,
         reminders=reminders,
+        projects=projects,
         ideas=ideas,
         concept=concept,
         contests=contests,
@@ -2089,6 +2096,7 @@ def build_agent(
     travel: bool = False,
     markets: bool = False,
     reminders: bool = False,
+    projects: bool = False,
     ideas: bool = False,
     concept: bool = False,
     contests: bool = False,
@@ -2123,6 +2131,7 @@ def build_agent(
         travel=travel,
         markets=markets,
         reminders=reminders,
+        projects=projects,
         ideas=ideas,
         concept=concept,
         contests=contests,
@@ -2327,6 +2336,7 @@ async def ask_async(
         travel="convert_currency" in tool_names,
         markets="stock_quote" in tool_names,
         reminders="set_reminder" in tool_names,
+        projects="project_create" in tool_names,
         ideas="idea_save" in tool_names,
         concept="concept_image" in tool_names or "price_check" in tool_names,
         contests="contest_add" in tool_names,
