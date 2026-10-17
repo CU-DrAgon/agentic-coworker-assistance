@@ -313,6 +313,24 @@ def center_page() -> HTMLResponse:
 events_router.add_api_route("/center", center_page, methods=["GET"], include_in_schema=False)
 
 
+PM_HTML = Path(__file__).parent / "static" / "pm.html"
+
+
+def pm_page() -> HTMLResponse:
+    client_id = get_settings().hub_google_client_id
+    if not hub.CLIENT_ID_RE.match(client_id):
+        client_id = ""
+    if not PM_HTML.exists():
+        raise HTTPException(404, "pm.html is not built yet")
+    html = PM_HTML.read_text(encoding="utf-8").replace("__HUB_GOOGLE_CLIENT_ID__", client_id)
+    return HTMLResponse(
+        html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+    )
+
+
+events_router.add_api_route("/pm", pm_page, methods=["GET"], include_in_schema=False)
+
+
 # ------------------------------------------------------------------ me / orgs
 @router.get("/me")
 async def me(email: str = Depends(hub.require_user), orgs: OrgStore = Depends(get_orgs)) -> MeView:
