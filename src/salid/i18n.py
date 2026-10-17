@@ -1075,9 +1075,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "Salid's voice here: listen only / may talk",
     ),
     "cmd_voice_arg": _bi("โหมด", "Mode"),
-    "cmd_quiet": _bi(
-        "ให้สลิดเงียบจนกว่าจะเรียกชื่อ", "Salid goes quiet until called by name"
-    ),
+    "cmd_quiet": _bi("ให้สลิดเงียบจนกว่าจะเรียกชื่อ", "Salid goes quiet until called by name"),
     "cmd_quiet_done": _bi(
         "เงียบแล้วค่ะ เรียกชื่อสลิดเมื่อต้องการ", "Quiet now. Call my name when you need me."
     ),
@@ -1305,6 +1303,7 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "สลิดออกจากการประชุมแล้วค่ะ กำลังสรุปให้ในแชตของห้องเสียง",
         "en": "Salid has left the meeting. The summary is coming in the voice channel's chat.",
     },
+    "meet_left_room": {"th": "👋 ออกจากห้องแล้วค่ะ", "en": "👋 Left the room"},
     "meet_wake_empty": {"th": "คะ? ว่ามาได้เลยค่ะ", "en": "Yes? Go ahead."},
     "meet_wake_spoken": {"th": "ค่ะ? ว่ามาได้เลยค่ะ", "en": "Yes? Go ahead."},
     "meet_greet_spoken": {"th": "สวัสดีค่ะ มีอะไรให้ช่วยคะ", "en": "Hi! How can I help?"},

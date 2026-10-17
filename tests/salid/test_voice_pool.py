@@ -163,6 +163,8 @@ async def enter(w, ch, uid):
         m, SimpleNamespace(channel=None), SimpleNamespace(channel=w.chans[ch])
     )
     await settle(w.mgr)
+    for sess in w.mgr.sessions.values():
+        sess.started -= 20.0  # past the 15 s "just joined" protection
     return m
 
 
@@ -441,7 +443,10 @@ async def test_busy_room_with_executive_preempts_a_person_alone(world):
     await enter(world, A, 10)  # one person alone holds it
     await enter(world, B, 11)  # B: another single person: no preemption
     assert list(world.mgr.sessions) == [(GID, A)]
-    await enter(world, B, 5)  # an executive joins B: 2 people incl. executive (40 vs 0)
+    await enter(world, B, 5)  # an executive joins B, but A still has its person: busy
+    assert list(world.mgr.sessions) == [(GID, A)]
+    world.chans[A].members = []  # the person stepped out: an empty room gives way (40 vs 0)
+    await enter(world, B, 5)
     assert list(world.mgr.sessions) == [(GID, B)]
     assert t("meet_preempted", "th") == "ขอไปช่วยประชุมที่นัดไว้ก่อนนะคะ ส่วนที่คุยมาสรุปไว้ให้แล้ว"
     assert t("meet_preempted", "th") in world.chans[A].sent  # the old room was told first
@@ -458,6 +463,7 @@ async def test_a_bigger_room_needs_the_margin_to_preempt_an_auto_session(world):
     )
     await settle(world.mgr)
     assert (GID, A) in world.mgr.sessions
+    world.mgr.sessions[(GID, A)].started -= 20.0
     people(world, B, 20, 21, 22)  # 15 points: only +5
     await world.mgr.on_voice_activity(
         world.chans[B].members[0],
@@ -474,6 +480,7 @@ async def test_a_bigger_room_needs_the_margin_to_preempt_an_auto_session(world):
     )
     await settle(world.mgr)
     assert list(world.mgr.sessions) == [(GID, A)]
+    world.chans[A].members = []  # only an empty room can be abandoned
     people(world, D, 5, 40, 41, 42)  # exec + 4 people: 50 points: +40
     await world.mgr.on_voice_activity(
         world.chans[D].members[0],
@@ -487,6 +494,7 @@ async def test_a_bigger_room_needs_the_margin_to_preempt_an_auto_session(world):
 
 async def test_scheduled_meeting_preempts_an_ad_hoc_session_even_a_single_person(world):
     await enter(world, A, 10)
+    world.chans[A].members = []  # the person stepped out
     m = make_member(world.guild, 50, "host", world.chans[B])
     world.chans[B].members = [m]
     ended = []
@@ -531,6 +539,7 @@ async def test_commanded_and_scheduled_sessions_are_never_preempted(world):
 
 async def test_command_join_without_a_free_body_follows_the_same_rules(world):
     await enter(world, A, 10)  # single, auto
+    world.chans[A].members = []
     m = make_member(world.guild, 11, "u11", world.chans[B])
     world.chans[B].members = [m, make_member(world.guild, 12, "u12", world.chans[B])]
     assert "room78" in await world.mgr.join(m)  # 2 people beat one alone

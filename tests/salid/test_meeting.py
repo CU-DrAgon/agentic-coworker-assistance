@@ -498,7 +498,7 @@ async def test_leave_posts_a_summary_and_drops_the_transcript(env, monkeypatch):
 async def test_leave_with_nothing_heard(env):
     await start(env)
     await env.mgr.end((1000, 77), "empty")
-    assert env.chan.sent[-1] == t("meet_no_transcript", "th")
+    assert t("meet_no_transcript", "th") not in env.chan.sent  # a quiet leave posts nothing
     assert env.llm.models.calls == []
 
 
@@ -944,7 +944,7 @@ async def test_an_auto_override_is_ignored_once_the_company_language_is_chosen(e
     assert s.language == "th" and s.lang == "th"  # the company language, not the starter's
     assert env.chan.sent == [t("meet_announce", "th")]
     await env.mgr.end((1000, 77), "empty")
-    assert env.chan.sent[-1] == t("meet_no_transcript", "th")
+    assert t("meet_no_transcript", "th") not in env.chan.sent
 
 
 def test_summary_language_auto_follows_the_transcript(env):
@@ -1153,7 +1153,8 @@ async def _tick_once(env, s, monkeypatch):
 
 async def test_meeting_leaves_thirty_seconds_after_humans_leave(env, monkeypatch):
     s = await start(env)
-    assert s.empty_grace == 30.0
+    assert s.empty_grace == 600.0
+    s.empty_grace = 30.0
     s.had_humans, s.empty_since = True, time.monotonic() - 20  # a brief disconnect
     env.chan.members = []
     assert await _tick_once(env, s, monkeypatch) == []
@@ -1173,14 +1174,12 @@ async def test_auto_join_nobody_came_uses_the_short_grace(env, monkeypatch):
     assert await _tick_once(env, s, monkeypatch) == []
 
 
-async def test_max_time_warns_ten_minutes_before_the_cap(env, monkeypatch):
+async def test_the_time_cap_only_ends_an_empty_room(env, monkeypatch):
     s = await start(env)
-    assert mt.MEETING_MAX_S == 6 * 3600
     env.chan.members = [make_member(env.guild, 10, "แอน", env.chan)]
-    s.started = time.monotonic() - (mt.MEETING_MAX_S - 300)
-    assert await _tick_once(env, s, monkeypatch) == []
-    assert env.chan.sent.count(t("meet_max_warning", "th")) == 1
     s.started = time.monotonic() - mt.MEETING_MAX_S - 1
+    assert await _tick_once(env, s, monkeypatch) == []  # people are there: no timeout
+    env.chan.members = []
     assert await _tick_once(env, s, monkeypatch) == ["timeout"]
 
 
@@ -1280,3 +1279,42 @@ async def test_salid_spoken_line_is_logged_to_the_transcript(env):
     env.mgr.set_recording(s, False)
     await env.mgr._log_salid_line(s, "ไม่ควรถูกเก็บ")
     assert len(s.transcript) == 0
+
+
+async def test_command_end_with_nothing_heard_posts_one_neutral_line(env):
+    await start(env)
+    await env.mgr.end((1000, 77), "command")
+    assert env.chan.sent[-1] == t("meet_left_room", "th")
+
+
+async def test_people_present_she_never_leaves(env, monkeypatch):
+    s = await start(env)
+    env.chan.members = [make_member(env.guild, 10, "แอน", env.chan)]
+    s.started = time.monotonic() - 7 * 3600  # past the old 6 h cap
+    s.consent, s.consent_until = "pending", time.monotonic() - 1  # consent never answered
+    assert await _tick_once(env, s, monkeypatch) == []  # humans are in env.chan
+
+
+async def test_empty_room_waits_for_the_scheduled_end_and_returns_reset_the_timer(env, monkeypatch):
+    s = await start(env)
+    s.empty_grace = 30.0
+    humans = [make_member(env.guild, 10, "แอน", env.chan)]
+    env.chan.members = []
+    s.empty_since = time.monotonic() - 40
+    s.meeting_id = "m1"
+    rec = {"end_utc": (env.bot.s.now() + timedelta(hours=1)).isoformat()}
+    env.bot.scheduler = SimpleNamespace(store=SimpleNamespace(get_meeting=lambda mid: rec))
+    assert await _tick_once(env, s, monkeypatch) == []  # the scheduled meeting is still running
+    rec["end_utc"] = (env.bot.s.now() - timedelta(hours=1)).isoformat()
+    assert await _tick_once(env, s, monkeypatch) == ["empty"]
+    s.meeting_id = None  # no schedule: a returning person resets the timer
+    env.chan.members = humans
+    await _tick_once(env, s, monkeypatch)
+    assert s.empty_since is None
+
+
+@pytest.mark.parametrize(
+    "text", ["ประชุมเลิกแล้ว", "เลิกประชุม", "the meeting is over", "we're done here"]
+)
+def test_meeting_over_phrases_leave(text):
+    assert mt.parse_meeting_command(text) == "leave"

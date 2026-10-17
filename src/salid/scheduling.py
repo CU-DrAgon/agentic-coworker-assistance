@@ -707,10 +707,9 @@ class MeetingService:
                     m["attended"].append(h.id)
                     dirty = True
             if (
-                humans
-                and not m["joined"]
+                not m["joined"]
                 and not in_session
-                and now < start + NUDGE_GRACE
+                and now < end  # she joins at the start and waits, even in an empty room
                 and self.team.enabled(guild.id, "voice_meetings")
             ):
                 dirty |= await self._auto_join(guild, m, lang)

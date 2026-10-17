@@ -80,7 +80,7 @@ TRANSCRIPT_MAX_LINES = 6000
 MEETING_MAX_S = 6 * 3600
 MAX_WARN_S = 600.0  # warn in the text chat this long before the cap
 RECONNECT_DELAYS = (2.0, 5.0, 10.0)
-EMPTY_GRACE_S = 30.0  # no humans left: end after this long (settings override)
+EMPTY_GRACE_S = 600.0  # no humans left: leave quietly after this long (meeting_empty_minutes)
 CONTEXT_WINDOW_S = 5 * 60
 CONTEXT_MAX_CHARS = 6000
 SUMMARY_MAX_CHARS = 150_000
@@ -113,7 +113,9 @@ _JOIN_RE = re.compile(
 _LEAVE_RE = re.compile(
     r"^(?:ออก\s?ประชุม|เลิก\s?ประชุม|จบ\s?ประชุม|ออกไป(?:ก่อน)?|ออกจาก(?:ห้อง|ประชุม)|ไปได้แล้ว"
     r"|leave(?:\s+(?:us|the\s+(?:meeting|call|room)))?\b|you\s+can\s+go\b"
-    r"|(?:end|stop)\s+(?:the\s+)?meeting\b)",
+    r"|(?:end|stop)\s+(?:the\s+)?meeting\b"
+    r"|ประชุมเลิกแล้ว|(?:the\s+)?meeting(?:'s|\s+is)\s+over\b|we(?:'re|\s+are)\s+done\s+here\b"
+    r"|that(?:'s|\s+is)\s+the\s+end\s+of\s+the\s+meeting\b)",
     re.I,
 )
 _POLITE_PREFIX = re.compile(
@@ -1362,7 +1364,10 @@ class MeetingManager:
             active = [
                 self._claim(s.key, s.voice_channel, s.origin, s.meeting_id is not None, s.started)
                 for s in self.sessions_in_guild(guild.id)
-                if not s.ending and s.key != (guild.id, channel.id) and s.started < fresh_s
+                if not s.ending
+                and s.key != (guild.id, channel.id)
+                and s.started < fresh_s
+                and not self._humans(s.voice_channel)  # a room with people is never abandoned
             ]
             victim = pick_victim(cand, active)
             if victim is None:
@@ -1442,7 +1447,7 @@ class MeetingManager:
                 return t("meet_connect_failed", lang)
             self._note_join_result(key, True)
             if empty_grace is None:
-                empty_grace = float(getattr(self.bot.s, "leave_empty_seconds", 30.0))
+                empty_grace = float(getattr(self.bot.s, "leave_empty_seconds", EMPTY_GRACE_S))
             loop = asyncio.get_running_loop()
             session = MeetingSession(
                 guild_id=guild.id, voice_channel=channel, text_channel=channel,
@@ -1684,7 +1689,7 @@ class MeetingManager:
                 if lang in LANGS and lang != "auto"
                 else resolve_lang(self.bot.team.current(guild.id).language_setting),
                 announce="meet_announce_auto",
-                first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
+                first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 10)) * 60.0,
                 origin="auto",
                 _locked=True,
             )
@@ -1872,9 +1877,6 @@ class MeetingManager:
         except Exception:
             logger.warning("could not reload the logged meeting lines", exc_info=True)
         self.sessions[key] = session
-        if not humans:
-            await self.end(key, "empty")
-            return
         try:
             vc.listen(MeetingSink(session))
         except Exception:
@@ -2036,29 +2038,44 @@ class MeetingManager:
                 self._consent_tick(s, now)
                 if s.captions.due(now) and not s.captions_busy:
                     self._spawn(s, self._caption_flush(s))
-                if now - s.started > MEETING_MAX_S:
-                    asyncio.create_task(self.end(s.key, "timeout"))
-                    return
-                if not s.max_warned and now - s.started > MEETING_MAX_S - MAX_WARN_S:
-                    s.max_warned = True
-                    await self._notice(s, t("meet_max_warning", s.lang))
-                humans = self._humans(s.voice_channel)
-                grace = s.empty_grace
+                humans = self._humans(
+                    s.voice_channel
+                )  # people present: she never leaves by herself
                 if humans:
                     s.empty_since = None
                     s.had_humans = True
                     continue
-                if not s.had_humans and s.first_grace is not None:
-                    grace = s.first_grace  # an auto-join nobody came to
+                if now - s.started > MEETING_MAX_S:  # the room is empty and the cap is reached
+                    asyncio.create_task(self.end(s.key, "timeout"))
+                    return
                 if s.empty_since is None:
                     s.empty_since = now
-                elif now - s.empty_since > grace:
+                if self._scheduled_wait(s):  # the room may fill again until the scheduled end
+                    continue
+                grace = s.empty_grace
+                if not s.had_humans and s.first_grace is not None:
+                    grace = s.first_grace  # an auto-join nobody came to
+                if now - s.empty_since > grace:
                     asyncio.create_task(self.end(s.key, "empty"))
                     return
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("meeting ticker crashed")
+
+    def _scheduled_wait(self, s: MeetingSession) -> bool:
+        """An empty room of a scheduled meeting stays until the meeting's end (+ FINISH_AFTER)."""
+        from .scheduling import FINISH_AFTER
+
+        store = getattr(getattr(self.bot, "scheduler", None), "store", None)
+        if not s.meeting_id or store is None:
+            return False
+        try:
+            rec = store.get_meeting(s.meeting_id)
+            end = datetime.fromisoformat(rec["end_utc"]) + FINISH_AFTER
+            return self.bot.s.now() < end
+        except Exception:
+            return False
 
     def _consent_tick(self, s: MeetingSession, now: float) -> None:
         """Nobody addressed Salid soon after the first speech: ask once. Silence after the question
@@ -2938,7 +2955,12 @@ class MeetingManager:
             return
         votes = self.votes_block(s)
         if not len(s.transcript):
-            await self._post_minutes(s, t("meet_no_transcript", s.lang) + votes)
+            if votes:
+                await self._post_minutes(s, votes.strip())
+            elif (
+                reason == "command"
+            ):  # a person asked her to go: one neutral line, no "nothing heard"
+                await self._notice(s, t("meet_left_room", s.lang))
             return
         try:
             body = await asyncio.to_thread(

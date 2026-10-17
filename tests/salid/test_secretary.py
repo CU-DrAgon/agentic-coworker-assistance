@@ -554,17 +554,27 @@ async def test_auto_join_takes_notes_when_people_are_in_the_channel(w):
     meeting_at(w, start)
     w.now = start
     await w.svc.tick()
-    assert w.meetings.joins == []  # nobody there yet
+    assert len(w.meetings.joins) == 1  # she joins at the start and waits, nobody there yet
     w.room.members = [w.ann]
     await w.svc.tick()
     ((starter, kw),) = w.meetings.joins
     assert starter.voice.channel is w.room and kw["announce"] == "meet_announce_scheduled"
-    assert kw["first_grace"] == 120.0 and kw["meeting_id"] == "m1"
+    assert kw["first_grace"] == 600.0 and kw["meeting_id"] == "m1"
     assert "สลิดเข้ามาจดประชุมตามนัดค่ะ" in t("meet_announce_scheduled", "th")
     got = w.store.get_meeting("m1")
     assert got["joined"] is True and got["attended"] == [10]
     await w.svc.tick()
     assert len(w.meetings.joins) == 1
+
+
+async def test_scheduled_meeting_joins_an_empty_room_and_stays_until_the_end(w):
+    meeting_at(w, NOW)
+    w.now = NOW
+    await w.svc.tick()
+    assert len(w.meetings.joins) == 1 and w.store.get_meeting("m1")["joined"] is True
+    w.now = NOW + timedelta(minutes=55)  # end - 5 min, still nobody: no second join, no finish
+    await w.svc.tick()
+    assert len(w.meetings.joins) == 1 and w.store.get_meeting("m1")["status"] != "done"
 
 
 async def test_auto_join_respects_the_voice_meetings_toggle(w):

@@ -613,7 +613,7 @@ def build_instruction_en(
         "set_recording(false), say briefly that you have stopped taking notes, and stay quiet until "
         "called. If it is a meeting, keep taking notes.\n"
         "- If someone tells you to leave the room / end the meeting (“leave”, “you can go”, "
-        "“end the meeting”), the system handles leaving itself: do not call set_recording and do not "
+        "“end the meeting”, “the meeting is over”), the system handles leaving itself: do not call set_recording and do not "
         "say you stopped taking notes. Say one short goodbye, such as “See you later!”, then stay quiet.\n"
         "- Talk to people by voice. The system also posts your answers to the text chat, so do not "
         "post them yourself. For what truly "

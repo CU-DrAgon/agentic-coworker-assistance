@@ -242,9 +242,11 @@ class Settings(BaseSettings):
     # Scheduled meetings (salid.scheduling)
     meeting_remind_minutes: int = 10  # reminder before the start (and again at the start)
     meeting_noshow_minutes: int = 5  # DM attendees missing from the voice channel after this
-    meeting_empty_minutes: int = 2  # an auto-joined meeting nobody ever came to ends after this
+    meeting_empty_minutes: int = (
+        10  # an empty room is left quietly after this (a schedule: its end); people present: never
+    )
     # A meeting where people were present ends only after this long with no humans in the channel.
-    meeting_leave_empty_seconds: float = 30.0  # covers a brief disconnect, then Salid leaves
+    meeting_leave_empty_seconds: float | None = None  # unset: meeting_empty_minutes
     meeting_leave_empty_minutes: float | None = None  # deprecated: when set, overrides the seconds
     # Auto-join (salid.voice_pool): Salid joins a voice channel as soon as `auto_join_min_humans`
     # people are in it. `auto_join_delay_seconds` > 0 adds a stability wait (default: none).
@@ -311,6 +313,8 @@ class Settings(BaseSettings):
         """How long a meeting waits with nobody in the room (old minutes setting still honoured)."""
         if self.meeting_leave_empty_minutes is not None:
             return float(self.meeting_leave_empty_minutes) * 60.0
+        if self.meeting_leave_empty_seconds is None:
+            return float(self.meeting_empty_minutes) * 60.0
         return float(self.meeting_leave_empty_seconds)
 
     @property
