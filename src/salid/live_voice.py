@@ -606,7 +606,9 @@ def build_instruction_en(
     `tone` (salid.tone) sets the persona line, the same style as the text answers."""
     now = now or settings.now()
     p = (
-        f"Today is {now:%A, %B} {now.day}, {now.year}.\n"
+        f"Today is {now:%A, %B} {now.day}, {now.year}. The team's time zone is {settings.tz} "
+        f"(this session started at {now:%H:%M} local time). When asked the time or date, call "
+        "ask_salid, which knows the exact local time; never answer in UTC or guess.\n"
         "You are “Salid”, the team's note-taker sitting in the team's Discord voice channel. Your base "
         "job is to LISTEN and take the minutes quietly; you do not start conversations yourself. You speak only "
         "when someone calls your name, then you talk with that person (and whoever joins in). Do not "
@@ -785,7 +787,8 @@ def build_instruction(
         )
     now = now or settings.now()
     p = (
-        f"{thai_date_line(now)}\n"
+        f"{thai_date_line(now)} เขตเวลาของทีมคือ {settings.tz} (เซสชันนี้เริ่ม {now:%H:%M} น. เวลาท้องถิ่น) "
+        "ถ้ามีคนถามเวลาหรือวันที่ ให้เรียก ask_salid ซึ่งรู้เวลาท้องถิ่นที่แน่นอน ห้ามตอบเป็น UTC หรือเดา\n"
         "คุณชื่อ “สลิด” (Salid) เป็นผู้จดบันทึกประจำทีม นั่งอยู่ในห้องเสียง Discord ของทีม งานหลักคือฟังและจดบันทึกการประชุมเงียบ ๆ "
         "ไม่ชวนคุยเอง คุณพูดเมื่อมีคนเรียกชื่อเท่านั้น แล้วคุยกับคนที่เรียกคุณ (และคนที่หันมาคุยด้วย) "
         "ไม่สั่งสอน ไม่ชวนคุยเอง ไม่อ่านกฎหรือนโยบายให้ใคร\n"
