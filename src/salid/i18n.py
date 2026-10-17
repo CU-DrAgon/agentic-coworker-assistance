@@ -1947,4 +1947,44 @@ CATALOG: dict[str, dict[str, str]] = {
     },
     "vote_offer_declined": {"th": "ได้ค่ะ ไม่เปิดโหวต", "en": "Okay, no vote."},
     "vote_offer_gone": {"th": "ข้อเสนอนี้หมดอายุแล้วค่ะ", "en": "That offer is no longer valid."},
+    # ---------------------------------------------------------------- concept studio
+    "concept_img_disabled": {
+        "th": "ตอนนี้ปิดการสร้างภาพคอนเซปต์ไว้ค่ะ ให้แอดมินเปิดก่อนนะคะ",
+        "en": "Concept images are turned off here. An admin can turn them on.",
+    },
+    "concept_img_daily_limit": {
+        "th": "วันนี้สร้างภาพคอนเซปต์ครบโควตาของเซิร์ฟเวอร์แล้วค่ะ ลองใหม่พรุ่งนี้นะคะ",
+        "en": "Today's concept image limit for this server is used up. Please try again tomorrow.",
+    },
+    "concept_img_blocked": {
+        "th": "ระบบความปลอดภัยของโมเดลไม่ยอมสร้างภาพนี้ค่ะ ลองเปลี่ยนคำอธิบายให้ต่างออกไปนะคะ",
+        "en": "The image model's safety filter declined this image. Try describing it differently.",
+    },
+    "concept_img_timeout": {
+        "th": "สร้างภาพนานเกินไปค่ะ ลองอีกครั้งได้เลยนะคะ",
+        "en": "The image took too long. Please try again.",
+    },
+    "concept_img_error": {
+        "th": "สร้างภาพไม่สำเร็จค่ะ ลองอีกครั้งได้เลยนะคะ",
+        "en": "Could not make the image. Please try again.",
+    },
+    "concept_price_none": {
+        "th": "ไม่พบราคาที่เชื่อถือได้ค่ะ ลองระบุรุ่น/ยี่ห้อ",
+        "en": "No reliable price found. Try giving a brand or model.",
+    },
+    "concept_price_recheck": {
+        "th": "บอกด้วยว่าราคาเป็นของวันที่ {date} จากเว็บ ต้องตรวจซ้ำกับร้านก่อนสั่งซื้อจริง",
+        "en": "Say the prices are from the web as of {date} and must be re-checked with the shop before buying.",
+    },
+    "concept_price_range": {"th": "ช่วงราคา", "en": "Price range"},
+    "concept_lbl_front": {"th": "ด้านหน้า", "en": "Front"},
+    "concept_lbl_side": {"th": "ด้านข้าง", "en": "Side"},
+    "concept_lbl_three_quarter": {"th": "มุมเฉียง", "en": "3/4 view"},
+    "concept_lbl_top": {"th": "ด้านบน", "en": "Top"},
+    "concept_lbl_option": {"th": "ตัวเลือก {n}", "en": "Option {n}"},
+    "concept_kind_product": {"th": "ภาพสินค้า", "en": "Product render"},
+    "concept_kind_scene": {"th": "ภาพการใช้งาน", "en": "In use"},
+    "concept_kind_ui": {"th": "ภาพหน้าจอ", "en": "Screen mockup"},
+    "concept_kind_logo": {"th": "ไอเดียโลโก้", "en": "Logo ideas"},
+    "concept_kind_moodboard": {"th": "มู้ดบอร์ด", "en": "Moodboard"},
 }

@@ -204,6 +204,9 @@ class Settings(BaseSettings):
     # per guild/day; 0 = AI scenes off (kits use the original photo).
     promo_image_model: str = "gemini-nano-banana-2.1"
     promo_kits_per_day: int = 20
+    # Concept studio (salid.concept): concept images per guild/day (own counter, 0 = off) and size.
+    concept_images_per_day: int = 20
+    concept_image_size: str = "1K"
     # Per-guild settings document `{guild_collection}/{guild_id}` (see salid.guild_settings).
     guild_collection: str = "salid_guilds"
     # PDF documents (salid.pdf_report): regular TTF/OTF with Thai glyphs; empty = search known paths.

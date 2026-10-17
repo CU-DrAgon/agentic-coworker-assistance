@@ -36,6 +36,7 @@ from .channel_access import (
 )
 from .chat_tools import ChatActions
 from .company_brain_bot import CompanyMixin, PlaybookButton
+from .concept_bot import ConceptMixin
 from .config import Settings
 from .contests_bot import ContestsMixin
 from .coo import CooMixin, DisclosureButton
@@ -350,6 +351,7 @@ class SecretaryBot(
     ProfileMixin,
     DeliverMixin,
     PromoMixin,
+    ConceptMixin,
     MediaMixin,
     discord.Client,
 ):
@@ -470,6 +472,7 @@ class SecretaryBot(
         self.image_stats = {"described": 0, "failed": 0, "skipped": 0}  # cost visibility
         self._init_media()
         self._init_promo()
+        self._init_concept()  # concept_image + price_check (salid.concept_bot)
         self.importer = MemoryImporter(
             self.memory_store,
             settings,
@@ -2197,6 +2200,7 @@ class SecretaryBot(
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
             # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
+            *([] if interjection else self._concept_tools(message, guild, asker, files, lang)),
             # post_message + send_dm_many (broadcast.py)
             *([] if interjection else self._broadcast_tools(message, guild, asker, lang, new_id())),
         ]

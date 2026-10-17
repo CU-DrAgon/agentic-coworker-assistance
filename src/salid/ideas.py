@@ -15,6 +15,8 @@ Only the owner writes. The command center library shows ideas to executives (not
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import logging
 import re
 from collections.abc import Callable
@@ -24,7 +26,7 @@ from datetime import UTC, datetime
 from pydantic import BaseModel, Field
 
 from . import frameworks as fw
-from .coo_store import IDEAS, DocStore
+from .coo_store import IDEA_IMAGES, IDEAS, DocStore
 from .ideas_pdf import markdown_docx, markdown_pdf
 from .pdf_report import FontSet
 from .wiki import slugify
@@ -34,6 +36,8 @@ logger = logging.getLogger(__name__)
 MAX_IDEAS_PER_USER = 50
 MAX_TITLE = 120
 MAX_SECTION_CHARS = 30000
+MAX_IMAGES = 12  # concept images kept per idea (oldest dropped)
+MAX_STORED_IMAGE_BYTES = 700_000  # base64 of this stays under Firestore's 1 MiB document limit
 MAX_LIST = 30
 FORMATS = ("pdf", "docx", "md")
 VISIBILITIES = ("normal", "private", "team")
@@ -42,6 +46,9 @@ VISIBILITIES = ("normal", "private", "team")
 SECTIONS: dict[str, tuple[str, str]] = {
     "problem": ("ปัญหาและไอเดีย", "Problem / Idea"),
     "customers": ("กลุ่มลูกค้าเป้าหมาย", "Target customers"),
+    "product_concept": ("คอนเซปต์สินค้า", "Product concept"),
+    "ui_concept": ("คอนเซปต์หน้าจอ (UI)", "UI concept"),
+    "brand_theme": ("ธีมและแบรนด์", "Brand theme"),
     "bmc": ("Business Model Canvas", "Business Model Canvas"),
     "lean_canvas": ("Lean Canvas", "Lean Canvas"),
     "value_proposition": ("Value Proposition", "Value Proposition"),
@@ -51,6 +58,9 @@ SECTIONS: dict[str, tuple[str, str]] = {
     "competitors": ("คู่แข่งและความใหม่ของไอเดีย", "Competitors & novelty"),
     "gtm": ("แผนเข้าสู่ตลาด / วิธีขาย", "Go-to-market"),
     "pricing": ("แพ็กเกจและราคา", "Pricing"),
+    "marketing_plan": ("แผนการตลาด", "Marketing plan"),
+    "website_copy": ("ข้อความหน้าเว็บ", "Website copy"),
+    "sourcing": ("การจัดหาและราคา", "Sourcing & prices"),
     "pitch_outline": ("โครงนำเสนอ (Pitch)", "Pitch outline"),
     "next_steps": ("ขั้นตอนถัดไป", "Next steps"),
     "notes": ("บันทึกเพิ่มเติม", "Notes"),
@@ -70,12 +80,29 @@ _SECTION_WORDS = {
     "gtm": "gtm go-to-market go to market sales how to sell วิธีขาย การขาย การตลาด marketing แผนขาย",
     "pricing": "pricing price prices pricing_tiers packages ราคา แพ็กเกจ แพ็คเกจ",
     "pitch_outline": "pitch pitch_outline pitch outline นำเสนอ",
+    "product_concept": "product_concept product-concept คอนเซปต์สินค้า คอนเซ็ปต์สินค้า แนวคิดสินค้า",
+    "ui_concept": "ui_concept ui-concept ui คอนเซปต์หน้าจอ หน้าจอ หน้าเว็บ wireframe",
+    "brand_theme": "brand_theme brand-theme ธีม ธีมแบรนด์ แบรนด์ แบรนด์และธีม",
+    "marketing_plan": "marketing_plan marketing-plan แผนการตลาด",
+    "website_copy": "website_copy website-copy ข้อความเว็บ ข้อความหน้าเว็บ",
+    "sourcing": "sourcing prices-sourcing procurement การจัดหา จัดซื้อ จัดหาและราคา",
     "next_steps": "next steps next-steps next_steps todo actions ขั้นตอนถัดไป สิ่งที่ต้องทำ",
     "notes": "notes note บันทึก อื่นๆ other",
 }
 _SECTION_LOOKUP = {w: k for k, words in _SECTION_WORDS.items() for w in words.split()}
 _SECTION_LOOKUP.update(
-    {"problem/idea": "problem", "go-to-market": "gtm", "target customers": "customers"}
+    {
+        "problem/idea": "problem",
+        "go-to-market": "gtm",
+        "target customers": "customers",
+        "marketing plan": "marketing_plan",
+        "website copy": "website_copy",
+        "web copy": "website_copy",
+        "brand theme": "brand_theme",
+        "product concept": "product_concept",
+        "ui concept": "ui_concept",
+        "sourcing & prices": "sourcing",
+    }
 )
 
 
@@ -116,6 +143,8 @@ class IdeaDoc(BaseModel):
     created_at: str = ""
     updated_at: str = ""
     offered: bool = False  # the "keep it all as one project document?" question was asked
+    # concept images (salid.concept): [{name, caption, sha256, created_at}], bytes in IDEA_IMAGES
+    images: list[dict] = Field(default_factory=list)
     version: int = 1
 
     @property
@@ -149,7 +178,13 @@ def library_visible(doc: IdeaDoc, is_exec: bool) -> bool:
     return is_exec and doc.visibility != "private"
 
 
-def render_markdown(doc: IdeaDoc, lang: str = "th", *, owner_line: bool = True) -> str:
+def images_heading(lang: str) -> str:
+    return "ภาพคอนเซปต์" if lang == "th" else "Concept images"
+
+
+def render_markdown(
+    doc: IdeaDoc, lang: str = "th", *, owner_line: bool = True, images: bool = True
+) -> str:
     """The whole project document: title, owner / date line, then every section (headings inside
     a section are moved one level down)."""
     out = [f"# {doc.title}", ""]
@@ -161,9 +196,16 @@ def render_markdown(doc: IdeaDoc, lang: str = "th", *, owner_line: bool = True) 
     for key, sec in doc.ordered():
         title = SECTIONS[key][0 if lang == "th" else 1] if key in SECTIONS else sec.title
         out += [f"## {title}", "", demote(sec.body), ""]
-    if not doc.sections:
+    if images and doc.images:  # the files themselves are in the PDF; Markdown lists them by name
+        out += [f"## {images_heading(lang)}", ""]
+        out += [f"- [{im['name']}]({im['name']})" + _cap(im) for im in doc.images] + [""]
+    if not doc.sections and not doc.images:
         out.append("(ยังไม่มีเนื้อหา)" if lang == "th" else "(empty)")
     return "\n".join(out).rstrip() + "\n"
+
+
+def _cap(im: dict) -> str:
+    return f": {im['caption']}" if im.get("caption") else ""
 
 
 def demote(md: str) -> str:
@@ -207,7 +249,64 @@ class IdeaRepo:
         return doc
 
     def delete(self, guild_id: int, doc: IdeaDoc) -> None:
+        for im in doc.images:
+            self.docs.delete(IDEA_IMAGES, guild_id, self._image_key(doc, im["sha256"]))
         self.docs.delete(IDEAS, guild_id, doc.key)
+
+    @staticmethod
+    def _image_key(doc: IdeaDoc, sha256: str) -> str:
+        return f"{doc.key}_{sha256[:20]}"
+
+    def add_image(
+        self,
+        guild_id: int,
+        owner_id: int,
+        owner_name: str,
+        title: str,
+        name: str,
+        caption: str,
+        data: bytes,
+    ) -> IdeaDoc:
+        """Keep a concept image (JPEG, <= MAX_STORED_IMAGE_BYTES) under the owner's idea `title`
+        (created empty on first use); at most MAX_IMAGES, the oldest dropped."""
+        title = " ".join((title or "").split())[:MAX_TITLE]
+        if not title:
+            raise ValueError("title is empty")
+        if not data or len(data) > MAX_STORED_IMAGE_BYTES:
+            raise ValueError("image is empty or too large to keep")
+        slug = slugify(title)
+        doc = self.get(guild_id, owner_id, slug)
+        now = self._clock().isoformat(timespec="seconds")
+        if doc is None:
+            if len(self.mine(guild_id, owner_id)) >= MAX_IDEAS_PER_USER:
+                raise ValueError(f"too many ideas (max {MAX_IDEAS_PER_USER}): delete one first")
+            doc = IdeaDoc(
+                slug=slug, title=title, owner_id=owner_id, owner_name=owner_name, created_at=now
+            )
+        sha = hashlib.sha256(data).hexdigest()
+        self.docs.put(
+            IDEA_IMAGES,
+            guild_id,
+            self._image_key(doc, sha),
+            {"name": name, "b64": base64.b64encode(data).decode("ascii"), "sha256": sha},
+        )
+        doc.images = [im for im in doc.images if im["sha256"] != sha]
+        doc.images.append(
+            {"name": name, "caption": (caption or "")[:300], "sha256": sha, "created_at": now}
+        )
+        while len(doc.images) > MAX_IMAGES:
+            old = doc.images.pop(0)
+            self.docs.delete(IDEA_IMAGES, guild_id, self._image_key(doc, old["sha256"]))
+        doc.version += 1
+        self.put(guild_id, doc)
+        return doc
+
+    def image_bytes(self, guild_id: int, doc: IdeaDoc, im: dict) -> bytes | None:
+        d = self.docs.get(IDEA_IMAGES, guild_id, self._image_key(doc, im["sha256"]))
+        try:
+            return base64.b64decode(d["b64"]) if d else None
+        except (KeyError, ValueError):
+            return None
 
     def mine(self, guild_id: int, owner_id: int) -> list[IdeaDoc]:
         return [d for d in self.all(guild_id) if d.owner_id == owner_id]
@@ -453,7 +552,7 @@ class IdeasCtx:
             return {"status": "not_found", "ideas": [self._row(d) for d in cands][:MAX_LIST]}
         if self._blocked(doc):
             return self._private_only(doc)
-        if not doc.sections:
+        if not doc.sections and not doc.images:
             return {"status": "error", "error": "the idea has no content yet"}
         md = render_markdown(doc, self.lang)
         name = f"{ascii_name(doc.title)}.{fmt}"
@@ -463,7 +562,7 @@ class IdeasCtx:
             elif fmt == "docx":
                 data = markdown_docx(doc.title, md)
             else:
-                data = self._pdf(doc, md)
+                data = self._pdf(doc, render_markdown(doc, self.lang, images=False))
         except Exception:
             logger.exception("idea export failed")
             return {"status": "error", "error": "could not build the file"}
@@ -472,6 +571,11 @@ class IdeasCtx:
 
     def _pdf(self, doc: IdeaDoc, md: str) -> bytes:
         bmc = doc.sections.get("bmc")
+        pics = []  # concept images: one page each, caption below
+        for im in doc.images:
+            raw = self.repo.image_bytes(self.guild_id, doc, im)
+            if raw:
+                pics.append((raw, im.get("caption") or im["name"]))
         return markdown_pdf(
             org=self.guild_name,
             title=doc.title,
@@ -480,6 +584,8 @@ class IdeasCtx:
             generated_at=self.now(),
             fonts=self.fonts(),
             canvas=bmc.body if bmc else None,
+            images=pics,
+            images_title=images_heading(self.lang),
         )
 
     def business_framework(self, kind: str, idea: str, context: str = "") -> dict:
@@ -623,7 +729,8 @@ def ideas_tools(ctx: IdeasCtx) -> list[Callable]:
 
         Args:
             kind: bmc | lean_canvas | swot | pestel | porter5 | value_proposition | pricing_tiers
-                (Thai market: THB, VAT 7% note) | gtm | pitch_outline.
+                (Thai market: THB, VAT 7% note) | gtm | pitch_outline | product_concept | brand_theme
+                (colors, fonts, style) | website_copy | marketing_plan | ui_concept (a web/app page).
             idea: the idea's short title, the same every time for the same idea.
             context: everything the user said about the idea so far (the concept, customers,
                 numbers, constraints), in a few sentences.

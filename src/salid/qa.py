@@ -1267,6 +1267,10 @@ CAPABILITIES_PROMPT = (
     "สลิดส่งไฟล์ PowerPoint (.pptx) ที่แก้ต่อได้ กราฟใช้ตัวเลขจริงจากบัญชี\n"
     "20) ใบเสนอราคา: ทำใบเสนอราคา (PDF/Word) และแก้ไขฉบับใหม่ได้ (เฉพาะผู้บริหารหรือบทบาทที่แอดมินกำหนด สลิดเปลี่ยนสิทธิ์ให้ใครไม่ได้ และอย่าบอกว่าตั้งค่าสิทธิ์ได้ที่ไหนถ้าไม่แน่ใจ) เช่น “ทำใบเสนอราคาให้ร้านบ้านกาแฟ กาแฟสด 100 กล่อง กล่องละ 350 ส่วนลด 5% ยืนราคา 30 วัน” "
     "เลขที่ต่อเนื่อง QT-ปี-เลข VAT 7% หัวบริษัทมาจากที่สอนสลิดไว้ (เฉพาะผู้บริหารหรือบทบาทที่กำหนด)\n"
+    "21) คอนเซปต์สินค้าและการตลาด: ช่วยคิดและร่างคอนเซปต์สินค้า/โปรเจกต์ (แม้เป็นหน้าตาของสินค้าหรือวัตถุ) ธีมแบรนด์ (สี ฟอนต์ สไตล์) ข้อความหน้าเว็บ แผนการตลาด คอนเซปต์หน้าจอ/UI "
+    "วาดภาพคอนเซปต์ด้วย AI (concept_image: ภาพสินค้า ภาพตอนใช้งาน หน้าจอ โลโก้ มู้ดบอร์ด และภาพหลายมุมแบบ 3 มิติจำลอง) "
+    "เช็คราคาจากเว็บพร้อมแหล่งอ้างอิง (price_check) ถามแค็ตตาล็อกจากหน้าเว็บของซัพพลายเออร์ ช่วยหาข้อมูลเพื่อจัดซื้อ และค้นข้อมูลแล้วทำเป็นเอกสาร PDF/Word ทั้งหมดเก็บในเอกสารโปรเจกต์เดียว "
+    "(ภาพเป็นภาพคอนเซปต์จาก AI ไม่ใช่โมเดล 3 มิติหรือแบบวิศวกรรม; ภาพสร้างได้ในแชตเท่านั้น ไม่ใช่ในห้องเสียง)\n"
     "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
     "ถ้าไม่แน่ใจให้ดูสถานะด้วย show_settings (หรือ /โหมด /ภาษา /ความจำ เป็นทางลัด)"
 )
@@ -1320,6 +1324,31 @@ WEB_PROMPT = (
     "คำถามเรื่องภายในทีม (บัญชี ใบเสร็จ ใครพูดอะไร) ให้ใช้ ledger/ความจำก่อน ไม่ต้องค้นเว็บ. "
     "ถ้ามีหลายลิงก์ ให้เรียก read_web ครั้งเดียวโดยใส่ทุกลิงก์ (ไม่เกิน 5) ใน request ห้ามเรียกแยกทีละลิงก์. "
     "ลิงก์ที่เจอจากความจำหรือแชตของทีม (เช่น ผู้ใช้ขอสรุปวิดีโอที่เคยแชร์ในห้อง) ให้ใส่ URL นั้นใน request ได้."
+)
+
+# One block when the concept studio tools exist (concept_image and/or price_check).
+CONCEPT_PROMPT = (
+    "\nคอนเซปต์สินค้า/การตลาด (Concept studio): เมื่อผู้ใช้ขอให้ช่วยคิด/ร่างคอนเซปต์สินค้า ออกแบบหน้าตาของสินค้าหรือวัตถุ "
+    "ธีม ข้อความเว็บ แผนการตลาด หรือหน้าจอ (เช่น หน้ารวมงาน + ปฏิทินทีม) ให้ทำตามลำดับนี้ "
+    "(Help with a product / marketing concept like this): "
+    "(1) ถ้าไอเดียยังไม่ชัด ถามได้ไม่เกิน 2 คำถามแล้วเริ่มเลย ถ้าชัดพอให้ลงมือทันที ไม่ต้องถามเยอะ; "
+    "(2) เรียก business_framework(kind=product_concept) (หรือ ui_concept ถ้าเป็นหน้าจอ/เว็บแอป) แล้วสรุปสั้นๆ ในแชต; "
+    "(3) ปิดท้ายด้วยข้อเสนอขั้นต่อไปบรรทัดเดียว: ธีมแบรนด์ (kind=brand_theme), ข้อความหน้าเว็บ (website_copy), แผนการตลาด (marketing_plan) หรือภาพคอนเซปต์ (concept_image); "
+    "(4) ทุกอย่างเก็บในเอกสารโปรเจกต์ของไอเดียนั้น (ใช้ title เดิม; business_framework เก็บให้เอง) ส่งออกเป็น PDF/Word เมื่อผู้ใช้ขอ (idea_export); "
+    "ค้นข้อมูลด้วย web_search / deep_research และอ้างแหล่งที่มา แล้วทำเป็นเอกสารได้. "
+    "ภาพ: เรียก concept_image(brief เป็นภาษาอังกฤษ, kind=product|scene|ui|logo|moodboard, views=front|turnaround|set) "
+    "“ภาพหลายมุม/3D/ดูรอบตัว” = views=turnaround (ภาพเดียว 4 มุม ป้ายชื่อมุมระบบใส่ให้ ต้องบอกว่าเป็นภาพคอนเซปต์ ไม่ใช่โมเดล 3 มิติจริง); "
+    "“ขอหลายแบบ/ลองหลายสี” = views=set; ส่ง idea=ชื่อไอเดีย เมื่อภาพนี้เป็นของไอเดียที่คุยอยู่หรือเก็บไว้ (ภาพจะเข้าเอกสารและ PDF); "
+    "ขอแก้ภาพล่าสุด (“โค้งมนกว่านี้”, “เปลี่ยนเป็นสีเขียว”) เรียกซ้ำด้วย revise=true และใส่ใน brief เฉพาะสิ่งที่เปลี่ยน; "
+    "ถ้าผู้ใช้แนบรูปมา ระบบใช้เป็นภาพอ้างอิงรูปทรงให้เอง. ห้ามใส่ข้อความ/ชื่อ/ตัวเลขที่ต้องการให้เห็นในภาพลงใน brief (ระบบไม่ให้โมเดลวาดตัวหนังสือ); "
+    "ถ้าไม่ได้ภาพ (ปิดอยู่/ครบโควตา/ถูกบล็อก/ผิดพลาด) ให้บอกตามข้อความที่เครื่องมือคืนมา ห้ามบอกว่าสร้างแล้ว. "
+    "concept_image ไม่มีให้ในห้องเสียง (ภาพพูดไม่ได้): ถ้าอยู่ในห้องเสียงแล้วถูกขอภาพ ให้บอกว่าจะทำให้ในแชตตัวอักษร. "
+    "ราคา: เช็คราคาสินค้า/วัสดุ ขอซัพพลายเออร์ หรือช่วยเรื่องจัดซื้อ ให้เรียก price_check(item, country=TH, quantity, purpose=buy|procure, idea) "
+    "แล้วแสดงตารางและแหล่งที่มาตามที่ได้ ห้ามแก้ตัวเลขหรือเดาราคาเอง และบอกว่าเป็นราคาจากเว็บ ณ วันที่ที่ระบุ ต้องตรวจซ้ำก่อนซื้อ; "
+    "ถามแค็ตตาล็อกของซัพพลายเออร์: ใช้ web_search / read_web อ่านหน้าแค็ตตาล็อก และ price_check สำหรับราคา "
+    "(แค็ตตาล็อกที่บริษัทอัปโหลดไว้ในคลังเอกสารค้นเจอด้วย search_everything). "
+    "ข้อความเว็บ/แผนการตลาด/คอนเซปต์เป็นฉบับร่างให้ผู้ใช้ตรวจแก้ ไม่ใช่ข้อเท็จจริง; ห้ามแต่งตัวเลขตลาด รีวิว หรือคำรับรองลูกค้า. "
+    "Honesty: concept renders are AI pictures (not engineering drawings or 3D models), prices come from the web on the stated date and must be re-checked before purchasing, copy is a draft.\n"
 )
 
 # Sent on the last allowed call, when the tools are taken away.
@@ -1416,6 +1445,7 @@ def stable_prompt(
     secretary: bool = False,
     chat: bool = False,
     particle: str = "ค่ะ",
+    concept: bool = False,
 ) -> str:
     """The part of the system prompt that is identical for every request in one language and
     tool set (persona, rules, capabilities, duplicate rules, memory guidance, and the guidance of
@@ -1455,6 +1485,8 @@ def stable_prompt(
         p += MARKETS_PROMPT
     if ideas:
         p += IDEAS_PROMPT
+    if concept:
+        p += CONCEPT_PROMPT
     if contests:
         p += CONTESTS_PROMPT
     if bizfin:
@@ -1535,6 +1567,7 @@ def system_prompt(
     travel: bool = False,
     markets: bool = False,
     ideas: bool = False,
+    concept: bool = False,
     contests: bool = False,
     bizfin: bool = False,
     deck: bool = False,
@@ -1555,6 +1588,7 @@ def system_prompt(
         travel=travel,
         markets=markets,
         ideas=ideas,
+        concept=concept,
         contests=contests,
         bizfin=bizfin,
         deck=deck,
@@ -2014,6 +2048,7 @@ def build_agent(
     travel: bool = False,
     markets: bool = False,
     ideas: bool = False,
+    concept: bool = False,
     contests: bool = False,
     bizfin: bool = False,
     max_rounds: int = MAX_ROUNDS,
@@ -2044,6 +2079,7 @@ def build_agent(
         travel=travel,
         markets=markets,
         ideas=ideas,
+        concept=concept,
         contests=contests,
         bizfin=bizfin,
         deck=deck,
@@ -2242,6 +2278,7 @@ async def ask_async(
         travel="convert_currency" in tool_names,
         markets="stock_quote" in tool_names,
         ideas="idea_save" in tool_names,
+        concept="concept_image" in tool_names or "price_check" in tool_names,
         contests="contest_add" in tool_names,
         bizfin="unit_economics" in tool_names,
         max_rounds=max_rounds,

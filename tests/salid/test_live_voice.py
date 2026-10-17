@@ -610,7 +610,7 @@ async def test_chat_and_voice_build_the_same_agent_tools(lv, tool_names, monkeyp
     await until(lambda: live.tool_responses)
     voice = tool_names["names"]
     # one assistant: exactly the same tools in chat and in a voice room (decks flag included)
-    assert voice == chat
+    assert voice == chat - {"concept_image"}  # the one exception: an image cannot be spoken
     assert {"create_deck", "idea_export", "business_framework", "wiki_write"} <= voice
     assert {"send_dm", "deliver_file", "read_web"} <= voice
     await lv.mgr.end((1000, 77))

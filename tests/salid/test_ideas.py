@@ -20,6 +20,7 @@ from salid.guild_settings import GuildSettingsUpdate
 from salid.i18n import t
 from salid.ideas import (
     IDEAS_PROMPT,
+    SECTIONS,
     IdeaDoc,
     IdeaRepo,
     IdeasCtx,
@@ -29,6 +30,7 @@ from salid.ideas import (
     render_markdown,
     section_key,
 )
+from salid.ideas import SECTIONS as IDEA_SECTIONS
 from salid.ideas_pdf import canvas_blocks, markdown_docx, markdown_pdf
 from salid.pdf_report import find_fonts
 from salid.qa import system_prompt, tool_files
@@ -547,3 +549,115 @@ def slugify_(t_):
     from salid.wiki import slugify
 
     return slugify(t_)
+
+
+# ------------------------------------------------------------------ concept kinds
+CONCEPT_KINDS = ("product_concept", "brand_theme", "website_copy", "marketing_plan", "ui_concept")
+
+
+def test_concept_kinds_exist_with_their_headings_and_sections():
+    assert all(k in fw.KINDS and fw.KIND_SECTION[k] in IDEA_SECTIONS for k in CONCEPT_KINDS)
+    heads = {k: [p[0] for p in fw.KINDS[k][2]] for k in CONCEPT_KINDS}
+    assert len(heads["product_concept"]) == 6 and heads["product_concept"][2] == "ฟีเจอร์หลัก"
+    assert heads["brand_theme"][1:3] == ["ชุดสี", "ฟอนต์"] and "Do และ Don't" in heads["brand_theme"]
+    assert heads["website_copy"][0].endswith("Hero") and "คำถามที่พบบ่อย" in heads["website_copy"]
+    assert "ปฏิทิน 4 สัปดาห์" in heads["marketing_plan"] and "งบประมาณคร่าวๆ" in heads["marketing_plan"]
+    assert heads["ui_concept"][2] == "โครงหน้า" and "สิ่งที่ยังไม่ตัดสินใจ" in heads["ui_concept"]
+    # the document section of sourcing exists too (price_check)
+    assert IDEA_SECTIONS["sourcing"] == ("การจัดหาและราคา", "Sourcing & prices")
+
+
+@pytest.mark.parametrize(
+    "word, kind",
+    [
+        ("คอนเซปต์สินค้า", "product_concept"),
+        ("product concept", "product_concept"),
+        ("ธีม", "brand_theme"),
+        ("Brand Theme", "brand_theme"),
+        ("ข้อความเว็บ", "website_copy"),
+        ("landing page copy", "website_copy"),
+        ("แผนการตลาด", "marketing_plan"),
+        ("marketing-plan", "marketing_plan"),
+        ("หน้าเว็บ", "ui_concept"),
+        ("UI", "ui_concept"),
+    ],
+)
+def test_concept_kinds_resolve_from_thai_and_english_words(word, kind):
+    assert fw.resolve_kind(word) == kind
+    assert (
+        fw.resolve_kind("pricing") == "pricing_tiers"
+        and fw.resolve_kind("pitch") == "pitch_outline"
+    )
+
+
+@pytest.mark.parametrize("kind", CONCEPT_KINDS)
+@pytest.mark.parametrize("lang", ["th", "en"])
+def test_concept_kinds_validate_headings_in_both_languages_with_one_reask(kind, lang):
+    full = "# T\n\n" + "\n\n".join(f"{fw.heading_line(p, lang)}\n- x" for p in fw.KINDS[kind][2])
+    assert fw.missing_headings(full, kind) == []
+    client = FakeClient([text_resp("# T\n\n## ผิด\n- x"), text_resp(full)])
+    res = fw.generate_framework(client, "m", kind, "Desk Lamp", "", lang)
+    assert (
+        res.complete and len(client.models.calls) == 2 and "INCOMPLETE" in client.models.calls[1][1]
+    )
+    stuck = FakeClient([text_resp("# T\n\n## ผิด\n- x")] * 2)
+    placeholder = fw.generate_framework(stuck, "m", kind, "Desk Lamp", "", lang)
+    assert not placeholder.complete and fw.missing_headings(placeholder.markdown, kind) == []
+
+
+def test_the_headings_of_a_kind_do_not_hide_each_other():
+    # "เป้าหมาย" would match "กลุ่มเป้าหมาย": the marketing headings are chosen so a missing one is caught
+    md = "# T\n\n" + "\n\n".join(
+        f"{fw.heading_line(p, 'th')}\n- x"
+        for p in fw.KINDS["marketing_plan"][2]
+        if p[1] != "Marketing Goals"
+    )
+    assert fw.missing_headings(md, "marketing_plan") == [("เป้าหมายการตลาด", "Marketing Goals")]
+
+
+def test_concept_prompts_carry_their_hints():
+    th = fw.build_prompt("brand_theme", "Desk Lamp", "", "th")
+    assert (
+        "exactly 5 colors" in th
+        and "HEX" in th
+        and "Google Fonts" in th
+        and "## ชุดสี (Color Palette)" in th
+    )
+    web = fw.build_prompt("website_copy", "Desk Lamp", "ขอเป็นภาษาอังกฤษ", "th")
+    assert "DRAFT" in web and "exactly 4 FAQ" in web and "different language for the copy" in web
+    assert "ขอเป็นภาษาอังกฤษ" in web and "Pricing only from numbers the user gave" in web
+    assert "at most 7 key features" in fw.build_prompt("product_concept", "x", "", "en")
+    assert "4 weeks" in fw.build_prompt("marketing_plan", "x", "", "th")
+    ui = fw.build_prompt("ui_concept", "job board", "", "en")
+    assert "top to bottom" in ui and "## Page Purpose" in ui and "## Open Decisions" in ui
+    assert "VAT" not in fw.build_prompt("brand_theme", "x", "", "th")
+
+
+def test_concept_section_names_map_to_their_sections():
+    assert (
+        section_key("sourcing")[0] == "sourcing"
+        and section_key("Sourcing & prices")[0] == "sourcing"
+    )
+    assert section_key("การจัดหาและราคา")[0] == "sourcing"
+    assert section_key("คอนเซปต์หน้าจอ (UI)")[0] == "ui_concept"
+    assert (
+        section_key("brand theme")[0] == "brand_theme"
+        and section_key("แผนการตลาด")[0] == "marketing_plan"
+    )
+    assert section_key("website copy")[0] == "website_copy" and section_key("marketing")[0] == "gtm"
+
+
+def test_business_framework_tool_saves_a_ui_concept_under_its_section(repo):
+    md = "# UI: งานและปฏิทิน\n\n" + "\n\n".join(
+        f"{fw.heading_line(p, 'th')}\n- ข้อ {i}" for i, p in enumerate(fw.KINDS["ui_concept"][2])
+    )
+    c = ctx_for(repo, client=FakeClient([text_resp(md)]))
+    r = c.business_framework("หน้าเว็บ", "Job Board", "กระดานงาน + ปฏิทินทีม")
+    assert r["status"] == "saved" and r["framework"] == "คอนเซปต์หน้าจอ (UI)" and r["complete"]
+    doc = repo.get(GUILD, STAFF, "job-board")
+    assert "ui_concept" in doc.sections and doc.sections["ui_concept"].title == "คอนเซปต์หน้าจอ (UI)"
+    assert [n for n, _ in c.outbox] == ["job-board-ui_concept.pdf"]
+    assert len(r["summary"].splitlines()) <= 8
+    assert (
+        "ui_concept" in ideas_tools(c)[-1].__doc__ and "website_copy" in ideas_tools(c)[-1].__doc__
+    )

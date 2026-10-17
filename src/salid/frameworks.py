@@ -145,6 +145,67 @@ KINDS: dict[str, tuple[str, str, list[tuple[str, str]]]] = {
             ("การเงินและสิ่งที่ขอ", "Financials and Ask"),
         ],
     ),
+    "product_concept": (
+        "คอนเซปต์สินค้า",
+        "Product concept",
+        [
+            ("ชื่อและแนวคิด", "Name and Concept"),
+            ("ผู้ใช้และสถานการณ์ใช้งาน", "Users and Use Cases"),
+            ("ฟีเจอร์หลัก", "Key Features"),
+            ("รูปทรง วัสดุ ขนาด และหน้าจอหลัก", "Form, Materials, Size and Main Screen"),
+            ("จุดต่าง", "Differentiators"),
+            ("ความเสี่ยงและสิ่งที่ต้องทดสอบ", "Risks and What to Test"),
+        ],
+    ),
+    "brand_theme": (
+        "ธีมและแบรนด์",
+        "Brand theme",
+        [
+            ("อารมณ์และโทน", "Mood and Tone"),
+            ("ชุดสี", "Color Palette"),
+            ("ฟอนต์", "Fonts"),
+            ("สไตล์ภาพ", "Image Style"),
+            ("Do และ Don't", "Do and Don't"),
+            ("ตัวอย่าง Tagline", "Tagline Examples"),
+        ],
+    ),
+    "website_copy": (
+        "ข้อความหน้าเว็บ",
+        "Website copy",
+        [
+            ("ส่วนหัวหน้าเว็บ Hero", "Hero"),
+            ("จุดเด่น", "Key Benefits"),
+            ("วิธีใช้ 3 ขั้น", "How It Works"),
+            ("ราคาและแพ็กเกจ", "Pricing"),
+            ("คำถามที่พบบ่อย", "FAQ"),
+            ("ส่วนท้ายและ CTA", "Footer CTA"),
+        ],
+    ),
+    "marketing_plan": (
+        "แผนการตลาด",
+        "Marketing plan",
+        [
+            ("เป้าหมายการตลาด", "Marketing Goals"),
+            ("กลุ่มเป้าหมาย", "Target Audience"),
+            ("ข้อความหลัก", "Key Messages"),
+            ("ช่องทางและเหตุผล", "Channels and Why"),
+            ("ปฏิทิน 4 สัปดาห์", "4-Week Calendar"),
+            ("งบประมาณคร่าวๆ", "Rough Budget"),
+            ("ตัวชี้วัด", "Metrics"),
+        ],
+    ),
+    "ui_concept": (
+        "คอนเซปต์หน้าจอ (UI)",
+        "UI concept",
+        [
+            ("วัตถุประสงค์ของหน้า", "Page Purpose"),
+            ("ผู้ใช้", "Users"),
+            ("โครงหน้า", "Layout"),
+            ("องค์ประกอบหลัก", "Key Components"),
+            ("สถานะและการโต้ตอบ", "States and Interactions"),
+            ("สิ่งที่ยังไม่ตัดสินใจ", "Open Decisions"),
+        ],
+    ),
 }
 # the document section each kind is saved under in the idea document (see ideas.SECTIONS)
 KIND_SECTION = {
@@ -157,6 +218,11 @@ KIND_SECTION = {
     "pricing_tiers": "pricing",
     "gtm": "gtm",
     "pitch_outline": "pitch_outline",
+    "product_concept": "product_concept",
+    "brand_theme": "brand_theme",
+    "website_copy": "website_copy",
+    "marketing_plan": "marketing_plan",
+    "ui_concept": "ui_concept",
 }
 ALIASES = {
     "business model canvas": "bmc",
@@ -175,6 +241,35 @@ ALIASES = {
     "go to market": "gtm",
     "pitch": "pitch_outline",
     "pitch outline": "pitch_outline",
+    "product concept": "product_concept",
+    "concept": "product_concept",
+    "คอนเซปต์สินค้า": "product_concept",
+    "คอนเซ็ปต์สินค้า": "product_concept",
+    "คอนเซปต์": "product_concept",
+    "แนวคิดสินค้า": "product_concept",
+    "brand": "brand_theme",
+    "brand theme": "brand_theme",
+    "theme": "brand_theme",
+    "ธีม": "brand_theme",
+    "ธีมแบรนด์": "brand_theme",
+    "แบรนด์": "brand_theme",
+    "website": "website_copy",
+    "web copy": "website_copy",
+    "website copy": "website_copy",
+    "landing page copy": "website_copy",
+    "copy": "website_copy",
+    "ข้อความเว็บ": "website_copy",
+    "ข้อความหน้าเว็บ": "website_copy",
+    "marketing": "marketing_plan",
+    "marketing plan": "marketing_plan",
+    "แผนการตลาด": "marketing_plan",
+    "ui": "ui_concept",
+    "ui concept": "ui_concept",
+    "ux": "ui_concept",
+    "wireframe": "ui_concept",
+    "หน้าเว็บ": "ui_concept",
+    "หน้าจอ": "ui_concept",
+    "คอนเซปต์หน้าจอ": "ui_concept",
 }
 
 PRICING_DEFAULTS = (
@@ -186,6 +281,38 @@ PRICING_DEFAULTS = (
     "invoice and withholding tax 3% for B2B; mark every number as an ASSUMPTION to validate with "
     "customers. Never present invented market data as fact."
 )
+
+
+KIND_HINTS = {
+    "product_concept": (
+        "List at most 7 key features. For a physical product describe shape, materials and size "
+        "in plain words (a designer or a factory can picture it); for software describe the main "
+        "screen instead. Name 3-5 concrete things to test with real users before building."
+    ),
+    "brand_theme": (
+        "Mood and tone: exactly 3 words with one line each. Color palette: a Markdown table with "
+        "exactly 5 colors (name, HEX code like #1E5EC8, what it is used for). Fonts: one Thai and "
+        "one Latin suggestion, free from Google Fonts. Do and Don't: 3 each. Exactly 3 tagline "
+        "examples."
+    ),
+    "website_copy": (
+        "This is ready-to-paste website copy (a DRAFT): Hero = headline + one sub-line + button "
+        "text; 3-4 key benefits (title + one line each); How It Works in exactly 3 steps; Pricing "
+        "only from numbers the user gave (otherwise write that the price is not decided yet); "
+        "exactly 4 FAQ questions with short answers; Footer CTA. If the context asks for a "
+        "different language for the copy, write the copy in that language (headings stay as "
+        "listed). No invented customer quotes, awards or statistics."
+    ),
+    "marketing_plan": (
+        "Cover goal, audience, one main message, channels with the reason for each, a week-by-week "
+        "table for 4 weeks, a rough budget in THB (as assumptions) and 3-5 metrics to track."
+    ),
+    "ui_concept": (
+        "Describe the layout as numbered blocks from top to bottom (for each block: what is in "
+        "it), then the main components, then the states (empty, loading, error, filled) and "
+        "interactions. List what is still undecided as questions. Do not draw ASCII art."
+    ),
+}
 
 
 @dataclass
@@ -238,7 +365,7 @@ def build_prompt(kind: str, idea: str, context: str, lang: str, existing: str = 
     name = th if lang == "th" else en
     lines = "\n".join(heading_line(p, lang) for p in pairs)
     language = "Thai" if lang == "th" else "English"
-    extra = PRICING_DEFAULTS if kind == "pricing_tiers" else ""
+    extra = PRICING_DEFAULTS if kind == "pricing_tiers" else KIND_HINTS.get(kind, "")
     if kind in ("bmc", "lean_canvas"):
         extra += (
             " Under every heading write 3-5 concrete bullet points for THIS idea (no generic "
