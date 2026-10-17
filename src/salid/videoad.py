@@ -10,9 +10,10 @@ for their scene, shop photos left unused), then a storyboard with hard problems 
 `StoryboardError`. Narration is finally cut to its scene by `fit_narration`.
 
 Part 2, the pictures: `scene_stills` makes one 1080x1920 still per scene (AI scenes and hero
-scenes through `imagegen.generate_images`, at most 3 at a time, one retry, then `fallback_card`;
-`photo:N` scenes from the shop photo framed by `frame_photo`, or an AI still when that photo is
-missing or unreadable). `motion_clip` turns a still into a slow zoom clip with ffmpeg, and
+scenes through `imagegen.generate_images`, at most 3 at a time, one retry unless blocked, then
+a textless accent `fallback_card`; `photo:N` scenes from the shop photo framed by `frame_photo`,
+or an AI still when that photo is missing or unreadable). `motion_clip` turns a still into a
+slow zoom clip with ffmpeg, and
 `caption_png` draws the scene caption and the "สร้างด้วย AI" label on a transparent overlay,
 inside the Reels / TikTok safe area `SAFE`.
 
@@ -29,7 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from google.genai import types
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageColor, ImageEnhance, ImageFilter, ImageOps
 from pydantic import BaseModel, Field, ValidationError
 
 from . import cards, imagegen
@@ -320,10 +321,9 @@ PHOTO_SIDE = round(H * COVER_TOLERANCE)  # decoded long side: enough for any cov
 FILL_BLUR = 40
 FILL_BRIGHTNESS = 0.65
 STILL_WORKERS = 3  # scenes whose still is made at the same time
-STILL_TRIES = 2  # one try and one retry, then the fallback card
+STILL_TRIES = 2  # one try and one retry (none when blocked), then the fallback card
 STILL_PROMPT = "{prompt}\nNo text, letters, numbers, logos or watermarks anywhere in the picture."
-CARD_SIZES = (96, 56)
-CARD_LINES = 4
+CARD_TOP, CARD_BOTTOM = 0.70, 0.45  # accent darkened to this at the card's top / bottom
 CAPTION_SIZES = (88, 48)
 CAPTION_LINES = 3
 LABEL_SIZE = 30
@@ -345,24 +345,21 @@ def frame_photo(img: Image.Image) -> Image.Image:
     return canvas
 
 
-def fallback_card(caption: str, accent: str, fonts: CardFonts) -> Image.Image:
-    """The still of a scene whose picture failed: the accent colour (unknown = red) with the
-    caption centred in the safe area."""
-    fill, text_fill = ACCENTS.get(accent, ACCENTS["red"])
-    img = Image.new("RGB", (W, H), fill)
-    text = cards.drawable(caption, fonts.bold)
-    if text:
-        x0, y0, x1, y1 = SAFE
-        f = cards.fit_text(text, fonts.bold, x1 - x0, CARD_LINES, CARD_SIZES)
-        x = x0 + (x1 - x0 - f.width) // 2
-        y = y0 + (y1 - y0 - f.height) // 2
-        cards.draw_lines(img, x, y, f, fonts.bold, fill=text_fill, align="center", width=f.width)
-    return img
+def fallback_card(accent: str) -> Image.Image:
+    """The still of a scene whose picture failed: a 1080x1920 vertical gradient of the accent
+    colour (unknown = red), darkened from CARD_TOP to CARD_BOTTOM so the white caption overlay
+    keeps at least 3:1 contrast (gold too) and the slow zoom still reads as motion. No text:
+    `caption_png` draws the caption on every scene."""
+    fill = ImageColor.getrgb(ACCENTS.get(accent, ACCENTS["red"])[0])
+    top = Image.new("RGB", (W, H), tuple(round(c * CARD_TOP) for c in fill))
+    bottom = Image.new("RGB", (W, H), tuple(round(c * CARD_BOTTOM) for c in fill))
+    return Image.composite(bottom, top, Image.linear_gradient("L").resize((W, H)))
 
 
 def _ai_still(client, model: str, scene: Scene) -> tuple[Image.Image | None, int]:
-    """(still or None, images billed) for a generated scene: one try and one retry. No call (and
-    no bill) without a client or with Thai in the prompt (imagegen would refuse it)."""
+    """(still or None, images billed) for a generated scene: one try, and one retry after an
+    error or a timeout (a blocked prompt would most likely be blocked again). No call (and no
+    bill) without a client or with Thai in the prompt (imagegen would refuse it)."""
     billed = 0
     if client is not None and imagegen.english_only(scene.image_prompt_en):
         prompt = STILL_PROMPT.format(prompt=scene.image_prompt_en)
@@ -372,6 +369,8 @@ def _ai_still(client, model: str, scene: Scene) -> tuple[Image.Image | None, int
             if imgs:
                 return cards.cover(imgs[0], (W, H)), billed
             logger.warning("video still failed (%s)", reason)
+            if reason == "blocked":
+                break
     return None, billed
 
 
@@ -399,8 +398,9 @@ def scene_stills(
     image-model call). `photo:N` scenes use the shop photo without a model call (framed one at
     a time, so at most one big photo is decoded at once); AI and hero scenes (and photo scenes
     whose photo is unusable) are generated from the scene's English prompt, STILL_WORKERS
-    scenes at a time; a still that fails twice becomes `fallback_card` (drawn here, not in the
-    worker threads)."""
+    scenes at a time; a blocked still, or one that fails twice, becomes the textless
+    `fallback_card` in `accent`. `fonts` is unused since cards carry no text (kept so callers
+    keep one signature)."""
     stills: list[Image.Image | None] = [_photo_still(s, photos) for s in scenes]
     todo = [i for i, img in enumerate(stills) if img is None]
     with ThreadPoolExecutor(max_workers=STILL_WORKERS) as pool:
@@ -408,7 +408,7 @@ def scene_stills(
     billed = 0
     for i, (img, n) in zip(todo, made, strict=True):
         billed += n
-        stills[i] = img if img is not None else fallback_card(scenes[i].caption_th, accent, fonts)
+        stills[i] = img if img is not None else fallback_card(accent)
     return stills, billed
 
 

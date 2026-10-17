@@ -4,7 +4,7 @@ import threading
 import time
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageChops
 from promo_helpers import fake_client, json_response, png_bytes, probe, text_response
 from pydantic import ValidationError
 
@@ -255,15 +255,29 @@ def test_near_9x16_photo_is_cover_cropped():
     assert out.getpixel((2, 2)) == out.getpixel((540, 960))  # no fill border
 
 
-def test_failed_ai_still_retries_once_then_uses_a_card(monkeypatch):
+@pytest.mark.parametrize("reason", ["error", "timeout"])
+def test_failed_ai_still_retries_once_then_uses_a_card(monkeypatch, reason):
     calls = []
     monkeypatch.setattr(
-        videoad.imagegen, "generate_images", lambda *a, **k: calls.append(1) or ([], "error")
+        videoad.imagegen, "generate_images", lambda *a, **k: calls.append(1) or ([], reason)
     )
     stills, billed = videoad.scene_stills(
         object(), "m", sb(5, 5, 5, 5).scenes[:1], [], "red", FONTS
     )
     assert len(calls) == 2 and stills[0].size == (1080, 1920) and billed == 2
+    assert stills[0].tobytes() == videoad.fallback_card("red").tobytes()
+
+
+def test_a_blocked_still_is_not_retried(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        videoad.imagegen, "generate_images", lambda *a, **k: calls.append(1) or ([], "blocked")
+    )
+    stills, billed = videoad.scene_stills(
+        object(), "m", sb(5, 5, 5, 5).scenes[:1], [], "gold", FONTS
+    )
+    assert len(calls) == 1 and billed == 1
+    assert stills[0].tobytes() == videoad.fallback_card("gold").tobytes()
 
 
 def test_photo_scenes_use_the_shop_photo_without_a_model_call(monkeypatch):
@@ -359,17 +373,26 @@ def test_no_model_call_without_a_client_or_with_a_thai_prompt(monkeypatch):
     assert videoad.scene_stills(object(), "m", thai, [], "red", FONTS)[1] == 0
 
 
-def test_fallback_card_is_the_accent_with_the_caption_in_the_safe_area():
-    card = videoad.fallback_card("ลาเต้เย็น ลด 20%", "green", FONTS)
-    fill, text = promo.ACCENTS["green"]
-    rgb = tuple(int(fill[i : i + 2], 16) for i in (1, 3, 5))
+@pytest.mark.parametrize("accent", list(promo.ACCENTS))
+def test_fallback_card_is_a_textless_gradient_under_a_readable_caption(accent):
+    card = videoad.fallback_card(accent)
     assert card.size == (1080, 1920) and card.mode == "RGB"
-    assert card.getpixel((5, 5)) == rgb and card.getpixel((540, 1900)) == rgb
-    inside = card.crop(videoad.SAFE).getcolors(1_000_000)
-    assert any(c == (255, 255, 255) for _, c in inside)  # caption drawn inside SAFE
-    outside = card.crop((0, 0, 1080, 270)).getcolors(10)
-    assert outside == [(1080 * 270, rgb)]
-    assert videoad.fallback_card("x", "no-such-accent", FONTS).getpixel((5, 5)) == (229, 57, 53)
+    r, g, b = card.crop(videoad.SAFE).split()
+    lowest = ImageChops.darker(ImageChops.darker(r, g), b)  # per pixel: its darkest channel
+    assert lowest.getextrema()[1] < 230  # no near-white (text) pixel inside SAFE
+    assert len(card.getcolors(1_000_000)) > 1  # a gradient, not one flat colour
+    cap, box = videoad.caption_png("ลาเต้เย็น หอมกรุ่น ลดพิเศษ 20% ทั้งเดือน", FONTS)
+    comp = card.convert("RGBA")
+    comp.alpha_composite(cap)
+    assert (255, 255, 255) in {c for _, c in comp.crop(box).convert("RGB").getcolors(1_000_000)}
+    brightest = "#" + "".join(f"{hi:02X}" for _, hi in card.crop(box).getextrema())
+    assert cards.contrast("#FFFFFF", brightest) >= 3.0
+
+
+def test_fallback_card_with_an_unknown_accent_is_red():
+    assert (
+        videoad.fallback_card("no-such-accent").tobytes() == videoad.fallback_card("red").tobytes()
+    )
 
 
 def test_caption_stays_in_the_safe_area_with_the_label():
