@@ -29,6 +29,21 @@ def s():
     return FixedClockSettings(exec_user_ids=set())
 
 
+class FakeClock:
+    """A clock whose sleep just moves it forward: pacing and debounce tests run instantly."""
+
+    def __init__(self):
+        self.t = 1000.0
+        self.slept: list[float] = []
+
+    def now(self):
+        return self.t
+
+    async def sleep(self, d):
+        self.slept.append(d)
+        self.t += d
+
+
 class FakeApi:
     """Stands in for TelegramApi: records calls, serves scripted updates and files."""
 
@@ -38,14 +53,19 @@ class FakeApi:
         self.webhook_deleted = 0
         self.batches: list = []  # list of update lists, or Exceptions to raise
         self.offsets: list = []
+        self.commands: list[list[dict]] = []
+        self.me = {"id": int(BOT_ID), "username": BOT_NAME, "can_read_all_group_messages": True}
         self.files = {"ph_big": b"bigjpeg", "ph_small": b"small", "doc1": b"%PDF-bytes"}
         self.fetched: list[str] = []
 
     async def get_me(self):
-        return {"id": int(BOT_ID), "username": BOT_NAME}
+        return self.me
 
     async def delete_webhook(self):
         self.webhook_deleted += 1
+
+    async def set_my_commands(self, commands):
+        self.commands.append(commands)
 
     async def get_updates(self, offset, timeout):
         self.offsets.append(offset)
@@ -70,8 +90,9 @@ class FakeApi:
 def fx(s, tmp_path):
     api = FakeApi()
     a = make_assistant(s, tmp_path)
-    port = TelegramPort(api)
-    adapter = TelegramAdapter(a, port, BOT_ID, BOT_NAME)
+    clock = FakeClock()
+    port = TelegramPort(api, clock=clock.now, sleep=clock.sleep)
+    adapter = TelegramAdapter(a, port, BOT_ID, BOT_NAME, sleep=clock.sleep)
     return api, a, port, adapter
 
 
@@ -580,7 +601,11 @@ async def test_get_updates_sends_offset_timeout_and_allowed_updates():
     assert bodies == [
         (
             f"/bot{TOKEN}/getUpdates",
-            {"timeout": 30, "allowed_updates": ["message", "edited_message"], "offset": 41},
+            {
+                "timeout": 30,
+                "allowed_updates": ["message", "edited_message", "my_chat_member"],
+                "offset": 41,
+            },
         )
     ]
     await api.aclose()
@@ -722,3 +747,407 @@ async def test_check_uses_getme_and_returns_no_secrets(monkeypatch):
     )
     out = await telegram.check(PlatformSettings(_env_file=None, telegram_bot_token=TOKEN))
     assert out == {"username": "SalidBot", "id": 9}
+
+
+# ------------------------------------------------------------------ commands (/cmd@bot, /help)
+
+
+def command(text, who):
+    off = text.index(who)
+    return {"type": "bot_command", "offset": off, "length": len(who)}
+
+
+def test_command_for_this_bot_addresses_it_and_loses_the_suffix():
+    text = "/total@SalidBot this week"
+    out, me, others = strip_self_mentions(
+        text, [command(text, "/total@SalidBot")], BOT_ID, BOT_NAME
+    )
+    assert (out, me, others) == ("/total this week", True, False)
+    text = "/total@salidbot"  # usernames are case-insensitive
+    out, me, _o = strip_self_mentions(text, [command(text, text)], BOT_ID, BOT_NAME)
+    assert (out, me) == ("/total", True)
+    plain = strip_self_mentions("/total", [command("/total", "/total")], BOT_ID, BOT_NAME)
+    assert plain == ("/total", False, False)  # no suffix: not addressed to us by name
+    text = "/total@OtherBot"
+    other = strip_self_mentions(text, [command(text, text)], BOT_ID, BOT_NAME)
+    assert other == (text, False, True)  # another bot's command is not ours
+
+
+async def test_command_with_our_username_is_answered_in_a_group_but_not_another_bots(fx):
+    api, a, port, adapter = fx
+    text = "/total@SalidBot please"
+    await adapter.on_update(upd(text, entities=[command(text, "/total@SalidBot")]))
+    assert a.ask_fn.calls[0][0] == "/total please"
+    other = "/total@OtherBot please"
+    await adapter.on_update(upd(other, mid=11, entities=[command(other, "/total@OtherBot")]))
+    assert len(a.ask_fn.calls) == 1
+
+
+async def test_start_at_bot_in_a_group_gets_the_greeting_not_a_question(fx):
+    api, a, port, adapter = fx
+    for mid, text in ((10, "/start@SalidBot"), (11, "/start@SalidBot ref123")):
+        await adapter.on_update(upd(text, mid=mid, entities=[command(text, "/start@SalidBot")]))
+    await a.drain()
+    assert not a.ask_fn.calls and len(api.sent) == 2  # the core's greeting, twice
+
+
+async def test_help_is_answered_without_the_model_in_private_and_when_addressed(fx):
+    api, a, port, adapter = fx
+    await adapter.on_update(upd("/help", chat="private"))
+    text = "/help@SalidBot"
+    await adapter.on_update(upd(text, mid=11, entities=[command(text, text)]))
+    await adapter.on_update(upd("/help", mid=12))  # a bare /help in a group may be for any bot
+    await a.drain()
+    assert not a.ask_fn.calls and len(api.sent) == 2
+    private, group = api.sent
+    assert private["text"] == telegram.HELP_TEXT and "reply_parameters" not in private
+    assert group["text"] == telegram.HELP_TEXT and group["reply_parameters"]["message_id"] == 11
+    assert "Salid" in telegram.HELP_TEXT and "สลิด" in telegram.HELP_TEXT  # Thai and English
+
+
+# ------------------------------------------------------------------ startup
+
+
+async def test_startup_registers_the_commands_and_warns_when_privacy_mode_is_on(fx, caplog):
+    api, a, port, adapter = fx
+    api.me = {"id": int(BOT_ID), "username": BOT_NAME, "can_read_all_group_messages": False}
+    p = Poller(api, adapter)
+    p.stop()
+    caplog.set_level(logging.WARNING)
+    await p.run()
+    (cmds,) = api.commands
+    assert [c["command"] for c in cmds] == ["start", "help"]
+    assert all(1 <= len(c["description"]) <= 256 and "/" in c["description"] for c in cmds)
+    assert "privacy mode is ON" in caplog.text and "RE-ADD" in caplog.text
+
+
+async def test_startup_is_quiet_when_privacy_is_off_and_never_raises(fx, caplog):
+    api, a, port, adapter = fx
+    caplog.set_level(logging.WARNING)
+    await Poller(api, adapter).startup()
+    assert "privacy" not in caplog.text
+    off_and_closed = {"can_read_all_group_messages": False, "can_join_groups": False}
+    assert telegram.privacy_warning(off_and_closed) is None
+    assert telegram.privacy_warning({"id": 1}) is None  # unknown: say nothing
+
+    async def boom(*_a):
+        raise TelegramError("getMe", 500)
+
+    api.get_me, api.set_my_commands = boom, boom
+    await Poller(api, adapter).startup()  # logged, not raised
+    assert "getMe check failed" in caplog.text and "setMyCommands failed" in caplog.text
+
+
+async def test_set_my_commands_posts_the_command_list():
+    seen = []
+
+    def handler(request):
+        import json
+
+        seen.append((request.url.path, json.loads(request.content)))
+        return ok(True)
+
+    api = TelegramApi(TOKEN, transport=httpx.MockTransport(handler))
+    await api.set_my_commands(telegram.COMMANDS)
+    assert seen == [(f"/bot{TOKEN}/setMyCommands", {"commands": telegram.COMMANDS})]
+    await api.aclose()
+
+
+# ------------------------------------------------------------------ albums
+
+
+def album_item(mid, file_id, caption=None, entities=None, group="g1", chat="group"):
+    photo = [{"file_id": file_id, "file_size": 50}]
+    u = upd("", chat=chat, mid=mid, media_group_id=group, photo=photo)
+    del u["message"]["text"]
+    if caption:
+        u["message"]["caption"] = caption
+    if entities:
+        u["message"]["caption_entities"] = entities
+    return u
+
+
+@pytest.fixture
+def album_fx(s, tmp_path):
+    """An adapter whose debounce sleep yields once, so concurrently started updates can join."""
+    api = FakeApi()
+    api.files.update(p1=b"one", p2=b"two", p3=b"three")
+    a = make_assistant(s, tmp_path)
+    slept = []
+
+    async def sleep(d):
+        slept.append(d)
+        await asyncio.sleep(0)
+
+    clock = FakeClock()
+    port = TelegramPort(api, clock=clock.now, sleep=clock.sleep)
+    return api, a, TelegramAdapter(a, port, BOT_ID, BOT_NAME, sleep=sleep), slept
+
+
+async def test_an_album_in_a_private_chat_is_one_question_with_all_files(album_fx):
+    api, a, adapter, slept = album_fx
+    await asyncio.gather(
+        adapter.on_update(album_item(10, "p1", chat="private")),
+        adapter.on_update(album_item(11, "p2", caption="three receipts", chat="private")),
+        adapter.on_update(album_item(12, "p3", chat="private")),
+    )
+    await a.drain()
+    (call,) = a.ask_fn.calls  # one answer, not three
+    assert call[0] == "three receipts" and len(api.sent) == 1
+    assert [f.data for f in call[1]["files"]] == [b"one", b"two", b"three"]
+    assert slept and set(slept) == {telegram.ALBUM_DEBOUNCE_S}
+
+
+async def test_a_group_album_is_addressed_if_any_caption_mentions_the_bot(album_fx):
+    api, a, adapter, _ = album_fx
+    cap = "@SalidBot record these"
+    await asyncio.gather(
+        adapter.on_update(album_item(10, "p1")),
+        adapter.on_update(album_item(11, "p2", caption=cap, entities=[mention(cap)])),
+    )
+    await a.drain()
+    (call,) = a.ask_fn.calls
+    assert call[0] == "record these" and len(call[1]["files"]) == 2
+    assert api.sent[0]["reply_parameters"]["message_id"] == 11  # replies to the captioned photo
+
+
+async def test_an_unaddressed_group_album_is_only_remembered_and_downloads_nothing(album_fx):
+    api, a, adapter, _ = album_fx
+    await asyncio.gather(
+        adapter.on_update(album_item(10, "p1", caption="lunch bills")),
+        adapter.on_update(album_item(11, "p2")),
+    )
+    await a.drain()
+    assert not a.ask_fn.calls and not api.sent and api.fetched == []
+
+
+async def test_separate_albums_and_single_photos_do_not_merge(album_fx):
+    api, a, adapter, _ = album_fx
+    await asyncio.gather(
+        adapter.on_update(album_item(20, "p1", group="A", chat="private")),
+        adapter.on_update(album_item(21, "p2", group="B", chat="private")),
+        adapter.on_update(photo_msg()),
+    )
+    await a.drain()
+    assert len(a.ask_fn.calls) == 3
+
+
+# ------------------------------------------------------------------ membership (my_chat_member)
+
+
+def member_update(status, old="left", *, chat="group", cid=-100500, user=None):
+    return {
+        "update_id": 1,
+        "my_chat_member": {
+            "chat": {"id": cid, "type": chat, "title": "Ops team"},
+            "from": {"id": 5, "is_bot": False, "first_name": "Admin"},
+            "date": TS,
+            "old_chat_member": {"status": old, "user": {"id": int(BOT_ID), "is_bot": True}},
+            "new_chat_member": {
+                "status": status,
+                "user": {"id": int(user or BOT_ID), "is_bot": True},
+            },
+        },
+    }
+
+
+async def test_being_added_to_a_group_posts_the_consent_notice_once(fx):
+    api, a, port, adapter = fx
+    await adapter.on_update(member_update("member"))
+    (note,) = api.sent
+    assert note["chat_id"] == -100500 and note["text"] == telegram.WELCOME_TEXT
+    text = telegram.WELCOME_TEXT
+    assert "ความจำของทีม" in text and "team memory" in text  # Thai and English
+    assert "Google Vertex AI" in text and "removes Salid" in text and "/help" in text
+    await adapter.on_update(member_update("administrator", old="member"))  # promoted: no repeat
+    assert len(api.sent) == 1
+
+
+async def test_removal_or_block_stops_sending_and_a_new_message_clears_it(fx):
+    api, a, port, adapter = fx
+    await adapter.on_update(member_update("kicked", old="member"))
+    assert -100500 in port.gone
+    msg = inc(platform="telegram", tenant=BOT_ID, room="-100500", message="42")
+    assert await port.deliver(msg, ["hello"], None) == [] and api.sent == []
+    await port.typing(msg)
+    assert api.actions == []
+    await port.notice(-100500, "x")
+    assert api.sent == []
+    await adapter.on_update(member_update("kicked", old="member", chat="private", cid=111))
+    assert 111 in port.gone  # a user blocked the bot
+    await adapter.on_update(member_update("member", old="kicked", chat="private", cid=111))
+    assert 111 not in port.gone and api.sent == []  # unblocked: no welcome in a private chat
+    await adapter.on_update(upd("@SalidBot hi", entities=[mention("@SalidBot hi")]))
+    assert -100500 not in port.gone  # it talked to us, so we are in there
+    await a.drain()
+    assert len(api.sent) == 1
+
+
+async def test_a_403_marks_the_chat_gone_instead_of_raising_and_other_users_are_ignored(fx):
+    api, a, port, adapter = fx
+
+    async def forbidden(params):
+        raise TelegramError("sendMessage", 403)
+
+    api.send_message = forbidden
+    msg = inc(platform="telegram", tenant=BOT_ID, room="-100500", message="42")
+    assert await port.deliver(msg, ["a", "b"], None) == []
+    assert -100500 in port.gone
+    await adapter.on_update(member_update("kicked", user=777, cid=-1))  # someone else's status
+    assert -1 not in port.gone
+    port.mark_alive(-100500)
+    muted = member_update("restricted", old="member")
+    muted["my_chat_member"]["new_chat_member"]["can_send_messages"] = False
+    await adapter.on_update(muted)
+    assert -100500 in port.gone
+
+
+# ------------------------------------------------------------------ send pacing, 429
+
+
+async def test_messages_to_one_chat_are_spaced_a_second_apart(fx):
+    api, a, port, adapter = fx
+    clock = FakeClock()
+    port = TelegramPort(api, clock=clock.now, sleep=clock.sleep)
+    msg = inc(platform="telegram", tenant=BOT_ID, room="111", message="1", is_direct=True)
+    other = inc(platform="telegram", tenant=BOT_ID, room="222", message="1", is_direct=True)
+    await port.deliver(msg, ["a", "b", "c"], None)
+    assert clock.slept == [pytest.approx(1.0)] * 2
+    clock.slept.clear()
+    await port.deliver(other, ["x"], None)  # another chat is not held back
+    assert clock.slept == []
+
+
+async def test_a_group_gets_at_most_twenty_messages_a_minute(fx):
+    api, a, port, adapter = fx
+    clock = FakeClock()
+    sent_at: list[float] = []
+
+    async def record(params):
+        sent_at.append(clock.now())
+        return {"message_id": len(sent_at)}
+
+    api.send_message = record
+    port = TelegramPort(api, clock=clock.now, sleep=clock.sleep)
+    msg = inc(platform="telegram", tenant=BOT_ID, room="-100500", message="1")
+    await port.deliver(msg, [str(i) for i in range(45)], None)
+    assert len(sent_at) == 45  # none dropped
+    assert all(b - a_ >= 1.0 - 1e-9 for a_, b in zip(sent_at, sent_at[1:], strict=False))
+    for t0 in sent_at:
+        assert sum(1 for x in sent_at if t0 <= x < t0 + 60) <= 20
+    assert sent_at[20] - sent_at[0] >= 60  # the 21st waited for the minute to roll over
+
+
+async def test_a_429_is_waited_out_up_to_two_minutes_and_later_chunks_still_go():
+    slept, bodies = [], []
+
+    def handler(request):
+        import json
+
+        body = json.loads(request.content)
+        bodies.append(body["text"])
+        # chunk "b" is rate limited twice (90 s each), then accepted
+        if body["text"] == "b" and bodies.count("b") <= 2:
+            return httpx.Response(
+                429, json={"ok": False, "error_code": 429, "parameters": {"retry_after": 90}}
+            )
+        return ok({"message_id": len(bodies)})
+
+    async def sleep(d):
+        slept.append(d)
+
+    api = TelegramApi(TOKEN, transport=httpx.MockTransport(handler), sleep=sleep)
+    port = TelegramPort(api, sleep=sleep)
+    msg = inc(platform="telegram", tenant=BOT_ID, room="111", message="1", is_direct=True)
+    sent = await port.deliver(msg, ["a", "b", "c"], None)
+    assert len(sent) == 3 and bodies == ["a", "b", "b", "b", "c"]
+    assert slept.count(90.0) == 2
+    await api.aclose()
+
+
+async def test_a_long_429_is_surfaced_loudly_not_dropped_silently(caplog):
+    def handler(request):
+        return httpx.Response(
+            429, json={"ok": False, "error_code": 429, "parameters": {"retry_after": 600}}
+        )
+
+    async def sleep(d):
+        pass
+
+    api = TelegramApi(TOKEN, transport=httpx.MockTransport(handler), sleep=sleep)
+    port = TelegramPort(api, sleep=sleep)
+    msg = inc(platform="telegram", tenant=BOT_ID, room="111", message="1", is_direct=True)
+    caplog.set_level(logging.ERROR)
+    with pytest.raises(TelegramError) as e:
+        await port.deliver(msg, ["a", "b"], None)
+    assert e.value.code == 429 and e.value.retry_after == 600
+    assert "0 of 2 messages sent" in caplog.text
+    await api.aclose()
+
+
+# ------------------------------------------------------------------ private-chat topics
+
+
+async def test_private_chat_topics_are_answered_inside_their_thread(fx):
+    api, a, port, adapter = fx
+    msg = adapter._incoming(
+        upd("hi", chat="private", message_thread_id=5, is_topic_message=True)["message"]
+    )
+    assert msg.thread == "5" and msg.is_direct
+    await adapter.on_update(
+        upd("hello", chat="private", message_thread_id=5, is_topic_message=True)
+    )
+    await a.drain()
+    (reply,) = api.sent
+    assert reply["message_thread_id"] == 5 and "reply_parameters" not in reply
+    assert api.actions[0] == (111, 5)  # typing goes to the topic too
+    plain = adapter._incoming(upd("hi", chat="private")["message"])
+    assert plain.thread is None
+
+
+# ------------------------------------------------------------------ offset, 409
+
+
+async def test_after_a_long_idle_the_offset_is_reset_loudly(fx, caplog):
+    api, a, port, adapter = fx
+    now = [1_000_000.0]
+    p = Poller(api, adapter, clock=lambda: now[0])
+    api.batches = [[upd("one", update_id=7, mid=1)], [], []]
+    await p.poll_once()
+    assert p.offset == 8
+    now[0] += telegram.IDLE_RESET_S - 60  # quiet, but not yet a week
+    await p.poll_once()
+    assert api.offsets[-1] == 8
+    now[0] += 120
+    caplog.set_level(logging.WARNING)
+    await p.poll_once()
+    assert api.offsets[-1] is None and "resetting the offset" in caplog.text
+    await a.drain()
+
+
+async def test_a_409_conflict_is_logged_clearly_and_retried_with_a_floor_backoff(fx, caplog):
+    api, a, port, adapter = fx
+    api.batches = [TelegramError("getUpdates", 409), TelegramError("getUpdates", 409), []]
+    delays = []
+    p = Poller(api, adapter)
+
+    async def sleep(d):
+        delays.append(d)
+
+    p._sleep = sleep
+    calls = 0
+    original = api.get_updates
+
+    async def counting(offset, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            p.stop()
+        return await original(offset, timeout)
+
+    api.get_updates = counting
+    caplog.set_level(logging.WARNING)
+    await p.run()
+    assert delays == [telegram.CONFLICT_BACKOFF_MIN, 5.0]  # never hammers: 5 s floor
+    assert caplog.text.count("409 Conflict") == 2 and "ONE instance per token" in caplog.text
+    assert api.webhook_deleted == 3  # a webhook may be the cause: cleared again each round
