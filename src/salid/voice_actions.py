@@ -41,6 +41,8 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "set_reminder",
         "cancel_reminder",
         "list_reminders",
+        # tone: "สลิด พูดให้ทางการหน่อย" sets the meeting channel's tone with the SPEAKER's rights
+        "set_tone",
         "start_form",
         "set_captions",
         "set_captions_tool",

@@ -287,11 +287,15 @@ def render_plain(inp: CompanyInput, lang: str = "th") -> str:
     return "\n".join(lines)[:MAX_PLAIN_CHARS]
 
 
-def build_company_report(client, model: str, inp: CompanyInput, lang: str = "th") -> str:
+def build_company_report(
+    client, model: str, inp: CompanyInput, lang: str = "th", tone: str = ""
+) -> str:
     """The report text. Falls back to the plain report when the model fails or returns nothing."""
     prompt = REPORT_PROMPT.format(
         day=inp.day, language=LANG_NAME.get(lang, "Thai"), data=compact_text(inp)
     )
+    if tone:  # the server's tone block (salid.tone.tone_block): wording only, facts unchanged
+        prompt = tone.strip() + "\n\n" + prompt
     try:
         resp = generate(
             client,

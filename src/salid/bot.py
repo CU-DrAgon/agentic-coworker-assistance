@@ -164,6 +164,10 @@ from .summary import (
     message_summary_question,
     summary_question,
 )
+from .tone import RESET as TONE_RESET
+from .tone import TONES
+from .tone import label as tone_label
+from .tone_bot import TONE_COMMANDS, ToneMixin
 from .translate_bot import TranslateMixin
 from .travel_bot import TravelMixin
 from .voice_pool import VoicePool
@@ -341,6 +345,7 @@ class SecretaryBot(
     TravelMixin,
     MarketsMixin,
     ReminderMixin,
+    ToneMixin,
     IdeasMixin,
     QuotationMixin,
     MeetingDocMixin,
@@ -860,6 +865,8 @@ class SecretaryBot(
             return
         if called and await self._language_command(message):
             return
+        if called and await self._tone_command(message):
+            return
         if called and await self._private_command(message, message.guild, message.author):
             return
         # Q&A off and no image describer: images are receipt candidates when Salid is addressed
@@ -1215,6 +1222,8 @@ class SecretaryBot(
         private channel in it): private-channel commands, replies to reminders and forms, the
         private note, then the answer. Nothing here leaves `guild`."""
         if await self._private_command(message, guild, member):
+            return
+        if await self._personal_tone_command(message, guild, member):  # their own tone
             return
         await asyncio.to_thread(self.team.current, guild.id)
         ack = await self.scheduler.handle_dm_reply(
@@ -2194,6 +2203,7 @@ class SecretaryBot(
             *([] if interjection else self._travel_tools(guild, asker, lang)),  # fx + flights
             *([] if interjection else self._markets_tools(guild, asker, is_exec, lang)),
             *([] if interjection else self._reminder_tools(message, guild, asker, is_exec, lang)),
+            *([] if interjection else self._tone_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._ideas_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._quotation_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._company_tools(message, guild, asker, is_exec, lang)),
@@ -2209,12 +2219,19 @@ class SecretaryBot(
                 message, guild, asker, is_exec, memory, extra_tools, lang
             )
         company = self._company_block(message, guild, asker, is_exec, question, interjection, lang)
+        tone, tone_note = self._tone_for(message, guild, asker, profile)
         return {
             "language": setting,
+            "tone": tone,
+            "tone_note": tone_note,
             "memory": memory,
             "chat_actions": chat_actions,
             "people": list(people),
-            **({"profile": profile_block(profile)} if profile is not None else {}),
+            **(
+                {"profile": profile_block(profile, self._tone_private(message, asker.id))}
+                if profile is not None
+                else {}
+            ),
             **({"company": company} if company else {}),
             **self._web_kw(guild.id),
             **({"secretary": secretary} if secretary is not None else {}),
@@ -2573,6 +2590,34 @@ class SecretaryBot(
         for name in LANGUAGE_COMMANDS:
             self.tree.add_command(
                 app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
+            )
+
+        async def tone_cb(
+            interaction: discord.Interaction, tone: str | None = None, scope: str | None = None,
+            note: str | None = None,
+        ):  # fmt: skip
+            await self.handle_tone(interaction, tone, scope, note)
+
+        tone_cb = app_commands.guild_only()(tone_cb)
+        tone_cb = app_commands.describe(
+            tone=t("cmd_tone_arg"), scope=t("cmd_tone_scope_arg"), note=t("cmd_tone_note_arg")
+        )(tone_cb)
+        tone_cb = app_commands.choices(
+            tone=[
+                app_commands.Choice(name=f"{tone_label(k, 'th')} · {tone_label(k, 'en')}", value=k)
+                for k in (*TONES, TONE_RESET)
+            ],
+            scope=[
+                app_commands.Choice(
+                    name=f"{t(f'tone_cmd_scope_choice_{k}', 'th')} · {t(f'tone_cmd_scope_choice_{k}', 'en')}",
+                    value=k,
+                )
+                for k in ("channel", "server")
+            ],
+        )(tone_cb)
+        for name in TONE_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(name=name, description=t("cmd_tone"), callback=tone_cb)
             )
 
         async def private_cb(interaction: discord.Interaction):

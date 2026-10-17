@@ -249,6 +249,8 @@
         <div class="fields" id="modes">
           <label><span data-i18n="default_mode_l"></span> <select class="field" id="default-mode"></select><small data-i18n="default_mode_s"></small></label>
           <label><span data-i18n="default_lang_l"></span> <select class="field" id="default-language"></select><small data-i18n="default_lang_s"></small></label>
+          <label><span data-i18n="default_tone_l"></span> <select class="field" id="default-tone"></select><small data-i18n="default_tone_s"></small></label>
+          <label><span data-i18n="tone_note_l"></span> <input type="text" id="tone-note" maxlength="200" data-i18n-attr="placeholder:tone_note_ph"><small data-i18n="tone_note_s"></small></label>
           <div id="channel-modes" class="fields"></div>
         </div>
         <small class="hint" data-i18n="modes_hint"></small>
@@ -641,6 +643,50 @@
  "mode_chat": {
   "th": "💬 ตอบทุกข้อความ",
   "en": "💬 Chat"
+ },
+ "default_tone_l": {
+  "th": "โทนการพูดของสลิด (เริ่มต้นของเซิร์ฟเวอร์)",
+  "en": "Salid's tone of voice (server default)"
+ },
+ "default_tone_s": {
+  "th": "ใช้กับห้องที่ไม่ได้เลือกโทนเฉพาะ · สมาชิกตั้งโทนของตัวเองได้ในห้องส่วนตัวและ DM",
+  "en": "Used for channels without their own tone · members can set their own tone in their private channel and DMs"
+ },
+ "tone_note_l": {
+  "th": "หมายเหตุเรื่องวิธีพูด (ไม่บังคับ)",
+  "en": "Wording note (optional)"
+ },
+ "tone_note_ph": {
+  "th": "เช่น เรียกลูกค้าว่า “คุณลูกค้า” เสมอ",
+  "en": "e.g. Always address customers as “valued customer”"
+ },
+ "tone_note_s": {
+  "th": "ไม่เกิน 200 ตัวอักษร ใช้ได้เฉพาะเรื่องวิธีพูด ไม่ใช้เปลี่ยนสิทธิ์หรือตัวตนของสลิด",
+  "en": "Up to 200 characters, only about how to speak; it cannot change permissions or Salid's identity"
+ },
+ "tone_cheerful": {
+  "th": "สดใส ร่าเริง",
+  "en": "Bright & cheerful"
+ },
+ "tone_friendly": {
+  "th": "เป็นกันเอง สบายๆ",
+  "en": "Friendly & relaxed"
+ },
+ "tone_professional": {
+  "th": "สุภาพ ทางการ",
+  "en": "Professional & formal"
+ },
+ "tone_concise": {
+  "th": "กระชับ",
+  "en": "Concise"
+ },
+ "tone_calm": {
+  "th": "ใจเย็น อบอุ่น",
+  "en": "Calm & warm"
+ },
+ "tone_opt_default": {
+  "th": "โทน: ตามค่าเริ่มต้น",
+  "en": "Tone: server default"
  },
  "lang_th": {
   "th": "ไทย",
@@ -1657,6 +1703,15 @@ function languageSelect(value, withDefault) {
   sel.value = value || "";
   return sel;
 }
+const TONES = ["cheerful", "friendly", "professional", "concise", "calm"];
+let currentTones = {};
+function toneSelect(value, withDefault) {
+  const sel = document.createElement("select"); sel.className = "field";
+  if (withDefault) sel.append(option("", "tone_opt_default"));
+  for (const v of TONES) sel.append(option(v, "tone_" + v));
+  sel.value = value || "";
+  return sel;
+}
 function modeSelect(value, withDefault) {
   const sel = document.createElement("select"); sel.className = "field";
   if (withDefault) sel.append(option("", "mode_opt_default"));
@@ -1664,9 +1719,11 @@ function modeSelect(value, withDefault) {
   sel.value = value || "";
   return sel;
 }
-function renderModes(channels, modes, def, languages, defLang) {
+function renderModes(channels, modes, def, languages, defLang, tones, defTone) {
   currentModes = { ...(modes || {}) };
   currentLanguages = { ...(languages || {}) };
+  currentTones = { ...(tones || {}) };
+  const dt = $("default-tone"); dt.replaceWith(Object.assign(toneSelect(defTone || "cheerful", false), { id: "default-tone" }));
   const dm = $("default-mode"); dm.replaceWith(Object.assign(modeSelect(def || "call", false), { id: "default-mode" }));
   const dl = $("default-language"); dl.replaceWith(Object.assign(languageSelect(defLang || "th", false), { id: "default-language" }));
   const box = $("channel-modes"); box.textContent = "";
@@ -1674,12 +1731,18 @@ function renderModes(channels, modes, def, languages, defLang) {
     const label = document.createElement("label"); label.append("#" + c.name + " ");
     const sel = modeSelect(currentModes[c.id] || "", true); sel.dataset.channel = c.id; sel.classList.add("mode-sel");
     const lsel = languageSelect(currentLanguages[c.id] || "", true); lsel.dataset.channel = c.id; lsel.classList.add("lang-sel");
-    label.append(sel, " ", lsel); box.append(label);
+    const tsel = toneSelect(currentTones[c.id] || "", true); tsel.dataset.channel = c.id; tsel.classList.add("tone-sel");
+    label.append(sel, " ", lsel, " ", tsel); box.append(label);
   }
 }
 function collectModes() {
   const sels = [...$("channel-modes").querySelectorAll("select.mode-sel")];
   if (!sels.length) return currentModes; // channel list not synced yet: keep what is stored
+  return Object.fromEntries(sels.filter((x) => x.value).map((x) => [x.dataset.channel, x.value]));
+}
+function collectTones() {
+  const sels = [...$("channel-modes").querySelectorAll("select.tone-sel")];
+  if (!sels.length) return currentTones;
   return Object.fromEntries(sels.filter((x) => x.value).map((x) => [x.dataset.channel, x.value]));
 }
 function collectLanguages() {
@@ -1747,7 +1810,8 @@ function fillSettings(s) {
   renderHomeSelect(channels, s.receipt_home_channel_id);
   $("receipt-forward").checked = s.receipt_forward !== false;
   renderDigestSelect(channels, s.report_channel_id, "report-id", "report_auto");
-  renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language);
+  renderModes(channels, s.channel_modes, s.default_mode, s.channel_languages, s.default_language, s.channel_tones, s.default_tone);
+  $("tone-note").value = s.tone_note || "";
   $("digest-time").value = s.digest_time || "18:00";
   $("followup-time").value = s.followup_time || "10:00";
   $("report-time").value = s.report_time || "18:30";
@@ -1833,6 +1897,9 @@ async function save() {
     default_mode: $("default-mode").value || "call",
     channel_languages: collectLanguages(),
     default_language: $("default-language").value || "th",
+    channel_tones: collectTones(),
+    default_tone: $("default-tone").value || "cheerful",
+    tone_note: $("tone-note").value.trim(),
     digest_time: $("digest-time").value || "18:00",
     followup_time: $("followup-time").value || "10:00",
     report_time: $("report-time").value || "18:30",

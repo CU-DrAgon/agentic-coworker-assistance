@@ -13,6 +13,9 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     default_mode         mode of channels with no entry above (default "call")
     channel_languages    {channel id str: th|en|auto}, reply language override, see salid.i18n
     default_language     reply language of channels with no entry above (default "th")
+    channel_tones        {channel id str: cheerful|friendly|professional|concise|calm}, see salid.tone
+    default_tone         tone of channels with no entry above (default "cheerful")
+    tone_note            str <= 200 chars, owner's extra wording note appended to every tone
     receipt_home_channel_id  str main receipt channel ("" = auto-pick), see salid.receipt_forward
     receipt_forward      bool copy receipts posted in other channels to the home channel (default true)
     digest_channel_id    str ("" = no daily digest)
@@ -59,6 +62,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from .i18n import DEFAULT_LANGUAGE, LANGS, resolve_language
 from .modes import DEFAULT_MODE, MODES, resolve_mode
+from .tone import DEFAULT_TONE, MAX_NOTE, TONES, clean_note, effective_tone, note_problem
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +115,7 @@ FEATURES = (
 DEFAULT_EXEC_ROLES = ["ผู้บริหาร", "Executive"]
 MAX_CHANNEL_MODES = 500
 MAX_CHANNEL_LANGUAGES = 500
+MAX_CHANNEL_TONES = 500
 _ID = re.compile(r"^\d{1,25}$")
 _TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 
@@ -226,6 +231,9 @@ class GuildSettingsUpdate(BaseModel):
     default_mode: str = DEFAULT_MODE
     channel_languages: dict[str, str] = Field(default_factory=dict)
     default_language: str = DEFAULT_LANGUAGE
+    channel_tones: dict[str, str] = Field(default_factory=dict)
+    default_tone: str = DEFAULT_TONE
+    tone_note: str = ""
     memory_retention_days: int = Field(default_factory=default_retention_days)
 
     @field_validator("memory_retention_days", mode="before")
@@ -262,6 +270,32 @@ class GuildSettingsUpdate(BaseModel):
     @classmethod
     def _default_language(cls, v):
         return v if v in LANGS else DEFAULT_LANGUAGE
+
+    @field_validator("channel_tones", mode="before")
+    @classmethod
+    def _tones(cls, v):
+        """Keep numeric channel ids with a known tone; drop the rest, bounded like languages."""
+        if not isinstance(v, dict):
+            return {}
+        out = {str(k).strip(): m for k, m in v.items() if _ID.match(str(k).strip()) and m in TONES}
+        return dict(list(out.items())[:MAX_CHANNEL_TONES])
+
+    @field_validator("default_tone", mode="before")
+    @classmethod
+    def _default_tone(cls, v):
+        return v if v in TONES else DEFAULT_TONE
+
+    @field_validator("tone_note", mode="before")
+    @classmethod
+    def _tone_note(cls, v):
+        """What the hub may save: one clean line of at most 200 characters that does not try to
+        touch permissions, secrets or the persona (otherwise the save is a 422)."""
+        raw = " ".join(str(v or "").split())
+        if len(raw) > MAX_NOTE:
+            raise ValueError(f"tone_note must be at most {MAX_NOTE} characters")
+        if note_problem(raw):
+            raise ValueError("tone_note is not allowed")
+        return clean_note(raw)
 
     @field_validator("receipt_channel_ids", "ask_channel_ids", mode="before")
     @classmethod
@@ -317,6 +351,13 @@ class GuildSettings(GuildSettingsUpdate):
     updated_at: str = ""
     # Per-channel languages saved when the whole server was switched, so switching back restores.
     previous_channel_languages: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("tone_note", mode="before")
+    @classmethod
+    def _tone_note(cls, v):
+        """A stored note is read leniently: an unsafe or over-long one is dropped, never an error."""
+        raw = " ".join(str(v or "").split())
+        return "" if len(raw) > MAX_NOTE or note_problem(raw) else clean_note(raw)
 
     @field_validator("previous_channel_languages", mode="before")
     @classmethod
@@ -414,12 +455,13 @@ class GuildStore:
         data = update.model_dump()
         modes = data.pop("channel_modes")
         languages = data.pop("channel_languages")
+        tones = data.pop("channel_tones")
         data["updated_by"] = updated_by
         data["updated_at"] = _now().isoformat(timespec="seconds")
         ref = self._ref(guild_id)
         ref.set(data, merge=True)
         # set(merge=True) would deep-merge the map and never remove a channel: replace it whole.
-        ref.update({"channel_modes": modes, "channel_languages": languages})
+        ref.update({"channel_modes": modes, "channel_languages": languages, "channel_tones": tones})
         return self.get(guild_id)
 
     def set_channel_mode(self, guild_id: int, channel_id: int, mode: str | None) -> None:
@@ -471,6 +513,41 @@ class GuildStore:
                 txn.update(ref, {"channel_languages": langs})
 
         self._in_transaction(run)
+
+    def set_channel_tone(self, guild_id: int, channel_id: int, tone: str | None) -> None:
+        """Set one channel's tone (None removes the entry: the channel follows the guild default).
+        Same map-replace semantics as `set_channel_language`."""
+        if tone is not None and tone not in TONES:
+            raise ValueError(f"unknown tone {tone!r}")
+        ref, cid = self._ref(guild_id), str(channel_id)
+
+        def run(txn) -> None:
+            snap = ref.get(transaction=txn)
+            doc = snap.to_dict() if snap.exists else None
+            tones = dict((doc or {}).get("channel_tones") or {})
+            if tone is None:
+                tones.pop(cid, None)
+            else:
+                tones[cid] = tone
+            if doc is None:
+                txn.set(ref, {"channel_tones": tones})
+            else:
+                txn.update(ref, {"channel_tones": tones})
+
+        self._in_transaction(run)
+
+    def set_server_tone(self, guild_id: int, tone: str) -> None:
+        """Set the guild default tone (per-channel tones stay)."""
+        if tone not in TONES:
+            raise ValueError(f"unknown tone {tone!r}")
+        self._ref(guild_id).set({"default_tone": tone}, merge=True)
+
+    def set_tone_note(self, guild_id: int, note: str) -> None:
+        """Set (or, with "", clear) the guild's wording note. Validated like the hub field."""
+        note = clean_note(note, MAX_NOTE + 1)
+        if note and (len(note) > MAX_NOTE or note_problem(note)):
+            raise ValueError("unsafe or too long note")
+        self._ref(guild_id).set({"tone_note": note}, merge=True)
 
     def set_server_language(
         self, guild_id: int, language: str, apply_to_all_channels: bool = True
@@ -726,6 +803,32 @@ class BotGuildSettings:
         """Write one channel's language and drop the cache so it applies at once."""
         try:
             self.store.set_channel_language(guild_id, channel_id, language)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def tone_of(self, guild_id: int, channel_id: int) -> str:
+        """The channel's tone for a shared room (override, else guild default). A person's own
+        tone is `salid.tone.effective_tone(..., private=True)`."""
+        return effective_tone(self.current(guild_id), channel_id)
+
+    def tone_note(self, guild_id: int) -> str:
+        return self.current(guild_id).tone_note
+
+    def set_channel_tone(self, guild_id: int, channel_id: int, tone: str | None) -> None:
+        try:
+            self.store.set_channel_tone(guild_id, channel_id, tone)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def set_server_tone(self, guild_id: int, tone: str) -> None:
+        try:
+            self.store.set_server_tone(guild_id, tone)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def set_tone_note(self, guild_id: int, note: str) -> None:
+        try:
+            self.store.set_tone_note(guild_id, note)
         finally:
             self._cache.pop(guild_id, None)
 

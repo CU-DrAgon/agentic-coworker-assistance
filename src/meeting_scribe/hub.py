@@ -259,6 +259,7 @@ async def hub_put_settings(
         *body.ask_channel_ids,
         *body.channel_modes,
         *body.channel_languages,
+        *body.channel_tones,
         body.digest_channel_id,
         body.receipt_home_channel_id,
         body.report_channel_id,

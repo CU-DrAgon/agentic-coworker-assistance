@@ -38,6 +38,7 @@ from .memory_access import (
     member_rank,
 )
 from .tasks import TaskRepo, TaskTracker, due_for_followup
+from .tone import tone_block
 
 logger = logging.getLogger(__name__)
 
@@ -611,7 +612,14 @@ class CooMixin:
             approvals=self._approval_counts(guild.id, day),
             include_memory=self._memory_day_retained(guild.id, day),
         )
-        text = reports.build_company_report(self.llm, self.s.gemini_model, inp, lang)
+        g = self.team.current(guild.id)
+        text = reports.build_company_report(
+            self.llm,
+            self.s.gemini_model,
+            inp,
+            lang,
+            tone_block(g.default_tone, resolve_lang(lang), g.tone_note),
+        )
         news = self._company_news_section(guild, lang)  # followed customers / competitors
         return f"{text}\n\n{news}" if news else text
 

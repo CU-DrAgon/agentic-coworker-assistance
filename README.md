@@ -168,7 +168,7 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   meeting`; `ออกประชุม` / `leave`, `leave the meeting`, `end meeting`, `stop meeting`; `เงียบก่อน` / `be quiet`,
   `quiet`, `shh`, `shush`, `mute`, `hush`, `snooze`; `คุยได้แล้ว` / `you can talk`, `talk again`, `unmute`,
   `unsnooze`, `wake up`, `come back`. Slash commands have Thai names with English aliases (`/โหมด` `/mode`,
-  `/ภาษา` `/language`, `/เข้าประชุม` `/join-meeting`, `/ออกประชุม` `/leave-meeting`, `/ตั้งค่า` `/setup`). The name is recognised in
+  `/ภาษา` `/language`, `/โทน` `/tone`, `/เข้าประชุม` `/join-meeting`, `/ออกประชุม` `/leave-meeting`, `/ตั้งค่า` `/setup`). The name is recognised in
   Latin letters too ("hey salid, what did we spend?").
 - **Deleting and cancelling.** Reply to one of Salid's messages with just `ลบ` / `ลบข้อความ` / `ยกเลิกข้อความ` /
   `เอาออก` / `delete` / `remove` / `unsend` and Salid deletes it (all chunks of a long answer, tracked for about
@@ -187,6 +187,17 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   meeting summaries, the daily digest, receipt replies and deep-task reports. Only managers/executives may
   change it; others get a short refusal. A voice meeting uses the language of the voice channel's text chat as
   it was when the meeting started.
+- **Tone of voice** (`/โทน` or `/tone`, `@Salid เปลี่ยนโทนเป็นทางการ` / `change tone to professional`,
+  `โทนอะไร` / `what tone`, `พูดให้ทางการหน่อย` / `speak formally`, or the hub's server and per-channel tone
+  selects): five presets, each in Thai and English: `cheerful` สดใส ร่าเริง (the default), `friendly` เป็นกันเอง
+  สบายๆ, `professional` สุภาพ ทางการ, `concise` กระชับ, `calm` ใจเย็น อบอุ่น. Only the style changes (emoji,
+  exclamations, sentence length, small talk, greeting): she stays "สลิด" / Salid, ค่ะ / คะ, and every rule on
+  accuracy, permissions and confidentiality is the same. Resolution: a member's own tone in their private
+  channel and DMs, else the channel's tone, else the server default (`/tone` with `scope: server` or "use the
+  professional tone across the whole server"). Executives and server managers set channel and server tones; anyone
+  sets their own in their private channel or DMs; an optional server wording note (up to 200 characters, e.g.
+  "always call customers คุณลูกค้า") is refused when it touches permissions or the persona. Chat, voice, briefs and
+  reports use the same tone; the confirmation is already written in the new tone.
 - **Q&A runs on Google ADK**: an `LlmAgent` (Gemini on Vertex) with four ledger `FunctionTool`s that
   are built per request around the asker's scope, so the model cannot widen it. At most 4 tool rounds.
 - **Read links and search the web (`web` feature, default on)**: the `read_web(request)` tool makes a

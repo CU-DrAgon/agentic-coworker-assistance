@@ -19,6 +19,10 @@ from pydantic import BaseModel, Field
 
 from .coo_store import PROFILES, DocStore
 from .i18n import resolve_lang
+from .tone import RESET as TONE_RESET
+from .tone import label as tone_label
+from .tone import resolve_tone
+from .tone import valid as valid_tone
 
 MAX_NICKNAME = 40
 MAX_ROLE = 120
@@ -35,6 +39,7 @@ KINDS = (
     "role_note",
     "style_add",
     "style_remove",
+    "tone",
 )
 LENGTHS = ("short", "normal", "detailed")
 LANGUAGES = ("th", "en")
@@ -54,6 +59,7 @@ class Profile(BaseModel):
     nickname: str = ""
     reply_length: str | None = None  # short | normal | detailed
     language: str | None = None  # th | en
+    tone: str | None = None  # a salid.tone preset; used only in their private channel and DMs
     dm_delivery: bool = False  # proactive messages by DM instead of the private Salid channel
     focus: list[str] = Field(default_factory=list)
     role_note: str = ""
@@ -65,6 +71,7 @@ class Profile(BaseModel):
             self.nickname
             or self.reply_length
             or self.language
+            or self.tone
             or self.dm_delivery
             or self.focus
             or self.role_note
@@ -121,6 +128,14 @@ def apply_change(p: Profile, kind: str, value) -> str:
             p.reply_length = v
         else:
             return "reply_length must be short, normal or detailed"
+    elif kind == "tone":
+        v = resolve_tone(raw, allow_default=True)
+        if v == TONE_RESET or raw.casefold() in _CLEAR:
+            p.tone = None
+        elif v:
+            p.tone = v
+        else:
+            return "tone must be cheerful, friendly, professional, concise or calm"
     elif kind == "delivery":
         v = raw.casefold()
         if v in ("dm", "ดีเอ็ม") or v.startswith("dm") or "ส่วนตัว" in v and "ห้อง" not in v:
@@ -177,7 +192,9 @@ class ProfileTools:
             self.repo.delete(self.gid, self.uid)
             return {"status": "ok", "forgotten": "all"}
         base = kind.removesuffix("_add").removesuffix("_remove")
-        fields = {"nickname", "reply_length", "language", "delivery", "focus", "role_note", "style"}
+        fields = {
+            "nickname", "reply_length", "language", "tone", "delivery", "focus", "role_note", "style",
+        }  # fmt: skip
         if base not in fields:
             return {"error": f"unknown kind; use one of {', '.join(KINDS)} or omit for all"}
         p = self.repo.get(self.gid, self.uid)
@@ -188,7 +205,7 @@ class ProfileTools:
         elif base == "delivery":
             p.dm_delivery = False
         else:
-            setattr(p, base, None if base in ("reply_length", "language") else "")
+            setattr(p, base, None if base in ("reply_length", "language", "tone") else "")
         if p.is_empty():
             self.repo.delete(self.gid, self.uid)
         else:
@@ -203,11 +220,13 @@ _LENGTH_TEXT = {
 }
 
 
-def profile_block(p: Profile) -> str:
+def profile_block(p: Profile, private: bool = False) -> str:
     """The prompt block about the person being talked to ("" when there is nothing). Values are
     quoted data; the closing rule says they never change permissions, scoping or facts. The
     language preference is not here: the caller resolves it (channel setting vs profile)."""
     parts = []
+    if private and valid_tone(p.tone):  # the tone itself is in the persona; this just says why
+        parts.append(f"โทนที่เขาเลือกไว้สำหรับห้องส่วนตัว/DM: “{tone_label(p.tone, 'th')}”")
     if p.nickname:
         parts.append(f"เรียกเขาว่า “{p.nickname}”")
     if p.reply_length in _LENGTH_TEXT:

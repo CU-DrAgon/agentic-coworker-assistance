@@ -625,6 +625,174 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "ตั้งภาษาหลักของเซิร์ฟเวอร์เป็น{label}แล้วค่ะ (ห้องที่ตั้งภาษาไว้เองยังคงเดิม)",
         "en": "The server's default language is now {label} (channels with their own language are unchanged).",
     },
+    # ---------------------------------------------------------------- tone presets (salid.tone)
+    "tone_label_cheerful": {"th": "สดใส ร่าเริง", "en": "Bright & cheerful"},
+    "tone_label_friendly": {"th": "เป็นกันเอง สบายๆ", "en": "Friendly & relaxed"},
+    "tone_label_professional": {"th": "สุภาพ ทางการ", "en": "Professional & formal"},
+    "tone_label_concise": {"th": "กระชับ", "en": "Concise"},
+    "tone_label_calm": {"th": "ใจเย็น อบอุ่น", "en": "Calm & warm"},
+    "tone_label_default": {"th": "ตามค่าเริ่มต้น", "en": "Default"},
+    "tone_desc_cheerful": {
+        "th": "ขี้เล่น อบอุ่น มีอีโมจิเบาๆ (ค่าเริ่มต้น)",
+        "en": "playful and warm, light emoji (the default)",
+    },
+    "tone_desc_friendly": {
+        "th": "คุยสบายๆ เหมือนเพื่อนร่วมงาน ไม่น่ารักเกินจริง อีโมจิไม่เกิน 1 ตัว",
+        "en": "natural and relaxed like a coworker, no cutesy words, at most one emoji",
+    },
+    "tone_desc_professional": {
+        "th": "ภาษาสุภาพแบบงานธุรกิจ ไม่มีอีโมจิ ไม่เล่นมุก ประโยคครบ",
+        "en": "polite business English, no emoji, no jokes, complete sentences",
+    },
+    "tone_desc_concise": {
+        "th": "ตอบสั้นที่สุดที่ยังครบ ใช้บูลเล็ตเมื่อมี 3 ข้อขึ้นไป ไม่มีอีโมจิ ไม่คุยเล่น",
+        "en": "the shortest correct answer, bullets for 3+ items, no emoji, no small talk",
+    },
+    "tone_desc_calm": {
+        "th": "ปลอบให้อุ่นใจ อดทน จังหวะช้า เหมาะกับห้องที่เครียด",
+        "en": "reassuring and patient with a slower rhythm, good for stressful rooms",
+    },
+    "tone_list_line": {"th": "• {label} — {desc}", "en": "• {label} — {desc}"},
+    "tone_current": {
+        "th": "โทนของสลิดในห้องนี้ตอนนี้: {label}",
+        "en": "Salid's tone in this channel right now: {label}",
+    },
+    "tone_current_me": {
+        "th": "โทนที่สลิดใช้คุยกับคุณในห้องส่วนตัว/DM ตอนนี้: {label}",
+        "en": "The tone Salid uses with you in your private channel / DMs right now: {label}",
+    },
+    "tone_current_note": {
+        "th": "หมายเหตุของเซิร์ฟเวอร์: “{note}”",
+        "en": "Server note: “{note}”",
+    },
+    "tone_presets_h": {"th": "โทนที่เลือกได้:", "en": "Available tones:"},
+    "tone_footer": {
+        "th": "ผู้ดูแลหรือผู้บริหารเปลี่ยนได้ด้วย /โทน (เลือกโทน และ scope: เซิร์ฟเวอร์ ถ้าต้องการทั้งเซิร์ฟเวอร์) "
+        "หรือแท็กสลิดแล้วพิมพ์ “เปลี่ยนโทนเป็นทางการ” / “change tone to professional” "
+        "ส่วนในห้องส่วนตัวหรือ DM ทุกคนเปลี่ยนโทนของตัวเองได้",
+        "en": "Admins or executives can change it with /tone (pick a tone, and scope: server for the whole "
+        "server) or tag Salid and say “change tone to professional” / “เปลี่ยนโทนเป็นทางการ”. "
+        "In your private channel or DMs anyone can change their own tone.",
+    },
+    "tone_denied": {
+        "th": "เปลี่ยนโทนของห้องหรือของเซิร์ฟเวอร์ได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารค่ะ "
+        "(โทนของตัวเองเปลี่ยนได้ในห้องส่วนตัวหรือ DM)",
+        "en": "Only server admins or executives can change the tone of a channel or the server "
+        "(you can change your own tone in your private channel or DMs).",
+    },
+    "tone_failed": {
+        "th": "ตั้งโทนไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะคะ",
+        "en": "Could not set the tone. Please try again later.",
+    },
+    "tone_unknown": {
+        "th": "ไม่รู้จักโทนนั้นค่ะ เลือกได้: สดใส, เป็นกันเอง, ทางการ, กระชับ, ใจเย็น",
+        "en": "I don't know that tone. Choose one of: cheerful, friendly, professional, concise, calm.",
+    },
+    "tone_note_too_long": {
+        "th": "หมายเหตุยาวเกิน 200 ตัวอักษรค่ะ ช่วยย่อให้สั้นลงหน่อยนะคะ",
+        "en": "The note is longer than 200 characters. Please shorten it.",
+    },
+    "tone_note_unsafe": {
+        "th": "หมายเหตุนี้แตะเรื่องสิทธิ์ ความลับ หรือตัวตนของสลิด สลิดรับไว้ไม่ได้ค่ะ "
+        "(หมายเหตุใช้ได้เฉพาะเรื่องวิธีพูด เช่น การเรียกลูกค้า)",
+        "en": "That note touches permissions, secrets or Salid's identity, so I can't accept it "
+        "(a note can only be about how to speak, e.g. how to address customers).",
+    },
+    "tone_note_scope": {
+        "th": "หมายเหตุตั้งได้ที่ระดับทั้งเซิร์ฟเวอร์เท่านั้น (scope: เซิร์ฟเวอร์) ค่ะ",
+        "en": "A note can only be set for the whole server (scope: server).",
+    },
+    "tone_note_set": {
+        "th": "จดหมายเหตุเรื่องวิธีพูดของเซิร์ฟเวอร์ไว้แล้วค่ะ: “{note}”",
+        "en": "Saved the server's wording note: “{note}”",
+    },
+    "tone_note_cleared": {
+        "th": "ลบหมายเหตุเรื่องวิธีพูดของเซิร์ฟเวอร์แล้วค่ะ",
+        "en": "Removed the server's wording note.",
+    },
+    "tone_reset_channel": {
+        "th": "ได้ค่ะ ห้องนี้จะใช้โทนตามค่าเริ่มต้นของเซิร์ฟเวอร์ ({label}) นะคะ",
+        "en": "Okay, this channel now follows the server's default tone ({label}).",
+    },
+    "tone_reset_me": {
+        "th": "ได้ค่ะ ต่อไปจะใช้โทนตามห้องและเซิร์ฟเวอร์ ({label}) กับคุณนะคะ",
+        "en": "Okay, I'll go back to the channel and server tone ({label}) with you.",
+    },
+    "tone_me_elsewhere": {
+        "th": "(ใช้ในห้องส่วนตัวและ DM ของคุณ ส่วนในห้องรวมสลิดใช้โทนของห้อง)",
+        "en": "(This applies in your private channel and DMs; in shared rooms I use the room's tone.)",
+    },
+    "tone_cmd_scope_choice_channel": {"th": "ห้องนี้", "en": "This channel"},
+    "tone_cmd_scope_choice_server": {"th": "ทั้งเซิร์ฟเวอร์", "en": "Whole server"},
+    "cmd_tone": _bi("ดูหรือตั้งโทนการพูดของสลิด", "View or set Salid's tone of voice"),
+    "cmd_tone_arg": _bi("โทนใหม่ (ไม่เลือก = ดูโทนปัจจุบัน)", "New tone (empty = view)"),
+    "cmd_tone_scope_arg": _bi(
+        "ขอบเขต: ห้องนี้ (ค่าเริ่มต้น) หรือทั้งเซิร์ฟเวอร์", "Scope: this channel (default) or the whole server"
+    ),
+    "cmd_tone_note_arg": _bi(
+        "หมายเหตุวิธีพูดของเซิร์ฟเวอร์ ไม่เกิน 200 ตัวอักษร (scope: เซิร์ฟเวอร์)",
+        "Server wording note, up to 200 characters (scope: server)",
+    ),
+    "tone_set_cheerful_channel": {
+        "th": "ได้เลยค่ะ ต่อจากนี้สลิดจะพูดแบบสดใสร่าเริงในห้องนี้นะคะ 😊",
+        "en": "Sure thing! I'll keep it bright and cheerful in this channel from now on 😊",
+    },
+    "tone_set_cheerful_server": {
+        "th": "ได้เลยค่ะ ต่อจากนี้สลิดจะพูดแบบสดใสร่าเริงทั้งเซิร์ฟเวอร์นะคะ 😊",
+        "en": "Sure thing! I'll keep it bright and cheerful across the whole server from now on 😊",
+    },
+    "tone_set_cheerful_me": {
+        "th": "ได้เลยค่ะ ต่อจากนี้สลิดจะคุยกับคุณแบบสดใสร่าเริงนะคะ 😊",
+        "en": "Sure thing! I'll be bright and cheerful with you from now on 😊",
+    },
+    "tone_set_friendly_channel": {
+        "th": "โอเคค่ะ ต่อไปจะคุยแบบสบายๆ เป็นกันเองในห้องนี้นะคะ",
+        "en": "Okay, I'll keep things relaxed and casual in this channel from now on.",
+    },
+    "tone_set_friendly_server": {
+        "th": "โอเคค่ะ ต่อไปจะคุยแบบสบายๆ เป็นกันเองทั้งเซิร์ฟเวอร์นะคะ",
+        "en": "Okay, I'll keep things relaxed and casual across the whole server from now on.",
+    },
+    "tone_set_friendly_me": {
+        "th": "โอเคค่ะ ต่อไปจะคุยกับคุณแบบสบายๆ เป็นกันเองนะคะ",
+        "en": "Okay, I'll keep things relaxed and casual with you from now on.",
+    },
+    "tone_set_professional_channel": {
+        "th": "รับทราบค่ะ ต่อจากนี้สลิดจะพูดแบบสุภาพทางการในห้องนี้ค่ะ",
+        "en": "Done. I'll keep a professional tone in this channel from now on.",
+    },
+    "tone_set_professional_server": {
+        "th": "รับทราบค่ะ ต่อจากนี้สลิดจะพูดแบบสุภาพทางการทั้งเซิร์ฟเวอร์ค่ะ",
+        "en": "Done. I'll keep a professional tone across the whole server from now on.",
+    },
+    "tone_set_professional_me": {
+        "th": "รับทราบค่ะ ต่อจากนี้สลิดจะพูดกับคุณแบบสุภาพทางการค่ะ",
+        "en": "Done. I'll keep a professional tone with you from now on.",
+    },
+    "tone_set_concise_channel": {
+        "th": "รับทราบค่ะ ห้องนี้จะตอบสั้นกระชับค่ะ",
+        "en": "Got it. Short answers in this channel from now on.",
+    },
+    "tone_set_concise_server": {
+        "th": "รับทราบค่ะ ทั้งเซิร์ฟเวอร์จะตอบสั้นกระชับค่ะ",
+        "en": "Got it. Short answers across the whole server from now on.",
+    },
+    "tone_set_concise_me": {
+        "th": "รับทราบค่ะ กับคุณจะตอบสั้นกระชับค่ะ",
+        "en": "Got it. Short answers with you from now on.",
+    },
+    "tone_set_calm_channel": {
+        "th": "ได้ค่ะ ต่อไปนี้สลิดจะคุยอย่างใจเย็นและอบอุ่นในห้องนี้นะคะ ไม่ต้องรีบนะคะ",
+        "en": "Of course. I'll keep a calm, gentle tone in this channel from now on. No rush.",
+    },
+    "tone_set_calm_server": {
+        "th": "ได้ค่ะ ต่อไปนี้สลิดจะคุยอย่างใจเย็นและอบอุ่นทั้งเซิร์ฟเวอร์นะคะ ไม่ต้องรีบนะคะ",
+        "en": "Of course. I'll keep a calm, gentle tone across the whole server from now on. No rush.",
+    },
+    "tone_set_calm_me": {
+        "th": "ได้ค่ะ ต่อไปนี้สลิดจะคุยกับคุณอย่างใจเย็นและอบอุ่นนะคะ ไม่ต้องรีบนะคะ",
+        "en": "Of course. I'll keep a calm, gentle tone with you from now on. No rush.",
+    },
     "lang_label_th": {"th": "ไทย", "en": "Thai"},
     "lang_label_en": {"th": "อังกฤษ (English)", "en": "English"},
     "lang_label_auto": {

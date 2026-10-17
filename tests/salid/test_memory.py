@@ -1520,6 +1520,8 @@ def test_company_report_hides_memory_outside_current_retention(bot, world, monke
     topic_day(bot.memory_store, "2026-10-08", 10, old)
     assert bot.team.memory_retention_days(GUILD) == 90
     bot.team.store.set_memory_retention_days(GUILD, 1)
-    monkeypatch.setattr(reports, "build_company_report", lambda _c, _m, inp, _lang: repr(inp))
+    monkeypatch.setattr(
+        reports, "build_company_report", lambda _c, _m, inp, _lang, _tone="": repr(inp)
+    )
     result = bot._report_text(world.g, {MANAGER}, date(2026, 10, 8), "en")
     assert old not in result

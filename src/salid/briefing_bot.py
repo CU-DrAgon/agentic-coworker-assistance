@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from . import briefings as bf
 from .channel_access import split_message
@@ -26,6 +27,7 @@ from .mentions import match_members
 from .profiles import profile_block
 from .scheduling import join_link
 from .tasks import due_for_followup
+from .tone import tone_block
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +103,17 @@ class BriefingMixin:
             return 0
         profile = self._profile_of(guild.id, member.id)  # the recipient's own, nobody else's
         lang = profile.language or self._guild_lang(guild.id)
+        tone, note = self._tone_for(
+            SimpleNamespace(guild=None, channel=None), guild, member, profile
+        )  # a DM: the person's own tone, else the server default
         text = await asyncio.to_thread(
-            bf.build_brief, self.llm, self.s.gemini_model, inp, lang, profile_block(profile)
+            bf.build_brief,
+            self.llm,
+            self.s.gemini_model,
+            inp,
+            lang,
+            profile_block(profile),
+            tone_block(tone, resolve_lang(lang), note),
         )
         if inp.catchup:  # deterministic and link-complete: appended, never rewritten by the model
             text = f"{text}\n\n{inp.catchup}"

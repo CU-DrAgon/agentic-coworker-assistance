@@ -56,6 +56,7 @@ from .meeting import (
 from .mentions import tag_candidates
 from .qa import THAI_DAYS
 from .speech import pcm_duration_s, pitch_pcm, say, with_particle
+from .tone import DEFAULT_TONE, effective_tone, voice_line, voice_note
 from .voice_actions import rebind_actions
 
 if TYPE_CHECKING:
@@ -523,9 +524,16 @@ def thai_date_line(now) -> str:
 
 
 def build_instruction_en(
-    settings: Any, language: str = "en", now=None, qa: bool = True, history: str = ""
+    settings: Any,
+    language: str = "en",
+    now=None,
+    qa: bool = True,
+    history: str = "",
+    tone: str = DEFAULT_TONE,
+    tone_note: str = "",
 ) -> str:
-    """The English system instruction (guild language "en"): English persona, no Thai particles."""
+    """The English system instruction (guild language "en"): English persona, no Thai particles.
+    `tone` (salid.tone) sets the persona line, the same style as the text answers."""
     now = now or settings.now()
     p = (
         f"Today is {now:%A, %B} {now.day}, {now.year}.\n"
@@ -549,9 +557,7 @@ def build_instruction_en(
         "- A word that sounds like your name but sits mid-sentence and is not addressing you "
         "(for example “Salad”, “Siri”, “slip”) is not a call: stay quiet.\n"
         "- Answer in 1-3 short sentences, natural like real talk. Never read long lists aloud.\n"
-        "- Persona: a friendly, cheerful, easygoing woman's voice. Speak plain natural English only. "
-        "Never use Thai words or Thai particles, and refer to yourself only as “Salid”. Never make "
-        "animal sounds.\n"
+        f"- {voice_line(tone, 'en')}\n"
         "- When you join the room, do not say anything yet: wait until someone greets you or talks to you. "
         "If nobody calls your name, the system never plays your voice at all, so do not speak on your own "
         "when you join or when you hear someone unmute their mic / background noise.\n"
@@ -623,6 +629,8 @@ def build_instruction_en(
         p += "Language: reply in the language the speaker uses; default to English. Never use Thai particles.\n"
     else:
         p += "Language: always speak English (keep names and vendors as they are).\n"
+    if note := voice_note(tone_note, "en"):
+        p += note + "\n"
     if history:
         p += (
             "\nContext: what people in the room just said (reference only, do not answer it):\n"
@@ -639,11 +647,14 @@ def build_instruction(
     qa: bool = True,
     history: str = "",
     lang: str | None = None,
+    tone: str = DEFAULT_TONE,
+    tone_note: str = "",
 ) -> str:
     """System instruction for the Live session (built per connect so the date is current). Thai by
-    default; English persona and rules when the session's resolved `lang` (or `language`) is en."""
+    default; English persona and rules when the session's resolved `lang` (or `language`) is en.
+    `tone`: the salid.tone preset of the meeting's text channel (persona line, TH and EN)."""
     if lang == "en" or language == "en":
-        return build_instruction_en(settings, language, now, qa, history)
+        return build_instruction_en(settings, language, now, qa, history, tone, tone_note)
     now = now or settings.now()
     p = (
         f"{thai_date_line(now)}\n"
@@ -661,7 +672,7 @@ def build_instruction(
         "- คำที่เสียงคล้ายชื่อคุณแต่อยู่กลางประโยคและไม่ใช่การเรียกคุณ (เช่น “สนิท” ใน “เขาสนิทกันมาก”, “สลิป”, “สิริ”) "
         "ไม่ใช่การเรียกชื่อ ให้เงียบ\n"
         "- ตอบสั้น 1-3 ประโยค เป็นธรรมชาติเหมือนคุยกันจริง ไม่อ่านเป็นรายการยาว ๆ\n"
-        "- บุคลิกน่ารัก ร่าเริง เป็นกันเอง เสียงผู้หญิง ลงท้ายด้วย “ค่ะ” “คะ” “นะคะ” ห้ามส่งเสียงสัตว์\n"
+        f"- {voice_line(tone, 'th')}\n"
         "- ตอนเข้าห้องอย่าเพิ่งพูดอะไร รอจนมีคนทักหรือคุยกับคุณ ถ้าไม่มีใครเรียกชื่อคุณ ระบบจะไม่ส่งเสียงของคุณออกไปเลย "
         "ดังนั้นอย่าพูดเองตอนเข้าห้องหรือตอนได้ยินคนเปิดไมค์ / เสียงรบกวน\n"
         "- ถ้าไม่ชัดว่านี่คือการประชุมไหม (ไม่มีนัดหมาย คุยกันสบาย ๆ) และไม่มีใครคุยกับคุณมาสักพัก คุณถามได้เองแบบเพื่อนร่วมงาน "
@@ -711,6 +722,8 @@ def build_instruction(
         p += "ภาษา: ตอบด้วยภาษาเดียวกับคนที่พูดกับคุณ (ไทยหรืออังกฤษ)\n"
     else:
         p += "ภาษา: พูดภาษาไทย\n"
+    if note := voice_note(tone_note, "th"):
+        p += note + "\n"
     if history:
         p += "\nบริบท: สิ่งที่คนในห้องเพิ่งคุยกัน (ใช้อ้างอิงเท่านั้น ไม่ต้องตอบ):\n" + history + "\n"
     return p
@@ -956,6 +969,18 @@ class LiveVoice:
     async def _qa_enabled(self) -> bool:
         return await asyncio.to_thread(self.bot.team.enabled, self.session.guild_id, "qa")
 
+    def _tone_kw(self) -> dict:
+        """The tone of the meeting's text channel (so the voice sounds like the chat). Only read at
+        connect: a tone changed mid-meeting reaches the spoken answers of `ask_salid` at once and
+        the persona line at the next (re)connect."""
+        sess = self.session
+        try:
+            cid = sess.minutes_channel_id or getattr(sess.text_channel, "id", 0)
+            g = self.bot.team.current(sess.guild_id)
+            return {"tone": effective_tone(g, cid), "tone_note": g.tone_note}
+        except Exception:
+            return {}
+
     async def build_config(self) -> types.LiveConnectConfig:
         s, sess = self.bot.s, self.session
         qa = await self._qa_enabled()
@@ -975,7 +1000,7 @@ class LiveVoice:
         return types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             system_instruction=build_instruction(
-                s, sess.language, s.now(), qa=qa, history=history, lang=sess.lang
+                s, sess.language, s.now(), qa=qa, history=history, lang=sess.lang, **self._tone_kw()
             ),
             tools=tools,
             speech_config=types.SpeechConfig(

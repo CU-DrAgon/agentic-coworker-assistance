@@ -225,6 +225,8 @@ async def test_answer_asks_with_the_message_guild(bot, world, monkeypatch):
             "user_id": STAFF,
             "history": "",
             "language": "th",
+            "tone": "cheerful",  # the guild default (salid.tone)
+            "tone_note": "",
             "interjection": False,
             "deck": True,
         }
@@ -427,6 +429,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "ตามทัน",
         "catchup",
         "report",
+        "โทน",
+        "tone",
     }
     assert all(c.guild_only for n, c in cmds.items() if n not in ("บริษัท", "company"))
 

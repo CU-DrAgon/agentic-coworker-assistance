@@ -47,6 +47,7 @@ from .reminders import REMINDERS_PROMPT
 from .search import SEARCH_PROMPT
 from .secretary import SecretaryContext, SecretaryTools, build_secretary_tools
 from .store import Store, duplicate_extras, is_active, pick_keep
+from .tone import DEFAULT_TONE, tone_block, tone_override
 from .web_read import make_read_web
 from .wiki import WIKI_PROMPT
 
@@ -1037,30 +1038,35 @@ class FileActions:
     start_deep_task: Callable[[str], str] | None = None  # -> "started" or a reason
 
 
-PERSONA = {
+# Who she is (never changes with the tone); HOW she talks is `salid.tone.tone_block`.
+PERSONA_IDENTITY = {
     "th": (
-        "คุณคือ “สลิด” เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามว่าใครทำอะไร ตามงาน รายงาน และรักษาความลับตามลำดับชั้น role โดยเสนอขออนุญาตเจ้าของข้อมูลเมื่อผู้ถามยังไม่มีสิทธิ์เห็น) พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: "
-        "สั้นและเป็นธรรมชาติเป็นค่าเริ่มต้น เป็นผู้หญิง เรียกตัวเองว่า “สลิด” (ห้ามใช้ ผม/ฉัน/ครับ) ใช้คำลงท้ายอย่าง ค่ะ นะคะ ได้ค่ะ ตามจังหวะที่คนไทยพูดกัน (ประโยคคำถามใช้ “คะ”) "
-        "ปรับน้ำเสียงตามอีกฝ่าย (เขาเล่นมาก็เล่นด้วย เขาจริงจังก็จริงจัง) เรียกชื่อคนที่คุยด้วยบ้างเป็นครั้งคราว และจำเรื่องที่คุยกันมาก่อนหน้า\n"
+        "คุณคือ “สลิด” เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามว่าใครทำอะไร ตามงาน รายงาน และรักษาความลับตามลำดับชั้น role โดยเสนอขออนุญาตเจ้าของข้อมูลเมื่อผู้ถามยังไม่มีสิทธิ์เห็น) "
+        "เป็นผู้หญิง เรียกตัวเองว่า “สลิด” (ห้ามใช้ ผม/ฉัน/ครับ) ใช้คำลงท้ายอย่าง ค่ะ นะคะ ได้ค่ะ ตามจังหวะที่คนไทยพูดกัน (ประโยคคำถามใช้ “คะ”)\n"
     ),
     "en": (
         "You are “Salid”, a capable, warm teammate and secretary in the team's Discord chat, and the team's executive assistant and coordinator: you track who is doing what, follow up on work, report, and keep confidential information according to the role hierarchy, offering to ask the owner when the asker may not see something. "
-        "Talk like a real person, not a robot: short and natural by default, relaxed, polite, with a "
-        "bit of warmth. Match the other person's energy (playful with playful, serious with serious), "
-        "use their name now and then, and remember what was said earlier. You are a friendly woman "
-        "and call yourself “Salid”; write natural English only, with no Thai words, Thai particles "
+        "You are a woman and call yourself “Salid”; write natural English only, with no Thai words, Thai particles "
         "(like ka / na ka) or Thai-style honorific endings. ALWAYS reply in English, even if the user "
         "writes in Thai or the memory, documents and tool results are in Thai: translate or "
         "paraphrase anything you quote (keep only proper names such as people, vendors and "
         "product names as they are).\n"
     ),
     "auto": (
-        "คุณคือ “สลิด” (Salid) เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามงานและรายงาน รักษาความลับตามลำดับชั้น / executive assistant and coordinator) พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: "
-        "สั้นและเป็นธรรมชาติเป็นค่าเริ่มต้น ปรับน้ำเสียงตามอีกฝ่าย เรียกชื่อคนที่คุยด้วยบ้าง และจำเรื่องที่คุยกันมา "
+        "คุณคือ “สลิด” (Salid) เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามงานและรายงาน รักษาความลับตามลำดับชั้น / executive assistant and coordinator) "
         "ตอบด้วยภาษาเดียวกับข้อความล่าสุดของผู้ใช้ (reply in the same language as the user's latest "
         "message): ถ้าพิมพ์ไทยตอบไทยธรรมชาติ เป็นผู้หญิง เรียกตัวเองว่า “สลิด” (ห้ามใช้ ผม/ฉัน/ครับ) ลงท้ายด้วยคำว่าค่ะ (ประโยคคำถามใช้ “คะ”) ถ้าพิมพ์อังกฤษตอบอังกฤษแบบเป็นกันเอง\n"
     ),
 }
+
+
+def persona(language: str = "th", tone: str = DEFAULT_TONE, note: str = "") -> str:
+    """Identity + the style of `tone` (th / en / auto), plus the owner's optional wording note."""
+    lang = language if language in PERSONA_IDENTITY else "th"
+    return PERSONA_IDENTITY[lang] + tone_block(tone, lang, note)
+
+
+PERSONA = {lang: persona(lang) for lang in PERSONA_IDENTITY}  # the default (cheerful) tone
 
 HUMAN_STYLE_PROMPT = (
     "สไตล์การตอบ: เหมือนเพื่อนร่วมงานที่เก่ง ไม่ใช่ระบบ. คุยเล่นหรือถามสั้นๆ ตอบ 1-2 ประโยค ไม่ใช้หัวข้อหรือบูลเล็ตในการคุยทั่วไป "
@@ -1419,14 +1425,19 @@ def stable_prompt(
     secretary: bool = False,
     chat: bool = False,
     particle: str = "ค่ะ",
+    tone: str = DEFAULT_TONE,
+    tone_note: str = "",
 ) -> str:
-    """The part of the system prompt that is identical for every request in one language and
+    """The part of the system prompt that is identical for every request in one language, tone and
     tool set (persona, rules, capabilities, duplicate rules, memory guidance, and the guidance of
     each tool family that is registered). It comes first so Gemini's implicit prefix cache can
-    reuse it across requests and tool rounds. `particle`: the persona's politeness particle."""
+    reuse it across requests and tool rounds (the tone is part of the text, so a cached prefix is
+    never shared across tones). `particle`: the persona's politeness particle."""
+    lang = language if language in PERSONA_IDENTITY else "th"
     p = (
-        PERSONA[language if language in PERSONA else "th"]
+        persona(lang, tone, tone_note)
         + HUMAN_STYLE_PROMPT
+        + tone_override(tone, lang)
         + "คุยได้ทุกเรื่อง: คุยเล่น ทักทาย ให้กำลังใจ ตอบความรู้ทั่วไป "
         "ช่วยคิดไอเดีย ร่างข้อความ แปลภาษา สรุปหรืออธิบายเรื่องต่างๆ "
         "ถ้าเป็นข่าวหรือข้อมูลล่าสุดที่อาจไม่รู้ ให้บอกตรงๆ ว่าอาจไม่อัปเดต\n"
@@ -1544,8 +1555,11 @@ def system_prompt(
     contests: bool = False,
     bizfin: bool = False,
     deck: bool = False,
+    tone: str = DEFAULT_TONE,
+    tone_note: str = "",
 ) -> str:
     """`language`: th / en answer in that language; auto = the language of the user's message.
+    `tone`: a salid.tone preset (how she talks); `tone_note`: the owner's wording note.
     `chat`: the settings tools exist; `people`: display names that may be tagged (None = no
     tagging, e.g. a DM). Stable part first, per-request part last (see `stable_prompt`)."""
     now = now or settings.now()
@@ -1569,6 +1583,8 @@ def system_prompt(
         secretary=secretary,
         chat=chat,
         particle=particle_of(settings),
+        tone=tone,
+        tone_note=tone_note,
     ) + volatile_prompt(
         settings,
         now,
@@ -2026,6 +2042,8 @@ def build_agent(
     bizfin: bool = False,
     max_rounds: int = MAX_ROUNDS,
     deck: bool = False,
+    tone: str = DEFAULT_TONE,
+    tone_note: str = "",
 ) -> LlmAgent:
     """One ADK LlmAgent per request. `model` is injectable so tests stay offline."""
     _ensure_vertex_env(settings)
@@ -2056,6 +2074,8 @@ def build_agent(
         contests=contests,
         bizfin=bizfin,
         deck=deck,
+        tone=tone,
+        tone_note=tone_note,
     )
     model_calls = 0
 
@@ -2167,6 +2187,8 @@ async def ask_async(
     tool_overrides: list | None = None,
     deck: bool = False,
     on_tool_call=None,  # callable(name), for every tool the model calls (from the agent's thread)
+    tone: str = DEFAULT_TONE,  # salid.tone preset: how she talks (identity never changes)
+    tone_note: str = "",  # the owner's wording note, appended to the tone
 ) -> Answer:
     """Answer a question with an ADK agent. `history` is recent chat text, context only. Scope is decided here in code, before any data
     reaches the model: tools are built per request around a LedgerTools bound to `guild_id`
@@ -2256,6 +2278,8 @@ async def ask_async(
         bizfin="unit_economics" in tool_names,
         max_rounds=max_rounds,
         deck=sink is not None,
+        tone=tone,
+        tone_note=tone_note,
     )
     runner = InMemoryRunner(agent=agent, app_name=APP_NAME)
     adk_user, session_id = str(user_id), uuid.uuid4().hex
@@ -2355,6 +2379,8 @@ def ask(
     tool_overrides: list | None = None,
     deck: bool = False,
     on_tool_call=None,  # callable(name), for every tool the model calls (from the agent's thread)
+    tone: str = DEFAULT_TONE,  # salid.tone preset: how she talks (identity never changes)
+    tone_note: str = "",  # the owner's wording note, appended to the tone
 ) -> Answer:
     """Blocking wrapper around `ask_async` (call from a worker thread, e.g. asyncio.to_thread)."""
     return asyncio.run(
@@ -2384,5 +2410,7 @@ def ask(
             tool_overrides=tool_overrides,
             deck=deck,
             on_tool_call=on_tool_call,
+            tone=tone,
+            tone_note=tone_note,
         )
     )

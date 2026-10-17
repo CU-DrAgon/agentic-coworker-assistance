@@ -109,6 +109,7 @@ def test_document_layout(gstore):
         "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
         "channel_languages", "default_language", "memory_retention_days",
         "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
+        "channel_tones", "default_tone", "tone_note",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
 
