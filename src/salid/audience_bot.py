@@ -39,11 +39,8 @@ class AudienceMixin:
     def langs_for(self, guild_id: int, channel_id: int | None, *user_ids: int) -> list[str]:
         """The ordered languages of a message in `channel_id` (None: the company language) to the
         people `user_ids`."""
-        try:
-            if channel_id is None:
-                company = aud.company_lang(self.team.current(guild_id))
-            else:
-                company = self.team.channel_language(guild_id, channel_id)
+        try:  # one company language for the whole server (no per-channel overrides)
+            company = aud.company_lang(self.team.current(guild_id))
         except Exception:
             company = "auto"
         people = [self._person_extra(guild_id, u) for u in user_ids if u]

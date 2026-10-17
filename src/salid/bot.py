@@ -1144,6 +1144,12 @@ class SecretaryBot(
         if cmd is None or message.guild is None:
             return False
         user = message.author
+        if not server_cmd:  # "speak Thai" with no scope: the person's own language
+            cmd_p = ("unset", None) if cmd == "auto" else ("set", cmd)
+            company = self._person_langs(message.guild.id)
+            reply = self._set_personal_language(message.guild.id, user.id, cmd_p, company)
+            await message.reply(reply, mention_author=False)
+            return True
         if not hasattr(user, "guild_permissions") or not (
             can_manage_guild(user) or self.is_exec_member(user)
         ):
@@ -2891,6 +2897,25 @@ class SecretaryBot(
         language_cb = app_commands.choices(
             language=[app_commands.Choice(name=LANGUAGE_LABELS[x], value=x) for x in LANGS]
         )(language_cb)
+
+        async def company_language_cb(interaction: discord.Interaction, language: str):
+            await self.handle_company_language(interaction, language)
+
+        company_language_cb = app_commands.guild_only()(company_language_cb)
+        company_language_cb = app_commands.describe(language=t("cmd_language_arg"))(
+            company_language_cb
+        )
+        company_language_cb = app_commands.choices(
+            language=[
+                app_commands.Choice(name=LANGUAGE_LABELS[x], value=x) for x in LANGS if x != "auto"
+            ]
+        )(company_language_cb)
+        for name in ("company-language", "ภาษาบริษัท"):
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name, description=t("cmd_company_language"), callback=company_language_cb
+                )
+            )
         for name in LANGUAGE_COMMANDS:
             self.tree.add_command(
                 app_commands.Command(name=name, description=t("cmd_language"), callback=language_cb)
@@ -3210,44 +3235,51 @@ class SecretaryBot(
         await send(t("memory_set", lang, days=days))
 
     async def handle_language(self, interaction: discord.Interaction, language: str | None) -> None:
-        """/ภาษา: show this channel's reply language, or (executives / server managers) set it."""
-        guild, channel, user = interaction.guild, interaction.channel, interaction.user
+        """/language: show the languages Salid uses for YOU (company + your personal one), or set
+        your personal language. The company language is /company-language (executives)."""
+        guild, user = interaction.guild, interaction.user
         send = interaction.response.send_message
-        if guild is None or channel is None:
+        if guild is None:
             await send(t("setup_denied", self._interaction_lang(interaction)), ephemeral=True)
             return
         await asyncio.to_thread(self.team.current, guild.id)
         lang = self._interaction_lang(interaction)
+        company = self._person_langs(guild.id)
         if language is None:
-            current = self.team.channel_language(guild.id, channel.id)
-            lines = [
-                t("lang_current", lang, label=t(f"lang_label_{current}", lang)),
-                "",
-                t("lang_footer", lang),
-            ]
-            await send("\n".join(lines), ephemeral=True)
+            mine = self._person_langs(guild.id, user.id)
+            labels = " + ".join(t(f"lang_label_{x}", lang) for x in mine)
+            await send(t("lang_current", lang, label=labels), ephemeral=True)
             return
-        if language not in LANGS:
+        if language not in LANGS or language == "auto":
+            await send(t("lang_failed", lang), ephemeral=True)
+            return
+        reply = self._set_personal_language(guild.id, user.id, ("set", language), company)
+        await send(reply, ephemeral=True)
+
+    async def handle_company_language(
+        self, interaction: discord.Interaction, language: str
+    ) -> None:
+        """/company-language: the whole server's language (executives / server managers)."""
+        guild, user = interaction.guild, interaction.user
+        send = interaction.response.send_message
+        if guild is None:
+            await send(t("setup_denied", self._interaction_lang(interaction)), ephemeral=True)
+            return
+        await asyncio.to_thread(self.team.current, guild.id)
+        lang = self._interaction_lang(interaction)
+        if language not in LANGS or language == "auto":
             await send(t("lang_failed", lang), ephemeral=True)
             return
         if not self._may_configure(user):
             await send(t("lang_denied", lang), ephemeral=True)
             return
         try:
-            await asyncio.to_thread(
-                self.team.set_channel_language,
-                guild.id,
-                channel.id,
-                self._channel_language_value(guild.id, language),
-            )
+            await self._apply_server_language(guild, language, True)
         except Exception:
-            logger.exception("could not save channel language")
+            logger.exception("could not save server language")
             await send(t("lang_failed", lang), ephemeral=True)
             return
-        if language == "auto" and self.team.language_chosen(guild.id):
-            language = self.team.channel_language(guild.id, channel.id)  # the company language
-        new = lang if language == "auto" else language  # confirm in the language just chosen
-        await send(t("lang_set", new, label=t(f"lang_label_{language}", new)))
+        await send(t("server_lang_set", language, label=t(f"lang_label_{language}", language)))
 
     async def handle_setup(self, interaction: discord.Interaction) -> None:
         """/ตั้งค่า: DM-style ephemeral reply with a one-time link to the hub for this guild."""

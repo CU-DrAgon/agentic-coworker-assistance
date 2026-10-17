@@ -116,10 +116,8 @@ def resolve_language(
     channel_languages: dict[str, str],
     default_language: str = DEFAULT_LANGUAGE,
 ) -> str:
-    """The channel's language setting: its own override, else the guild default (th/en/auto)."""
-    explicit = channel_languages.get(str(channel_id))
-    if explicit in LANGS:
-        return explicit
+    """The guild's language (th/en/auto). Per-channel overrides are no longer used: language is
+    set for the whole server, and per person (the owner's rule, 2026-10-17)."""
     return default_language if default_language in LANGS else DEFAULT_LANGUAGE
 
 
@@ -1068,7 +1066,12 @@ CATALOG: dict[str, dict[str, str]] = {
     "cmd_setup": _bi("เชื่อมเซิร์ฟเวอร์กับศูนย์บัญชาการ (ผู้ดูแล)", "Link server to command center (admins)"),
     "cmd_mode": _bi("ดูหรือตั้งโหมดการคุยของสลิดในห้องนี้", "View or set Salid's mode here"),
     "cmd_mode_arg": _bi("โหมดใหม่ (ไม่เลือก = ดูโหมดปัจจุบัน)", "New mode (empty = view)"),
-    "cmd_language": _bi("ดูหรือตั้งภาษาที่สลิดตอบในห้องนี้", "View or set Salid's language here"),
+    "cmd_language": _bi(
+        "ภาษาส่วนตัวของคุณ (สลิดจะตอบคุณเพิ่มเป็นภาษานี้)", "Your personal language (Salid adds it for you)"
+    ),
+    "cmd_company_language": _bi(
+        "ภาษาบริษัท ใช้ทั้งเซิร์ฟเวอร์ (ผู้บริหาร)", "Company language for the whole server (executives)"
+    ),
     "cmd_language_arg": _bi("ภาษาใหม่ (ไม่เลือก = ดูภาษาปัจจุบัน)", "New language (empty = view)"),
     "cmd_show_captions": _bi(
         "แสดงข้อความถอดเสียงสดในแชตประชุมนี้", "Show live captions (ASR text) in this meeting"
