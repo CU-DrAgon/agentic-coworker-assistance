@@ -85,9 +85,7 @@ class Settings(BaseSettings):
     # Barge-in: "intentional" (default) = background noise or someone else talking never cuts Salid
     # off; she stops only when told to ("สลิด หยุด", "เดี๋ยวก่อน", "stop", "wait", or her name).
     # "any" = the old behaviour: any detected speech interrupts her (good in quiet rooms only).
-    live_barge_in: str = (
-        "any"  # intentional | any — people may interrupt her freely (owner, 2026-10-18)
-    )
+    live_barge_in: str = "intentional"  # the person she answers can talk over her (0.8 s of clear speech); notifications, whispers and side talk never stop her
     # Voice meetings stay voice: no "🔊" echoes, per-answer text or join announcement in the text
     # chat (the end-of-meeting summary and replies to messages typed to Salid are always posted).
     meeting_text_echo: bool = (
@@ -119,7 +117,9 @@ class Settings(BaseSettings):
     engaged_timeout_seconds: float = 1800.0  # dead air is fine: the exchange stays open until the caller closes it (owner, 2026-10-18)
     # Engaged by the name alone (no question): back to listening after this long unless someone
     # addresses Salid (SALID_ENGAGED_BARE_TIMEOUT_SECONDS).
-    engaged_bare_timeout_seconds: float = 300.0  # "Salid?" … thinking for minutes is fine, she waits
+    engaged_bare_timeout_seconds: float = (
+        300.0  # "Salid?" … thinking for minutes is fine, she waits
+    )
     # "Be quiet" / "เงียบก่อน": Salid says nothing and does not wake on a bare name until someone
     # says her name with words again, like a person would. 0 = no timer (default); a positive value
     # ends the silence after that many seconds instead (SALID_HUSH_HOLD_SECONDS).
