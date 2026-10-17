@@ -94,13 +94,13 @@ def test_domain_pack_labels_english():
 def test_flight_prompts_and_notes_english():
     flight = flights.normalize_flight("TG 676")
     assert no_thai(flights.status_prompt(flight, "2026-01-02", "2026-01-01", "en"))
-    assert "สายการบิน" in flights.status_prompt(flight, "2026-01-02", "2026-01-01")
+    assert "สายการบิน" in flights.status_prompt(flight, "2026-01-02", "2026-01-01", "th")
     p = flights.prices_prompt("BKK", "NRT", "2026-02-01", "", 1, "economy", "2026-01-01", "en")
     assert "in English" in p
     svc = flights.FlightService(client=object(), model="m", today=lambda: date(2026, 1, 1))
     svc._ground = lambda prompt: {"text": "ok", "sources": []}
     assert no_thai(str(svc.status("TG 676", "2026-01-02", "en")))
-    assert "ข้อมูลจาก" in svc.status("TG 676", "2026-01-02")["note"]
+    assert "ข้อมูลจาก" in svc.status("TG 676", "2026-01-02", "th")["note"]
     assert no_thai(str(svc.prices("BKK", "NRT", "2026-02-01", lang="en")["label"]))
 
 

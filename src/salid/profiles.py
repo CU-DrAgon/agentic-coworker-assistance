@@ -282,7 +282,7 @@ class ProfileMixin:
         """th / en for a private message to one person: their own language if set, else the
         guild default (`auto` then follows `text`)."""
         own = self._profile_of(guild_id, user_id).language
-        return resolve_lang(own or self.team.current(guild_id).default_language, text)
+        return resolve_lang(own or self.team.current(guild_id).language_setting, text)
 
     def _profile_actions(self, gid: int, uid: int) -> dict:
         """ChatActions fields, bound to this guild and this speaker."""

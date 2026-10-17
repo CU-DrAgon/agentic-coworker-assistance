@@ -1059,7 +1059,11 @@ async def test_memory_command_status_and_permissions(bot, world):
     await bot.handle_memory(exec_it, 365)  # executives (env id) may change it too
     assert bot.team.memory_retention_days(GUILD) == 365
     bot.guilds_store.save_settings(
-        GUILD, GuildSettingsUpdate(features=dict(memory=False), memory_retention_days=365), "x"
+        GUILD,
+        GuildSettingsUpdate(
+            features=dict(memory=False), memory_retention_days=365, default_language="th"
+        ),
+        "x",
     )
     bot.team._cache.clear()
     off = Interaction(world.g, member(world.g, STAFF), world.gen)

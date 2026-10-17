@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 import discord
 
 from .coo_store import DocStore
-from .i18n import t
+from .i18n import locale_lang, t
 
 logger = logging.getLogger(__name__)
 
@@ -287,8 +287,7 @@ class DMGuildMixin:
 
     # ------------------------------------------------------------- button and slash command
     async def handle_company_pick(self, interaction, guild_id: int, user_id: int) -> None:
-        locale = str(getattr(interaction, "locale", "") or "")
-        lang = "en" if locale and not locale.startswith("th") else "th"
+        lang = locale_lang(getattr(interaction, "locale", ""))
         if interaction.user.id != user_id:
             await interaction.response.send_message(t("dmg_not_yours", lang), ephemeral=True)
             return
@@ -308,8 +307,7 @@ class DMGuildMixin:
                 logger.exception("could not answer the held DM")
 
     async def handle_company_switch(self, interaction, act: str, guild_id: int, user_id: int):
-        locale = str(getattr(interaction, "locale", "") or "")
-        lang = "en" if locale and not locale.startswith("th") else "th"
+        lang = locale_lang(getattr(interaction, "locale", ""))
         if interaction.user.id != user_id:
             await interaction.response.send_message(t("dmg_not_yours", lang), ephemeral=True)
             return

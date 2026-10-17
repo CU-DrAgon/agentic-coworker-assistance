@@ -13,11 +13,11 @@ CHAT_CHANNEL_NAME = "คุยกับน้องสลิด"
 CHAT_CHANNEL_NAME_EN = "chat-with-salid"  # created in guilds whose default language is English
 
 
-def mode_label(mode: str, lang: str = "th") -> str:
+def mode_label(mode: str, lang: str = "en") -> str:
     return t(f"mode_label_{mode}", lang)
 
 
-def mode_help(mode: str, lang: str = "th", days: int = 90) -> str:
+def mode_help(mode: str, lang: str = "en", days: int = 90) -> str:
     return t(f"mode_help_{mode}", lang, days=days)
 
 
@@ -27,7 +27,7 @@ def mode_choice_name(mode: str) -> str:
     return f"{th} · {en.split(' ', 1)[1]}"
 
 
-def chat_channel_name(lang: str = "th") -> str:
+def chat_channel_name(lang: str = "en") -> str:
     return CHAT_CHANNEL_NAME_EN if lang != "th" else CHAT_CHANNEL_NAME
 
 

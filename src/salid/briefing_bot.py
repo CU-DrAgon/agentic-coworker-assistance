@@ -48,7 +48,7 @@ class BriefingMixin:
         return self.team.enabled(gid, "briefings") and self.team.enabled(gid, "memory")
 
     def _guild_lang(self, gid: int) -> str:
-        return resolve_lang(self.team.current(gid).default_language)
+        return resolve_lang(self.team.current(gid).language_setting)
 
     def _all_prefs(self, gid: int) -> dict[int, bf.NotifPrefs]:
         """Members' stored preferences, cached for a few minutes (blocking on a miss)."""

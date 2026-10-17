@@ -335,7 +335,7 @@ def test_three_tiers_for_a_stock_quote(clock):
     assert q["status"] == "web_reference" and q["price"] == 30.525 and q["n_sources"] == 2
     assert q["confidence"] == "medium" and {x["url"] for x in q["sources"]} == {
         "https://set.or.th/x", "https://settrade.com/y"}  # fmt: skip
-    assert "ราคาอ้างอิงจาก 2 แหล่ง (อ่านจากหน้าเว็บ)" in q["estimate_text"]
+    assert "Reference price 30.52 THB (median) from 2 web source(s)" in q["estimate_text"]
     assert "https://set.or.th/x" in q["estimate_text"] and "2026-10-16 10:30" in q["estimate_text"]
     # tier 3: sources differ (> 0.5%) or lack a time -> range, low confidence
     differ = [
@@ -345,12 +345,15 @@ def test_three_tiers_for_a_stock_quote(clock):
     q = blocked_data(Clock(), GClient(json.dumps(differ)))[0].quote("PTT.BK")
     assert q["status"] == "estimate" and q["range"] == {"low": 30.0, "high": 31.0}
     assert q["price"] == 30.5 and q["confidence"] == "low"
-    assert "ราคาโดยประมาณ" in q["estimate_text"] and "ช่วง 30.00–31.00" in q["estimate_text"]
+    assert "Estimate ~30.50 THB" in q["estimate_text"] and "range 30.00-31.00" in q["estimate_text"]
     no_time = blocked_data(Clock(), GClient(json.dumps([gq("PTT.BK", 30.5, as_of="")])))[0].quote(
         "PTT.BK"
     )
     assert no_time["status"] == "estimate" and no_time["sources"][0]["as_of"] == "ไม่ระบุเวลา"
-    assert no_time["sources"][0]["missing"] == ["เวลา"] and "ขาด: เวลา" in no_time["estimate_text"]
+    assert (
+        no_time["sources"][0]["missing"] == ["เวลา"]
+        and "[missing: เวลา]" in no_time["estimate_text"]
+    )
     # tier 4: nothing usable
     for bad in ("[]", "no idea", json.dumps([gq("PTT.BK", price="n/a")])):
         assert blocked_data(Clock(), GClient(bad))[0].quote("PTT.BK")["status"] == "unavailable"
@@ -676,7 +679,7 @@ async def test_alert_is_delivered_by_dm_once_and_not_when_flag_off(bot, world, m
     set_features(bot, markets=True)
     bot._markets_last = -1e9
     assert await bot._markets_due(FRI_10AM) == 1
-    assert "PTT" in world.staff.dms[0][0] and "ไม่ใช่คำแนะนำการลงทุน" in world.staff.dms[0][0]
+    assert "PTT" in world.staff.dms[0][0] and "not investment advice" in world.staff.dms[0][0]
     bot._markets_last = -1e9
     bot.market_poller._last.clear()
     assert await bot._markets_due(FRI_10AM) == 0  # once per condition per day

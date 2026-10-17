@@ -37,7 +37,7 @@ class Disclosure(BaseModel):
     description: str = ""  # neutral text shown to the owner
     message_ids: list[int] = Field(default_factory=list)  # the source records
     status: str = "pending"  # pending | approved | declined
-    lang: str = "th"
+    lang: str = "en"
     requested_at: str = ""
     granted_at: str = ""
     expires_at: str = ""  # "" = no expiry
@@ -56,7 +56,7 @@ def pick_owner(hits: Collection[MemoryMessage], ranks: dict[int, int]) -> int:
     return max(counts, key=lambda a: (ranks.get(a, -1), counts[a], -a))
 
 
-def describe_hits(hits: Collection[MemoryMessage], names: dict[int, str], lang: str = "th") -> str:
+def describe_hits(hits: Collection[MemoryMessage], names: dict[int, str], lang: str = "en") -> str:
     """Count, date span and place of the records; never their content."""
     days = sorted(m.local_date for m in hits)
     places = {
@@ -83,7 +83,7 @@ class DisclosureRepo:
         question: str,
         hits: Collection[MemoryMessage],
         names: dict[int, str],
-        lang: str = "th",
+        lang: str = "en",
     ) -> tuple[Disclosure, bool]:
         """Create a pending request for the owner's records among `hits`. An identical pending
         request (same people and topic) is returned instead of a second one: (doc, created)."""

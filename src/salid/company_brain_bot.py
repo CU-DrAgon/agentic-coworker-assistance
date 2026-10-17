@@ -73,7 +73,7 @@ class CompanyMixin:
         is_exec: bool,
         question: str,
         interjection: bool,
-        lang: str = "th",
+        lang: str = "en",
     ) -> str:
         """The company playbook block for one request ("" when off, empty or on any error).
         Also decides the once-a-week onboarding nudge for an admin."""

@@ -137,7 +137,7 @@ class Geocoder:
         self.http, self.clock = http, clock
         self._cache: dict[str, tuple[float, tuple[float, float] | None]] = {}
 
-    def locate(self, text: str, lang: str = "th") -> tuple[float, float] | None:
+    def locate(self, text: str, lang: str = "en") -> tuple[float, float] | None:
         key = " ".join(text.casefold().split())
         hit = self._cache.get(key)
         if hit and hit[0] > self.clock():

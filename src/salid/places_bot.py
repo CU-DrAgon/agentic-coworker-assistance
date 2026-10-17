@@ -183,7 +183,7 @@ class PlacesMixin:
             )
             gid = message.guild.id
             own = self._profile_of(gid, message.author.id).language
-            lang = resolve_lang(own or self.team.current(gid).default_language, text)
+            lang = resolve_lang(own or self.team.current(gid).language_setting, text)
             for c in res.offers:  # asked once; nothing is stored until the person says yes
                 with contextlib.suppress(discord.HTTPException):
                     await message.author.send(

@@ -182,15 +182,15 @@ def norm(tone, fallback: str = DEFAULT_TONE) -> str:
     return tone if valid(tone) else fallback
 
 
-def label(tone: str, lang: str = "th") -> str:
+def label(tone: str, lang: str = "en") -> str:
     return t("tone_label_default" if tone == RESET else f"tone_label_{norm(tone)}", lang)
 
 
-def description(tone: str, lang: str = "th") -> str:
+def description(tone: str, lang: str = "en") -> str:
     return t(f"tone_desc_{norm(tone)}", lang)
 
 
-def preset_list(lang: str = "th") -> str:
+def preset_list(lang: str = "en") -> str:
     """One line per preset: the list shown by /โทน and "โทนอะไร"."""
     return "\n".join(
         t("tone_list_line", lang, label=label(k, lang), desc=description(k, lang)) for k in TONES
@@ -232,7 +232,7 @@ def note_block(note: str, lang: str) -> str:
     )
 
 
-def tone_block(tone: str, lang: str = "th", note: str = "") -> str:
+def tone_block(tone: str, lang: str = "en", note: str = "") -> str:
     """The style part of the persona for `tone` (th / en; auto = both, the reply language follows
     the user), plus the custom note. Replaces the old style sentences of `qa.PERSONA`."""
     lang = lang if lang == "auto" else base_lang(lang)  # second-tier languages: English blocks
@@ -244,7 +244,7 @@ def tone_block(tone: str, lang: str = "th", note: str = "") -> str:
     return BLOCKS[key]["th"] + note_block(note, "th")
 
 
-def tone_override(tone: str, lang: str = "th") -> str:
+def tone_override(tone: str, lang: str = "en") -> str:
     """A one-line reminder placed right after the general style rules, for the tones that differ
     from them (no emoji, a different length), so the later general rules do not win."""
     lang = lang if lang == "auto" else base_lang(lang)  # second-tier languages: English blocks
@@ -258,7 +258,7 @@ def tone_override(tone: str, lang: str = "th") -> str:
     return en if lang == "en" else (th + en if lang == "auto" else th)
 
 
-def voice_line(tone: str, lang: str = "th") -> str:
+def voice_line(tone: str, lang: str = "en") -> str:
     """The persona rule of the Live voice instruction. The cheerful line is the original one."""
     lang = lang if lang == "auto" else base_lang(lang)  # second-tier languages: English blocks
     th_style, th_extra, en_style, en_extra = _VOICE[norm(tone)]
@@ -271,7 +271,7 @@ def voice_line(tone: str, lang: str = "th") -> str:
     return f"บุคลิก{th_style} เสียงผู้หญิง ลงท้ายด้วย “ค่ะ” “คะ” “นะคะ” ห้ามส่งเสียงสัตว์{th_extra}"
 
 
-def voice_note(note: str, lang: str = "th") -> str:
+def voice_note(note: str, lang: str = "en") -> str:
     """The custom note for the Live instruction ("" when none)."""
     return note_block(note, lang).strip("\n")
 

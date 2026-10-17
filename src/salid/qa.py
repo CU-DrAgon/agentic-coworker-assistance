@@ -1048,27 +1048,28 @@ PERSONA_IDENTITY = {
     "en": (
         "You are “Salid”, a capable, warm teammate and secretary in the team's Discord chat, and the team's executive assistant and coordinator: you track who is doing what, follow up on work, report, and keep confidential information according to the role hierarchy, offering to ask the owner when the asker may not see something. "
         "You are a woman and call yourself “Salid”; write natural English only, with no Thai words, Thai particles "
-        "(like ka / na ka) or Thai-style honorific endings. ALWAYS reply in English, even if the user "
-        "writes in Thai or the memory, documents and tool results are in Thai: translate or "
-        "paraphrase anything you quote (keep only proper names such as people, vendors and "
-        "product names as they are).\n"
+        "(like ka / na ka) or Thai-style honorific endings. English is this room's language: reply in "
+        "English, even if the memory, documents and tool results are in Thai (translate or "
+        "paraphrase anything you quote; keep only proper names such as people, vendors and "
+        "product names as they are). Switch to Thai, or another language, only when the person "
+        "writes to you in it or asks you to; then use natural Thai with ค่ะ/คะ.\n"
     ),
     "auto": (
         "คุณคือ “สลิด” (Salid) เพื่อนร่วมทีมและเลขาที่เก่งและใจดี อยู่ในแชต Discord ของทีม และเป็นผู้ช่วยผู้บริหารและผู้ประสานงานของทีม (ติดตามงานและรายงาน รักษาความลับตามลำดับชั้น / executive assistant and coordinator) "
         "ตอบด้วยภาษาเดียวกับข้อความล่าสุดของผู้ใช้ (reply in the same language as the user's latest "
-        "message): ถ้าพิมพ์ไทยตอบไทยธรรมชาติ เป็นผู้หญิง เรียกตัวเองว่า “สลิด” (ห้ามใช้ ผม/ฉัน/ครับ) ลงท้ายด้วยคำว่าค่ะ (ประโยคคำถามใช้ “คะ”) ถ้าพิมพ์อังกฤษตอบอังกฤษแบบเป็นกันเอง\n"
+        "message; English when you cannot tell): ถ้าพิมพ์ไทยตอบไทยธรรมชาติ เป็นผู้หญิง เรียกตัวเองว่า “สลิด” (ห้ามใช้ ผม/ฉัน/ครับ) ลงท้ายด้วยคำว่าค่ะ (ประโยคคำถามใช้ “คะ”) ถ้าพิมพ์อังกฤษตอบอังกฤษแบบเป็นกันเอง\n"
     ),
 }
 
 
-def persona(language: str = "th", tone: str = DEFAULT_TONE, note: str = "") -> str:
+def persona(language: str = "en", tone: str = DEFAULT_TONE, note: str = "") -> str:
     """Identity + the style of `tone` (th / en / auto), plus the owner's optional wording note."""
     lang = (
         language
         if language in PERSONA_IDENTITY
         else base_lang(language)
         if language in EXTRA
-        else "th"
+        else "en"
     )
     return reply_language_line(language) + PERSONA_IDENTITY[lang] + tone_block(tone, lang, note)
 
@@ -1479,7 +1480,7 @@ def stable_prompt(
         if language in PERSONA_IDENTITY
         else base_lang(language)
         if language in EXTRA
-        else "th"
+        else "en"
     )
     p = (
         persona(language, tone, tone_note)
@@ -1575,12 +1576,21 @@ def volatile_prompt(
         )
     elif language == "en":
         p += (
-            "\nLanguage: write your whole reply in English, including quoted memory, documents and "
-            "titles; translate Thai content instead of copying it."
+            "\nLanguage: this server's main language is English. Write your whole reply in English, "
+            "including quoted memory, documents and titles (translate Thai content instead of "
+            "copying it), unless the person writes to you in Thai or asks you to switch to Thai "
+            "(or another language): then answer in that language."
+        )
+    elif language == "th":
+        p += (
+            "\nภาษา: ภาษาหลักของเซิร์ฟเวอร์นี้คือภาษาไทย ตอบเป็นภาษาไทย (แปลเนื้อหาภาษาอื่นที่ยกมา) "
+            "เว้นแต่ผู้ใช้พิมพ์มาเป็นภาษาอังกฤษ (หรือภาษาอื่น) หรือขอให้เปลี่ยนภาษา ก็ตอบเป็นภาษานั้น"
         )
     elif language == "auto":
         p += (
-            "\nLanguage: reply in the same language as the user's latest message (Thai or English)."
+            "\nLanguage: reply in the same language as the user's latest message (Thai or "
+            "English; another language if they write in it or ask for it). English when you "
+            "cannot tell."
         )
     return apply_particle(p, "ค่ะ" if language in EXTRA else particle_of(settings))
 
@@ -1589,7 +1599,7 @@ def system_prompt(
     settings: Settings,
     scoped: bool,
     now=None,
-    language: str = "th",
+    language: str = "en",
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
@@ -2078,7 +2088,7 @@ def build_agent(
     now=None,
     model=None,
     on_model_call=None,
-    language: str = "th",
+    language: str = "en",
     memory: bool = False,
     interjection: bool = False,
     files: bool = False,
@@ -2236,7 +2246,7 @@ async def ask_async(
     history: str = "",
     now=None,
     model=None,
-    language: str = "th",
+    language: str = "en",
     memory: MemoryTools | None = None,
     interjection: bool = False,
     files: list[FileInput] | None = None,
@@ -2430,7 +2440,7 @@ def ask(
     history: str = "",
     now=None,
     model=None,
-    language: str = "th",
+    language: str = "en",
     memory: MemoryTools | None = None,
     interjection: bool = False,
     files: list[FileInput] | None = None,

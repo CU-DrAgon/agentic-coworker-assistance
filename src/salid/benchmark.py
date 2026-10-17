@@ -277,7 +277,7 @@ def run_benchmark(
     *,
     topic: str,
     our_product: str = "",
-    lang: str = "th",
+    lang: str = "en",
     today: date,
     search_model: str,
     synth_model: str,

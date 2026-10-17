@@ -427,14 +427,14 @@ def test_hub_saves_channel_languages_and_default_language(client):
     put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
     assert put["channel_languages"] == body["channel_languages"] and put["default_language"] == "en"
     assert client.guilds.get(A).channel_languages == body["channel_languages"]
-    # the hub sends the full map: a channel left out is removed, the default falls back to th
+    # the hub sends the full map: a channel left out is removed, the default falls back to en
     client.put(
         f"/api/hub/guilds/{A}/settings",
         json={"channel_languages": {str(A + 2): "th"}},
         headers=AUTH,
     )
     g = client.guilds.get(A)
-    assert g.channel_languages == {str(A + 2): "th"} and g.default_language == "th"
+    assert g.channel_languages == {str(A + 2): "th"} and g.default_language == "en"
     assert client.guilds.get(B).channel_languages == {}
 
 
@@ -453,7 +453,7 @@ def test_hub_rejects_languages_for_unknown_channels(client, bad):
 def test_hub_drops_unknown_language_values(client):
     body = {"channel_languages": {str(A + 1): "fr", str(A + 2): "en"}, "default_language": "fr"}
     put = client.put(f"/api/hub/guilds/{A}/settings", json=body, headers=AUTH).json()
-    assert put["channel_languages"] == {str(A + 2): "en"} and put["default_language"] == "th"
+    assert put["channel_languages"] == {str(A + 2): "en"} and put["default_language"] == "en"
 
 
 def test_hub_page_has_the_language_selectors(client):

@@ -151,7 +151,7 @@ def test_digest_is_per_guild(two_guilds):
     b = build_daily_digest(two_guilds, OTHER_GUILD, "2026-10-05")
     assert "฿100" in a and "Zeta" not in a and "7777" not in a
     assert "Zeta Corp" in b and "฿7,877" in b
-    assert "ไม่มีใบเสร็จ" in build_daily_digest(two_guilds, 999, "2026-10-05")
+    assert "ไม่มีใบเสร็จ" in build_daily_digest(two_guilds, 999, "2026-10-05", "th")
 
 
 def test_old_sqlite_ledger_is_migrated_to_guild_zero(tmp_path):

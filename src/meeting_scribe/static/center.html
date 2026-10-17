@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -300,7 +300,7 @@ en: {
   set_h:"Server settings", set_p:"Per-server settings such as feature toggles live on the Hub page.", set_go:"Open Hub",
   org_settings:"Organization settings",
 }};
-let lang = "th";
+let lang = ((navigator.language || "").toLowerCase().startsWith("th")) ? "th" : "en";
 try { const s = localStorage.getItem("center_lang"); if (s === "en" || s === "th") lang = s; } catch { /* ignore */ }
 const t = (k, vars) => { let s = (I[lang] && I[lang][k]) ?? I.th[k] ?? k; for (const [a, b] of Object.entries(vars || {})) s = s.replaceAll("{" + a + "}", b); return s; };
 function applyStatic() {

@@ -290,7 +290,9 @@ async def test_summary_refuses_a_channel_the_invoker_cannot_read(bot, rworld, ag
 
 
 async def test_summary_needs_memory_and_qa(bot, rworld, agent):
-    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(features=dict(memory=False)), "x")
+    bot.guilds_store.save_settings(
+        GUILD, GuildSettingsUpdate(features=dict(memory=False), default_language="th"), "x"
+    )
     bot.team._cache.clear()
     it = Interaction(rworld.g, rworld.staff, rworld.g.text_channels[0])
     await bot.handle_summary(it, "today", None, False, None, False)

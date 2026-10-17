@@ -370,7 +370,7 @@ class View:
     prepared_by: str
     company: dict[str, str]
     org_name: str = ""
-    lang: str = "th"
+    lang: str = "en"
 
     @property
     def company_name(self) -> str:

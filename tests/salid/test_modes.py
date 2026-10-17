@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import discord
 import pytest
-from conftest import GUILD, FixedClockSettings
+from conftest import GUILD, FixedClockSettings, ThaiGuildStore
 from test_bot_multitenant import ME, FakeChannel, FakeGuild, Msg, member, photo
 
 from salid import bot as botmod
@@ -174,7 +174,7 @@ def bot(world, monkeypatch, tmp_path):
         FixedClockSettings(exec_user_ids={EXEC}, ask_channel_ids={world.chat.id}),
         SQLiteStore(str(tmp_path / "t.db")),
         None,
-        guilds=MemoryGuildStore(),
+        guilds=ThaiGuildStore(),
         clock=clock,
     )
     b._choose = lambda xs: xs[0]  # deterministic variants (greeting, acknowledgement)
@@ -754,6 +754,9 @@ async def test_answer_passes_the_language_setting_and_follows_it_for_fixed_text(
 
 
 async def test_direct_messages_use_auto(bot, world, monkeypatch):
+    # companies that never chose a language: the DM follows the words (English when none)
+    monkeypatch.setattr(type(bot.guilds_store), "get", MemoryGuildStore.get)
+    bot.team._cache.clear()
     author = member(world.g, STAFF)
     other = FakeGuild(2000, "B")  # shares nobody with the author: the DM is refused
     monkeypatch.setattr(SecretaryBot, "guilds", property(lambda s: [world.g, other]))
@@ -765,6 +768,17 @@ async def test_direct_messages_use_auto(bot, world, monkeypatch):
         await bot.on_message(m)
     assert en.replies[0].startswith(t("dmg_ask", "en"))  # two shared servers: asks which company
     assert th.replies[0].startswith(t("dmg_ask", "th"))
+
+
+async def test_direct_messages_use_the_chosen_language_of_the_company(bot, world, monkeypatch):
+    author = member(world.g, STAFF)
+    other = FakeGuild(2000, "B")
+    monkeypatch.setattr(SecretaryBot, "guilds", property(lambda s: [world.g, other]))
+    other.get_member = lambda uid: author
+    world.g.get_member = lambda uid: author
+    en = Msg(None, world.gen, author, "hello there")
+    await bot.on_message(en)  # the (Thai) company chose Thai: English words still get Thai
+    assert en.replies[0].startswith(t("dmg_ask", "th"))
 
 
 # ------------------------------------------------------------------ typed language commands
@@ -780,7 +794,9 @@ async def test_manager_changes_the_channel_language_by_mention(bot, world, text,
     assert bot.guilds_store.get(GUILD).channel_languages == {"10": expected}
     assert bot.team.channel_language(GUILD, 10) == expected  # immediate, no cache wait
     assert len(m.replies) == 1 and bot.calls == []  # a command, not a question
-    assert bot.team.channel_language(GUILD, 11) == "th"  # other channels untouched
+    # the channel command stored default_language="auto" (language_chosen=True) on the store
+    # that had not chosen; other channels follow that default
+    assert bot.team.channel_language(GUILD, 11) == "auto"
 
 
 async def test_language_command_confirms_in_the_new_language(bot, world):
@@ -851,7 +867,8 @@ async def test_language_change_by_manager_is_persisted_and_immediate(bot, world)
     assert it.sent == [(t("lang_set", "en", label="English"), False)]
     assert bot.guilds_store.get(GUILD).channel_languages == {"10": "en"}
     assert bot.team.channel_language(GUILD, 10) == "en"
-    assert bot.team.channel_language(GUILD, 12) == "th"
+    assert bot.team.channel_language(GUILD, 12) == "auto"  # the unchosen default, now stored
+    assert bot.guilds_store.get(GUILD).language_chosen
     ex = Interaction(world.g, member(world.g, EXEC), world.gen)
     await bot.handle_language(ex, "auto")
     assert bot.team.channel_language(GUILD, 10) == "auto"
@@ -862,6 +879,7 @@ async def test_language_change_by_manager_is_persisted_and_immediate(bot, world)
 
 async def test_default_language_of_the_guild_applies_until_a_channel_overrides(bot, world):
     bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
+    bot.guilds_store.set_channel_language(GUILD, 99, "th")  # a language choice was made
     bot.team._cache.clear()
     m = await send(bot, world, world.gen, "<@999> shh", mention=True)
     assert m.replies == [t("snooze", "en")]
@@ -873,11 +891,15 @@ async def test_default_language_of_the_guild_applies_until_a_channel_overrides(b
 async def test_interaction_language_for_auto_follows_the_discord_locale(bot, world):
     set_lang(bot, 10, "auto")
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
-    assert bot._interaction_lang(it) == "th"  # unknown locale: today's default
+    assert bot._interaction_lang(it) == "en"  # empty / unknown locale: English
+    it.locale = "xx-YY"
+    assert bot._interaction_lang(it) == "en"
     it.locale = "en-US"
     assert bot._interaction_lang(it) == "en"
-    it.locale = "th"
-    assert bot._interaction_lang(it) == "th"
+    for locale, lang in (("th", "th"), ("th-TH", "th"), ("zh-CN", "zh"), ("ja", "ja"),
+                         ("ko", "ko"), ("hi", "hi"), ("ms", "ms"), ("id", "id"), ("vi", "vi")):  # fmt: skip
+        it.locale = locale
+        assert bot._interaction_lang(it) == lang
 
 
 def test_language_command_has_three_choices_in_both_languages(bot):
@@ -924,15 +946,44 @@ def test_welcome_message_is_short_human_and_has_no_command_list():
     assert "Hi, I'm Salid" in en and "just tell me" in en
 
 
-async def test_welcome_is_sent_in_the_guild_default_language(bot, world):
+def _welcome_world(world):
     world.g.text_channels[:] = [world.gen]
     world.g.system_channel = world.gen
     world.g.me = SimpleNamespace(guild_permissions=SimpleNamespace(manage_channels=False))
     world.g.me.permissions_for = lambda *_: None
     world.gen.permissions_for = lambda _: SimpleNamespace(send_messages=True)
-    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
+    kwargs = []
+    orig = world.gen.send
+
+    async def send(text, **kw):
+        kwargs.append(kw)
+        return await orig(text, **kw)
+
+    world.gen.send = send
+    return kwargs
+
+
+async def test_welcome_is_sent_in_the_guild_default_language(bot, world):
+    kwargs = _welcome_world(world)
+    # a server that chose Thai gets the Thai welcome
     await bot.on_guild_join(world.g)
-    assert world.gen.sent and world.gen.sent[0].startswith("Hi, I'm")
+    assert world.gen.sent and world.gen.sent[0].startswith("สวัสดีค่ะ")
+    assert not [x for x in world.gen.sent if "Which language" in x]  # already chosen: no question
+    assert "view" not in kwargs[0]
+
+
+async def test_welcome_for_an_unchosen_server_is_english_then_asks_the_language(
+    bot, world, monkeypatch
+):
+    kwargs = _welcome_world(world)
+    monkeypatch.setattr(type(bot.guilds_store), "get", MemoryGuildStore.get)
+    bot.team._cache.clear()
+    await bot.on_guild_join(world.g)
+    assert world.gen.sent[0].startswith("Hi, I'm")
+    asks = [i for i, x in enumerate(world.gen.sent) if "Which language" in x]
+    assert len(asks) == 1  # ONE bilingual language question, after the welcome
+    assert asks[0] > 0 and "ภาษา" in world.gen.sent[asks[0]]
+    assert "view" in kwargs[asks[0]]
 
 
 # ------------------------------------------------------------------ no names

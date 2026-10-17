@@ -187,7 +187,7 @@ async def test_slash_command_is_ephemeral_and_scoped(bot, world):
     set_features(bot, catchup=False)
     off = SlashInteraction(world.g, world.staff, world.pub)
     await bot.handle_catchup(off, None)
-    assert off.sent == [(t("cu_off", "th"), True)]
+    assert off.sent == [(t("cu_off", "en"), True)]
 
 
 async def test_morning_brief_adds_a_short_catch_up_only_after_a_working_day_away(bot, world):

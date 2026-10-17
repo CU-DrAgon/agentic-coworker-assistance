@@ -23,7 +23,7 @@ def _duplicates_line(store: Store, guild_id: int, lang: str) -> str | None:
     return t("digest_dups", lang, n=len(extras), amount=amount)
 
 
-def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str = "th") -> str:
+def build_daily_digest(store: Store, guild_id: int, day: date | str, lang: str = "en") -> str:
     d = day.isoformat() if isinstance(day, date) else day
     total = store.summarize(guild_id, d, d, "none")
     dup_line = _duplicates_line(store, guild_id, lang)

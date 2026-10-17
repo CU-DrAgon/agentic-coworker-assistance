@@ -75,7 +75,7 @@ class TravelMixin:
                 member = guild.get_member(doc["user_id"])
                 if member is None or not events:
                     continue
-                lang = resolve_lang(self.team.current(guild.id).default_language)
+                lang = resolve_lang(self.team.current(guild.id).language_setting)
                 for ev in events:
                     text = t(
                         f"flight_{ev.kind}_dm",

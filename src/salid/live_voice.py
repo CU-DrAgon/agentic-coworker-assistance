@@ -654,7 +654,7 @@ def build_instruction_en(
 
 def build_instruction(
     settings: Any,
-    language: str = "th",
+    language: str = "en",
     now=None,
     qa: bool = True,
     history: str = "",
@@ -662,8 +662,8 @@ def build_instruction(
     tone: str = DEFAULT_TONE,
     tone_note: str = "",
 ) -> str:
-    """System instruction for the Live session (built per connect so the date is current). Thai by
-    default; English persona and rules when the session's resolved `lang` (or `language`) is en.
+    """System instruction for the Live session (built per connect so the date is current). English by
+    default; the Thai persona and rules when the session's resolved `lang` (or `language`) is th.
     `tone`: the salid.tone preset of the meeting's text channel (persona line, TH and EN)."""
     reply = lang or language
     if reply in EXTRA:
@@ -1928,7 +1928,7 @@ class LiveVoice:
     # ---- filler ("one moment") while a slow tool runs
     def _en(self) -> bool:
         """The session speaks English: guild/channel language en (auto falls back to the guild's)."""
-        return getattr(self.session, "lang", "th") == "en"
+        return getattr(self.session, "lang", "en") == "en"
 
     def _qa_setting(self) -> str:
         s = self.session
@@ -1938,7 +1938,7 @@ class LiveVoice:
         return "en" if self._en() else resolve_lang(self.session.language, question)
 
     def _filler_lang(self) -> str:
-        return "en" if self._en() else "th"
+        return "en" if self._en() else getattr(self.session, "lang", "en")
 
     def _particle(self) -> str:
         return str(getattr(self.bot.s, "voice_particle", "") or "")

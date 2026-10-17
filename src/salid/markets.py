@@ -574,7 +574,7 @@ def _src_line(x: dict, lang: str) -> str:
     return f"{x['name']} {x['value']:,.2f} ({x['as_of']}){link}{note}"
 
 
-def estimate_text(q: dict, lang: str = "th") -> str:
+def estimate_text(q: dict, lang: str = "en") -> str:
     """Labelled text for a web-read price. web_reference (sources agree, each with link and time):
     "ราคาอ้างอิงจาก N แหล่ง (อ่านจากหน้าเว็บ) ..."; estimate (they differ or lack a time/link):
     "ราคาโดยประมาณ ช่วง A–B ...". Every source is listed with its value, time and link."""
@@ -822,7 +822,7 @@ GROUNDED_LABELS = {
 }
 
 
-def gold_summary(g: dict, lang: str = "th") -> str:
+def gold_summary(g: dict, lang: str = "en") -> str:
     """Ready text with every unit spelled out, Thai section first, world section second."""
     en = lang != "th"
     th, w = g["thai"], g["world"]
@@ -1276,7 +1276,7 @@ class MarketData:
             "so it differs from this figure.",
         }  # fmt: skip
 
-    def news(self, query: str = "", topic: str = "", lang: str = "th", limit: int = 5) -> dict:
+    def news(self, query: str = "", topic: str = "", lang: str = "en", limit: int = 5) -> dict:
         lang = "en" if str(lang).casefold().startswith("en") else "th"
         limit = max(1, min(int(limit or 5), 10))
         url = news_url(query, topic, lang)
@@ -1486,7 +1486,7 @@ class Poller:
         return out
 
 
-def format_alert(a: Alert, lang: str = "th") -> str:
+def format_alert(a: Alert, lang: str = "en") -> str:
     w = a.watch
     cond = t_(f"mk_cond_{w.condition}", lang, thr=f"{w.threshold:g}")
     chg = "" if a.change_pct is None else f" ({a.change_pct:+.2f}%)"
@@ -1629,7 +1629,7 @@ class MarketsCtx:
     repo: WatchRepo
     docs: object
     prefs: object | None = None  # briefings.PrefsRepo
-    lang: str = "th"
+    lang: str = "en"
     now: Callable[[], datetime] = field(default=lambda: datetime.now(UTC))
     on_prefs_changed: Callable[[], None] = field(default=lambda: None)
 
@@ -1698,7 +1698,7 @@ def markets_tools(ctx: MarketsCtx) -> list[Callable]:
             res["summary"] = res.get("summary_en") or res.get("summary", "")
         return res
 
-    def news(query: str = "", topic: str = "", lang: str = "th", max: int = 5) -> dict:  # noqa: A002
+    def news(query: str = "", topic: str = "", lang: str = "en", max: int = 5) -> dict:  # noqa: A002
         """Latest news headlines from Google News: title, source, time and link (no article
         text). Use for "ข่าวล่าสุดเรื่อง …", "ข่าวหุ้น", "news about …". To summarise an article the
         asker names, call read_web on its link. Do not claim anything that is not in the

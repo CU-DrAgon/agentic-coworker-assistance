@@ -130,7 +130,7 @@ def _chunks(turns: list[Turn]) -> list[list[int]]:
     return out
 
 
-def clean_turns(client: Any, model: str, turns: list[Turn], lang: str = "th") -> list[Turn]:
+def clean_turns(client: Any, model: str, turns: list[Turn], lang: str = "en") -> list[Turn]:
     """The turns with obvious transcription errors / filler words fixed. Only the text of a turn is
     sent and replaced: speakers and times are kept from `turns`, so the model cannot merge or
     reassign anyone. Any failure of a chunk (or an answer that changes numbers, length, or the item
@@ -206,7 +206,7 @@ def render_markdown(
     transcript_note: str = "",
 ) -> str:
     """The minutes document. `transcript_note` replaces the heading note (e.g. "cleaned")."""
-    lang = lang if lang in LANGS and lang != "auto" else "th"
+    lang = lang if lang in LANGS and lang != "auto" else "en"
     out = [f"# {t('mdoc_title', lang)}", ""]
     meta = []
     if info.room:

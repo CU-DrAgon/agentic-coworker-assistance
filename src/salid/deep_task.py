@@ -215,7 +215,7 @@ def prepare_workspace(
     task: str,
     guild_id: int,
     submitter_id: int | None = None,
-    lang: str = "th",
+    lang: str = "en",
 ) -> int:
     """Write receipts.csv, aggregates.json and TASK.md into `ws`. Returns the receipt count."""
     rows = store.all_receipts(guild_id, "0000-01-01", "9999-12-31", submitter_id=submitter_id)
@@ -412,7 +412,7 @@ def run_deep_task(
     guild_id: int,
     submitter_id: int | None = None,
     runner=None,
-    lang: str = "th",
+    lang: str = "en",
     handle: DeepHandle | None = None,
 ) -> DeepResult:
     """Run one deep task on `guild_id`'s ledger only. `submitter_id` narrows the exported data
@@ -483,7 +483,7 @@ def parse_deep_trigger(text: str) -> str | None:
     return None
 
 
-def reply_parts(r: DeepResult, lang: str = "th") -> tuple[str, bytes | None]:
+def reply_parts(r: DeepResult, lang: str = "en") -> tuple[str, bytes | None]:
     """(message text, report.md bytes to attach or None). Long reports are attached, with a preview."""
     footer = "\n\n" + format_stats(r, lang)
     if len(r.text) <= INLINE_LIMIT:
@@ -493,6 +493,6 @@ def reply_parts(r: DeepResult, lang: str = "th") -> tuple[str, bytes | None]:
     return f"{preview}\n…\n{note}" + footer, r.text.encode()
 
 
-def format_stats(r: DeepResult, lang: str = "th") -> str:
+def format_stats(r: DeepResult, lang: str = "en") -> str:
     models = ", ".join(f"{m} ({v['requests']} req)" for m, v in r.models.items()) or "-"
     return t("deep_stats", lang, seconds=r.seconds, tokens=r.tokens, models=models)

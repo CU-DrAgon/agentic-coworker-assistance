@@ -53,12 +53,12 @@ def test_tiers_and_names():
         ("Xin chào, bạn khỏe không? đây là ví dụ", "vi"),
         ("Hello there", "en"),
         ("Selamat pagi", "en"),  # Malay / Indonesian are never auto-detected
-        ("12345 :)", "th"),
+        ("12345 :)", "en"),  # no letters: the default, English
     ],
 )
 def test_auto_detects_by_script(text, lang):
     assert resolve_lang("auto", text) == lang
-    assert resolve_lang(None, text) == "th"
+    assert resolve_lang(None, text) == "en"  # no setting: English, whatever the text
     assert i18n.has_thai("สวัสดี") and not i18n.has_thai("こんにちは")
 
 
@@ -148,7 +148,7 @@ def test_t_tiers_and_fallbacks():
         assert out and out != "ใบเสนอราคา"
     assert t("quote_title", "ja") != "QUOTATION"  # translated, not the English fallback
     assert t("quote_rev", "ja", n=3).count("3") == 1
-    assert t("quote_title", "xx") == "ใบเสนอราคา"  # unknown: Thai, as before
+    assert t("quote_title", "xx") == "QUOTATION"  # unknown: the default, English
 
 
 def test_missing_key_in_a_locale_falls_back_to_english_never_thai(monkeypatch):

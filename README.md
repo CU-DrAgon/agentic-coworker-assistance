@@ -180,9 +180,13 @@ server's executive role names (default `ผู้บริหาร`, `Executive
   (`total` only when a single currency is present), no FX conversion; a receipt with no currency counts as THB.
 - **Reply language** (`/ภาษา` or `/language`, `@Salid พูดภาษาอังกฤษ` / `speak English` / `English please`,
   `พูดไทย` / `speak Thai`, `ภาษาอัตโนมัติ` / `auto language`, or the hub's per-channel language select and the
-  server default): `th` (default, the old behaviour), `en`, or `auto` (answer in the language of the message:
+  server default): `en` (default), `th`, or `auto` (answer in the language of the message:
   any Thai character means Thai, otherwise English; with no text, e.g. a slash command, the user's Discord
-  locale). Resolution: channel override, else the guild's `default_language`; DMs use `auto`. It applies to
+  locale). **Default language is English, and each server picks its main language when Salid joins**: she
+  posts one menu (English + Thai, admins and executives only) in her chat channel and from then on does
+  everything in that language (`language_chosen`; servers that never answered, or that already set
+  `default_language`, see `salid.language_ask`; until chosen a server runs on `auto`, so Thai writers still get Thai).
+  Resolution: channel override, else the guild's `default_language`; DMs use the person's own language, else the company's chosen one, else `auto`. It applies to
   everything Salid says: fixed replies (catalog in `src/salid/i18n.py`), Q&A and voice answers (system prompt),
   meeting summaries, the daily digest, receipt replies and deep-task reports. Only managers/executives may
   change it; others get a short refusal. A voice meeting uses the language of the voice channel's text chat as

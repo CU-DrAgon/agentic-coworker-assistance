@@ -78,7 +78,7 @@ class RouteService:
         self.http, self.clock = http, clock
         self._cache: dict = {}
 
-    def compute(self, origin, destination, mode, *, depart=None, arrive=None, lang="th") -> dict:
+    def compute(self, origin, destination, mode, *, depart=None, arrive=None, lang="en") -> dict:
         when = ("a", _round5(arrive)) if arrive else ("d", _round5(depart) if depart else "now")
         key = (origin, destination, mode, when, lang)
         hit = self._cache.get(key)

@@ -87,7 +87,7 @@ def new_vote(
     opener_name: str = "",
     minutes: int = DEFAULT_MINUTES,
     anonymous: bool = False,
-    lang: str = "th",
+    lang: str = "en",
     voice_channel_id: int = 0,
     now: datetime,
 ) -> dict:
@@ -351,7 +351,7 @@ def new_offer(
     question: str,
     options: list[str],
     voice_channel_id: int = 0,
-    lang: str = "th",
+    lang: str = "en",
     now: datetime,
 ) -> dict:
     return {

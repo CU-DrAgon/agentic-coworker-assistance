@@ -211,6 +211,7 @@ def vw(world, bot, monkeypatch):
     monkeypatch.setattr(bot.team, "license_gate", None)  # other suites may leave a gate behind
     g = world.g
     text = VChan(70, "meeting-chat")
+    text.guild = g  # a real channel knows its server, so Salid reads that server's language
     g.text_channels.append(text)
     room = SimpleNamespace(
         id=80, name="ห้องประชุม", guild=g, members=[world.staff, world.peer, world.intern]

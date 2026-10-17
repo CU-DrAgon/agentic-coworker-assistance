@@ -208,7 +208,7 @@ def run_research(
     *,
     question: str,
     depth: str = "quick",
-    lang: str = "th",
+    lang: str = "en",
     today: date,
     search_model: str,
     plan_model: str,

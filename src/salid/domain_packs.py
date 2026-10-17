@@ -390,7 +390,7 @@ def get_pack(pack_id: str) -> Pack | None:
     return PACKS.get((pack_id or "").strip().casefold())
 
 
-def pack_name(p: Pack, lang: str = "th") -> str:
+def pack_name(p: Pack, lang: str = "en") -> str:
     return p.en if lang != "th" else p.th
 
 
@@ -422,7 +422,7 @@ def pick_packs(text: str, limit: int = MAX_PACKS) -> list[str]:
     return [pid for _, pid in scored[: max(0, limit)]]
 
 
-def pack_text(p: Pack, lang: str = "th") -> str:
+def pack_text(p: Pack, lang: str = "en") -> str:
     """The full pack as text (for the user: 'what do you know about restaurants?')."""
     en = lang != "th"
     lines = [f"{pack_name(p, lang)}: {p.about}"]

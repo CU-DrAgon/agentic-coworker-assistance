@@ -58,9 +58,9 @@ def test_company_block_english_variant():
     assert not THAI.search(en) and "Company playbook" in en and "Reply in English" in en
     empty = cb.company_block(cb.CompanyPlaybook(), "x", nudge=True, lang="en")
     assert not THAI.search(empty) and "get to know the company" in empty
-    th = cb.company_block(pb, "what is PM", nudge=True)
+    th = cb.company_block(pb, "what is PM", nudge=True, lang="th")
     assert "กฎบริษัท" in th and "สลิดยังไม่รู้จัก" in cb.company_block(
-        cb.CompanyPlaybook(), "x", nudge=True
+        cb.CompanyPlaybook(), "x", nudge=True, lang="th"
     )
 
 
@@ -99,7 +99,7 @@ def _dm_fake(shared, langs, active=None):
         _shared_guilds=lambda uid: [(guilds[g], object()) for g in shared],
         dm_guilds=SimpleNamespace(active=lambda uid: active),
         _profile_of=lambda gid, uid: SimpleNamespace(language=langs.get(("p", gid))),
-        team=SimpleNamespace(current=lambda gid: SimpleNamespace(default_language=langs[gid])),
+        team=SimpleNamespace(current=lambda gid: SimpleNamespace(language_setting=langs[gid])),
     )
 
 
@@ -110,7 +110,7 @@ def _dm(fake):
 
 def test_dm_language_is_the_company_default_unless_the_person_set_one():
     assert _dm(_dm_fake([1], {1: "en"})) == "en"
-    assert _dm(_dm_fake([1], {1: "th"})) == "auto"  # Thai default: as before
+    assert _dm(_dm_fake([1], {1: "th"})) == "th"  # a company that chose Thai
     assert _dm(_dm_fake([1], {1: "en", ("p", 1): "th"})) == "th"  # personal wins
     assert _dm(_dm_fake([1], {1: "th", ("p", 1): "en"})) == "en"
     assert _dm(_dm_fake([1], {1: "auto"})) == "auto"
@@ -120,6 +120,6 @@ def test_dm_language_is_the_company_default_unless_the_person_set_one():
 def test_dm_language_with_two_companies_follows_the_picked_one():
     langs = {1: "en", 2: "th"}
     assert _dm(_dm_fake([1, 2], langs, active=1)) == "en"
-    assert _dm(_dm_fake([1, 2], langs, active=2)) == "auto"
+    assert _dm(_dm_fake([1, 2], langs, active=2)) == "th"
     assert _dm(_dm_fake([1, 2], langs)) == "auto"  # undecided and they disagree
     assert _dm(_dm_fake([1, 2], {1: "en", 2: "en"})) == "en"

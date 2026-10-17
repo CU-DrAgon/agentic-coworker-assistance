@@ -333,7 +333,7 @@ STATUS_INSTRUCTION = (
 )
 
 
-def status_prompt(flight: dict, day: str, today: str, lang: str = "th") -> str:
+def status_prompt(flight: dict, day: str, today: str, lang: str = "en") -> str:
     if lang != "th":
         return (
             f"Find the status of flight {flight['display']} (IATA {flight['iata']}"
@@ -362,7 +362,7 @@ def status_prompt(flight: dict, day: str, today: str, lang: str = "th") -> str:
 
 
 def prices_prompt(origin: str, dest: str, depart: str, ret: str, adults: int, cabin: str,
-                  today: str, lang: str = "th") -> str:  # fmt: skip
+                  today: str, lang: str = "en") -> str:  # fmt: skip
     trip = f"round trip returning {ret}" if ret else "one way"
     return (
         f"Find indicative airfares for flights from {origin} to {dest} departing {depart}, {trip}, "
@@ -399,7 +399,7 @@ class FlightService:
             return {"error": "web search is not available"}
         return web_read.grounded_search(self.client, self.model, prompt, STATUS_INSTRUCTION)
 
-    def status(self, flight_number: str, day: str = "", lang: str = "th") -> dict:
+    def status(self, flight_number: str, day: str = "", lang: str = "en") -> dict:
         flight = normalize_flight(flight_number)
         if flight is None:
             return {"error": "could not read the flight number; use e.g. 'TG 676'"}
@@ -411,7 +411,7 @@ class FlightService:
         return self._cached(("status", flight["iata"], day, lang), STATUS_CACHE_S,
                             lambda: self._status(flight, day, lang))  # fmt: skip
 
-    def _status(self, flight: dict, day: str, lang: str = "th") -> dict:
+    def _status(self, flight: dict, day: str, lang: str = "en") -> dict:
         links = flight_links(flight)
         base = {"flight": flight["display"], "date": day, "links": links,
                 "checked_at": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")}  # fmt: skip
@@ -440,7 +440,7 @@ class FlightService:
         }
 
     def prices(self, origin: str, destination: str, depart_date: str, return_date: str = "",
-               adults: int = 1, cabin: str = "economy", lang: str = "th") -> dict:  # fmt: skip
+               adults: int = 1, cabin: str = "economy", lang: str = "en") -> dict:  # fmt: skip
         o = resolve_airport(origin) or (origin or "").strip()
         d = resolve_airport(destination) or (destination or "").strip()
         if not o or not d:
@@ -607,7 +607,7 @@ class FlightTracker:
 
 # --------------------------------------------------------------------------- agent tools
 def flight_tools(svc: FlightService, tracker: FlightTracker, guild_id: int, user_id: int,
-                 today: Callable[[], date_cls] = date_cls.today, lang: str = "th") -> list:  # fmt: skip
+                 today: Callable[[], date_cls] = date_cls.today, lang: str = "en") -> list:  # fmt: skip
     def flight_status(flight_number: str, date: str = "") -> dict:
         """Status of a flight: airline, route, scheduled/estimated times (local), terminal/gate,
         status. Without a flight-data provider this comes from a web search (confidence "web"):

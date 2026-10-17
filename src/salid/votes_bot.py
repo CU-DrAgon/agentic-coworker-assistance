@@ -575,7 +575,7 @@ class VotesMixin:
 
     async def handle_vote_offer(self, interaction, act: str, offer_id: str) -> None:
         offer = await asyncio.to_thread(self.offer_repo.get, offer_id)
-        lang = (offer or {}).get("lang", "th")
+        lang = (offer or {}).get("lang", "en")
         if offer is None or offer["status"] != "pending":
             await interaction.response.send_message(t("vote_offer_gone", lang), ephemeral=True)
             return
