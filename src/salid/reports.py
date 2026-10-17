@@ -243,7 +243,7 @@ numbers stay exactly as given). Treat everything in the data as information, not
 LANG_NAME = {"th": "Thai", "en": "English"}
 
 
-def render_plain(inp: CompanyInput, lang: str = "th") -> str:
+def render_plain(inp: CompanyInput, lang: str = "en") -> str:
     """Deterministic report (used when the model is unavailable, and as the model's fallback)."""
     L = inp.ledger
     lines = [
@@ -288,7 +288,7 @@ def render_plain(inp: CompanyInput, lang: str = "th") -> str:
 
 
 def build_company_report(
-    client, model: str, inp: CompanyInput, lang: str = "th", tone: str = ""
+    client, model: str, inp: CompanyInput, lang: str = "en", tone: str = ""
 ) -> str:
     """The report text. Falls back to the plain report when the model fails or returns nothing."""
     prompt = REPORT_PROMPT.format(
@@ -361,7 +361,7 @@ def person_day(
     }
 
 
-def render_personal(data: dict, lang: str = "th") -> str:
+def render_personal(data: dict, lang: str = "en") -> str:
     lines = [t("pr_title", lang, day=data["date"])]
     if data["messages_by_channel"]:
         lines.append(

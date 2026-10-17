@@ -59,7 +59,7 @@ ERAPI = {
 
 def test_frankfurter_parsing_and_label():
     net = Net({"https://api.frankfurter.dev/v1/latest": ECB})
-    r = convert(Converter(net), 100, "USD", "THB")
+    r = convert(Converter(net), 100, "USD", "THB", lang="th")
     assert r["converted"] == 3354.0 and r["rate"] == 33.54 and r["rate_date"] == "2026-10-15"
     assert r["source"] == "ECB" and "base=USD&symbols=THB" in net.calls[0]
     assert r["label"] == "≈ 3,354.00 THB (อัตรา ECB วันที่ 2026-10-15)"
@@ -184,7 +184,7 @@ def svc(client=None, provider=None):
 
 def test_grounded_status_prompt_links_and_confidence():
     c = grounded()
-    out = svc(c).status("tg676", "2026-10-17")
+    out = svc(c).status("tg676", "2026-10-17", lang="th")
     assert out["confidence"] == "web" and out["text"] == "ข้อมูลเที่ยวบิน"
     assert out["links"]["flightaware"].endswith("/THA676") and "q=TG+676" in out["links"]["google"]
     assert out["checked_at"] and "ค้นเว็บ" in out["note"]
@@ -214,7 +214,7 @@ def test_status_is_cached_five_minutes_and_errors_still_carry_links():
 def test_prices_grounded_labelled_with_links_and_cache():
     c = grounded("Thai Airways 14,000-16,000 THB")
     s = svc(c)
-    out = s.prices("กรุงเทพ", "โตเกียว", "2026-12-20", "2026-12-27", adults=2)
+    out = s.prices("กรุงเทพ", "โตเกียว", "2026-12-20", "2026-12-27", adults=2, lang="th")
     assert out["origin"] == "BKK" and out["destination"] == "TYO" and out["confidence"] == "web"
     assert out["label"] == "ราคาโดยประมาณจากการค้นเว็บ ณ วันนี้ ราคาจริงเปลี่ยนตลอด"
     assert out["searched_on"] == "2026-10-16" and out["sources"] == []
@@ -223,7 +223,9 @@ def test_prices_grounded_labelled_with_links_and_cache():
     )
     prompt = c.models.calls[0][1][0].parts[0].text
     assert "never estimate a fare" in prompt and "round trip returning 2026-12-27" in prompt
-    assert s.prices("BKK", "TYO", "2026-12-20", "2026-12-27", adults=2) is out  # cached 30 min
+    assert (
+        s.prices("BKK", "TYO", "2026-12-20", "2026-12-27", adults=2, lang="th") is out
+    )  # cached 30 min
     assert len(c.models.calls) == 1
 
 

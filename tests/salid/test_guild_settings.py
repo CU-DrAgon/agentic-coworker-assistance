@@ -102,18 +102,22 @@ def test_bot_writes_and_hub_writes_do_not_clobber_each_other(gstore):
 def test_document_layout(gstore):
     install(gstore, installed=True)
     gstore.save_settings(
-        GUILD, GuildSettingsUpdate(ask_channel_ids=["12", "12", " 34 "]), "a@x.com"
+        GUILD,
+        GuildSettingsUpdate(ask_channel_ids=["12", "12", " 34 "], default_language="auto"),
+        "a@x.com",
     )
     doc = gstore.client.collection("salid_guilds").docs[str(GUILD)]
     assert set(doc) == {
         "guild_name", "icon_url", "channels", "active", "installed_at", "features",
         "receipt_channel_ids", "ask_channel_ids", "digest_channel_id", "receipt_home_channel_id", "receipt_forward", "digest_time",
         "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
-        "channel_languages", "default_language", "memory_retention_days",
+        "channel_languages", "memory_retention_days",
         "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
         "channel_tones", "default_tone", "tone_note",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
+    # the form only echoed "auto" for a server that never chose a language: nothing was chosen
+    assert "default_language" not in doc and "language_chosen" not in doc
 
 
 def test_channel_modes_are_validated_and_bounded():
@@ -280,11 +284,11 @@ def test_channel_languages_are_validated_and_bounded():
         channel_languages={"12": "en", "x": "th", "13": "bogus", " 14 ": "auto"},
         default_language="zzz",
     )
-    assert u.channel_languages == {"12": "en", "14": "auto"} and u.default_language == "th"
+    assert u.channel_languages == {"12": "en", "14": "auto"} and u.default_language == "en"
     big = GuildSettingsUpdate(channel_languages={str(i): "en" for i in range(900)})
     assert len(big.channel_languages) == gs.MAX_CHANNEL_LANGUAGES
     assert GuildSettingsUpdate(default_language="auto").default_language == "auto"
-    assert GuildSettingsUpdate().default_language == "th"  # today's behaviour
+    assert GuildSettingsUpdate().default_language == "en"  # English is the default
 
 
 def test_set_channel_language_sets_and_removes_one_channel(gstore):
@@ -310,7 +314,7 @@ def test_save_settings_replaces_the_channel_language_map(gstore):
 
 def test_bot_cache_sees_a_language_change_at_once_and_resolves_override_then_default(gstore):
     team = gs.BotGuildSettings(gstore, ttl=3600)
-    assert team.channel_language(GUILD, 5) == "th"  # nothing stored: today's default
+    assert team.channel_language(GUILD, 5) == "auto"  # never chosen: follow the words written
     gstore.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "a@x.com")
     team._cache.clear()
     assert team.channel_language(GUILD, 5) == "en"

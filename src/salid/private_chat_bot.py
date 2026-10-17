@@ -104,7 +104,9 @@ class PrivateChatMixin:
         try:
             await asyncio.to_thread(self.team.set_channel_mode, guild.id, ch.id, "chat")
             pref = self._profile_of(guild.id, member.id).language
-            await asyncio.to_thread(self.team.set_channel_language, guild.id, ch.id, pref or "auto")
+            await asyncio.to_thread(
+                self.team.set_channel_language, guild.id, ch.id, pref or "auto", mark_chosen=False
+            )
         except Exception:
             logger.warning("could not save the private channel settings", exc_info=True)
         with contextlib.suppress(discord.HTTPException):

@@ -418,7 +418,7 @@ def generate_framework(
     kind: str,
     idea: str,
     context: str = "",
-    lang: str = "th",
+    lang: str = "en",
     existing: str = "",
 ) -> FrameworkResult:
     """The full Markdown of a framework with every required heading (see module doc)."""
@@ -478,7 +478,7 @@ def _first_point(body: str) -> str:
     return ""
 
 
-def short_summary(markdown: str, lang: str = "th", lines: int = SUMMARY_LINES) -> str:
+def short_summary(markdown: str, lang: str = "en", lines: int = SUMMARY_LINES) -> str:
     """At most `lines` lines: the first point of each section (the rest is in the file)."""
     secs = [(h, _first_point(b)) for h, b in split_h2(markdown)]
     secs = [(re.sub(r"\s*\(.*?\)\s*$", "", h) if lang == "th" else h, p) for h, p in secs]

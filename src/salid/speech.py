@@ -132,7 +132,7 @@ def spoken_prompt(lang: str) -> str:
     return SPOKEN_PROMPT_EN if lang == "en" else SPOKEN_PROMPT
 
 
-def spoken_text(client: Any, model: str, question: str, answer: str, lang: str = "th") -> str:
+def spoken_text(client: Any, model: str, question: str, answer: str, lang: str = "en") -> str:
     """Blocking. One short Gemini call turning the written answer into 1-2 spoken sentences.
     Any failure (API error, empty reply) falls back to the markdown-stripped, clipped answer."""
     try:
@@ -210,7 +210,7 @@ def _cloud_voice(voice: str, lang: str) -> tuple[str, str]:
 
 
 def synthesize_cloud(
-    project: str, voice: str, text: str, lang: str = "th", rate: float = 1.0
+    project: str, voice: str, text: str, lang: str = "en", rate: float = 1.0
 ) -> bytes:
     """Blocking. Cloud Text-to-Speech (Chirp 3 HD) -> raw 16-bit mono PCM at 24 kHz, ~1.5 s."""
     import google.auth
@@ -254,7 +254,7 @@ def speakable(text: str) -> str:
     return _SPACES.sub(" ", _UNSPOKEN.sub(" ", strip_markdown(text))).strip()
 
 
-def say(settings: Any, client: Any, text: str, lang: str = "th") -> bytes:
+def say(settings: Any, client: Any, text: str, lang: str = "en") -> bytes:
     """Blocking. PCM for `text` with the configured backend; Cloud TTS falls back to Gemini TTS."""
     text = speakable(text)
     if not text:

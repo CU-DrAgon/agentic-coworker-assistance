@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import discord
 import pytest
-from conftest import FakeClient, FixedClockSettings
+from conftest import FakeClient, FixedClockSettings, ThaiGuildStore
 from test_meeting import SPEECH_PCM, FakeGuild, FakeVC, FakeVoiceChannel, make_member
 
 from salid import meeting as mt
 from salid.bot import SecretaryBot
-from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
+from salid.guild_settings import GuildSettingsUpdate
 from salid.i18n import t
 from salid.permissions import HELPER_PERMISSIONS, helper_invite_url
 from salid.voice_pool import (
@@ -114,7 +114,7 @@ def world(monkeypatch):
         ),
         None,
         FakeClient([]),
-        guilds=MemoryGuildStore(),
+        guilds=ThaiGuildStore(),
     )
     monkeypatch.setattr(SecretaryBot, "user", property(lambda s: SimpleNamespace(id=999)))
     monkeypatch.setattr(SecretaryBot, "get_guild", lambda self, gid: guild if gid == GID else None)
@@ -149,7 +149,7 @@ def people(w, ch, *uids):
 async def command_join(w, ch, uid=10):
     m = make_member(w.guild, uid, f"u{uid}", w.chans[ch])
     w.chans[ch].members = [*w.chans[ch].members, m]
-    return await w.mgr.join(m)
+    return await w.mgr.join(m, lang="th")
 
 
 async def settle(mgr):
@@ -267,7 +267,7 @@ async def test_leave_ends_the_session_of_the_room_the_person_is_in(world):
     await command_join(world, A)
     await command_join(world, B, uid=11)
     m = world.chans[B].members[0]
-    assert await world.mgr.leave(m) == t("meet_left", "th")
+    assert await world.mgr.leave(m, lang="th") == t("meet_left", "th")
     await asyncio.sleep(0.05)
     assert (GID, B) not in world.mgr.sessions and (GID, A) in world.mgr.sessions
     await end_all(world)
@@ -280,12 +280,16 @@ async def test_typed_leave_from_a_text_channel_uses_where_the_author_is_and_mana
     await command_join(world, A)
     await command_join(world, B, uid=11)
     outsider = make_member(world.guild, 30, "out")
-    assert await world.mgr.leave(outsider, text_channel_id=555) == t("meet_leave_denied", "th")
+    assert await world.mgr.leave(outsider, lang="th", text_channel_id=555) == t(
+        "meet_leave_denied", "th"
+    )
     boss = make_member(world.guild, 31, "boss")
     boss.guild_permissions.manage_guild = True
-    assert "#room77" in await world.mgr.leave(boss, text_channel_id=555)  # which room? (two)
+    assert "#room77" in await world.mgr.leave(
+        boss, lang="th", text_channel_id=555
+    )  # which room? (two)
     # the typed leave in a room's own text chat
-    assert await world.mgr.leave(boss, text_channel_id=A) == t("meet_left", "th")
+    assert await world.mgr.leave(boss, lang="th", text_channel_id=A) == t("meet_left", "th")
     await asyncio.sleep(0.05)
     assert (GID, A) not in world.mgr.sessions and (GID, B) in world.mgr.sessions
     await end_all(world)
@@ -511,13 +515,15 @@ async def test_commanded_and_scheduled_sessions_are_never_preempted(world):
     # not even a scheduled meeting takes a commanded session
     m = make_member(world.guild, 50, "host", world.chans[C])
     world.chans[C].members = [m]
-    reply = await world.mgr.join(m, meeting_id="m2")
+    reply = await world.mgr.join(m, lang="th", meeting_id="m2")
     assert reply == t("meet_busy", "th", rooms="#room77") and list(world.mgr.sessions) == [(GID, A)]
     await world.mgr.end((GID, A), "command")
-    await world.mgr.join(m, meeting_id="m2")
+    await world.mgr.join(m, lang="th", meeting_id="m2")
     other = make_member(world.guild, 51, "x", world.chans[D])
     world.chans[D].members = [other]
-    reply = await world.mgr.join(other, meeting_id="m3")  # scheduled never preempts scheduled
+    reply = await world.mgr.join(
+        other, lang="th", meeting_id="m3"
+    )  # scheduled never preempts scheduled
     assert reply.startswith(t("meet_busy", "th", rooms="")[:10])
     assert list(world.mgr.sessions) == [(GID, C)]
     await end_all(world)

@@ -111,7 +111,7 @@ def unit_economics(
     expected_units_month=None,
     initial_investment=0,
     currency: str = "THB",
-    lang: str = "th",
+    lang: str = "en",
 ) -> dict:
     """Contribution margin, gross margin, break-even units / revenue / months. `price` and costs
     are ex-VAT per unit; fixed costs per month."""
@@ -218,7 +218,7 @@ def price_from_cost(
     competitor_prices=None,
     competitors_include_vat: bool = False,
     currency: str = "THB",
-    lang: str = "th",
+    lang: str = "en",
 ) -> dict:
     """Cost per unit -> cost-plus price and entry / standard / premium tiers. A margin is on the
     price (price = cost / (1 - m)); a markup is on the cost (price = cost x (1 + k)). Competitor
@@ -404,7 +404,7 @@ def investment_metrics(
     discount_rate_pct=10,
     period: str = "month",
     currency: str = "THB",
-    lang: str = "th",
+    lang: str = "en",
 ) -> dict:
     """ROI, payback, discounted payback, NPV, IRR. `discount_rate_pct` is the ANNUAL rate; for
     monthly flows it is converted to a monthly rate ((1+r)^(1/12)-1) and the IRR is shown
@@ -568,7 +568,7 @@ def financial_projection(
     months: int = 24,
     scenario: str = "base",
     currency: str = "THB",
-    lang: str = "th",
+    lang: str = "en",
 ) -> dict:
     """12-36 month customer / P&L / cash projection with low / base / high scenarios. Churn is a
     monthly rate on the customer base; acquisition grows by `acquisition_growth_pct_month`. LTV =
@@ -765,7 +765,7 @@ def resolve_product_type(product_type: str) -> str:
     return "generic"
 
 
-def financial_data_checklist(product_type: str = "", provided=None, lang: str = "th") -> dict:
+def financial_data_checklist(product_type: str = "", provided=None, lang: str = "en") -> dict:
     """The inputs needed for payback / ROI / NPV / IRR / break-even / projection for this kind of
     product, split into `have` and `missing` by the keys the user already gave."""
     kind = resolve_product_type(product_type)

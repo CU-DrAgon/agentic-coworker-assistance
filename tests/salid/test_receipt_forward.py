@@ -3,12 +3,12 @@
 from types import SimpleNamespace
 
 import pytest
-from conftest import GUILD, FixedClockSettings
+from conftest import GUILD, FixedClockSettings, ThaiGuildStore
 
 from salid import bot as botmod
 from salid.bot import SecretaryBot
 from salid.extract import IngestResult
-from salid.guild_settings import GuildSettings, GuildSettingsUpdate, MemoryGuildStore
+from salid.guild_settings import GuildSettings, GuildSettingsUpdate
 from salid.receipt_forward import MAX_FILES, forward_receipt, home_channel, learned_channels
 
 ME = SimpleNamespace(id=999, mention="<@999>")
@@ -124,7 +124,7 @@ def world(monkeypatch, seeded):
     gen, home = Chan(10, "ทั่วไป"), Chan(11, "ใบเสร็จ")
     g = Guild([gen, home])
     monkeypatch.setattr(SecretaryBot, "guilds", property(lambda s: [g]))
-    bot = SecretaryBot(FixedClockSettings(), seeded, None, guilds=MemoryGuildStore())
+    bot = SecretaryBot(FixedClockSettings(), seeded, None, guilds=ThaiGuildStore())
     receipt = seeded.get(1)
     state = SimpleNamespace(status="created", receipt=receipt)
 

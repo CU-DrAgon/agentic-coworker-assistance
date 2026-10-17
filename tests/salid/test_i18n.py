@@ -24,12 +24,12 @@ from salid.i18n import (
         ("auto", "ยอดเดือนนี้เท่าไร", "th"),
         ("auto", "how much this month?", "en"),
         ("auto", "ยอดเดือนนี้ how much", "th"),  # any Thai character wins
-        ("auto", "", "th"),  # nothing to follow: today's default
-        ("auto", None, "th"),
-        ("auto", "👍", "th"),
-        ("auto", "500", "th"),
-        ("bogus", "hello", "th"),
-        (None, "hello", "th"),
+        ("auto", "", "en"),  # nothing to follow: the default, English
+        ("auto", None, "en"),
+        ("auto", "👍", "en"),
+        ("auto", "500", "en"),
+        ("bogus", "hello", "en"),
+        (None, "ยอดเท่าไร", "en"),  # no setting: the default
     ],
 )
 def test_resolve_lang(setting, text, expected):
@@ -47,8 +47,8 @@ def test_channel_override_beats_the_guild_default():
     assert resolve_language(11, default_language="th", **kw) == "auto"
     assert resolve_language(12, default_language="en", **kw) == "en"  # unknown value: default
     assert resolve_language(99, default_language="en", **kw) == "en"
-    assert resolve_language(99, channel_languages={}) == "th"  # no settings at all
-    assert resolve_language(99, channel_languages={}, default_language="zzz") == "th"
+    assert resolve_language(99, channel_languages={}) == "en"  # no settings at all
+    assert resolve_language(99, channel_languages={}, default_language="zzz") == "en"
 
 
 @pytest.mark.parametrize(
@@ -70,8 +70,8 @@ def test_parse_language_command(text, expected):
     assert parse_language_command(text) == expected
 
 
-def test_t_falls_back_to_thai_and_formats():
-    assert t("signoff", "th") == t("signoff", "auto") == t("signoff")
+def test_t_falls_back_to_english_and_formats():
+    assert t("signoff", "en") == t("signoff", "auto") == t("signoff")
     assert t("signoff", "en") != t("signoff", "th")
     assert t("meet_joined", "en", channel="Room") == "Salid has joined Room."
     with pytest.raises(KeyError):

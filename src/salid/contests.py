@@ -208,7 +208,7 @@ def left_text(delta: timedelta, lang: str) -> str:
 
 
 # ------------------------------------------------------------------ rendering
-def render_markdown(c: Contest, lang: str = "th", zone=None) -> str:
+def render_markdown(c: Contest, lang: str = "en", zone=None) -> str:
     th = lang == "th"
     out = [f"# {c.name}", ""]
     meta = [x for x in (c.organizer, c.track, c.kind, c.url) if x]
@@ -247,7 +247,7 @@ def render_markdown(c: Contest, lang: str = "th", zone=None) -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def checklist_line(d: Deliverable, lang: str = "th", zone=None) -> str:
+def checklist_line(d: Deliverable, lang: str = "en", zone=None) -> str:
     box = "[x]" if d.done else "[ ]"
     who = f" ({d.owner_name})" if d.owner_name else ""
     due = ""

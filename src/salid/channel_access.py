@@ -101,7 +101,7 @@ def split_message(text: str, limit: int = DISCORD_LIMIT) -> list[str]:
     return chunks
 
 
-def hidden_channels_messages(entries: list[dict], lang: str = "th") -> list[str]:
+def hidden_channels_messages(entries: list[dict], lang: str = "en") -> list[str]:
     """The friendly "channels Salid cannot see" message(s), each within Discord's limit."""
     if not entries:
         return [t("hidden_none", lang)]

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1522,7 +1522,7 @@ let lang = readLang("get") || browserLang();
 const locale = () => (lang === "th" ? "th-TH" : "en-US");
 function t(key, params) {
   const e = I18N[key];
-  let s = e ? (e[lang] ?? e.th) : key;
+  let s = e ? (e[lang] ?? e.en) : key;
   if (params) for (const [k, v] of Object.entries(params)) s = s.split("{" + k + "}").join(String(v));
   return s;
 }
@@ -1779,7 +1779,7 @@ function renderModes(channels, modes, def, languages, defLang, tones, defTone) {
   currentTones = { ...(tones || {}) };
   const dt = $("default-tone"); dt.replaceWith(Object.assign(toneSelect(defTone || "cheerful", false), { id: "default-tone" }));
   const dm = $("default-mode"); dm.replaceWith(Object.assign(modeSelect(def || "call", false), { id: "default-mode" }));
-  const dl = $("default-language"); dl.replaceWith(Object.assign(languageSelect(defLang || "th", false), { id: "default-language" }));
+  const dl = $("default-language"); dl.replaceWith(Object.assign(languageSelect(defLang || "en", false), { id: "default-language" }));
   const box = $("channel-modes"); box.textContent = "";
   for (const c of channels) {
     const label = document.createElement("label"); label.append("#" + c.name + " ");
@@ -1950,7 +1950,7 @@ async function save() {
     channel_modes: collectModes(),
     default_mode: $("default-mode").value || "call",
     channel_languages: collectLanguages(),
-    default_language: $("default-language").value || "th",
+    default_language: $("default-language").value || "en",
     channel_tones: collectTones(),
     default_tone: $("default-tone").value || "cheerful",
     tone_note: $("tone-note").value.trim(),

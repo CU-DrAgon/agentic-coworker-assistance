@@ -114,19 +114,19 @@ CATEGORY_EN = {
 }
 
 
-def category_label(category: str | None, lang: str = "th") -> str:
+def category_label(category: str | None, lang: str = "en") -> str:
     """The stored (Thai) expense category as shown to a person: English names for `en`."""
     return CATEGORY_EN.get(category or "", category or "") if lang != "th" else category or ""
 
 
-def fmt_money(x: float | None, currency: str = "THB", lang: str = "th") -> str:
+def fmt_money(x: float | None, currency: str = "THB", lang: str = "en") -> str:
     if x is None:
         return t("unknown", lang)
     s = f"{x:,.2f}".removesuffix(".00")
     return f"฿{s}" if currency == "THB" else f"{s} {currency}"
 
 
-def confirmation_text(r: Receipt, dup: Receipt | None, needs_check: bool, lang: str = "th") -> str:
+def confirmation_text(r: Receipt, dup: Receipt | None, needs_check: bool, lang: str = "en") -> str:
     lines = [
         f"{t('rc_check' if needs_check else 'rc_saved', lang)} (#{r.id})",
         t("rc_vendor", lang, v=r.vendor or t("unknown", lang)),
@@ -156,7 +156,7 @@ def ingest_attachment(
     message_id: int,
     note: str = "",
     archive=None,
-    lang: str = "th",
+    lang: str = "en",
     at: datetime | None = None,
 ) -> IngestResult:
     """`at`: the time the receipt was really posted (history import); default now."""
@@ -318,7 +318,7 @@ def parse_correction(client, settings: Settings, text: str, receipt: Receipt | N
 
 
 def apply_correction(
-    store: Store, client, settings: Settings, receipt: Receipt, text: str, lang: str = "th"
+    store: Store, client, settings: Settings, receipt: Receipt, text: str, lang: str = "en"
 ) -> str:
     fields = parse_correction(client, settings, text, receipt)
     if not fields:
@@ -365,7 +365,7 @@ def parse_void_command(text: str) -> str | None:
 
 
 def apply_void_command(
-    store: Store, receipt: Receipt, action: str, by: str, lang: str = "th"
+    store: Store, receipt: Receipt, action: str, by: str, lang: str = "en"
 ) -> str:
     """Void (soft delete) or restore one receipt; returns the reply text."""
     voided = (receipt.status or "active") == "void"

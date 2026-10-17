@@ -35,6 +35,7 @@ def test_parse_server_language_command(text, expected):
 
 def test_store_switch_clears_overrides_and_switching_back_restores(bot):
     store = bot.guilds_store
+    store.set_server_language(GUILD, "th", False)  # the language the overrides are saved under
     store.set_channel_language(GUILD, 10, "auto")
     store.set_channel_language(GUILD, 11, "th")
     bot.team.set_server_language(GUILD, "en", True)
@@ -138,6 +139,11 @@ async def test_new_private_channels_in_an_english_server_use_english_names(bot, 
 
 def test_english_persona_has_no_thai_and_translates_content(bot):
     persona = PERSONA["en"]
-    assert not THAI.search(persona) and "Salid" in persona and "translate" in persona
+    # the one Thai mention is the deliberate "switch to Thai ... ค่ะ/คะ" clause
+    assert (
+        not THAI.search(persona.replace("ค่ะ/คะ", ""))
+        and "Salid" in persona
+        and "translate" in persona
+    )
     tail = volatile_prompt(bot.s, bot.s.now(), scoped=False, interjection=False, language="en")
     assert "English" in tail and "translate" in tail

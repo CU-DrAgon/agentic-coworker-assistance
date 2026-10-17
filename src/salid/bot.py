@@ -78,6 +78,7 @@ from .guild_settings import (
 from .i18n import (
     LANGS,
     LANGUAGE_LABELS,
+    locale_lang,
     parse_language_command,
     parse_server_language_command,
     resolve_lang,
@@ -94,6 +95,7 @@ from .image_memory import (
     image_mime,
     receipt_note,
 )
+from .language_ask import LanguageAskMixin, LanguageSelect
 from .licensing import Licensing, make_licensing
 from .longtext import needs_attachment, split_sections, summary_of
 from .maps_bot import MapsMixin
@@ -321,9 +323,9 @@ class _LicensedTree(app_commands.CommandTree):
             return True
         with contextlib.suppress(discord.HTTPException):
             try:
-                lang = resolve_lang(bot.team.current(guild.id).default_language)
+                lang = resolve_lang(bot.team.current(guild.id).language_setting)
             except Exception:
-                lang = "th"
+                lang = "en"
             await interaction.response.send_message(
                 t("unlicensed", lang, url=licensing.url), ephemeral=True
             )
@@ -331,6 +333,7 @@ class _LicensedTree(app_commands.CommandTree):
 
 
 class SecretaryBot(
+    LanguageAskMixin,
     TranslateMixin,
     FreetimeMixin,
     PollsMixin,
@@ -460,7 +463,7 @@ class SecretaryBot(
                 settings,
                 llm,
                 now=settings.now,
-                lang_of=lambda gid: resolve_lang(self.team.current(gid).default_language),
+                lang_of=lambda gid: resolve_lang(self.team.current(gid).language_setting),
                 retention_of=self.team.fresh_memory_retention_days,
                 channel_name_of=self._channel_name,
                 enabled=lambda gid: self.team.enabled(gid, "memory"),
@@ -489,7 +492,7 @@ class SecretaryBot(
             llm,
             build_record=self._import_record,
             retention_of=self.team.memory_retention_days,
-            lang_of=lambda gid: resolve_lang(self.team.current(gid).default_language),
+            lang_of=lambda gid: resolve_lang(self.team.current(gid).language_setting),
             channel_name_of=self._channel_name,
             now=settings.now,
             page_sleep=IMPORT_PAGE_SLEEP_S,
@@ -546,6 +549,7 @@ class SecretaryBot(
         self.add_dynamic_items(VoteButton, VoteOfferButton)  # vote ballots + offers
         self.add_dynamic_items(SwitchButton)
         self.add_dynamic_items(CompanyButton)  # the "which company?" DM buttons
+        self.add_dynamic_items(LanguageSelect)  # the main-language menu (salid.language_ask)
         await self.tree.set_translator(SalidTranslator())
         try:
             await self.tree.sync()  # global commands; Discord may take a while to show them
@@ -560,6 +564,7 @@ class SecretaryBot(
         for guild in self.guilds:
             await self._sync_guild(guild)
             self._pc_backfill_start(guild)  # a private channel for every member, paced
+        await self._ask_unanswered_languages()  # servers that never chose a main language
         self._start_import()
         await self.meetings.resume_all()  # rejoin meetings a restart cut off
         self.meetings.scan_all()  # people already in voice channels: join by importance
@@ -622,7 +627,7 @@ class SecretaryBot(
         logger.info("joined guild %s", guild.id)
         await asyncio.to_thread(self.team.current, guild.id)
         self._pc_backfill_start(guild)
-        lang = resolve_lang(self.team.current(guild.id).default_language)
+        lang = resolve_lang(self.team.current(guild.id).language_setting)
         chat = await self._ensure_chat_channel(guild, lang)
         if chat is not None:  # a reused channel must answer everything, whatever its name
             try:
@@ -652,8 +657,10 @@ class SecretaryBot(
                     await target.send(
                         permission_message(["manage_channels"], lang, self.application_id)
                     )
+                # a server that has not chosen yet is asked for its main language, once
+                await self._post_language_question(guild, target)
 
-    async def _ensure_chat_channel(self, guild: discord.Guild, lang: str = "th"):
+    async def _ensure_chat_channel(self, guild: discord.Guild, lang: str = "en"):
         """The guild's Salid chat channel: an existing one with its name, else a new one."""
         existing = next((c for c in guild.text_channels if is_chat_channel_name(c.name)), None)
         if existing is not None:
@@ -931,9 +938,10 @@ class SecretaryBot(
         return self.team.channel_language(guild.id, getattr(channel, "id", 0))
 
     def _dm_setting(self, target) -> str:
-        """th / en / auto for a DM: the person's own language if set, else the default language
-        of the company the DM is about (the only shared server, or the one they picked) when that is
-        English. Otherwise, or when it is unclear and the shared servers disagree: auto."""
+        """A DM's language setting: the person's own language if set, else the main language of the
+        company the DM is about (the only shared server, or the one they picked) when it has
+        chosen one. Otherwise, or when the shared servers disagree: auto (follow their words,
+        English when there are none)."""
         user = getattr(target, "author", None) or getattr(target, "user", None)
         uid = getattr(user, "id", None)
         if uid is None:
@@ -946,10 +954,9 @@ class SecretaryBot(
                 shared = picked or shared
             langs = set()
             for g in shared:
-                default = self.team.current(g.id).default_language
-                # a Thai default keeps today's DM behaviour (auto: follow the words they write)
+                # the company's chosen language; `auto` (follow the words they write) until chosen
                 langs.add(
-                    self._profile_of(g.id, uid).language or (default if default == "en" else "auto")
+                    self._profile_of(g.id, uid).language or self.team.current(g.id).language_setting
                 )
         except Exception:  # a store hiccup must never stop an answer
             return "auto"
@@ -964,12 +971,12 @@ class SecretaryBot(
 
     def _interaction_lang(self, interaction) -> str:
         """Language for a slash command reply: the channel's setting; `auto` has no message to
-        follow, so the user's Discord locale (Thai, else English; Thai when unknown)."""
+        follow, so the user's Discord locale (`th-*` Thai, another known language of Salid's, else
+        English)."""
         setting = self._lang_setting(interaction)
         if setting != "auto":
             return setting
-        locale = str(getattr(interaction, "locale", "") or "")
-        return "en" if locale and not locale.startswith("th") else "th"
+        return locale_lang(getattr(interaction, "locale", ""))
 
     def _starts_with_name(self, message: discord.Message) -> bool:
         """The message opens with Salid's name (no @tag): "Salid เข้าประชุมหน่อย"."""
@@ -2390,7 +2397,7 @@ class SecretaryBot(
             return "busy"
         return "ok"
 
-    def _launch_deep(self, message, guild_id: int, task: str, setting: str = "th") -> None:
+    def _launch_deep(self, message, guild_id: int, task: str, setting: str = "en") -> None:
         handle = DeepHandle()
         job = asyncio.create_task(self._run_deep(message, guild_id, task, setting, handle))
         self._deep_tasks.add(job)
@@ -2487,7 +2494,7 @@ class SecretaryBot(
         guild_id: int,
         task: str,
         is_exec: bool,
-        setting: str = "th",
+        setting: str = "en",
     ):
         """Executives only. Acknowledge at once, run Gemini CLI in the background, post the result."""
         lang = resolve_lang(setting, task)
@@ -2510,7 +2517,7 @@ class SecretaryBot(
         message: discord.Message,
         guild_id: int,
         task: str,
-        setting: str = "th",
+        setting: str = "en",
         handle: DeepHandle | None = None,
     ):
         lang = resolve_lang(setting, task)
@@ -3649,7 +3656,7 @@ class SecretaryBot(
                 message_id=msg.id,
                 note=(msg.content or "").strip(),
                 archive=self.archive,
-                lang=resolve_lang(self.team.current(gid).default_language, msg.content),
+                lang=resolve_lang(self.team.current(gid).language_setting, msg.content),
                 at=msg.created_at,
             )
         except Exception as e:  # counts only, never contents

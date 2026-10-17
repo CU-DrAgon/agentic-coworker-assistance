@@ -122,7 +122,7 @@ class Converter:
             return {"error": "exchange rate unavailable right now; do not guess a rate"}
 
 
-def label(converted: float, to: str, source: str, day: str, lang: str = "th") -> str:
+def label(converted: float, to: str, source: str, day: str, lang: str = "en") -> str:
     src = "ECB" if source == "ECB" else source
     if lang != "th":
         return f"≈ {_fmt(converted)} {to} ({src} rate on {day})"
@@ -130,7 +130,7 @@ def label(converted: float, to: str, source: str, day: str, lang: str = "th") ->
 
 
 def convert(
-    conv: Converter, amount: float, from_cur: str, to_cur: str, on: str = "", lang: str = "th"
+    conv: Converter, amount: float, from_cur: str, to_cur: str, on: str = "", lang: str = "en"
 ) -> dict:
     base, to = resolve_currency(from_cur), resolve_currency(to_cur)
     if base is None or to is None:
@@ -172,7 +172,7 @@ def convert(
     return out
 
 
-def currency_tools(conv: Converter, lang: str = "th") -> list:
+def currency_tools(conv: Converter, lang: str = "en") -> list:
     def convert_currency(
         amount: float, from_currency: str, to_currency: str, date: str = ""
     ) -> dict:

@@ -6,12 +6,11 @@ import logging
 from types import SimpleNamespace
 
 import pytest
-from conftest import FakeClient, FixedClockSettings
+from conftest import FakeClient, FixedClockSettings, ThaiGuildStore
 from test_meeting import FakeGuild, FakeVC, FakeVoiceChannel, make_member
 
 from salid import meeting as mt
 from salid.bot import SecretaryBot
-from salid.guild_settings import MemoryGuildStore
 from salid.i18n import t
 
 ME = SimpleNamespace(id=999, mention="<@999>")
@@ -55,7 +54,7 @@ def env(monkeypatch):
         ),
         None,
         FakeClient([]),
-        guilds=MemoryGuildStore(),
+        guilds=ThaiGuildStore(),
     )
     monkeypatch.setattr(SecretaryBot, "user", property(lambda s: ME))
     return SimpleNamespace(guild=guild, chan=chan, other=other, bot=bot, mgr=bot.meetings)
@@ -71,7 +70,7 @@ def stale(env, channel, connected=True):
 async def test_concurrent_joins_connect_once(env):
     a = make_member(env.guild, 10, "แอน", env.chan)
     b = make_member(env.guild, 11, "บอม", env.chan)
-    r1, r2 = await asyncio.gather(env.mgr.join(a), env.mgr.join(b))
+    r1, r2 = await asyncio.gather(env.mgr.join(a, lang="th"), env.mgr.join(b, lang="th"))
     assert env.chan.connects == 1
     assert r1 == t("meet_joined", "th", channel=env.chan.name)
     assert r2 == t("meet_already", "th", channel=env.chan.name)  # waited, then saw the session
@@ -97,12 +96,12 @@ async def test_resume_and_auto_join_race_connects_once(env, monkeypatch):
 async def test_connect_timeout_disconnects_and_next_join_succeeds(env):
     env.chan.hang = True
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert await env.mgr.join(m) == t("meet_connect_failed", "th")
+    assert await env.mgr.join(m, lang="th") == t("meet_connect_failed", "th")
     hung = env.chan.new_vcs[0]
     assert hung.disconnected and not env.mgr.sessions and not env.mgr._joining
     env.guild.voice_client = None if hung.disconnected else hung  # FakeVC does not unregister
     env.chan.hang = False
-    assert "ห้องประชุม" in await env.mgr.join(m)
+    assert "ห้องประชุม" in await env.mgr.join(m, lang="th")
     assert (1000, 77) in env.mgr.sessions
     await env.mgr.end((1000, 77), "command")
 

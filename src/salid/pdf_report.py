@@ -306,7 +306,7 @@ def expense_pdf(
     scope_note: str = "",
     notes: str = "",
     kind: str = "expense_summary",
-    lang: str = "th",
+    lang: str = "en",
     generated_at: datetime,
     fonts: FontSet,
 ) -> bytes:
@@ -374,7 +374,7 @@ def minutes_pdf(
     summary: str,
     attendance: dict[str, str] | None = None,
     notes: str = "",
-    lang: str = "th",
+    lang: str = "en",
     generated_at: datetime,
     fonts: FontSet,
 ) -> bytes:
@@ -400,7 +400,7 @@ def custom_pdf(
     org: str,
     title: str,
     body: str,
-    lang: str = "th",
+    lang: str = "en",
     generated_at: datetime,
     fonts: FontSet,
 ) -> bytes:

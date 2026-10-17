@@ -280,8 +280,9 @@ def test_default_prompt_is_the_cheerful_one_and_persona_stays():
         assert "“สลิด”" in th and "ห้ามใช้ ผม/ฉัน/ครับ" in th and "ค่ะ" in th
         assert (
             "“Salid”" in en
-            and "ALWAYS reply in English" in en
-            and not THAI.search(qa.persona("en", key))
+            and "reply in English" in en
+            # Thai script appears only in the "switch to Thai when asked" clause (ค่ะ/คะ)
+            and not THAI.search(qa.persona("en", key).replace("ค่ะ/คะ", ""))
         )
 
 
@@ -306,7 +307,7 @@ def test_particle_swap_still_works_on_every_tone_block():
         p = qa.system_prompt(male, scoped=False, tone=key)
         assert "ค่ะ" not in p.split("สไตล์การตอบ")[0], key
         assert "ครับ" in T.tone_block(key, "th").replace("ค่ะ", "ครับ")
-    q = qa.system_prompt(male, scoped=False, tone="professional")
+    q = qa.system_prompt(male, scoped=False, tone="professional", language="th")
     assert "ลงท้ายด้วย ครับ" in q
 
 
@@ -314,13 +315,16 @@ def test_ask_passes_the_tone_to_the_model(bot):
     llm = scripted(text_resp("ok"))
     qa.ask(
         bot.s, bot.store, "hi", guild_id=GUILD, is_exec=False, user_id=STAFF, model=llm,
-        tone="concise", tone_note="เรียกลูกค้าว่า 'คุณลูกค้า'",
+        tone="concise", tone_note="เรียกลูกค้าว่า 'คุณลูกค้า'", language="th",
     )  # fmt: skip
     sys = llm.requests[0].config.system_instruction
     assert T.tone_block("concise", "th") in sys and T.tone_block("calm", "th") not in sys
     assert "เรียกลูกค้าว่า 'คุณลูกค้า'" in sys
     plain = scripted(text_resp("ok"))
-    qa.ask(bot.s, bot.store, "hi", guild_id=GUILD, is_exec=False, user_id=STAFF, model=plain)
+    qa.ask(
+        bot.s, bot.store, "hi", guild_id=GUILD, is_exec=False, user_id=STAFF, model=plain,
+        language="th",
+    )  # fmt: skip
     assert T.tone_block("cheerful", "th") in plain.requests[0].config.system_instruction
 
 

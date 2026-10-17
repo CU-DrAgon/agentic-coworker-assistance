@@ -36,8 +36,8 @@ KINDS = ("doc", "image", "audio", "link", "deep", "research", "slow", "voice")
 
 
 def _norm(lang: str | None) -> str:
-    """th, en or a second-tier language; anything else is Thai."""
-    return lang if lang == "en" or lang in EXTRA else "th"
+    """th, en or a second-tier language; anything else is English."""
+    return lang if lang in ("th", "en") or lang in EXTRA else "en"
 
 
 POOL_SIZE = 8  # ack_<kind>_1 .. 8 in the catalog; the "again" pool is ack_again_1 .. 8

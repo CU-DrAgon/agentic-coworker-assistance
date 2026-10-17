@@ -192,7 +192,7 @@ async def test_ended_poll_posts_a_line_once_and_goes_to_memory(bot, pw, monkeypa
     bot._memory_enqueue = queued.append
     rec = bot.poll_repo.all(GUILD)[0]
     await bot._poll_finish(pw.g, rec, NOW)
-    assert "B ชนะ" in pw.here.posts[-1].content and len(queued) == 1
+    assert "B wins" in pw.here.posts[-1].content and len(queued) == 1
     assert bot.poll_repo.all(GUILD)[0]["done"]
     later = datetime.fromisoformat(rec["ends_at"]) + timedelta(minutes=1)
     assert bot.poll_repo.due(GUILD, later) == []  # not posted twice

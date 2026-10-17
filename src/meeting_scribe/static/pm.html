@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -266,7 +266,7 @@ const S = /*I18N-START*/{
   sec_overview:["ภาพรวม","Overview"], sec_tasks:["งาน","Tasks"], sec_milestones:["เหตุการณ์สำคัญ","Milestones"], sec_risks:["ความเสี่ยงและปัญหา","Risks & Issues"], sec_links:["ไฟล์และลิงก์","Files & Links"],
   sec_h1:["ชื่อการแข่งขันและกำหนดส่งอย่างเป็นทางการ","Competition name & official deadline"], sec_h2:["กติกา คุณสมบัติ และเกณฑ์ตัดสิน","Rules, eligibility & judging criteria"], sec_h3:["ทีมและบทบาท","Team members & roles"], sec_h4:["ต้นแบบ เดโม และสไลด์นำเสนอ","Prototype, demo & pitch deck"], sec_h5:["รายการตรวจสอบและการยืนยันการส่ง","Submission checklist & confirmation"], sec_h6:["งบประมาณ ค่าเดินทาง และผลการแข่งขัน (การเงิน)","Budget, travel costs & results (finance)"]
 }/*I18N-END*/;
-let lang = (() => { try { const s = localStorage.getItem("pm_lang"); if (s === "en" || s === "th") return s; } catch { /* ignore */ } return (navigator.language || "th").toLowerCase().startsWith("th") ? "th" : "en"; })();
+let lang = (() => { try { const s = localStorage.getItem("pm_lang"); if (s === "en" || s === "th") return s; } catch { /* ignore */ } return (navigator.language || "en").toLowerCase().startsWith("th") ? "th" : "en"; })();
 const t = (k, vars) => { const e = S[k]; let s = e ? e[lang === "th" ? 0 : 1] : k; for (const [a, b] of Object.entries(vars || {})) s = s.replaceAll("{" + a + "}", b); return s; };
 
 /* ---------- DOM helpers ---------- */

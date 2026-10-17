@@ -53,7 +53,7 @@ def test_spoken_text_uses_english_prompt_for_en():
     speech.generate = fake
     try:
         speech.spoken_text(None, "m", "q", "a", "en")
-        speech.spoken_text(None, "m", "q", "a")
+        speech.spoken_text(None, "m", "q", "a", "th")
     finally:
         speech.generate = orig
     assert not THAI.search(seen[0]) and THAI.search(seen[1])

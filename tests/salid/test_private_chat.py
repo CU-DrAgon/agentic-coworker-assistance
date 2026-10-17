@@ -82,8 +82,9 @@ def g(world, bot):  # noqa: F811
 
 
 def test_pure_helpers():
-    assert channel_name("Somchai Jai") == "สลิด-somchai-jai"
-    assert channel_name("สมชาย!!") == "สลิด-สมชาย"
+    assert channel_name("Somchai Jai", "th") == "สลิด-somchai-jai"
+    assert channel_name("สมชาย!!", "th") == "สลิด-สมชาย"
+    assert channel_name("Somchai Jai") == "salid-somchai-jai"  # English is the default
     assert wants_private_channel("ขอห้องคุยส่วนตัวกับสลิด")
     assert wants_private_channel("make me a private channel")
     assert not wants_private_channel("ลบห้องส่วนตัว") and wants_delete("ลบห้องส่วนตัว")
@@ -143,7 +144,7 @@ async def test_join_creates_and_welcomes_bots_get_none_flag_off_nothing(bot, g):
     await bot.on_member_join(human(g, 50, "Robo", bot_=True))
     assert len(g.created) == 1
     bot.guilds_store.save_settings(
-        GUILD, GuildSettingsUpdate(features={"private_channels": False}), "x"
+        GUILD, GuildSettingsUpdate(features={"private_channels": False}, default_language="th"), "x"
     )
     bot.team._cache.clear()
     await bot.on_member_join(human(g, 51, "Late"))
@@ -310,6 +311,9 @@ async def test_audience_of_the_channel_is_its_viewers_including_admins(bot, g):
 async def test_delete_command_asks_then_deletes(bot, g):
     from test_bot_multitenant import Msg
 
+    # a server that chose Thai (the room itself is created on `auto`)
+    bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="th"), "x")
+    bot.team._cache.clear()
     m = dm_member(g)
     ch, *_ = await bot.ensure_private_channel(g, m)
     a = Msg(g, ch, m, "ลบห้องส่วนตัว")

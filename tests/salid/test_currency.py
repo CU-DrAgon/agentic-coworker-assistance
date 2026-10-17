@@ -112,7 +112,7 @@ def test_duplicate_deduction_per_currency(store):
 def test_digest_mixed_currencies(store):
     seed_mixed(store)
     add(store, 20, 100.0, "USD", vendor="Cloud1", dup_sha="d1")
-    text = build_daily_digest(store, GUILD, "2026-10-10")
+    text = build_daily_digest(store, GUILD, "2026-10-10", "th")
     assert "฿184,885.54, $231.99" in text
     assert "$100.00" in text and "อาจซ้ำ 1 รายการ รวม $100.00" in text
     assert "฿185" not in text.replace("฿184,885.54", "")

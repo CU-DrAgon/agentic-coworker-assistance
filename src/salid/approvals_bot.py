@@ -93,7 +93,7 @@ class ApprovalMixin:
 
     async def approval_lang(self, approval_id: str) -> str:
         a = await asyncio.to_thread(self.approvals.get, approval_id)
-        return self._approval_user_lang(a.guild_id, a.approver_id) if a else "th"
+        return self._approval_user_lang(a.guild_id, a.approver_id) if a else "en"
 
     # ------------------------------------------------------------- read API for other features
     def approved_leave(self, guild_id: int, user_id: int, start, end) -> list[tuple[date, date]]:
@@ -183,7 +183,7 @@ class ApprovalMixin:
     ) -> None:
         """Approve / Decline. Only the named approver counts; a decided request stays decided."""
         a = await asyncio.to_thread(self.approvals.get, approval_id)
-        lang = self._approval_user_lang(a.guild_id, a.approver_id) if a else "th"
+        lang = self._approval_user_lang(a.guild_id, a.approver_id) if a else "en"
         if a is None or a.status != "pending":
             await interaction.response.send_message(t("appr_handled", lang), ephemeral=True)
             return

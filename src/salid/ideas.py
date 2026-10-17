@@ -183,7 +183,7 @@ def images_heading(lang: str) -> str:
 
 
 def render_markdown(
-    doc: IdeaDoc, lang: str = "th", *, owner_line: bool = True, images: bool = True
+    doc: IdeaDoc, lang: str = "en", *, owner_line: bool = True, images: bool = True
 ) -> str:
     """The whole project document: title, owner / date line, then every section (headings inside
     a section are moved one level down)."""

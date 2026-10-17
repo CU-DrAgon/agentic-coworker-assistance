@@ -9,11 +9,11 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
-from conftest import FakeClient, FixedClockSettings, json_resp, text_resp
+from conftest import FakeClient, FixedClockSettings, ThaiGuildStore, json_resp, text_resp
 
 from salid import meeting as mt
 from salid.bot import SecretaryBot
-from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
+from salid.guild_settings import GuildSettingsUpdate
 from salid.i18n import t
 from salid.meeting import (
     PCM_BYTES_PER_SECOND,
@@ -246,7 +246,7 @@ def env(monkeypatch):
         ),
         None,
         llm,
-        guilds=MemoryGuildStore(),
+        guilds=ThaiGuildStore(),
     )
     monkeypatch.setattr(SecretaryBot, "user", property(lambda s: ME))
     mgr = bot.meetings
@@ -262,14 +262,14 @@ def env(monkeypatch):
 # ------------------------------------------------------------------ join / leave guards
 async def test_join_requires_being_in_a_voice_channel(env):
     m = make_member(env.guild, 10, "แอน")
-    assert await env.mgr.join(m) == t("meet_not_in_voice", "th")
+    assert await env.mgr.join(m, lang="th") == t("meet_not_in_voice", "th")
     assert env.mgr.sessions == {}
 
 
 async def test_join_needs_connect_permission(env):
     env.chan._connect = False
     m = make_member(env.guild, 10, "แอน", env.chan)
-    reply = await env.mgr.join(m)
+    reply = await env.mgr.join(m, lang="th")
     assert "Connect" in reply and "Manage" not in reply and "ตอนนี้สลิดยังขาดสิทธิ์" in reply
 
 
@@ -279,30 +279,30 @@ async def test_join_respects_the_feature_toggle(env):
     )
     await asyncio.to_thread(env.bot.team.current, 1000)
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert await env.mgr.join(m) == t("meet_off", "th")
+    assert await env.mgr.join(m, lang="th") == t("meet_off", "th")
 
 
 async def test_join_announces_listens_and_blocks_a_second_meeting(env):
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert "ห้องประชุม" in await env.mgr.join(m)
+    assert "ห้องประชุม" in await env.mgr.join(m, lang="th")
     assert env.chan.sent == [t("meet_announce", "th")]
     assert "สลิดเข้ามาฟังและจดบันทึกการประชุมค่ะ" in env.chan.sent[0]
     assert isinstance(env.vc.listening, mt.MeetingSink)
-    again = await env.mgr.join(m)
+    again = await env.mgr.join(m, lang="th")
     assert "กำลังอยู่ในการประชุม" in again
     await env.mgr.end((1000, 77), "command")
 
 
 async def test_leave_without_meeting(env):
     m = make_member(env.guild, 10, "แอน", env.chan)
-    assert await env.mgr.leave(m) == t("meet_none", "th")
+    assert await env.mgr.leave(m, lang="th") == t("meet_none", "th")
 
 
 async def test_leave_denied_for_outsiders(env):
     a = make_member(env.guild, 10, "แอน", env.chan)
     outsider = make_member(env.guild, 11, "ซี")
-    await env.mgr.join(a)
-    assert await env.mgr.leave(outsider) == t("meet_leave_denied", "th")
+    await env.mgr.join(a, lang="th")
+    assert await env.mgr.leave(outsider, lang="th") == t("meet_leave_denied", "th")
     assert (1000, 77) in env.mgr.sessions
     await env.mgr.end((1000, 77))
 
@@ -952,7 +952,7 @@ def test_summary_language_auto_follows_the_transcript(env):
     client = FakeClient([text_resp("x"), text_resp("y"), text_resp("z")])
     mt_.summarize_transcript(client, "m", "[10:00] Ann: ship it on Friday", "auto")
     mt_.summarize_transcript(client, "m", "[10:00] แอน: ส่งวันศุกร์", "auto")
-    mt_.summarize_transcript(client, "m", "[10:00] แอน: ส่งวันศุกร์")
+    mt_.summarize_transcript(client, "m", "[10:00] แอน: ส่งวันศุกร์", "th")
     en, th, default = (c[1][0] for c in client.models.calls)
     assert "in English" in en and "เป็นภาษาไทย" in th and "เป็นภาษาไทย" in default
 

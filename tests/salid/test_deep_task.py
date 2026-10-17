@@ -70,7 +70,7 @@ def ds(settings):
 
 def test_disabled_without_binary_path(seeded, settings):
     with pytest.raises(DeepTaskError, match="SALID_GEMINI_CLI_PATH") as e:
-        run_deep_task(settings, seeded, "x", guild_id=GUILD)
+        run_deep_task(settings, seeded, "x", guild_id=GUILD, lang="th")
     assert str(e.value) == t("deep_disabled", "th")
 
 
@@ -246,25 +246,27 @@ class FakeMessage:
 
 @pytest.fixture
 def bot(seeded, ds):
+    from conftest import ThaiGuildStore
+
     from salid.bot import SecretaryBot
 
-    return SecretaryBot(ds, seeded, None)
+    return SecretaryBot(ds, seeded, None, guilds=ThaiGuildStore())
 
 
 async def test_bot_refuses_non_exec_and_runs_no_task(bot, monkeypatch):
     called = []
     monkeypatch.setattr("salid.bot.run_deep_task", lambda *a, **k: called.append(1))
     m = FakeMessage()
-    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=False)
+    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=False, setting="th")
     assert "เฉพาะผู้บริหาร" in m.replies[0][0] and not called and not bot._deep_tasks
 
 
 async def test_bot_disabled_and_usage(bot):
     m = FakeMessage()
-    await bot._deep(m, GUILD, "", is_exec=True)
+    await bot._deep(m, GUILD, "", is_exec=True, setting="th")
     assert "บอกโจทย์" in m.replies[0][0]
     bot.s = bot.s.model_copy(update={"gemini_cli_path": ""})
-    await bot._deep(m, GUILD, "x", is_exec=True)
+    await bot._deep(m, GUILD, "x", is_exec=True, setting="th")
     assert "SALID_GEMINI_CLI_PATH" in m.replies[1][0]
 
 
@@ -279,7 +281,7 @@ async def test_bot_acks_then_posts_result_in_background(bot, monkeypatch):
 
     monkeypatch.setattr("salid.bot.run_deep_task", fake_run)
     m = FakeMessage()
-    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=True)
+    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=True, setting="th")
     assert "เดี๋ยวสลิดไล่ดูให้นะคะ" in m.replies[0][0] and not m.replies[1:]  # ack first
     await asyncio.gather(*bot._deep_tasks)
     assert "# ผล" in m.replies[1][0] and "tokens 10" in m.replies[1][0]
@@ -310,7 +312,7 @@ async def test_deep_ack_is_written_for_the_task_and_keeps_the_facts(bot, monkeyp
     )
     bot.fillers = Writer("เดี๋ยวไล่ดูยอดขายให้นะคะ ใช้เวลาประมาณ 1-5 นาที ส่งผลในห้องนี้ค่ะ")
     m = FakeMessage()
-    await bot._deep(m, GUILD, "ทำรายงานยอดขาย", is_exec=True)
+    await bot._deep(m, GUILD, "ทำรายงานยอดขาย", is_exec=True, setting="th")
     assert m.replies[0][0].startswith("เดี๋ยวไล่ดูยอดขาย")
     facts = " ".join(bot.fillers.calls[0]["facts"])
     assert "1-5" in facts and "ห้องนี้" in facts and bot.fillers.calls[0]["kind"] == "deep"
@@ -329,7 +331,7 @@ async def test_deep_ack_falls_back_to_the_catalog_line_when_the_model_is_slow(bo
     bot.s = bot.s.model_copy(update={"ack_llm_timeout_s": 0.05})
     bot.fillers = Writer("ช้าไปค่ะ", delay=1.0)
     m = FakeMessage()
-    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=True)
+    await bot._deep(m, GUILD, "ทำรายงาน", is_exec=True, setting="th")
     assert m.replies[0][0] == t("deep_ack", "th")
     await asyncio.gather(*bot._deep_tasks)
 
@@ -346,8 +348,8 @@ async def test_bot_rejects_second_concurrent_task_and_reports_failure(bot, monke
 
     monkeypatch.setattr("salid.bot.run_deep_task", slow)
     m1, m2 = FakeMessage(), FakeMessage()
-    await bot._deep(m1, GUILD, "a", is_exec=True)
-    await bot._deep(m2, GUILD, "b", is_exec=True)
+    await bot._deep(m1, GUILD, "a", is_exec=True, setting="th")
+    await bot._deep(m2, GUILD, "b", is_exec=True, setting="th")
     assert "กำลังทำงานใหญ่" in m2.replies[0][0]
     release.set()
     await asyncio.gather(*bot._deep_tasks)

@@ -350,11 +350,11 @@ def test_tools_are_registered_and_the_prompt_never_denies_posting():
 def test_persona_uses_one_particle_for_chat_and_voice(monkeypatch):
     s = Settings()
     assert s.persona_particle == "ค่ะ" and s.voice_particle == "ค่ะ"
-    p = qa.system_prompt(s, scoped=False)
+    p = qa.system_prompt(s, scoped=False, language="th")
     assert "ได้ค่ะ" in p and "ได้ครับ" not in p and "ห้ามใช้ ผม/ฉัน/ครับ" in p
     assert "สลิด" in qa.PERSONA["th"] and "ห้ามใช้ ผม" in qa.PERSONA["th"]
     male = Settings(persona_particle="ครับ")
-    q = qa.system_prompt(male, scoped=False)
+    q = qa.system_prompt(male, scoped=False, language="th")
     assert "ได้ครับ" in q and "นะคะ" not in q and "คะแนน" in qa.apply_particle("คะแนน คะ", "ครับ")
 
 

@@ -198,11 +198,11 @@ def test_round_cap(seeded, settings):
 
 def test_digest(seeded):
     seeded_day = "2026-10-05"
-    d = build_daily_digest(seeded, GUILD, seeded_day)
+    d = build_daily_digest(seeded, GUILD, seeded_day, "th")
     assert "฿9,250.5" in d and "Makro" in d and "วัตถุดิบ" in d and "ค่าเดินทาง" in d
-    d2 = build_daily_digest(seeded, GUILD, "2026-10-14")
+    d2 = build_daily_digest(seeded, GUILD, "2026-10-14", "th")
     assert "Ice Co" in d2 and "ต้องตรวจสอบ" in d2
-    assert "ไม่มีใบเสร็จ" in build_daily_digest(seeded, GUILD, "2026-01-01")
+    assert "ไม่มีใบเสร็จ" in build_daily_digest(seeded, GUILD, "2026-01-01", "th")
 
 
 def test_digest_top3(store):
@@ -210,7 +210,7 @@ def test_digest_top3(store):
 
     for i, (v, t) in enumerate([("A", 1), ("B", 5), ("C", 3), ("D", 4)]):
         mk(store, i, 1, "x", v, "2026-10-01", t)
-    d = build_daily_digest(store, GUILD, "2026-10-01")
+    d = build_daily_digest(store, GUILD, "2026-10-01", "th")
     assert "1. B" in d and "2. D" in d and "3. C" in d and "A:" not in d.split("3 อันดับ")[1]
 
 
@@ -222,13 +222,22 @@ def test_is_exec(settings):
 def test_system_prompt_language_instruction(settings):
     from salid.qa import system_prompt
 
-    th = system_prompt(settings, scoped=False)
-    assert th == system_prompt(settings, scoped=False, language="th")
+    th = system_prompt(settings, scoped=False, language="th")
     assert "พูดเหมือนคนจริงๆ" in th and "\nLanguage:" not in th
-    en = system_prompt(settings, scoped=False, language="en")
-    assert "ALWAYS reply in English" in en and "พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: สั้น" not in en
+    assert "ภาษาหลักของเซิร์ฟเวอร์นี้คือภาษาไทย" in th
+    en = system_prompt(settings, scoped=False)  # English is the default
+    assert en == system_prompt(settings, scoped=False, language="en")
+    assert (
+        "reply in English" in en
+        and "\nLanguage: this server's main language is English" in en
+        and "พูดเหมือนคนจริงๆ ไม่ใช่หุ่นยนต์: สั้น" not in en
+    )
     auto = system_prompt(settings, scoped=True, language="auto")
-    assert "same language as the user's latest message" in auto and "ไม่ใช่ผู้บริหาร" in auto
+    assert (
+        "same language as the user's latest message" in auto
+        and "English when you cannot tell" in auto
+        and "ไม่ใช่ผู้บริหาร" in auto
+    )
 
 
 def test_system_prompt_lists_capabilities(settings):
@@ -257,7 +266,7 @@ def test_ask_passes_the_language_to_the_model(seeded, settings):
         language="en",
     )  # fmt: skip
     assert a.text == "Total is ฿1,000"
-    assert "ALWAYS reply in English" in llm.requests[0].config.system_instruction
+    assert "reply in English" in llm.requests[0].config.system_instruction
 
 
 def test_empty_answer_falls_back_in_the_users_language(seeded, settings):

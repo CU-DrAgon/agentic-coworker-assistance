@@ -1,7 +1,8 @@
 """Salid's reply language: Thai, English or auto, plus the catalog of fixed user-facing strings.
 
 Language setting values: `th`, `en`, `auto` (reply in the language the person wrote in). A
-resolved language is always `th` or `en`. Thai entries are the original wording and the default.
+resolved language is always one of `LANGS` minus `auto`. English is the default (a server picks
+its main language when Salid joins); Thai entries are the original wording.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import re
 PRIMARY = ("th", "en")
 EXTRA = ("zh", "hi", "ms", "id", "vi", "ko", "ja")
 LANGS = PRIMARY + EXTRA + ("auto",)
-DEFAULT_LANGUAGE = "th"
+DEFAULT_LANGUAGE = "en"
 # lang -> (native name, English name, Thai name). Thai and English are hand-written; the others
 # are the second tier (model-translated catalogs in locales/<lang>.json, model replies).
 LANG_NAMES: dict[str, tuple[str, str, str]] = {
@@ -94,12 +95,19 @@ def detect_lang(text: str | None) -> str | None:
 
 def resolve_lang(setting: str | None, text: str | None = None) -> str:
     """The language to reply in. `auto` follows `text` by script (see detect_lang); no text (or
-    no letters, e.g. only emoji) -> th, today's default."""
+    no letters, e.g. only emoji) -> the default language (English)."""
     if setting in PRIMARY or setting in EXTRA:
         return setting  # type: ignore[return-value]
     if setting == "auto":
         return detect_lang(text) or DEFAULT_LANGUAGE
     return DEFAULT_LANGUAGE
+
+
+def locale_lang(locale: str | None) -> str:
+    """The language of a Discord locale (`th`, `en-US`, `zh-CN`, `ja`...): a known language of
+    `LANGS` by its primary subtag, English when the locale is empty or unknown."""
+    code = str(locale or "").lower().replace("_", "-").split("-")[0]
+    return code if code in LANGS and code != "auto" else DEFAULT_LANGUAGE
 
 
 def resolve_language(
@@ -263,14 +271,14 @@ def _locale(lang: str) -> dict[str, str]:
     return _LOCALES[lang]
 
 
-def t(key: str, lang: str = "th", **fmt) -> str:
+def t(key: str, lang: str = DEFAULT_LANGUAGE, **fmt) -> str:
     """Catalog text for a resolved language. th / en are hand-written; the second-tier languages
-    read locales/<lang>.json and fall back to English (never Thai); anything else is Thai."""
+    read locales/<lang>.json and fall back to English (never Thai); anything else is English."""
     entry = CATALOG[key]
     if lang in EXTRA:
         text = _locale(lang).get(key) or entry["en"]
     else:
-        text = entry["en"] if lang == "en" else entry["th"]
+        text = entry["th"] if lang == "th" else entry["en"]
     return text.format(**fmt) if fmt else text
 
 
@@ -767,6 +775,16 @@ CATALOG: dict[str, dict[str, str]] = {
     "lang_denied": {
         "th": "เปลี่ยนภาษาได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารค่ะ",
         "en": "Only server admins or executives can change the language.",
+    },
+    "lang_ask_done": {
+        "th": "ได้ค่ะ จากนี้สลิดจะใช้ภาษา{label}เป็นภาษาหลักของเซิร์ฟเวอร์นี้ค่ะ "
+        "(เปลี่ยนได้ทุกเมื่อ แค่บอกสลิดว่า “พูดภาษา…ทั้งเซิร์ฟเวอร์”)",
+        "en": "Done: from now on I'll use {label} as this server's main language. "
+        "You can change it any time, just tell me “speak … everywhere”.",
+    },
+    "lang_ask_denied": {
+        "th": "ให้ผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารเป็นคนเลือกภาษาหลักนะคะ",
+        "en": "Please ask a server admin or executive to pick the main language.",
     },
     "lang_failed": {
         "th": "ตั้งภาษาไม่สำเร็จ ลองใหม่อีกครั้งภายหลังนะคะ",

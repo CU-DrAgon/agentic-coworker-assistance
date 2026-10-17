@@ -112,7 +112,7 @@ class Approval(BaseModel):
     decided_at: str = ""
     decision_note: str = ""
     receipt_id: int | None = None  # the ledger receipt that settled an approved expense
-    lang: str = "th"
+    lang: str = "en"
 
 
 def _iso(dt: datetime) -> str:

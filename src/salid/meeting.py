@@ -479,7 +479,7 @@ def transcribe_pcm(client: Any, model: str, pcm: bytes, language: str | None = N
     return "" if re.fullmatch(r"[\s\W_]*", text) else text
 
 
-def summarize_transcript(client: Any, model: str, transcript: str, language: str = "th") -> str:
+def summarize_transcript(client: Any, model: str, transcript: str, language: str = "en") -> str:
     """Blocking: meeting summary (decisions, action items with owners, open questions) in
     `language` (th, en, or auto = the language the transcript is mostly in)."""
     resolved = resolve_lang(language, transcript)
@@ -601,8 +601,8 @@ class MeetingSession:
     play_lock: asyncio.Lock = field(default_factory=asyncio.Lock)  # one clip at a time, in order
     speaking_since: float = 0.0
     speaking_until: float = 0.0  # end of the last spoken reply + cooldown (monotonic)
-    language: str = "th"  # th / en / auto: the text channel's setting when the meeting started
-    fallback_lang: str = "th"  # th / en: what fixed messages use when `language` is auto
+    language: str = "en"  # th / en / auto: the text channel's setting when the meeting started
+    fallback_lang: str = "en"  # th / en: what fixed messages use when `language` is auto
     empty_grace: float = EMPTY_GRACE_S  # no humans in the channel: end after this long
     first_grace: float | None = None  # auto-join only: shorter wait while nobody has come yet
     had_humans: bool = False
@@ -1169,7 +1169,7 @@ class MeetingManager:
         self,
         member,
         fallback_channel=None,
-        lang: str = "th",
+        lang: str = "en",
         *,
         announce: str = "meet_announce",
         empty_grace: float | None = None,
@@ -1445,7 +1445,7 @@ class MeetingManager:
                 starter,
                 lang=lang
                 if lang in LANGS and lang != "auto"
-                else resolve_lang(self.bot.team.current(guild.id).default_language),
+                else resolve_lang(self.bot.team.current(guild.id).language_setting),
                 announce="meet_announce_auto",
                 first_grace=float(getattr(self.bot.s, "meeting_empty_minutes", 2)) * 60.0,
                 origin="auto",
@@ -1575,7 +1575,7 @@ class MeetingManager:
         text_ch = guild.get_channel(rec["text_channel_id"]) if rec.get("text_channel_id") else None
         humans = self._humans(channel)
         elapsed = max(0.0, (self.bot.s.now() - started_at).total_seconds())
-        lang = rec.get("fallback_lang") or resolve_lang(self.bot.team.current(gid).default_language)
+        lang = rec.get("fallback_lang") or resolve_lang(self.bot.team.current(gid).language_setting)
         on_end = None
         if rec.get("meeting_id") and getattr(self.bot, "scheduler", None) is not None:
             mid = rec["meeting_id"]
@@ -1606,7 +1606,7 @@ class MeetingManager:
         session = MeetingSession(
             guild_id=gid, voice_channel=channel, text_channel=channel, fallback_channel=text_ch,
             vc=vc, loop=asyncio.get_running_loop(), started=time.monotonic() - elapsed,
-            language=rec.get("language") or "th", fallback_lang=lang,
+            language=rec.get("language") or "auto", fallback_lang=lang,
             empty_grace=float(rec.get("empty_grace") or EMPTY_GRACE_S),
             first_grace=rec.get("first_grace"), on_end=on_end, meeting_id=rec.get("meeting_id"),
             started_at=started_at, starter=rec.get("starter", ""), had_humans=True,
@@ -1712,7 +1712,7 @@ class MeetingManager:
         if session.live is not None:
             session.live.stop_playback()
 
-    async def leave(self, member, lang: str = "th", text_channel_id: int | None = None) -> str:
+    async def leave(self, member, lang: str = "en", text_channel_id: int | None = None) -> str:
         """End the session of the room the person is in (else the one whose text chat they typed
         in, else, for a manager, the only one in the guild)."""
         from .bot import can_manage_guild
@@ -2190,7 +2190,7 @@ class MeetingManager:
         this meeting) and the generated one is dropped: one acknowledgement only."""
         if not self.bot.s.voice_reply or s.ending or s.speaking:
             return
-        lang = s.lang if s.lang in ACK_TEXT or s.lang in EXTRA else "th"
+        lang = s.lang if s.lang in ACK_TEXT or s.lang in EXTRA else "en"
         particle = str(getattr(self.bot.s, "voice_particle", "ค่ะ") or "ค่ะ")
         key = getattr(s, "key", id(s))
         recent = self._ack_recent.get(key)

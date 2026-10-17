@@ -76,14 +76,14 @@ def test_unsupported_file_ignored_without_gemini(store, settings):
 def test_sha_dedupe_skips_gemini(store, settings):
     ingest(store, settings, FakeClient([json_resp(EX)]))
     c = FakeClient([])  # would raise if Gemini were called
-    r = ingest(store, settings, c)
+    r = ingest(store, settings, c, lang="th")
     assert r.status == "duplicate" and "เคยบันทึก" in r.reply and not c.models.calls
     assert store.summarize(GUILD, "2000-01-01", "2100-01-01")["count"] == 1
 
 
 def test_likely_duplicate_flagged(store, settings):
     ingest(store, settings, FakeClient([json_resp(EX)]), data=b"one")
-    r = ingest(store, settings, FakeClient([json_resp(EX)]), data=b"two")
+    r = ingest(store, settings, FakeClient([json_resp(EX)]), data=b"two", lang="th")
     assert r.status == "created" and r.receipt.possible_duplicate_of and "อาจซ้ำ" in r.reply
     assert len(store.flagged(GUILD)) == 1
 
@@ -130,7 +130,9 @@ def test_correction_llm_fallback(store, settings):
 
 def test_correction_not_understood(store, settings):
     r = ingest(store, settings, FakeClient([json_resp(EX)])).receipt
-    assert "ไม่เข้าใจ" in apply_correction(store, FakeClient([json_resp({})]), settings, r, "555")
+    assert "ไม่เข้าใจ" in apply_correction(
+        store, FakeClient([json_resp({})]), settings, r, "555", "th"
+    )
 
 
 def test_reply_message_lookup(store, settings):
@@ -147,13 +149,13 @@ def test_recent_returns_newest_first_and_respects_limit(seeded):
 
 # ---------------------------------------------------------------- reply language
 def test_receipt_replies_follow_the_language(store, settings):
-    th = ingest(store, settings, FakeClient([json_resp(EX)]))
+    th = ingest(store, settings, FakeClient([json_resp(EX)]), lang="th")
     en = ingest(store, settings, FakeClient([json_resp(EX)]), data=b"img2", lang="en")
     assert "บันทึกแล้ว" in th.reply and "ร้าน:" in th.reply
     assert "Saved" in en.reply and "Vendor:" in en.reply and "บันทึกแล้ว" not in en.reply
     dup = ingest(store, settings, FakeClient([]), data=b"img2", lang="en")
     assert dup.status == "duplicate" and "already recorded" in dup.reply
-    assert "เคยบันทึกแล้ว" in ingest(store, settings, FakeClient([]), data=b"img2").reply
+    assert "เคยบันทึกแล้ว" in ingest(store, settings, FakeClient([]), data=b"img2", lang="th").reply
     unclear = ingest(
         store, settings, FakeClient([json_resp({**EX, "confidence": 0.3})]), data=b"img3", lang="en"
     )

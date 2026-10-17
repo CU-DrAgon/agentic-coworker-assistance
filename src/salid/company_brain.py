@@ -362,7 +362,7 @@ def _q(x: str) -> str:
 
 
 def company_block(
-    pb: CompanyPlaybook, question: str = "", *, nudge: bool = False, lang: str = "th"
+    pb: CompanyPlaybook, question: str = "", *, nudge: bool = False, lang: str = "en"
 ) -> str:
     """The prompt block with what the company taught Salid ("" when there is nothing and no
     nudge). Body <= BLOCK_CHARS (persona and rules first, then glossary / FAQ / SOP by keyword
@@ -476,7 +476,7 @@ class CompanyCtx:
     asker_name: str
     is_exec: bool
     repo: CompanyRepo
-    lang: str = "th"
+    lang: str = "en"
     link: str = ""  # jump link of the message being answered, "" when unknown
     notify: Callable[[Suggestion], int] = lambda s: 0  # DM the admins; returns how many got it
     add_style: Callable[[str], dict] | None = None  # profiles.ProfileTools.remember("style_add")
@@ -555,7 +555,7 @@ def decide(
     return s
 
 
-def view(pb: CompanyPlaybook, lang: str = "th", admin: bool = False) -> dict:
+def view(pb: CompanyPlaybook, lang: str = "en", admin: bool = False) -> dict:
     out = {
         "industry": pb.industry,
         "about": pb.about,

@@ -12,7 +12,11 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     channel_modes        {channel id str: off|listen|call|join|chat}, see salid.modes
     default_mode         mode of channels with no entry above (default "call")
     channel_languages    {channel id str: th|en|auto}, reply language override, see salid.i18n
-    default_language     reply language of channels with no entry above (default "th")
+    default_language     the server's main language, reply language of channels with no entry above
+                         (default "en"; counts only once `language_chosen`, until then: auto)
+    language_chosen      bool the server picked its main language (join question, /language, hub);
+                         a document that already carries a default_language counts as chosen
+    language_asked_at    str ISO time the join question was posted (so it is asked only once)
     channel_tones        {channel id str: cheerful|friendly|professional|concise|calm}, see salid.tone
     default_tone         tone of channels with no entry above (default "cheerful")
     tone_note            str <= 200 chars, owner's extra wording note appended to every tone
@@ -58,7 +62,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .i18n import DEFAULT_LANGUAGE, LANGS, resolve_language
 from .modes import DEFAULT_MODE, MODES, resolve_mode
@@ -357,6 +361,36 @@ class GuildSettings(GuildSettingsUpdate):
     updated_at: str = ""
     # Per-channel languages saved when the whole server was switched, so switching back restores.
     previous_channel_languages: dict[str, str] = Field(default_factory=dict)
+    # The default language those overrides were saved under; switching back to it restores them.
+    previous_default_language: str = ""
+    language_chosen: bool = False
+    language_asked_at: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_language_chosen(cls, data):
+        """A document that already carries a default_language (set earlier with /language or the
+        hub) counts as chosen; no write is needed. A server that never chose reads as `auto`
+        (what the hub shows, and what the bot runs on) until it does."""
+        if isinstance(data, dict) and "language_chosen" not in data:
+            if data.get("default_language") in LANGS:
+                data = {**data, "language_chosen": True}
+            else:
+                data = {**data, "default_language": "auto"}
+        elif isinstance(data, dict) and not data["language_chosen"]:
+            data = {**data, "default_language": "auto"}
+        return data
+
+    @property
+    def language_setting(self) -> str:
+        """The server's language setting as the bot uses it: the chosen main language, or `auto`
+        (follow the words they write, English fallback) until the server has chosen."""
+        return self.default_language if self.language_chosen else "auto"  # (see the validator)
+
+    @field_validator("previous_default_language", mode="before")
+    @classmethod
+    def _previous_default(cls, v):
+        return v if v in LANGS else ""
 
     @field_validator("tone_note", mode="before")
     @classmethod
@@ -369,6 +403,12 @@ class GuildSettings(GuildSettingsUpdate):
     @classmethod
     def _previous_languages(cls, v):
         return GuildSettingsUpdate._languages(v)
+
+
+def language_chosen_in(doc: dict | None) -> bool:
+    """Has this raw guild document a chosen main language (flag, or a stored default_language)?"""
+    d = doc or {}
+    return bool(d.get("language_chosen")) or d.get("default_language") in LANGS
 
 
 class LinkError(Exception):
@@ -459,12 +499,19 @@ class GuildStore:
         self, guild_id: int, update: GuildSettingsUpdate, updated_by: str
     ) -> GuildSettings:
         data = update.model_dump()
+        ref = self._ref(guild_id)
+        snap = ref.get()
+        if not language_chosen_in(snap.to_dict() if snap.exists else None):
+            if data.get("default_language") == "auto":
+                # the form only echoed what it showed for a server that never chose: not a choice
+                data.pop("default_language", None)
+            else:
+                data["language_chosen"] = True
         modes = data.pop("channel_modes")
         languages = data.pop("channel_languages")
         tones = data.pop("channel_tones")
         data["updated_by"] = updated_by
         data["updated_at"] = _now().isoformat(timespec="seconds")
-        ref = self._ref(guild_id)
         ref.set(data, merge=True)
         # set(merge=True) would deep-merge the map and never remove a channel: replace it whole.
         ref.update({"channel_modes": modes, "channel_languages": languages, "channel_tones": tones})
@@ -498,9 +545,12 @@ class GuildStore:
             raise ValueError(f"retention must be {MIN_RETENTION_DAYS}-{MAX_RETENTION_DAYS} days")
         self._ref(guild_id).set({"memory_retention_days": ok}, merge=True)
 
-    def set_channel_language(self, guild_id: int, channel_id: int, language: str | None) -> None:
+    def set_channel_language(
+        self, guild_id: int, channel_id: int, language: str | None, *, mark_chosen: bool = True
+    ) -> None:
         """Set one channel's reply language (None removes the entry: the channel follows the
-        guild default). Same map-replace semantics as `set_channel_mode`."""
+        guild default). Same map-replace semantics as `set_channel_mode`. `mark_chosen=False` is for
+        automatic settings (private channels) that must not answer the main-language question."""
         if language is not None and language not in LANGS:
             raise ValueError(f"unknown language {language!r}")
         ref, cid = self._ref(guild_id), str(channel_id)
@@ -513,12 +563,23 @@ class GuildStore:
                 langs.pop(cid, None)
             else:
                 langs[cid] = language
+            data: dict = {"channel_languages": langs}
+            if mark_chosen and language is not None and not language_chosen_in(doc):
+                # a channel command answers the join question: keep following the words people
+                # write elsewhere (auto) and never ask again
+                data.update(language_chosen=True, default_language="auto")
             if doc is None:
-                txn.set(ref, {"channel_languages": langs})
+                txn.set(ref, data)
             else:
-                txn.update(ref, {"channel_languages": langs})
+                txn.update(ref, data)
 
         self._in_transaction(run)
+
+    def mark_language_asked(self, guild_id: int) -> None:
+        """Remember that the main-language question was posted (it is asked only once)."""
+        self._ref(guild_id).set(
+            {"language_asked_at": _now().isoformat(timespec="seconds")}, merge=True
+        )
 
     def set_channel_tone(self, guild_id: int, channel_id: int, tone: str | None) -> None:
         """Set one channel's tone (None removes the entry: the channel follows the guild default).
@@ -559,8 +620,9 @@ class GuildStore:
         self, guild_id: int, language: str, apply_to_all_channels: bool = True
     ) -> None:
         """Set the guild default language. With `apply_to_all_channels` the per-channel overrides
-        are cleared (a copy is kept in `previous_channel_languages`); switching back to Thai
-        restores that copy."""
+        are cleared (a copy is kept in `previous_channel_languages` together with the default they
+        were saved under); switching back to that default restores the copy. Also marks the
+        server's language as chosen."""
         if language not in LANGS or language == "auto":
             raise ValueError(f"unknown language {language!r}")
         ref = self._ref(guild_id)
@@ -568,16 +630,23 @@ class GuildStore:
         def run(txn) -> None:
             snap = ref.get(transaction=txn)
             doc = snap.to_dict() if snap.exists else None
-            data: dict = {"default_language": language}
+            data: dict = {"default_language": language, "language_chosen": True}
             if apply_to_all_channels:
-                current = dict((doc or {}).get("channel_languages") or {})
-                previous = dict((doc or {}).get("previous_channel_languages") or {})
-                if language == "th":
+                d = doc or {}
+                current = dict(d.get("channel_languages") or {})
+                previous = dict(d.get("previous_channel_languages") or {})
+                # overrides saved before previous_default_language existed were saved under Thai
+                prev_default = d.get("previous_default_language") or ("th" if previous else "")
+                if previous and prev_default == language:
                     data["channel_languages"] = previous
                     data["previous_channel_languages"] = {}
+                    data["previous_default_language"] = ""
                 else:
+                    now_default = d.get("default_language") if language_chosen_in(d) else "auto"
                     data["channel_languages"] = {}
-                    data["previous_channel_languages"] = current or previous
+                    if current:
+                        data["previous_channel_languages"] = current
+                        data["previous_default_language"] = now_default
             if doc is None:
                 txn.set(ref, data)
             else:
@@ -802,13 +871,28 @@ class BotGuildSettings:
         return resolve_language(
             channel_id,
             channel_languages=g.channel_languages,
-            default_language=g.default_language,
+            default_language=g.language_setting,
         )
 
-    def set_channel_language(self, guild_id: int, channel_id: int, language: str | None) -> None:
+    def language_setting(self, guild_id: int) -> str:
+        """The server's main-language setting: the chosen language, `auto` until it has chosen."""
+        return self.current(guild_id).language_setting
+
+    def language_chosen(self, guild_id: int) -> bool:
+        return self.current(guild_id).language_chosen
+
+    def mark_language_asked(self, guild_id: int) -> None:
+        try:
+            self.store.mark_language_asked(guild_id)
+        finally:
+            self._cache.pop(guild_id, None)
+
+    def set_channel_language(
+        self, guild_id: int, channel_id: int, language: str | None, *, mark_chosen: bool = True
+    ) -> None:
         """Write one channel's language and drop the cache so it applies at once."""
         try:
-            self.store.set_channel_language(guild_id, channel_id, language)
+            self.store.set_channel_language(guild_id, channel_id, language, mark_chosen=mark_chosen)
         finally:
             self._cache.pop(guild_id, None)
 

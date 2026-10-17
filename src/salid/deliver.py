@@ -488,7 +488,7 @@ class DeliverMixin:
 
     @staticmethod
     def _lang_of_ctx(secretary) -> str:
-        return secretary.lang if secretary.lang in LANGS and secretary.lang != "auto" else "th"
+        return secretary.lang if secretary.lang in LANGS and secretary.lang != "auto" else "en"
 
     # ------------------------------------------------------------- meeting minutes
     def _minutes_actions(self, message, guild, member, lang: str, loop):

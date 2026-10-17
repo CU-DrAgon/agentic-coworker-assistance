@@ -251,12 +251,12 @@ class Library:
         return public, public | {int(c.id) for c in g.channels}
 
     def _lang(self, gid) -> str:
-        """The guild's reply language (th/en) for the markdown rendered into the library."""
+        """The guild's reply language for the markdown rendered into the library."""
         try:
             g = self.guilds.find(gid)
-            return resolve_lang(getattr(g, "default_language", None))
+            return resolve_lang(getattr(g, "language_setting", None))
         except Exception:  # noqa: BLE001 - a lookup failure must not break the listing
-            return "th"
+            return "en"
 
     # ---- gathering one workspace
     def _gather(self, ws: Workspace, viewer: Viewer, out: Gathered) -> None:

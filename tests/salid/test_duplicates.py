@@ -149,12 +149,12 @@ def test_void_is_excluded_everywhere_and_reversible(store, pair, settings):
 
 def test_void_excluded_from_digest_and_dup_line(store, pair):
     a, b, _ = pair
-    text = build_daily_digest(store, GUILD, "2026-10-10")
+    text = build_daily_digest(store, GUILD, "2026-10-10", "th")
     assert "฿10,000" in text and "อาจซ้ำ 1 รายการ รวม ฿5,000 รอตรวจ" in text
     en = build_daily_digest(store, GUILD, "2026-10-10", "en")
     assert "Possible duplicates: 1 receipts, ฿5,000 awaiting review" in en
     store.set_status(b.id, "void", "d", "x")
-    text = build_daily_digest(store, GUILD, "2026-10-10")
+    text = build_daily_digest(store, GUILD, "2026-10-10", "th")
     assert "฿5,000" in text and "รอตรวจ" not in text
 
 

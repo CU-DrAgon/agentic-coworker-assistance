@@ -51,7 +51,7 @@ def is_confirm(text: str) -> bool:
     return bool(_CONFIRM.match(text or ""))
 
 
-def channel_name(nickname: str, lang: str = "th") -> str:
+def channel_name(nickname: str, lang: str = "en") -> str:
     """`สลิด-<nickname>` (`salid-<nickname>` in English): lower case, spaces to dashes, Thai kept,
     other symbols dropped."""
     prefix = CHANNEL_PREFIX_EN if lang != "th" else CHANNEL_PREFIX

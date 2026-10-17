@@ -284,7 +284,7 @@ def test_prompt_follow_up_and_emoji_rules(settings):
 
 
 def test_prompt_persona_and_exchange_rate_rules(settings):
-    p = system_prompt(settings, scoped=False)
+    p = system_prompt(settings, scoped=False, language="th")
     assert "ไม่ใช่หุ่นยนต์" in p and "ระบบได้รับคำสั่งแล้ว" in p and "ในฐานะ AI" in p
     assert "ห้ามประมาณหรือเดาอัตราแลกเปลี่ยน" in p
     en = system_prompt(settings, scoped=False, language="en")

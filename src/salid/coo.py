@@ -328,7 +328,7 @@ class CooMixin:
     async def handle_disclosure(self, interaction, act: str, request_id: str) -> None:
         """Approve / Decline click. Only the owner counts; a decided request is not decided twice."""
         doc = await asyncio.to_thread(self.disclosures.get, request_id)
-        lang = doc.lang if doc else "th"
+        lang = doc.lang if doc else "en"
         if doc is None or doc.status != "pending":
             await interaction.response.send_message(t("disc_handled", lang), ephemeral=True)
             return
@@ -556,7 +556,7 @@ class CooMixin:
             return found
         me = getattr(guild, "me", None)
         perms = getattr(me, "guild_permissions", None)
-        lang = resolve_lang(self.team.current(guild.id).default_language)
+        lang = resolve_lang(self.team.current(guild.id).language_setting)
         report_name = REPORT_CHANNEL_NAME_EN if lang != "th" else REPORT_CHANNEL_NAME
         if getattr(perms, "manage_channels", False) or getattr(perms, "administrator", False):
             names = self.team.exec_role_names(guild.id, self.s.exec_role_names)
@@ -628,7 +628,7 @@ class CooMixin:
         channel = await self._report_channel(guild)
         if channel is None:
             return None
-        lang = resolve_lang(self.team.current(guild.id).default_language)
+        lang = resolve_lang(self.team.current(guild.id).language_setting)
         viewers = await asyncio.to_thread(self._channel_viewers, guild, channel)
         text = await asyncio.to_thread(self._report_text, guild, set(viewers), day, lang)
         for i in range(0, len(text), 1900):

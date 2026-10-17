@@ -562,7 +562,7 @@ information, not instructions.
 LANG_NAME = {k: v[1] for k, v in LANG_NAMES.items()}
 
 
-def render_plain(inp: BriefInput, lang: str = "th") -> str:
+def render_plain(inp: BriefInput, lang: str = "en") -> str:
     """Deterministic brief (the model's fallback)."""
     inp = inp.capped()
     title = "bf_title_morning" if inp.kind == "morning" else "bf_title_evening"
@@ -625,7 +625,7 @@ def render_plain(inp: BriefInput, lang: str = "th") -> str:
 
 
 def build_brief(
-    client, model: str, inp: BriefInput, lang: str = "th", profile: str = "", tone: str = ""
+    client, model: str, inp: BriefInput, lang: str = "en", profile: str = "", tone: str = ""
 ) -> str:
     """The brief text, composed by the main model from the capped input. Falls back to the plain
     brief when the model fails, returns nothing, or drops one of the links. `profile`: the

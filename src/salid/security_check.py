@@ -675,7 +675,7 @@ def reason_text(rid: str, lang: str) -> str:
     return en if lang != "th" else th
 
 
-def render_check(res: CheckResult | None, lang: str = "th") -> str:
+def render_check(res: CheckResult | None, lang: str = "en") -> str:
     if res is None:
         return t("sec_nothing_to_check", lang)
     icon = {"safe": "🟢", "suspicious": "🟡", "dangerous": "🔴"}[res.verdict]
@@ -796,7 +796,7 @@ def verify_slip_data(
     expected_receiver: str | None = None,
     ledger_refs: Callable[[str], int | None] | None = None,
     now: datetime,
-    lang: str = "th",
+    lang: str = "en",
 ) -> dict:
     """The slip checklist from fields already read off the image. `ledger_refs(ref) -> receipt id
     | None` finds the same reference in the ledger. Returns the findings and a rendered text; it
