@@ -442,9 +442,10 @@ class GuildSettings(GuildSettingsUpdate):
 
     @property
     def language_setting(self) -> str:
-        """The server's language setting as the bot uses it: the chosen main language, or `auto`
-        (follow the words they write, English fallback) until the server has chosen."""
-        return self.default_language if self.language_chosen else "auto"  # (see the validator)
+        """The server's language setting as the bot uses it: the chosen main language; English
+        until the server has chosen (the system's base language is English, never "follow the
+        words" — the owner's rule, 2026-10-17)."""
+        return self.default_language if self.language_chosen else DEFAULT_LANGUAGE
 
     @field_validator("previous_default_language", mode="before")
     @classmethod
