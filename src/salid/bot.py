@@ -1794,16 +1794,14 @@ class SecretaryBot(
             if message.guild is None or not text:
                 return text
             langs = self.langs_for(gid, message.channel.id, member.id)
-            if len(langs) != 1 or langs[0] not in ("th", "en"):
+            if len(langs) != 1:
                 return text
             from .captions import translate_lines
             from .i18n import thai_share
 
-            want, share = langs[0], thai_share(text)
-            wrong = (want == "en" and share > 0.3) or (
-                want == "th" and share == 0.0 and any(c.isalpha() for c in text)
-            )
-            if not wrong:
+            want = langs[0]
+            # English-only servers: a mostly-Thai answer is translated (Thai servers unchanged)
+            if want != "en" or thai_share(text) <= 0.3:
                 return text
             logger.warning("chat answer came in the wrong language for %s: translating", want)
             fixed = await asyncio.to_thread(
