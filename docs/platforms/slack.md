@@ -69,6 +69,7 @@ oauth_config:
       - files:read
       - users:read
       - users:read.email
+      - canvases:read   # huddle AI notes (optional, see Huddle notes)
 settings:
   event_subscriptions:
     bot_events:
@@ -92,6 +93,8 @@ settings:
       - app_uninstalled
       - tokens_revoked
       - user_change
+      - file_shared            # huddle AI notes canvas (optional)
+      - user_huddle_changed    # huddle presence, logged only (optional)
   interactivity:
     is_enabled: false
   org_deploy_enabled: false
@@ -120,6 +123,39 @@ refresh cached names and member lists sooner; without them the caches expire aft
 
 Scope notes: `users:read` gives names and the admin/owner flag; `users:read.email` lets Salid read the profile email to verify members of an organization (optional, see Linking accounts); `*:read` scopes let Salid list the
 conversations it is in and who is in them (for memory scope). `reactions:write` is not needed.
+`canvases:read` and the `file_shared` / `user_huddle_changed` events are only for Huddle notes (below); drop them if you keep `SALID_SLACK_HUDDLE_NOTES=false`.
+
+## Huddle notes (optional, experimental)
+
+Salid cannot join, listen to or record a huddle: Slack has no API for that. What it can read is
+the **AI notes canvas** a person turned on in the huddle (summary, action items and the embedded
+transcript). It is remembered as one message of kind `huddle`, prefixed `[Huddle notes]`, in the
+channel's memory, so the normal access rule applies (people who can read the channel can get it
+back). Re-sharing the canvas replaces the earlier text; later edits are not seen (Slack sends no
+canvas event). Text is cut at 30,000 characters. Nothing is ever answered because of a huddle.
+
+Needs: a **paid** Slack plan (or trial) with huddle AI notes allowed by an admin (Admin → Roles &
+permissions → Feature access → AI → Huddle notes), somebody starting AI notes in the huddle, and
+Salid being a **member of the channel** (else `canvas_not_found`). No notes exist for huddles with
+guests or Slack Connect people; Salid also refuses Slack Connect / unknown-share channels and 1:1
+DMs, channels whose mode is `off`, and workspaces with memory switched off. Add `canvases:read` and
+the `file_shared` event (manifest above), reinstall the app, and leave `SALID_SLACK_HUDDLE_NOTES`
+on (the default for now; `false` disables it). Storing transcripts of people who are not Salid
+users is sensitive: tell the workspace (see Privacy) and check Slack's API terms for your case.
+
+How to test: in a channel with Salid, start a huddle, turn on AI notes, talk, end it, then look
+at the log. Every `huddle_thread` message, `file_shared` event and `user_huddle_changed` is logged
+at INFO with ids and key names only (never text): `slack huddle_thread ...`, `slack file_shared
+...`, `slack file info ... filetype= mode= pretty_type= canvas=`. A canvas is recognised by
+`filetype`/`mode` `quip` or `canvas`, or `pretty_type` Canvas. `/memory` or a question such as "what
+was decided in the huddle?" then finds it.
+
+**Unverified (confirm on a real workspace; the logs above answer them):** whether Slack delivers
+`huddle_thread` messages over Socket Mode; whether `file_shared` fires when the notes canvas is
+posted; the exact `filetype`/`mode` of a canvas; that the bot token can read the canvas when it is in
+the channel; what the transcript looks like in markdown. A canvas shared by a person in any channel
+is also remembered under the same `[Huddle notes]` label, because `file_shared` does not say where a
+canvas came from. `huddle_thread` attachments other than `files` / `room.attached_file_ids` are not read.
 
 ## Linking accounts to your organization
 
@@ -151,6 +187,7 @@ SALID_SLACK_BOT_TOKEN=xoxb-...
 SALID_SLACK_APP_TOKEN=xapp-...
 SALID_SLACK_EXEC_USER_IDS=U012ABCDEF,U034GHIJKL   # optional: extra executives (Slack member ids)
 # SALID_SLACK_IMPORT=false                         # do not import channel history
+# SALID_SLACK_HUDDLE_NOTES=false                   # do not remember huddle AI notes (default: on)
 ```
 
 Check the tokens without starting anything (read-only `auth.test`, prints no secrets):
@@ -225,6 +262,8 @@ purge must also remove them before Marketplace rules can be met.
   author's display name and Slack user id, for the retention period of the workspace (90 days by
   default). Set a channel's mode to `off` to keep it out. Private channels and group DMs are
   remembered only if someone invited Salid there.
+- With `canvases:read` and `SALID_SLACK_HUDDLE_NOTES` on, the AI notes canvas of a huddle (summary
+  and transcript) in a channel Salid is in is remembered like a message of that channel.
 - 1:1 DMs between people are never visible to Salid. A DM to Salid itself is handled like a message
   to a bot: answered, and remembered for the retention period.
 - Memory is read back only with the access rule described above (the asker and every reader of the

@@ -9,6 +9,7 @@ import pytest
 from conftest import FixedClockSettings
 from platform_fakes import NOW, Clock, FakeAsk, gid_of, inc, make_assistant, rid_of, stored
 
+from salid.guild_settings import GuildSettingsUpdate
 from salid.platforms import ids, slack, slack_import
 from salid.platforms.slack import SlackAdapter, SlackPort
 
@@ -88,6 +89,17 @@ class FakeSlack:
         self.reply_calls: list[dict] = []
         self.files: dict[str, dict] = {}
         self.file_calls: list[str] = []
+        self.canvases: dict[str, str] = {}  # canvas id -> markdown
+        self.canvas_errors: set[str] = set()
+        self.api_calls: list[tuple[str, dict]] = []
+
+    async def api_call(self, method, json=None, **kw):
+        self.api_calls.append((method, json))
+        assert method == "canvases.getContent"
+        cid = json["canvas_id"]
+        if cid in self.canvas_errors or cid not in self.canvases:
+            raise RuntimeError("canvas_not_found")
+        return {"ok": True, "content": self.canvases[cid]}
 
     async def users_info(self, user):
         self.calls.append("users_info")
@@ -1033,3 +1045,190 @@ async def test_consecutive_429s_stop_the_run_keeping_progress_and_the_next_run_r
     assert await imp.run() == 3  # resumes after the stored cursor
     assert not imp.capped
     assert len(stored_texts()) == 6
+
+
+# ------------------------------------------------------------------ huddle AI notes (canvas)
+
+
+def canvas(fx, fid="F9", text="# Notes\n- ship friday", **info):
+    client = fx[0]
+    client.files[fid] = {
+        "id": fid, "filetype": "quip", "pretty_type": "Canvas",
+        "created": int(NOW.timestamp()), **info,
+    }  # fmt: skip
+    client.canvases[fid] = text
+    return fid
+
+
+def huddle_notes(a, room="C1"):
+    return [m for m in stored(a, inc(), room) if m.kind == "huddle"]
+
+
+def shared(fid="F9", channel="C1"):
+    return {"type": "file_shared", "file_id": fid, "channel_id": channel, "user_id": "U1"}
+
+
+async def test_a_shared_canvas_is_remembered_once_as_huddle_notes_and_never_answered(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    await adapter.on_event(shared(), TEAM)
+    await a.drain()
+    (note,) = huddle_notes(a)
+    assert note.text == "[Huddle notes] # Notes\n- ship friday"
+    assert client.api_calls == [("canvases.getContent", {"canvas_id": "F9"})]
+    assert not a.ask_fn.calls and not client.posts
+    assert [m.kind for m in stored(a, inc())] == ["huddle"]
+
+
+async def test_resharing_or_editing_a_canvas_replaces_the_record(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    await adapter.on_event(shared(), TEAM)
+    client.canvases["F9"] = "# Notes\n- ship monday"
+    await adapter.on_event(shared(), TEAM)
+    await a.drain()
+    (note,) = huddle_notes(a)
+    assert note.text.endswith("ship monday")
+
+
+async def test_a_file_that_is_not_a_canvas_is_ignored(fx):
+    client, a, port, adapter = fx
+    client.files["F2"] = {"id": "F2", "filetype": "pdf", "pretty_type": "PDF", "created": 1}
+    await adapter.on_event(shared("F2"), TEAM)
+    await a.drain()
+    assert client.file_calls == ["F2"] and client.api_calls == []
+    assert stored(a, inc()) == []
+
+
+async def test_a_canvas_in_a_room_with_mode_off_is_not_fetched_or_remembered(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    rid = ids.room_id("slack", TEAM, "C1")
+    a.team.store.save_settings(
+        ids.tenant_id("slack", TEAM), GuildSettingsUpdate(channel_modes={str(rid): "off"}), "t"
+    )
+    await adapter.on_event(shared(), TEAM)
+    await a.drain()
+    assert client.api_calls == [] and stored(a, inc()) == []
+
+
+async def test_workspace_with_memory_off_or_the_env_flag_off_remembers_nothing(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    a.team.store.save_settings(
+        ids.tenant_id("slack", TEAM), GuildSettingsUpdate(features={"memory": False}), "t"
+    )
+    await adapter.on_event(shared(), TEAM)
+    a.team.store.save_settings(
+        ids.tenant_id("slack", TEAM), GuildSettingsUpdate(features={"memory": True}), "t"
+    )
+    a.ps.slack_huddle_notes = False
+    await adapter.on_event(shared(), TEAM)
+    await a.drain()
+    assert client.api_calls == [] and stored(a, inc()) == []
+
+
+async def test_unreadable_or_empty_canvas_records_nothing(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    client.canvas_errors.add("F9")  # canvas_not_found: the bot cannot view it
+    await adapter.on_event(shared(), TEAM)
+    canvas(fx, "F8", text="  \n ")
+    await adapter.on_event(shared("F8"), TEAM)
+    await a.drain()
+    assert stored(a, inc()) == []
+
+
+@pytest.mark.parametrize("flag", ["is_ext_shared", "is_shared", "is_org_shared"])
+async def test_slack_connect_and_unknown_rooms_fail_closed(fx, flag):
+    client, a, port, adapter = fx
+    canvas(fx)
+    client.channels["C1"][flag] = True
+    await adapter.on_event(shared(), TEAM)
+    client.channels["C1"][flag] = False
+    client.omit_share_fields.add("is_org_shared")  # Slack left a flag out: unknown
+    port.forget_room("C1")
+    await adapter.on_event(shared(), TEAM)
+    await a.drain()
+    assert client.api_calls == [] and stored(a, inc()) == []
+
+
+async def test_a_one_to_one_dm_canvas_is_never_remembered(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    await adapter.on_event(shared(channel="D1"), TEAM)
+    await a.drain()
+    assert client.api_calls == []
+
+
+async def test_huddle_thread_message_is_metadata_only_and_remembers_its_canvas(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    event = ev(
+        subtype="huddle_thread", user="USLACKBOT", text="", ts="1791954000.000500",
+        room={"id": "R1", "call_family": "huddle", "has_ended": True,
+              "thread_root_ts": "1791954000.000500", "attached_file_ids": ["F9"]},
+    )  # fmt: skip
+    await adapter.on_message(event, TEAM)
+    await adapter.on_message({**event, "text": f"<@{BOT}> summarise"}, TEAM, mention=True)
+    await a.drain()
+    assert not a.ask_fn.calls and not client.posts
+    assert [m.kind for m in stored(a, inc())] == ["huddle"]  # no chat line for the huddle message
+
+
+async def test_huddle_thread_without_a_canvas_records_and_answers_nothing(fx):
+    client, a, port, adapter = fx
+    await adapter.on_message(
+        ev(subtype="huddle_thread", user="USLACKBOT", text=f"<@{BOT}> hi",
+           room={"id": "R1", "has_ended": False}),
+        TEAM,
+    )  # fmt: skip
+    await a.drain()
+    assert not a.ask_fn.calls and not client.posts and stored(a, inc()) == []
+
+
+async def test_a_bot_reply_in_a_known_huddle_thread_that_carries_a_canvas_is_remembered(fx):
+    client, a, port, adapter = fx
+    canvas(fx)
+    root = "1791954000.000500"
+    await adapter.on_message(
+        ev(subtype="huddle_thread", user="USLACKBOT", text="", ts=root, room={"id": "R1"}), TEAM
+    )
+    reply = ev(
+        ts="1791954999.000100", thread_ts=root, user="USLACKBOT", bot_id="B1", text="notes",
+        files=[{"id": "F9"}],
+    )  # fmt: skip
+    await adapter.on_message(reply, TEAM)
+    await a.drain()
+    assert len(huddle_notes(a)) == 1 and not a.ask_fn.calls
+    # the same files in an unrelated thread are not huddle notes
+    await adapter.on_message({**reply, "ts": "5.0", "thread_ts": "4.0"}, TEAM)
+    assert len(client.api_calls) == 1
+
+
+async def test_user_huddle_changed_is_logged_without_re_verifying_the_account(fx, caplog):
+    client, a, port, adapter = fx
+    caplog.set_level("INFO", logger="salid.platforms.slack")
+    before = list(client.calls)
+    await adapter.on_event(
+        {"type": "user_huddle_changed",
+         "user": {"id": "U1", "profile": {"huddle_state": "in_a_huddle",
+                                           "huddle_state_call_id": "R1"}}},
+        TEAM,
+    )  # fmt: skip
+    assert client.calls == before
+    assert "huddle_state=in_a_huddle" in caplog.text and "call_id=R1" in caplog.text
+
+
+async def test_diagnostics_log_ids_only_never_text(fx, caplog):
+    client, a, port, adapter = fx
+    caplog.set_level("INFO", logger="salid.platforms.slack")
+    canvas(fx, text="TOP SECRET TRANSCRIPT")
+    await adapter.on_event(shared(), TEAM)
+    assert "file_shared file=F9 channel=C1" in caplog.text
+    assert "canvas=True" in caplog.text and "TOP SECRET" not in caplog.text
+
+
+def test_lifecycle_listener_receives_file_shared_and_huddle_events():
+    assert slack.LIFECYCLE_EVENTS.match("file_shared")
+    assert slack.LIFECYCLE_EVENTS.match("user_huddle_changed")
