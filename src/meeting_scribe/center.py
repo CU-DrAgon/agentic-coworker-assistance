@@ -3072,10 +3072,13 @@ async def my_calendar(
     orgs: OrgStore = Depends(get_orgs),
     lib: Library = Depends(get_library),
     guilds=Depends(hub.get_guild_store),
+    g: Any = Depends(lambda orgs=Depends(get_orgs): get_google_oauth(orgs)),
+    http: Any = Depends(lambda: get_google_http()),
 ) -> dict:
     """What is coming up for the person: their reminders (set in Discord or here) and the due
     dates of their tasks, plus the company's meetings and events, grouped by day."""
-    return await run_in_threadpool(calendar_view, ctx, orgs, lib, guilds, True, True)
+    out = await run_in_threadpool(calendar_view, ctx, orgs, lib, guilds, True, True)
+    return await run_in_threadpool(with_google_events, out, ctx, g, http)
 
 
 @router.get("/orgs/{org_id}/calendar")
@@ -3085,11 +3088,105 @@ async def company_calendar(
     orgs: OrgStore = Depends(get_orgs),
     lib: Library = Depends(get_library),
     guilds=Depends(hub.get_guild_store),
+    g: Any = Depends(lambda orgs=Depends(get_orgs): get_google_oauth(orgs)),
+    http: Any = Depends(lambda: get_google_http()),
 ) -> dict:
     """The COMPANY calendar: meetings (held and scheduled), Discord events, project deadlines
     and milestones. `mine=1` overlays the caller's personal items (reminders, their task due
     dates); every item says its `layer` (company | personal)."""
-    return await run_in_threadpool(calendar_view, ctx, orgs, lib, guilds, True, mine)
+    out = await run_in_threadpool(calendar_view, ctx, orgs, lib, guilds, True, mine)
+    return await run_in_threadpool(with_google_events, out, ctx, g, http) if mine else out
+
+
+GCAL_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+GCAL_BACK_DAYS, GCAL_AHEAD_DAYS, GCAL_MAX = 31, 92, 250
+
+
+def get_google_http() -> Any:
+    """The HTTP client for Google Calendar reads. Overridden in tests."""
+    import httpx
+
+    return httpx.Client(timeout=8)
+
+
+def google_events(
+    g: Any, org_id: str, email: str, http: Any, now: datetime | None = None
+) -> list[dict]:
+    """The person's own Google Calendar (primary) events from a month back to three months
+    ahead, as calendar items on the PERSONAL layer. Raises on any failure (the caller keeps the
+    rest of the calendar). One retry with a fresh token after a 401."""
+    now = now or datetime.now(UTC)
+    params = {
+        "singleEvents": "true",
+        "orderBy": "startTime",
+        "maxResults": str(GCAL_MAX),
+        "timeMin": (now - timedelta(days=GCAL_BACK_DAYS)).isoformat(timespec="seconds"),
+        "timeMax": (now + timedelta(days=GCAL_AHEAD_DAYS)).isoformat(timespec="seconds"),
+    }
+    r = None
+    for attempt in range(2):
+        token = g.access_token(org_id, email)
+        r = http.get(GCAL_EVENTS, params=params, headers={"Authorization": f"Bearer {token}"})
+        if r.status_code != 401 or attempt:
+            break
+        g.evict(org_id, email)  # a stale cached token: refresh once
+    if r.status_code >= 400:
+        raise RuntimeError(f"google calendar {r.status_code}")
+    out: list[dict] = []
+    for ev in r.json().get("items", []):
+        if ev.get("status") == "cancelled":
+            continue
+        start, end = ev.get("start") or {}, ev.get("end") or {}
+        out.append(
+            {
+                "kind": "gcal",
+                "layer": "personal",
+                "at": start.get("dateTime") or start.get("date", ""),
+                "end": end.get("dateTime") or end.get("date", ""),
+                "all_day": "date" in start,
+                "title": ev.get("summary") or "(busy)",
+                "where": ev.get("location", ""),
+                "url": ev.get("htmlLink", ""),
+                "meet": ev.get("hangoutLink", ""),
+                "workspace_name": "Google Calendar",
+            }
+        )
+    return out
+
+
+def with_google_events(view: dict, ctx: Ctx, g: Any, http: Any) -> dict:
+    """Merge the caller's Google Calendar into a calendar view (personal layer). Fail-soft:
+    not configured / not connected / a Google error only shows up in `google`."""
+    info = {"connected": False, "error": ""}
+    try:
+        if g is None or not g.enabled() or ctx.org.role_of(ctx.email) is None:
+            info["error"] = "not_configured"
+        elif not g.is_connected(ctx.org.id, ctx.email):
+            info["error"] = "not_connected"
+        else:
+            info["connected"] = True
+            items = google_events(g, ctx.org.id, ctx.email, http)
+            days: dict[str, list[dict]] = {
+                d["date"]: list(d["items"]) for d in view.get("days", [])
+            }
+            for it in items:
+                if it["at"]:
+                    days.setdefault(it["at"][:10], []).append(it)
+            view["days"] = [
+                {"date": d, "items": sorted(days[d], key=lambda x: x.get("at", ""))}
+                for d in sorted(days)
+            ]
+            info["events"] = len(items)
+    except Exception as exc:
+        logger.warning("google calendar overlay failed: %s", type(exc).__name__)
+        info["error"] = "failed"
+    finally:
+        with contextlib.suppress(Exception):
+            if hasattr(http, "close"):
+                http.close()
+    view.setdefault("sources", {})["google_calendar"] = info["connected"] and not info["error"]
+    view["google"] = info
+    return view
 
 
 def calendar_view(

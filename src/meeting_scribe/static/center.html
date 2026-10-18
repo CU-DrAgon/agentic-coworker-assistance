@@ -551,6 +551,7 @@ details.sys > .inner { padding-top: 12px; }
 .cal-chip.event { background: #FFF0D6; color: #7A4B00; border-left-color: #E8A33A; }
 .cal-chip.deadline { background: #FDE2E2; color: #8A1C1C; border-left-color: #D64545; }
 .cal-chip.milestone { background: #E8F4FD; color: #0B4F79; border-left-color: #2D8FD5; }
+.cal-chip.gcal { background: #E8F0FE; color: #174EA6; border-left-color: #1A73E8; }
 .cal-chip.personal { background: #fff; border: 1px dashed #8A6CF0; border-left-width: 3px; border-left-style: solid; }
 .cal-item.personal { border-style: dashed; border-color: #B9A6F5; }
 .chk.ovl { font-weight: 600; font-size: 14px; cursor: pointer; padding: 6px 10px; border: 1px solid var(--line); border-radius: 99px; background: #fff; }
@@ -805,7 +806,7 @@ th: {
   ab_h:"เชื่อมบอทเข้าองค์กร", ab_p:"สำหรับผู้ดูแล: ขอรหัสแล้วส่งให้บอทของ LINE, Telegram หรือ WhatsApp", ab_instr:"ส่งรหัสนี้ให้บอทในแชทส่วนตัว",
   set_h:"ตั้งค่าเซิร์ฟเวอร์", set_p:"การตั้งค่าเฉพาะเซิร์ฟเวอร์ เช่น เปิด/ปิดฟีเจอร์ อยู่ที่หน้า Hub", set_go:"เปิดหน้า Hub",
   org_settings:"ตั้งค่าองค์กร",
-  n_account:"โปรไฟล์ของฉัน", n_mytasks:"งานของฉัน", n_mycal:"ปฏิทินบริษัท", cal_overlay:"ซ้อนปฏิทินของฉัน", cal_company:"บริษัท", cal_mine:"ของฉัน", mc_deadline:"กำหนดส่งโปรเจกต์", mc_milestone:"เป้าหมายย่อย", talk:"คุยกับสลิด", panel_p:"ถามเรื่องบริษัทได้เลย ทั้งใบเสร็จ เอกสาร การประชุม และงานค่ะ", typing_dots:"สลิดกำลังพิมพ์…",
+  n_account:"โปรไฟล์ของฉัน", n_mytasks:"งานของฉัน", n_mycal:"ปฏิทินบริษัท", cal_overlay:"ซ้อนปฏิทินของฉัน", cal_g_off:"ยังไม่ได้เชื่อม Google Calendar: เชื่อมด้านล่างเพื่อให้นัดใน Google ของคุณแสดงที่นี่ด้วย", cal_g_fail:"ดึง Google Calendar ไม่สำเร็จในตอนนี้ ส่วนอื่นของปฏิทินยังใช้ได้", cal_company:"บริษัท", cal_mine:"ของฉัน", mc_deadline:"กำหนดส่งโปรเจกต์", mc_milestone:"เป้าหมายย่อย", talk:"คุยกับสลิด", panel_p:"ถามเรื่องบริษัทได้เลย ทั้งใบเสร็จ เอกสาร การประชุม และงานค่ะ", typing_dots:"สลิดกำลังพิมพ์…",
   platforms:"แพลตฟอร์ม", connected_of:"เชื่อมต่อแล้ว {x} จาก {y}", p_not_connected:"ยังไม่เชื่อมต่อ", members_linked:"เชื่อมบัญชีของตัวเองแล้ว {n} คน", members_n:"สมาชิก {n} คน",
   mem_name:"สมาชิก", mem_linked:"บัญชีที่เชื่อม", linked_n:"เชื่อมแล้ว {n} แพลตฟอร์ม", linked_none:"ยังไม่ได้เชื่อมบัญชี",
   verified:"ยืนยันแล้ว", unverified:"ยังไม่ยืนยัน", not_linked:"ยังไม่เชื่อม",
@@ -896,7 +897,7 @@ en: {
   ab_h:"Connect a bot workspace", ab_p:"For admins: get a code and send it to your LINE, Telegram or WhatsApp bot", ab_instr:"Send this code to the bot in a private chat",
   set_h:"Server settings", set_p:"Per-server settings such as feature toggles live on the Hub page.", set_go:"Open Hub",
   org_settings:"Organization settings",
-  n_account:"My profile", n_mytasks:"My tasks", n_mycal:"Calendar", cal_overlay:"Overlay my calendar", cal_company:"Company", cal_mine:"Mine", mc_deadline:"Project deadline", mc_milestone:"Milestone", talk:"Talk to Salid", panel_p:"Ask about the company: receipts, documents, meetings, tasks.", typing_dots:"Salid is typing…",
+  n_account:"My profile", n_mytasks:"My tasks", n_mycal:"Calendar", cal_overlay:"Overlay my calendar", cal_g_off:"Google Calendar is not connected: connect it below to see your Google events here too.", cal_g_fail:"Could not read Google Calendar right now; the rest of the calendar is up to date.", cal_company:"Company", cal_mine:"Mine", mc_deadline:"Project deadline", mc_milestone:"Milestone", talk:"Talk to Salid", panel_p:"Ask about the company: receipts, documents, meetings, tasks.", typing_dots:"Salid is typing…",
   platforms:"Platforms", connected_of:"Connected {x} of {y}", p_not_connected:"Not connected", members_linked:"{n} linked their accounts", members_n:"Members: {n}",
   mem_name:"Member", mem_linked:"Linked accounts", linked_n:"Linked: {n} platforms", linked_none:"No linked accounts",
   verified:"Verified", unverified:"Unverified", not_linked:"Not linked",
@@ -2688,8 +2689,8 @@ VIEWS.mycal = async (body, my) => {
   const byDate = {}; for (const dd of days) byDate[String(dd.date || "").slice(0, 10)] = items(dd);
   const ymd = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   const parse = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(); };
-  const kindKey = (it) => ({ reminder: "mc_reminder", task: "mc_task", meeting: "mc_meeting", event: "mc_event", deadline: "mc_deadline", milestone: "mc_milestone" })[it.kind] || "mc_event";
-  const item = (it) => { const tm = timeOf(it.at); return el("div", { class: "cal-item " + (it.kind || "event") + (it.layer === "personal" ? " personal" : "") }, el("span", { class: "ci", "aria-hidden": "true", text: { reminder: "⏰", task: "☑", meeting: "🎧", event: "📅", deadline: "🏁", milestone: "◆" }[it.kind] || "📅" }),
+  const kindKey = (it) => ({ reminder: "mc_reminder", task: "mc_task", meeting: "mc_meeting", event: "mc_event", deadline: "mc_deadline", milestone: "mc_milestone", gcal: "mc_gcal" })[it.kind] || "mc_event";
+  const item = (it) => { const tm = timeOf(it.at); return el("div", { class: "cal-item " + (it.kind || "event") + (it.layer === "personal" ? " personal" : "") }, el("span", { class: "ci", "aria-hidden": "true", text: { reminder: "⏰", task: "☑", meeting: "🎧", event: "📅", deadline: "🏁", milestone: "◆", gcal: "🗓️" }[it.kind] || "📅" }),
     el("div", { class: "cx" }, el("div", { class: "ct", text: it.title }),
       el("div", { class: "cm" }, el("span", { text: t(kindKey(it)) + (tm ? " · " + tm : "") }), it.repeat ? el("span", { class: "chip", text: t("mc_repeat", { x: it.repeat }) }) : null, it.workspace_name ? el("span", { text: it.workspace_name }) : null, discordLink(it.url)))); };
   // ---- a real calendar: month grid (Google-Calendar style), week columns, or the agenda list
@@ -2735,8 +2736,10 @@ VIEWS.mycal = async (body, my) => {
   const ov = el("input", { type: "checkbox", id: "cal-overlay", checked: overlay });
   ov.addEventListener("change", () => { try { localStorage.setItem("salid_cal_overlay", ov.checked ? "1" : "0"); } catch { /* ignore */ } route(); });
   const legend = el("div", { class: "cal-legend" }, ["meeting", "event", "deadline", "milestone"].map((k) => el("span", { class: "cal-chip " + k }, t(kindKey({ kind: k })))),
-    overlay ? ["reminder", "task"].map((k) => el("span", { class: "cal-chip personal " + k }, t(kindKey({ kind: k })))) : null);
-  const out = [el("div", { class: "card calcard" }, el("div", { class: "pline" }, el("h2", { text: t("n_mycal") }), el("label", { class: "chk ovl" }, ov, " ", t("cal_overlay"))), legend, host)];
+    overlay ? ["reminder", "task", "gcal"].map((k) => el("span", { class: "cal-chip personal " + k }, t(kindKey({ kind: k })))) : null);
+  const gnote = overlay && r.google && r.google.error && r.google.error !== "not_configured"
+    ? el("div", { class: "notice small", style: "margin:6px 0" }, t(r.google.error === "not_connected" ? "cal_g_off" : "cal_g_fail")) : null;
+  const out = [el("div", { class: "card calcard" }, el("div", { class: "pline" }, el("h2", { text: t("n_mycal") }), el("label", { class: "chk ovl" }, ov, " ", t("cal_overlay"))), legend, gnote, host)];
   // Google Calendar: the person's own connection (main's /google/calendar API), not "coming soon"
   const gbox = el("div", { class: "card" }), gstat = el("div", { class: "muted small", text: t("loading") });
   gbox.replaceChildren(el("div", { class: "hd" }, platBadge("google_calendar"), el("div", {}, el("strong", { text: t("mc_gcal") }), gstat)));
@@ -3021,8 +3024,8 @@ function mockApi(method, path, body) {
   if (sub === "/calendar") { const mine = qp.get("mine") === "1"; const base = (mockApi.calBase = mockApi.calBase || null);
     const all = [{ date: day(0), items: [{ kind: "reminder", layer: "personal", at: day(0) + "T09:30", title: "โทรหาลูกค้า A เรื่องใบเสนอราคา" }, { kind: "meeting", layer: "company", at: day(0) + "T14:00", title: "ประชุมทีมขายประจำสัปดาห์", workspace_name: "ออฟฟิศกรุงเทพ" }] },
       { date: day(2), items: [{ kind: "task", layer: "personal", at: day(2), title: "ส่งใบเสนอราคาลูกค้า A ฉบับแก้ไข" }, { kind: "event", layer: "company", at: day(2) + "T10:00", title: "Town hall ไตรมาส 4" }] },
-      { date: day(5), items: [{ kind: "milestone", layer: "company", at: day(5), title: "แอปใหม่: เปิดเบต้า" }] }, { date: day(9), items: [{ kind: "deadline", layer: "company", at: day(9), title: "แอปใหม่" }] }];
-    void base; return ok({ days: all.map((d) => ({ date: d.date, items: d.items.filter((i) => mine || i.layer === "company") })).filter((d) => d.items.length), sources: { google_calendar: false }, layers: mine ? ["company", "personal"] : ["company"] }); }
+      { date: day(5), items: [{ kind: "milestone", layer: "company", at: day(5), title: "แอปใหม่: เปิดเบต้า" }, { kind: "gcal", layer: "personal", at: day(5) + "T16:00", title: "นัดหมอฟัน", workspace_name: "Google Calendar" }] }, { date: day(9), items: [{ kind: "deadline", layer: "company", at: day(9), title: "แอปใหม่" }] }];
+    void base; return ok({ days: all.map((d) => ({ date: d.date, items: d.items.filter((i) => mine || i.layer === "company") })).filter((d) => d.items.length), sources: { google_calendar: mine }, google: mine ? { connected: true, error: "" } : undefined, layers: mine ? ["company", "personal"] : ["company"] }); }
   if (sub === "/me/calendar") return ok({ days: [
     { date: day(0), items: [{ kind: "reminder", at: day(0) + "T09:30", title: "โทรหาลูกค้า A เรื่องใบเสนอราคา", repeat: "", workspace_name: "ออฟฟิศกรุงเทพ" }, { kind: "task", at: day(0), title: "เตรียมสไลด์ประชุมบอร์ดไตรมาส 4", url: "", workspace_name: "ทีมเชียงใหม่" }] },
     { date: day(1), items: [{ kind: "reminder", at: day(1) + "T10:00", title: "ประชุมทีมขายประจำสัปดาห์", repeat: "week", workspace_name: "ออฟฟิศกรุงเทพ" }] },
