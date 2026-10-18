@@ -411,3 +411,11 @@ def test_pages_are_gzipped_for_browsers_that_accept_it(client):
     r = client.get("/center", headers={"Accept-Encoding": "gzip"})
     assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
     assert "<html" in r.text  # the client transparently decodes
+
+
+def test_pages_and_static_files_are_revalidated_never_stale(client):
+    """After a deploy every page shows the new version at once (no stale browser copy)."""
+    for path in ("/", "/center", "/start", "/hub", "/static/salid/theme.css"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers.get("cache-control") in ("no-cache", "no-store"), path

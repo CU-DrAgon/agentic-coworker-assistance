@@ -565,3 +565,21 @@ def test_person_profile_holds_identities_across_orgs_and_syncs_discord_id(orgs):
         orgs.set_user_identity("ann@example.com", Identity(platform="slack", external_id="  "))
     profiles = orgs.member_profiles(orgs.get("org_a"))
     assert list(profiles) == ["ann@example.com"] and profiles["ann@example.com"].name == "Ann Lee"
+
+
+def test_org_records_keep_fields_this_version_does_not_know():
+    """A web and a bot on different builds share the org document: a field one of them does
+    not know (here a future `nickname_ok` on a member, `region` on the org) must survive a
+    read-modify-write by the other (18 Oct 2026: an older bot dropped `reports_to`)."""
+    from salid.coo_store import SQLiteDocStore
+    from salid.orgs import ORGS, OrgStore
+
+    orgs = OrgStore(SQLiteDocStore(":memory:"))
+    org = orgs.create("Co", "a@x.com")
+    d = orgs.docs.get(ORGS, 0, org.id)
+    d["region"] = "TH"
+    d["members"][0]["nickname_ok"] = True
+    orgs.docs.put(ORGS, 0, org.id, d)
+    orgs.set_company_profile(org.id, tagline="hi")  # a full read-modify-write
+    d = orgs.docs.get(ORGS, 0, org.id)
+    assert d["region"] == "TH" and d["members"][0]["nickname_ok"] is True

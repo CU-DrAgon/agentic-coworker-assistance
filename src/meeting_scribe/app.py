@@ -33,6 +33,24 @@ MAX_CHUNK_BYTES = 32 * 1024 * 1024  # Cloud Run's HTTP/1 request limit
 app = FastAPI(title="Meeting Scribe")
 # The pages are single 50-135 KB HTML files: gzip them (and JSON) so phones load them fast.
 app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def no_stale_pages(request, call_next):
+    """Pages and their stylesheet / scripts must never be served from a stale browser copy:
+    without a Cache-Control header phones kept showing a days-old command center after a
+    deploy (18 Oct 2026). `no-cache` = the browser may keep a copy but checks first (the
+    static files answer 304 through their ETag, so it stays fast)."""
+    response = await call_next(request)
+    ctype = response.headers.get("content-type", "")
+    path = request.url.path
+    if "cache-control" not in response.headers and (
+        ctype.startswith("text/html") or path.startswith("/static/")
+    ):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.include_router(hub.router)
 app.include_router(center.router)
 app.include_router(center.events_router)

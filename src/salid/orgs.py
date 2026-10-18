@@ -31,7 +31,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .coo_store import DocStore
 
@@ -138,6 +138,10 @@ TENANT_BOUND_PLATFORMS = frozenset({"line", "telegram", "whatsapp"})
 
 # ------------------------------------------------------------------ models
 class Member(BaseModel):
+    # keep fields this version does not know: a web and a bot on different builds must
+    # never erase each other's data (18 Oct 2026: the old bot dropped `reports_to`)
+    model_config = ConfigDict(extra="allow")
+
     email: str
     role: str = "member"  # owner | admin | member
     discord_user_id: str | None = None
@@ -218,6 +222,10 @@ class License(BaseModel):
 
 
 class Workspace(BaseModel):
+    # keep fields this version does not know: a web and a bot on different builds must
+    # never erase each other's data (18 Oct 2026: the old bot dropped `reports_to`)
+    model_config = ConfigDict(extra="allow")
+
     id: str
     platform: str  # discord | slack | line | telegram | whatsapp | clickup | web
     external_id: str  # guild id / slack team id / clickup team id / org id (web)
@@ -328,6 +336,10 @@ class Handover(BaseModel):
 
 
 class Org(BaseModel):
+    # keep fields this version does not know: a web and a bot on different builds must
+    # never erase each other's data (18 Oct 2026: the old bot dropped `reports_to`)
+    model_config = ConfigDict(extra="allow")
+
     id: str
     name: str
     logo_url: str = ""
