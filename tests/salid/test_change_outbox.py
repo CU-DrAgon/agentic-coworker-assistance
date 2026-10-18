@@ -325,6 +325,36 @@ def test_get_without_org_uses_the_change_id_alone(docs):
     assert ob.mark_alerted(c.id, "slack") is True
 
 
+def to_legacy(docs, change):
+    """Put a change back where it lived before the per-org key (not migrated yet)."""
+    docs.put(
+        co.KIND,
+        co.LEGACY_GUILD,
+        change.id,
+        docs.get(co.KIND, co.org_guild(change.org_id), change.id),
+    )
+    docs.delete(co.KIND, co.org_guild(change.org_id), change.id)
+
+
+def test_a_change_not_migrated_yet_can_still_be_acked(docs):
+    ob = ChangeOutbox(docs, Clock())
+    c = one_change(ob)
+    to_legacy(docs, c)
+    assert ob.ack(c.id, "slack-T1", "U9", "reply", org_id="o2") is False  # another org's
+    assert ob.ack(c.id, "slack-T1", "U9", "reply", org_id="o1") is True
+    found = ob.get(c.id)  # the click path: by the change id alone
+    assert found is not None and found.org_id == "o1"
+    assert ob.ack(c.id, "slack-T1", "", "applied") is True  # no org: found from the id
+    legacy = co.Change(**docs.get(co.KIND, co.LEGACY_GUILD, c.id))
+    assert {(x.kind, x.status) for x in legacy.targets} == {
+        ("notify", "acked"),
+        ("apply", "acked"),
+    }
+    assert docs.get(co.KIND, co.org_guild("o1"), c.id) is None  # nothing written under the org
+    assert migrate_legacy(docs, apply=True)["moved"] == 1
+    assert {x.status for x in ob.get(c.id, "o1").targets} == {"acked"}
+
+
 def test_open_for_resolves_the_org_of_the_workspace(docs):
     ob = ChangeOutbox(docs, Clock())
     c = one_change(ob)
@@ -644,15 +674,63 @@ async def test_the_bot_reads_only_the_changes_of_its_servers_orgs(drig):
     assert await drig.bot._change_org_ids() == {"o1"}
     m = Member(email="peer@x.com", discord_user_id=str(PEER))
     other = Org(id="o9", name="Other", members=[m], workspaces=[ws("discord", str(GUILD))])
-    drig.bot.change_outbox.record(
+    (theirs,) = drig.bot.change_outbox.record(
         diff_members(other, edit_role(other, "peer@x.com", "admin")), other
     )
     await tick(drig)
-    dms = drig.g.members[PEER].dms
-    assert not any("Other" in text for text, _ in dms)  # o9 owns none of this bot's servers
+    # o9 owns none of this bot's servers: its change is never read, so nothing was tried
+    got = drig.bot.change_outbox.get(theirs.id, "o9")
+    assert len(got.targets) == 2
+    assert {(x.status, x.attempts) for x in got.targets} == {("pending", 0)}
+    assert drig.g.members[PEER].dms == []
     web_edit(drig.bot, "peer@x.com", title="CTO")
     await tick(drig)
-    assert any("Cafe" in text for text, _ in dms)
+    assert next(x for x in targets(drig, "notify")).status == "sent"
+
+
+async def test_a_server_whose_org_lookup_fails_is_skipped_and_the_others_are_served(
+    drig, monkeypatch, caplog
+):
+    bad = SimpleNamespace(id=4242, get_member=lambda uid: None)
+    monkeypatch.setattr(type(drig.bot), "guilds", property(lambda s: [bad, drig.g]))
+    real = OrgStore.org_of_guild
+
+    def lookup(self, guild_id):
+        if guild_id == 4242:
+            raise RuntimeError("broken org doc for boss@x.com")
+        return real(self, guild_id)
+
+    monkeypatch.setattr(OrgStore, "org_of_guild", lookup)
+    assert await drig.bot._change_org_ids() == {"o1"}
+    web_edit(drig.bot, "peer@x.com", title="CTO")
+    await tick(drig)
+    assert next(x for x in targets(drig, "notify")).status == "sent"  # o1 still delivered
+    assert any(
+        "4242" in r.getMessage() and "RuntimeError" in r.getMessage() for r in caplog.records
+    )
+    assert "boss@x.com" not in caplog.text  # only the error type and the guild id are logged
+
+
+async def test_a_click_on_a_notice_sent_before_the_re_key_still_acks(drig):
+    web_edit(drig.bot, "peer@x.com", title="CTO")
+    await tick(drig)
+    (c,) = drig.bot.change_outbox.list_changes("o1")
+    to_legacy(drig.bot.docs, c)
+    said = []
+
+    async def edit_message(**kw):
+        said.append(kw)
+
+    inter = SimpleNamespace(
+        user=SimpleNamespace(id=PEER),
+        message=SimpleNamespace(content="the card"),
+        response=SimpleNamespace(edit_message=edit_message, send_message=None),
+    )
+    await drig.bot.handle_change_click(inter, c.id, f"discord-{GUILD}")
+    assert t("chg_done", drig.lang) in said[0]["content"]
+    note = next(x for x in drig.bot.change_outbox.get(c.id).targets if x.kind == "notify")
+    assert (note.status, note.acked_how) == ("acked", "button")
+    assert drig.bot.docs.get(co.KIND, co.org_guild("o1"), c.id) is None  # updated where it is
 
 
 # ------------------------------------------------------------------ the safety net (watcher)

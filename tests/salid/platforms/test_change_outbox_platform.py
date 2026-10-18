@@ -214,6 +214,31 @@ async def test_the_bridge_reads_only_the_orgs_of_its_tenants(wd):
     assert wd.sent == [] and {x.status for x in wd.outbox.get(c.id).targets} == {"pending"}
 
 
+async def test_a_tenant_whose_org_lookup_fails_is_skipped_and_the_others_are_served(
+    wd, monkeypatch, caplog
+):
+    wd.changes.add_pusher("telegram", "999", wd.pusher("telegram"))
+    wd.changes.add_pusher("line", "Ubot", wd.pusher("line"))
+    real = wd.orgs.org_of_workspace
+
+    def lookup(platform, tenant):
+        if platform == "telegram":
+            raise RuntimeError("broken org doc for boss@example.com")
+        return real(platform, tenant)
+
+    monkeypatch.setattr(wd.orgs, "org_of_workspace", lookup)
+    assert wd.changes._org_ids() == {"org_a"}
+    c = make_change(wd, title="CTO")
+    await wd.changes.tick()
+    assert [(p, u) for p, u, _ in wd.sent] == [("line", "U-mew")]  # org_a still delivered
+    assert states(wd, c)[("line-Ubot", "notify")] == "sent"
+    assert any(
+        "telegram-999" in r.getMessage() and "RuntimeError" in r.getMessage()
+        for r in caplog.records
+    )
+    assert "boss@example.com" not in caplog.text  # only the error type and the workspace id
+
+
 async def test_without_a_pusher_the_tick_does_nothing(wd):
     c = make_change(wd, title="CTO")
     await wd.changes.tick()

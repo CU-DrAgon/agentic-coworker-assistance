@@ -8,7 +8,8 @@ Every 30 s `tick` reads only the changes of the orgs that own a tenant with a pu
 - `notify` target: the notice goes to the person with "reply OK to confirm"; a reply (see
   `on_message`, called by `Assistant` before anything else in a 1:1) acks it.
 A workspace nobody serves (platform not configured) keeps its targets pending; they fail after the
-deadline and the alert below says so. Admins on a served platform get one alert per failed change.
+deadline when a running process serves the org, and the alert below says so. Admins on a served
+platform get one alert per failed change.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from ..change_outbox import (
     is_ack_text,
 )
 from ..i18n import base_lang, resolve_lang, t
-from ..orgs import OrgStore
+from ..orgs import OrgStore, workspace_id
 from . import ids
 from .core import safe_exc
 
@@ -49,10 +50,19 @@ class PlatformChanges:
         return (key, push) if push else None
 
     def _org_ids(self) -> set[str]:
-        """The orgs that own a tenant this process can message: the only changes it reads."""
+        """The orgs that own a tenant this process can message: the only changes it reads. A
+        tenant whose lookup fails is skipped this tick (the others are still served)."""
         out: set[str] = set()
         for platform, tenant in list(self._pushers):
-            found = self.orgs.org_of_workspace(platform, tenant)
+            try:
+                found = self.orgs.org_of_workspace(platform, tenant)
+            except Exception as e:
+                logger.warning(
+                    "change outbox: org lookup failed workspace=%s (%s)",
+                    workspace_id(platform, tenant),
+                    type(e).__name__,
+                )
+                continue
             if found is not None:
                 out.add(found[0].id)
         return out
@@ -81,7 +91,7 @@ class PlatformChanges:
         for change, target in await asyncio.to_thread(outbox.due, org_ids):
             served = self._served(target.workspace_id, target.platform)
             if served is None:
-                continue  # not configured here: stays pending, fails at the deadline
+                continue  # not here: pending, fails at the deadline when a process serves the org
             tenant, push = served
             try:
                 if target.kind == "apply":

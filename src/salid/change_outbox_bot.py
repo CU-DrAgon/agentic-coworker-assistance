@@ -126,12 +126,24 @@ class ChangeOutboxMixin:
             logger.warning("change outbox: tick failed", exc_info=True)
 
     async def _change_org_ids(self) -> set[str]:
-        """The orgs that own this bot's servers: the only changes it reads."""
+        """The orgs that own this bot's servers: the only changes it reads. A server whose
+        lookup fails is skipped this tick (the others are still served)."""
         ids = [g.id for g in self.guilds]
 
         def load() -> set[str]:
             store = OrgStore(self.docs)
-            return {org.id for gid in ids if (org := store.org_of_guild(gid)) is not None}
+            out: set[str] = set()
+            for gid in ids:
+                try:
+                    org = store.org_of_guild(gid)
+                except Exception as e:
+                    logger.warning(
+                        "change outbox: org lookup failed guild=%s (%s)", gid, type(e).__name__
+                    )
+                    continue
+                if org is not None:
+                    out.add(org.id)
+            return out
 
         return await asyncio.to_thread(load)
 

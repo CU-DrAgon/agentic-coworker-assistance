@@ -13,9 +13,10 @@ safety net) calls `record_org_edit` / `ChangeOutbox.record`. `record` fills the 
 `apply` target per connected chat workspace of the org (the platform makes the change real:
 Discord roles, ...) and one `notify` target per platform where the subject person is linked (the
 person must confirm they saw it). A consumer asks `due(its org ids)` for what to (re)send, sends,
-and calls `mark_attempt`; a button click or a reply "รับทราบ / ok / got it" calls `ack`. After
-`max_attempts` unanswered sends (or past the deadline for a platform nobody serves) the target is
-`failed`, kept forever as an audit trail, and the org's owners and admins get one alert per platform.
+and calls `mark_attempt`; a button click or a reply "รับทราบ / ok / got it" calls `ack`. When a
+running process serves the org, after `max_attempts` unanswered sends (or past the deadline for a
+platform nobody serves) the target is `failed`, kept forever as an audit trail, and the org's owners
+and admins get one alert per platform.
 """
 
 from __future__ import annotations
@@ -293,7 +294,9 @@ class ChangeOutbox:
     # ---- state changes (each one atomic)
     def _update(self, change_id: str, fn: Callable[[Change], bool], org_id: str = "") -> bool:
         """Read-modify-write one change in ONE transaction. Without `org_id` the org is found
-        from the change id first (one extra read)."""
+        from the change id first (one extra read). A change not migrated yet (still at
+        `LEGACY_GUILD`, see `migrate_legacy`) is updated where it is, in the same transaction, so
+        acks and button clicks on notices sent before the re-key keep working."""
         if not org_id:
             d = self.docs.find_any(KIND, change_id)
             org_id = str((d or {}).get("org_id") or "")
@@ -302,13 +305,17 @@ class ChangeOutbox:
         guild = org_guild(org_id)
 
         def run(tx) -> bool:
-            d = tx.get(KIND, guild, change_id)
+            where, d = guild, tx.get(KIND, guild, change_id)
+            if d is None:
+                where, d = LEGACY_GUILD, tx.get(KIND, LEGACY_GUILD, change_id)
+                if d is not None and d.get("org_id") != org_id:
+                    return False  # another org's change
             if d is None:
                 return False
             c = Change(**d)
             if not fn(c):
                 return False
-            tx.put(KIND, guild, c.id, c.model_dump())
+            tx.put(KIND, where, c.id, c.model_dump())
             return True
 
         return self.docs.transact(run)
