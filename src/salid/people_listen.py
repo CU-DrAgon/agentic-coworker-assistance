@@ -34,6 +34,7 @@ from .people import (
     HeardContact,
     PeopleRepo,
     clean,
+    is_bot_name,
     merge_extraction,
     merge_fact,
     merge_topic,
@@ -163,7 +164,9 @@ class PeopleListener:
             if m.kind in ("chat", "voice") and m.text.strip() and not is_dm_scope(m.channel_id)
         ]
         lines = lines[-MAX_LINES_FOR_CHECK:]
-        people = self.people_of(guild_id)
+        people = {
+            u: n for u, n in self.people_of(guild_id).items() if not self.repo.is_bot(u, n)
+        }  # the assistant (and any bot) is never a person
         kind = "meeting" if self.kind_of(guild_id, channel_id) == "meeting" else "chat"
         n = 0
         if lines:
@@ -254,6 +257,8 @@ class PeopleListener:
             about = _ok(c.about) if c.about else ""
             if not who or injection_reason(who) or _SENSITIVE.search(who):
                 continue
+            if is_bot_name(who):
+                continue  # talking to Salid is not a work contact
             other = match_person(who, people)
             if other == uid:
                 continue

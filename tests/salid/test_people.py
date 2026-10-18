@@ -232,3 +232,85 @@ def test_repo_roundtrip_find_and_update_under_a_lock(docs):
     ] == [2]
     assert repo.find(G, "nobody") == []
     assert repo.get(2 * G, 1) is None  # guild scoped
+
+
+# ------------------------------------------------------------------ bots, graph, offline map
+def test_the_assistant_never_gets_a_dossier_or_a_contact(docs):
+    repo = P.PeopleRepo(docs)
+    assert repo.update(G, 9, "สลิด", lambda d: True) is None
+    assert repo.update(G, 9, "Salid", lambda d: True) is None
+    repo.bot_check = lambda uid, name: uid == 77
+    assert repo.update(G, 77, "Helper", lambda d: True) is None
+    assert repo.list(G, include_bots=True) == []
+    repo.update(G, 1, "Mali", lambda d: P.merge_contact(d.contacts, P.HeardContact(who="Salid"), ev(), DAY))  # fmt: skip
+    assert repo.get(G, 1) is None  # nothing changed, nothing saved
+    d = dossier()
+    assert P.merge_contact(d.contacts, P.HeardContact(who="สลิด", about="x"), ev(), DAY) == 0
+    assert d.contacts == []
+
+
+def test_a_stored_bot_dossier_is_hidden_from_the_list(docs):
+    repo = P.PeopleRepo(docs)
+    repo.put(G, dossier(9, "สลิด"))
+    repo.put(G, dossier(1, "Mali"))
+    assert [d.name for d in repo.list(G)] == ["Mali"]
+    assert len(repo.list(G, include_bots=True)) == 2
+
+
+def graph_world():
+    def with_contacts(uid, name, dept, *cs):
+        d = dossier(uid, name, department=dept)
+        for who, other, about, n in cs:
+            for i in range(n):
+                P.merge_contact(d.contacts, P.HeardContact(who=who, user_id=other, about=about), ev(mid=100 * uid + i), f"2026-10-{1 + i:02d}")  # fmt: skip
+        return d
+
+    return [
+        with_contacts(1, "Mali", "finance", ("Tom", 2, "invoices", 3), ("ACME", 0, "supply", 2)),
+        with_contacts(2, "Tom", "sales", ("Mali", 1, "invoices", 1)),
+        with_contacts(3, "Bee", "tech", ("Mali", 1, "payroll", 2), ("Tom", 2, "demo", 1)),
+        with_contacts(4, "Ann", "tech", ("Mali", 1, "audit", 1), ("ACME", 0, "supply", 1)),
+    ]
+
+
+def test_contact_graph_hubs_bridges_pairs_and_topics():
+    g = P.contact_graph(graph_world(), {PUB}, False)
+    hubs = g.hubs()
+    assert hubs[0].name == "Mali" and hubs[0].in_weight == 4  # Tom 1 + Bee 2 + Ann 1
+    assert hubs[0].degree == 4  # Tom, ACME, Bee, Ann
+    assert "payroll" in hubs[0].topics
+    bridges = {n.name: depts for n, depts in g.bridges()}
+    assert bridges["Mali"] == ["Sales", "Tech"] and "Ann" not in bridges
+    top = g.pairs(1)[0]
+    assert {g.nodes[top.a].name, g.nodes[top.b].name} == {"Mali", "Tom"} and top.weight == 4
+    assert "invoices" in top.topics
+    acme = g.nodes["x:acme"]
+    assert acme.external and acme.in_weight == 3 and g.also_talk_to("u1")[0][0].name == "Ann"
+
+
+def test_contact_graph_hides_what_the_reader_cannot_see_and_dms():
+    ds = graph_world()
+    mali = ds[0]
+    for c in mali.contacts:
+        c.evidence = [ev(cid=PRIV)]
+    g = P.contact_graph(ds, {PUB}, False)
+    assert "x:acme" in g.nodes  # Ann still deals with ACME in a public channel
+    assert g.nodes["x:acme"].in_weight == 1 and g.directed.get(("u1", "u2")) is None
+    assert P.contact_graph(ds, {PUB}, True).nodes["x:acme"].in_weight == 3
+    from salid.memory_access import dm_scope
+
+    for d in ds:
+        for c in d.contacts:
+            c.evidence = [ev(cid=dm_scope(5))]
+    assert P.contact_graph(ds, {PUB}, True).edges == {}  # a DM never counts, even for see_all
+
+
+def test_the_offline_map_skips_private_channels_and_dm():
+    d = dossier(1, "Mali", department="finance", role_title="Accountant")
+    P.merge_topic(d.expertise, "invoices", ev(cid=PUB), DAY)
+    P.merge_topic(d.expertise, "layoffs", ev(cid=PRIV), DAY)
+    P.merge_contact(d.contacts, P.HeardContact(who="ACME", about="supplier"), ev(cid=PUB), DAY)
+    P.merge_contact(d.contacts, P.HeardContact(who="Secret Co"), ev(cid=PRIV), DAY)
+    org, who, contacts = P.map_from_dossiers([d], lambda cid: cid == PRIV)
+    assert [w.topic for w in who] == ["invoices"] and [k.name for k in contacts] == ["ACME"]
+    assert org[0].name == "Finance" and org[0].positions[0].title == "Accountant"

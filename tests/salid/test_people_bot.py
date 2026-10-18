@@ -26,6 +26,7 @@ from test_coordinator import (
 from test_modes import TMsg, bot  # noqa: F401  (fixture)
 from test_private_chat import human, prep
 
+from salid import company_brain as cb
 from salid import people as P
 from salid import qa
 from salid.guild_settings import FEATURES, Features, GuildSettingsUpdate
@@ -143,6 +144,78 @@ async def test_the_nightly_map_uses_the_roster_and_only_what_everyone_can_read(b
     assert [k.name for k in pb.key_contacts] == ["ACME"]
     assert bot.people.get(GUILD, STAFF).role_title == "Accountant"
     assert "invoices" in qa_block(bot, pb)
+
+
+async def test_the_map_is_saved_when_one_channel_raises(bot, world, monkeypatch, caplog):
+    learn(bot, STAFF, "Somchai", merge_topic=("expertise", "invoices", ev(PUBLIC), DAY, 5))
+    real = bot._channel_viewers
+
+    def flaky(guild, channel, **kw):
+        if channel.id == SECRET:
+            raise RuntimeError("boom")
+        return real(guild, channel, **kw)
+
+    monkeypatch.setattr(bot, "_channel_viewers", flaky)
+    with caplog.at_level("INFO", logger="salid.people_bot"):
+        await asyncio.to_thread(bot._people_refresh, world.g)
+    pb = bot.company.get(GUILD)
+    assert pb.org_built_at and [w.topic for w in pb.who_to_ask] == ["invoices"]
+    line = [
+        r.getMessage() for r in caplog.records if r.getMessage().startswith("people map: guild=")
+    ]
+    assert len(line) == 1 and f"guild={GUILD}" in line[0] and "topics=1" in line[0]
+    assert any("channel skipped" in r.getMessage() for r in caplog.records)
+
+
+async def test_the_map_is_saved_with_no_public_channels_and_an_empty_org(bot, world, monkeypatch):
+    learn(bot, STAFF, "Somchai", merge_topic=("expertise", "invoices", ev(PUBLIC), DAY, 5))
+    monkeypatch.setattr(bot, "_public_channel_ids", lambda guild: set())
+    await asyncio.to_thread(bot._people_refresh, world.g)
+    pb = bot.company.get(GUILD)
+    assert pb.org_built_at and pb.who_to_ask == [] and pb.key_contacts == []
+    monkeypatch.setattr(bot, "_people_roster", lambda *a, **k: [])
+    bot.company.save(GUILD, cb.CompanyPlaybook())
+    await asyncio.to_thread(bot.rebuild_company_map, world.g)
+    assert bot.company.get(GUILD).org_built_at  # saved even with an empty org
+
+
+async def test_a_failing_stage_never_stops_the_map(bot, world, monkeypatch, caplog):
+    def boom(guild):
+        raise RuntimeError("roles broke")
+
+    monkeypatch.setattr(bot, "_people_stage_roles", boom)
+    monkeypatch.setattr(bot, "_people_roster", lambda *a, **k: (_ for _ in ()).throw(ValueError("x")))  # fmt: skip
+    with caplog.at_level("WARNING", logger="salid.people_bot"):
+        await asyncio.to_thread(bot._people_refresh, world.g)
+    assert bot.company.get(GUILD).org_built_at
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "stage=roles" in text and "stage=org" in text
+
+
+async def test_a_partial_member_cache_needs_everyone_to_be_able_to_read(bot, world):
+    world.g.member_count = 50  # only 6 are cached
+    world.g.default_role = SimpleNamespace(name="@everyone")
+    public = await asyncio.to_thread(bot._public_channel_ids, world.g)
+    full = world.g
+    full.member_count = len(world.g.members)
+    whole = await asyncio.to_thread(bot._public_channel_ids, full)
+    assert PUBLIC in whole and SECRET not in whole and public <= whole
+
+
+async def test_the_assistant_itself_gets_no_dossier_and_is_not_in_the_roster(bot, world):
+    me = bot.user
+    bot.people.update(GUILD, me.id, "สลิด", lambda d: True)
+    bot.people.update(GUILD, 424242, getattr(me, "display_name", "Salid"), lambda d: True)
+    assert bot.people.list(GUILD, include_bots=True) == []
+    bot.people.update(GUILD, 31337, "Salid", lambda d: True)  # a task handed to the bot by name
+    assert bot.people.list(GUILD, include_bots=True) == []
+    roster = await asyncio.to_thread(bot._people_roster, world.g, True)
+    assert all(r.name not in ("Salid", "สลิด") for r in roster)
+    world.g.members[31337] = SimpleNamespace(
+        id=31337, display_name="สลิด", bot=False, top_role=None, guild_permissions=None
+    )
+    roster = await asyncio.to_thread(bot._people_roster, world.g, True)
+    assert 31337 not in {r.user_id for r in roster}
 
 
 def qa_block(bot, pb):

@@ -64,9 +64,10 @@ def rig():
     return r
 
 
-def test_the_eight_tools_exist_and_share_one_outbox(rig):
+def test_the_ten_tools_exist_and_share_one_outbox(rig):
     assert set(rig.tools) == {"company_overview", "who_to_ask", "person_profile", "how_do_we",
-                              "onboarding_brief", "handover", "set_role", "person_left"}  # fmt: skip
+                              "onboarding_brief", "handover", "set_role", "person_left",
+                              "who_works_with_whom", "knowledge_status"}  # fmt: skip
     assert all(f.outbox is rig.ctx.outbox for f in rig.tools.values())
 
 
@@ -305,3 +306,64 @@ def test_person_left_is_executive_only_and_delegates_to_the_flow():
 def test_a_tool_never_raises(rig):
     rig.ctx.roster = lambda: 1 / 0
     assert rig.tools["company_overview"]()["status"] == "error"
+
+
+# ------------------------------------------------------------------ who works with whom, status
+def _contacts(rig):
+    def add(uid, name, who, other, about, cid=PUB, n=1):
+        for i in range(n):
+            rig.repo.update(G, uid, name, lambda d, i=i: P.merge_contact(
+                d.contacts, P.HeardContact(who=who, user_id=other, about=about),
+                ev(cid=cid, mid=uid * 100 + i), f"2026-10-{1 + i:02d}"))  # fmt: skip
+
+    add(2, "Tom", "Mali", 1, "invoices", n=3)
+    add(3, "Bee", "Mali", 1, "payroll")
+    add(1, "Mali", "ACME", 0, "supply", n=2)
+    add(3, "Bee", "ACME", 0, "demo")
+    add(3, "Bee", "Tom", 2, "secret plan", cid=PRIV)
+
+
+def test_who_works_with_whom_overview_shows_hubs_bridges_and_pairs(rig):
+    _contacts(rig)
+    out = rig.tools["who_works_with_whom"]()
+    assert out["hubs"][0]["name"] == "Mali" and out["hubs"][0]["named_by_others"] == 4
+    assert "invoices" in out["hubs"][0]["contacted_about"]
+    assert set(out["strongest_pairs"][0]["between"]) == {"Mali", "Tom"}
+    assert all("secret plan" not in repr(p) for p in out["strongest_pairs"])  # PRIV unreadable
+    assert out["bridges"] == [] or all(len(b["departments"]) >= 2 for b in out["bridges"])
+
+
+def test_who_works_with_whom_for_a_person_and_for_nobody_known(rig):
+    assert rig.tools["who_works_with_whom"]()["found"] is False
+    _contacts(rig)
+    out = rig.tools["who_works_with_whom"]("Bee")
+    assert {c["who"] for c in out["contacts"]} == {"ACME", "Mali"}
+    assert next(c for c in out["contacts"] if c["who"] == "ACME")["outside_party"] is True
+    assert any(x["name"] == "Mali" for x in out["also_dealing_with_the_same_parties"])
+    boss = Rig(is_exec=True, readable=(PUB,), see_all=True)
+    boss.ctx.repo = rig.repo
+    seen = boss.tools["who_works_with_whom"]("Bee")
+    assert "Tom" in {c["who"] for c in seen["contacts"]}  # the exec alone reads the private one
+    assert rig.tools["who_works_with_whom"]("zzz")["error"] == "not_found"
+
+
+def test_company_overview_has_a_collaboration_line(rig):
+    assert "collaboration" not in rig.tools["company_overview"]()
+    _contacts(rig)
+    line = rig.tools["company_overview"]()["collaboration"]
+    assert line.startswith("most connected: Mali (4 contacts)")
+
+
+def test_knowledge_status_is_executive_only_and_counts(rig):
+    assert rig.tools["knowledge_status"]()["status"] == "error"
+    boss = Rig(is_exec=True)
+    boss.ctx.repo = rig.repo
+    _contacts(rig)
+    rig.repo.put(G, P.Dossier(user_id=999, name="สลิด", role_title="chatbot"))
+    boss.company.save(G, cb.CompanyPlaybook(org_built_at="2026-10-15T01:00:00"))
+    boss.ctx.company = boss.company
+    out = boss.tools["knowledge_status"]()
+    assert out["people_with_dossiers"] == 3 and out["bots_excluded"] == 1
+    assert out["topics"] == 2 and out["contacts"] == 5 and out["map_built_at"]
+    assert out["last_learned"] and out["missing"]["no_dossier_count"] == 1  # Newbie
+    assert out["missing"]["no_role"] == ["Newbie"]

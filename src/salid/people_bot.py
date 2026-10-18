@@ -43,8 +43,10 @@ from .people import (
     PeopleRepo,
     RosterEntry,
     build_key_contacts,
+    build_org,
     build_who_to_ask,
     department_label,
+    is_bot_name,
     set_role,
 )
 from .people_listen import PeopleListener
@@ -87,6 +89,7 @@ class PeopleMixin:
 
     def _people_init(self) -> None:
         self.people = PeopleRepo(self.docs, clock=self.s.now)
+        self.people.bot_check = self._people_is_bot
         self.people_listener = PeopleListener(
             self.people,
             self.s,
@@ -99,6 +102,19 @@ class PeopleMixin:
         self.tasks.on_done = self.people_listener.on_task_done
         self._people_roster_cache: dict[int, tuple[float, list[RosterEntry]]] = {}
         self._people_day: dict[int, str] = {}
+
+    def _people_is_bot(self, uid: int, name: str) -> bool:
+        """The assistant itself (id, or its display name in any guild): never a person."""
+        me = getattr(self, "user", None)
+        if me is not None and getattr(me, "id", None) == uid:
+            return True
+        mine = {getattr(me, "name", ""), getattr(me, "display_name", "")} - {""}
+        for g in list(getattr(self, "guilds", ()) or ()):
+            m = getattr(g, "me", None)
+            mine |= {getattr(m, "display_name", ""), getattr(m, "name", "")} - {""}
+            if m is not None and getattr(m, "id", None) == uid:
+                return True
+        return is_bot_name(name, mine)
 
     def _people_on(self, gid: int) -> bool:
         return self.team.enabled(gid, "company_knowledge")
@@ -147,6 +163,8 @@ class PeopleMixin:
             d = dossiers.get(m.id)
             if d is not None and d.status == "left":
                 continue
+            if self._people_is_bot(m.id, getattr(m, "display_name", "")):
+                continue
             out.append(
                 RosterEntry(
                     user_id=m.id,
@@ -160,15 +178,31 @@ class PeopleMixin:
         return out
 
     def _public_channel_ids(self, guild) -> set[int]:
-        """Channels every human member of the server can read."""
+        """Channels every human member of the server can read. One channel that raises is skipped
+        (treated as not public). With a partial member cache (no chunking) the cached members
+        alone prove nothing, so the channel must also be readable by @everyone."""
         everyone = {m.id for m in self._members(guild)}
         if not everyone:
             return set()
-        return {
-            c.id
-            for c in self._all_channels(guild)
-            if everyone <= set(self._channel_viewers(guild, c))
-        }
+        total = getattr(guild, "member_count", None)
+        everyone_role = getattr(guild, "default_role", None)
+        partial = bool(
+            isinstance(total, int) and everyone_role is not None and total > len(everyone)
+        )
+        out: set[int] = set()
+        for c in self._all_channels(guild):
+            try:
+                if not everyone <= set(self._channel_viewers(guild, c)):
+                    continue
+                if partial and not self._can_read(c, everyone_role):
+                    continue
+                out.add(c.id)
+            except Exception:
+                logger.warning(
+                    "people map: channel skipped guild=%s channel=%s", guild.id, getattr(c, "id", "?"),
+                    exc_info=True,
+                )  # fmt: skip
+        return out
 
     # ------------------------------------------------------------- nightly refresh
     async def _people_due(self) -> None:
@@ -182,16 +216,33 @@ class PeopleMixin:
                 if not self._people_on(guild.id):
                     continue
                 self._people_day[guild.id] = today
+                logger.info("people refresh: start guild=%s", guild.id)
                 await asyncio.to_thread(self._people_refresh, guild)
             except Exception:
                 logger.warning("people refresh failed", exc_info=True)
 
     def _people_refresh(self, guild) -> None:
-        """Blocking."""
+        """Blocking. Three stages (roles, projects, map), each in its own try: a failure in one
+        is logged with its name and never stops the next, so the map is always rebuilt."""
+        for stage, fn in (
+            ("roles", self._people_stage_roles),
+            ("projects", self._people_stage_projects),
+            ("map", self.rebuild_company_map),
+        ):
+            try:
+                fn(guild)
+            except Exception:
+                logger.warning(
+                    "people refresh: stage=%s failed guild=%s", stage, guild.id, exc_info=True
+                )
+
+    def _people_stage_roles(self, guild) -> None:
         gid = guild.id
         depts = self._org_departments(gid)
         for m in self._members(guild):
             name = getattr(m, "display_name", str(m.id))
+            if self._people_is_bot(m.id, name):
+                continue
             role = self._discord_role(guild, m)
             dept = depts.get(m.id)
 
@@ -200,26 +251,54 @@ class PeopleMixin:
                 b = set_role(d, "", "org", dept) if dept else False
                 return a or b
 
-            self.people.update(gid, m.id, name, apply)
-        if self.team.enabled(gid, "projects"):
-            with contextlib.suppress(Exception):
-                self.people_listener.refresh_projects(gid, self.project_repo.list(gid))
-        self.rebuild_company_map(guild)
+            try:
+                self.people.update(gid, m.id, name, apply)
+            except Exception:
+                logger.warning(
+                    "people refresh: stage=roles member failed guild=%s", gid, exc_info=True
+                )
+
+    def _people_stage_projects(self, guild) -> None:
+        if self.team.enabled(guild.id, "projects"):
+            self.people_listener.refresh_projects(guild.id, self.project_repo.list(guild.id))
 
     def rebuild_company_map(self, guild) -> None:
-        """Departments, who-to-ask and key contacts into the playbook. Blocking."""
-        from .people import build_org
-
+        """Departments, who-to-ask and key contacts into the playbook. Blocking. Each part is
+        built in its own try and the playbook is ALWAYS saved (even with an empty org or no public
+        channel), with `org_built_at` set; one info line says what came out."""
         gid = guild.id
-        roster = self._people_roster(guild, fresh=True)
-        dossiers = self.people.list(gid)
-        public = self._public_channel_ids(guild)
         pb = self.company.get(gid)
-        pb.org = build_org(roster)
-        pb.who_to_ask = build_who_to_ask(dossiers, public)
-        pb.key_contacts = build_key_contacts(dossiers, public)
+        try:
+            pb.org = build_org(self._people_roster(guild, fresh=True))
+        except Exception:
+            logger.warning("people map: stage=org failed guild=%s", gid, exc_info=True)
+        try:
+            dossiers = self.people.list(gid)
+        except Exception:
+            logger.warning("people map: stage=dossiers failed guild=%s", gid, exc_info=True)
+            dossiers = []
+        try:
+            public = self._public_channel_ids(guild)
+        except Exception:
+            logger.warning("people map: stage=public failed guild=%s", gid, exc_info=True)
+            public = set()
+        try:
+            pb.who_to_ask = build_who_to_ask(dossiers, public)
+        except Exception:
+            logger.warning("people map: stage=who_to_ask failed guild=%s", gid, exc_info=True)
+        try:
+            pb.key_contacts = build_key_contacts(dossiers, public)
+        except Exception:
+            logger.warning("people map: stage=contacts failed guild=%s", gid, exc_info=True)
         pb.org_built_at = self.s.now().isoformat(timespec="seconds")
         self.company.save(gid, pb)
+        members = self._members(guild)
+        logger.info(
+            "people map: guild=%s people=%d topics=%d contacts=%d departments=%d "
+            "public_channels=%d members=%d/%s",
+            gid, len(dossiers), len(pb.who_to_ask), len(pb.key_contacts), len(pb.org),
+            len(public), len(members), getattr(guild, "member_count", "?"),
+        )  # fmt: skip
 
     # ------------------------------------------------------------- agent tools
     def _people_tools(self, message, guild, asker, is_exec: bool, memory, lang: str) -> list:
