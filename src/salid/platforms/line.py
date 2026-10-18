@@ -481,12 +481,15 @@ class LineAdapter:
         ns = SimpleNamespace(platform=PLATFORM, tenant=tenant)
         if tenant not in self._retention_set and self.a._owner_ok(ns, gid):
             self._retention_set.add(tenant)
-            from ..guild_settings import default_retention_days
+            from ..guild_settings import default_retention_days, effective_retention_days
 
             try:
-                if team.memory_retention_days(gid) == default_retention_days():
+                # The STORED value (0 = keep forever, the global default), not the effective
+                # window. A hub save (updated_at) makes even the default a company choice.
+                g, default = team.current(gid), default_retention_days()
+                if g.memory_retention_days == default and not g.updated_at:
                     team.set_memory_retention_days(
-                        gid, min(LINE_RETENTION_DAYS, default_retention_days())
+                        gid, min(LINE_RETENTION_DAYS, effective_retention_days(default))
                     )
             except Exception as e:
                 logger.warning("could not set LINE memory retention (%s)", safe_exc(e))
