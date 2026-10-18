@@ -69,7 +69,9 @@ def test_voice_langs_take_profiles_or_plain_codes():
 
 def test_tt_renders_each_language_and_dedupes_identical_ones():
     both = aud.tt("aud_personal_unset", ["en", "th"])
-    assert both == t("aud_personal_unset", "en") + "\n\n" + t("aud_personal_unset", "th")
+    th = aud.translation_label("th") + t("aud_personal_unset", "th")  # labelled as a translation
+    assert both == t("aud_personal_unset", "en") + "\n\n" + th
+    assert aud.translation_label("th") == "*(Thai translation)*\n"
     assert aud.tt("aud_personal_unset", ["en", "en"]) == t("aud_personal_unset", "en")
     # a key that reads the same in every language is shown once
     CATALOG["aud_test_same"] = {"th": "OK", "en": "OK"}
@@ -80,10 +82,11 @@ def test_tt_renders_each_language_and_dedupes_identical_ones():
 
 
 def test_join_blocks_and_render_keep_the_audience_order():
-    assert aud.join_blocks({"th": "ก", "en": "A"}, ["en", "th"]) == "A\n\nก"
+    label = aud.translation_label("th")
+    assert aud.join_blocks({"th": "ก", "en": "A"}, ["en", "th"]) == "A\n\n" + label + "ก"
     assert aud.join_blocks({"en": "A"}, ["en", "th"]) == "A"
     assert aud.join_blocks({"en": "A"}, ["ja"]) == "A"  # nothing matches: the first block
-    assert aud.render(lambda lg: lg.upper(), ["en", "th", "en"]) == "EN\n\nTH"
+    assert aud.render(lambda lg: lg.upper(), ["en", "th", "en"]) == "EN\n\n" + label + "TH"
 
 
 # ------------------------------------------------------------------ the mode statements
@@ -198,19 +201,22 @@ def test_the_second_language_rule_is_in_the_prompt_only_for_two_or_more_language
     assert "ตอบซ้ำเป็นภาษาอังกฤษ" in th
 
 
-def test_the_live_instruction_carries_the_rule_and_the_mode_line_once():
+def test_the_live_instruction_carries_the_rule_but_never_a_spoken_mode_line():
     s = FixedClockSettings()
     en = lvm.build_instruction(s, "en", lang="en", langs=["en", "th"])
-    assert "repeat it in Thai" in en and "Someone here prefers Thai" in en
+    assert "repeat it in Thai" in en
     assert "never switch language because someone speaks" in en
     th = lvm.build_instruction(s, "th", lang="th", langs=["th", "en"])
     assert "ตอบซ้ำเป็นภาษาอังกฤษ" in th and "ห้ามเปลี่ยนภาษาเอง" in th
     one = lvm.build_instruction(s, "en", lang="en", langs=["en"])
-    assert "repeat it in" not in one and "I'll take notes and answer in English." in one
+    assert "repeat it in" not in one
     only = lvm.build_instruction(s, "en", lang="en", langs=["en"], company_only=True)
-    assert "I'll answer in English only in this room." in only
-    plain = lvm.build_instruction(s, "en", lang="en")  # an unchosen server: as before
-    assert "take notes and answer in" not in plain
+    plain = lvm.build_instruction(s, "en", lang="en")
+    # nothing about settings is spoken (docs/voice_behaviour.md rule 4): the mode statement is a
+    # text line in the meeting chat, never part of the Live instruction
+    for p in (en, one, only, plain):
+        assert "Someone here prefers" not in p and "take notes and answer in" not in p
+        assert "only in this room" not in p
 
 
 # ------------------------------------------------------------------ settings
@@ -508,7 +514,8 @@ async def test_a_card_to_a_thai_preferring_assignee_on_an_english_server_has_bot
     ((card, _),) = world.staff.dms
     en_block = hs._handshake_text(world.g, [hs.tasks.get(GUILD, task.id)], "en", first_time=True)
     th_block = hs._handshake_text(world.g, [hs.tasks.get(GUILD, task.id)], "th", first_time=True)
-    assert card == en_block + "\n\n" + th_block  # company language first, then theirs
+    # company language first, then theirs, labelled as a translation
+    assert card == en_block + "\n\n" + aud.translation_label("th") + th_block
     assert en_block != th_block
 
 

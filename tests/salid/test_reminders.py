@@ -528,7 +528,7 @@ async def test_a_reminder_to_a_thai_preferring_person_on_an_english_server_has_b
     assert await tick_at(bot, at(12, 10)) == 1
     text = staff.dms[0][0]
     en, th = text.split("\n\n", 1)  # the company language first, then their own
-    assert en.startswith("⏰ Reminder:") and th.startswith("⏰ เตือนค่ะ:")
+    assert en.startswith("⏰ Reminder:") and th.startswith("*(Thai translation)*\n⏰ เตือนค่ะ:")
     staff.dms.clear()
     bot.profiles.save(GUILD, STAFF, Profile(language="en"))  # same as the company: one block
     agent_tools(bot, world, staff)["set_reminder"]("again", at="+10m")
