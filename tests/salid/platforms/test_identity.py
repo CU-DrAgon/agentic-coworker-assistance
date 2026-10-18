@@ -3,6 +3,7 @@ never seen by the model or the memory), guessing limits, Slack email verificatio
 
 import itertools
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 from conftest import FixedClockSettings
@@ -14,12 +15,13 @@ from salid.identity_links import (
     REPLY_ATTACHED,
     REPLY_INVALID,
     REPLY_LINKED,
+    REPLY_ONE_CODE,
     REPLY_PRIVATE,
     REPLY_SLOW_DOWN,
     IdentityLinks,
 )
 from salid.orgs import Member, OrgStore, Workspace, workspace_id
-from salid.platforms.core import LINK_ATTEMPTS, LINK_WINDOW_S, VERIFY_TTL_S
+from salid.platforms.core import LINK_ATTEMPTS, LINK_WINDOW_S, VERIFY_TTL_S, AccountState
 from salid.platforms.slack import SlackAdapter, SlackPort
 
 _n = itertools.count(1)
@@ -106,9 +108,66 @@ async def test_thai_command(wd):
     assert wd.port.texts == [REPLY_LINKED] and not wd.a.ask_fn.calls
 
 
-async def test_an_ordinary_sentence_with_a_code_inside_goes_to_the_model(wd):
-    await say(wd, f"can you link {code_for(wd)} for me")
-    assert len(wd.a.ask_fn.calls) == 1 and wd.port.texts == ["ok"]
+def assert_unseen(w, msg, *codes):
+    """The message reached neither the model, the gate, the live buffer nor the memory."""
+    assert w.a.ask_fn.calls == [] and w.a.gate_calls == []
+    assert stored(w.a, msg) == []
+    assert not w.a.buffer._d
+    assert all(c not in repr(w.a.buffer._d) for c in codes)
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "can you link {code} for me",
+        "please attach this: {code} thanks",
+        "my code is {code}",
+        "รหัสของฉันคือ {code} ช่วยเชื่อมให้หน่อย",
+    ],
+)
+async def test_a_code_inside_a_sentence_in_a_private_chat_is_redeemed_not_answered(wd, template):
+    attach(wd.orgs, "org_a", "line", "Ubot")
+    code = code_for(wd)
+    msg = await say(wd, template.format(code=code))
+    assert wd.port.texts == [REPLY_LINKED]
+    assert wd.orgs.member_by_identity("org_a", "line", "U-mew").email == "mew@example.com"
+    assert_unseen(wd, msg, code, code.replace("-", ""))
+
+
+async def test_a_sentence_with_a_code_in_a_group_is_never_seen_by_the_model_or_memory(wd):
+    attach(wd.orgs, "org_a", "line", "Ubot")
+    code = code_for(wd)
+    msg = await say(wd, f"@Salid can you link {code} for me", direct=False, mentions_bot=True)
+    assert wd.port.texts == [REPLY_PRIVATE]
+    assert wd.orgs.member_by_identity("org_a", "line", "U-mew") is None
+    assert_unseen(wd, msg, code)
+    await say(wd, f"link {code}")  # not consumed: the private chat still works
+    assert wd.port.texts[-1] == REPLY_LINKED
+
+
+async def test_several_codes_in_one_message_get_the_instruction_and_redeem_nothing(wd):
+    attach(wd.orgs, "org_a", "line", "Ubot")
+    one, two = code_for(wd), code_for(wd)
+    msg = await say(wd, f"link {one} and also {two}")
+    assert wd.port.texts == [REPLY_ONE_CODE]
+    assert wd.orgs.member_by_identity("org_a", "line", "U-mew") is None
+    assert_unseen(wd, msg, one, two)
+
+
+async def test_a_number_without_a_link_word_is_just_a_message(wd):
+    await say(wd, "my number is 1234-5678")
+    assert len(wd.a.ask_fn.calls) == 1
+
+
+async def test_an_edited_message_with_a_code_is_not_remembered(wd):
+    attach(wd.orgs, "org_a", "line", "Ubot")
+    code = code_for(wd)
+    msg = await say(wd, "hello")
+    edited = inc(**{**msg.__dict__, "text": f"oops link {code}"})
+    await wd.a.on_edit(edited)
+    await wd.a.drain()
+    assert all(code not in line.text for k in wd.a.buffer._d for _, line in wd.a.buffer._d[k])
+    assert all(code not in (r.text or "") for r in stored(wd.a, msg))
 
 
 async def test_without_an_identity_store_nothing_is_intercepted(wd):
@@ -334,9 +393,9 @@ async def test_slack_workspace_of_no_org_is_never_looked_up(slack):
 
     async def spy(uid):
         asked.append(uid)
-        return "mew@example.com"
+        return AccountState("member", "mew@example.com")
 
-    slack.port.profile_email = spy
+    slack.port.account_state = spy
     await slack_say(slack, "U1")
     assert asked == []
     assert all(not m.identities for m in slack.orgs.get("org_a").members)
@@ -345,21 +404,27 @@ async def test_slack_workspace_of_no_org_is_never_looked_up(slack):
 async def test_slack_lookup_is_throttled_and_retried_later(slack):
     attach(slack.orgs, "org_a", "slack", TEAM)
     asked = []
-    real = slack.port.profile_email
+    real = slack.port.account_state
 
     async def spy(uid):
         asked.append(uid)
         return await real(uid)
 
-    slack.port.profile_email = spy
-    slack.orgs.link_identity("org_a", "ann@example.com", "slack", "U1")  # U1 is taken by Ann
+    slack.port.account_state = spy
     await slack_say(slack, "U1")
     await slack_say(slack, "U1")
     assert asked == ["U1"]  # not asked again within the window
     slack.clock.advance(VERIFY_TTL_S + 1)
     await slack_say(slack, "U1")
     assert asked == ["U1", "U1"]
-    assert slack.orgs.member_by_identity("org_a", "slack", "U1").email == "ann@example.com"
+    assert slack.orgs.member_by_identity("org_a", "slack", "U1").email == "mew@example.com"
+
+
+async def test_an_account_linked_to_another_member_is_not_taken_over(slack):
+    attach(slack.orgs, "org_a", "slack", TEAM)
+    slack.orgs.link_identity("org_a", "ann@example.com", "slack", "U9")  # Ann has another account
+    await slack_say(slack, "U1")  # U1's address is Mew's: linked to Mew, Ann untouched
+    assert who(slack, "U1") == "mew@example.com" and who(slack, "U9") == "ann@example.com"
 
 
 async def test_slack_uninstall_forgets_the_member_links(slack):
@@ -368,3 +433,110 @@ async def test_slack_uninstall_forgets_the_member_links(slack):
     assert slack.orgs.get("org_a").members[1].identities == {"slack": "U1"}
     await slack.adapter.on_event({"type": "app_uninstalled"}, TEAM)
     assert slack.orgs.get("org_a").members[1].identities == {}
+
+
+# ------------------------------------------------------------------ Slack: revocation
+def link_u1(slack):
+    attach(slack.orgs, "org_a", "slack", TEAM)
+    slack.orgs.link_identity("org_a", "mew@example.com", "slack", "U1")
+
+
+def who(slack, uid="U1"):
+    m = slack.orgs.member_by_identity("org_a", "slack", uid)
+    return m.email if m else None
+
+
+async def test_a_member_who_became_a_guest_is_unlinked_at_the_next_refresh(slack):
+    link_u1(slack)
+    first = await slack_say(slack, "U1")
+    assert slack.a.identity_of(first) == ("org_a", "mew@example.com")
+    slack.client.users["U1"]["is_restricted"] = True
+    # within the window the cached verdict stands ...
+    assert slack.a.identity_of(await slack_say(slack, "U1")) == ("org_a", "mew@example.com")
+    slack.clock.advance(VERIFY_TTL_S + 1)  # (users.info is cached for the same 10 minutes)
+    msg = await slack_say(slack, "U1")
+    assert slack.a.identity_of(msg) is None and who(slack) is None
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"deleted": True},
+        {"is_ultra_restricted": True},
+        {"team_id": "T-ELSEWHERE"},
+        {"profile": {"email": "someone.else@example.com"}},
+        {"is_bot": True},
+    ],
+)
+async def test_deleted_restricted_other_team_or_new_email_loses_the_link(slack, change):
+    link_u1(slack)
+    slack.client.users["U1"].update(change)
+    msg = await slack_say(slack, "U1")
+    assert slack.a.identity_of(msg) is None
+    assert who(slack) is None
+
+
+async def test_a_new_email_that_matches_nobody_does_not_relink_to_someone_else(slack):
+    link_u1(slack)
+    slack.client.users["U1"]["profile"] = {"email": "ann@example.com"}
+    msg = await slack_say(slack, "U1")
+    assert who(slack) is None and slack.a.identity_of(msg) is None
+    # the address now belongs to Ann; she links on the next refresh (not in this request)
+    slack.clock.advance(VERIFY_TTL_S + 1)
+    msg2 = await slack_say(slack, "U1")
+    assert slack.a.identity_of(msg2) == ("org_a", "ann@example.com")
+
+
+async def test_a_lookup_error_fails_closed_for_the_request_but_keeps_the_link(slack):
+    link_u1(slack)
+    del slack.client.users["U1"]  # users.info raises
+    msg = await slack_say(slack, "U1")
+    assert slack.a.identity_of(msg) is None
+    assert who(slack) == "mew@example.com"  # not unlinked
+    # the person comes back: the very next message (no waiting for the TTL) is verified again
+    slack.client.users["U1"] = {
+        "id": "U1",
+        "team_id": TEAM,
+        "profile": {"email": "mew@example.com"},
+    }
+    slack.clock.advance(31)  # only the short failure cache
+    msg2 = await slack_say(slack, "U1")
+    assert slack.a.identity_of(msg2) == ("org_a", "mew@example.com")
+
+
+async def test_a_missing_email_scope_fails_closed_without_unlinking(slack):
+    link_u1(slack)
+    slack.client.users["U1"]["profile"] = {}
+    msg = await slack_say(slack, "U1")
+    assert slack.a.identity_of(msg) is None and who(slack) == "mew@example.com"
+
+
+async def test_user_change_event_revokes_at_once(slack):
+    link_u1(slack)
+    assert slack.a.identity_of(await slack_say(slack, "U1")) == ("org_a", "mew@example.com")
+    slack.client.users["U1"]["deleted"] = True
+    await slack.adapter.on_event({"type": "user_change", "user": {"id": "U1"}}, TEAM)
+    assert who(slack) is None  # unlinked before the person says another word
+    msg = await slack_say(slack, "U1")  # (also within the verdict window)
+    assert slack.a.identity_of(msg) is None
+
+
+async def test_user_change_event_of_another_team_is_ignored(slack):
+    link_u1(slack)
+    slack.client.users["U1"]["deleted"] = True
+    await slack.adapter.on_event({"type": "user_change", "user": {"id": "U1"}}, "T-OTHER")
+    assert who(slack) == "mew@example.com"
+
+
+async def test_user_change_does_not_unlink_a_person_who_is_fine(slack):
+    link_u1(slack)
+    await slack.adapter.on_event({"type": "user_change", "user": {"id": "U1"}}, TEAM)
+    assert who(slack) == "mew@example.com"
+
+
+def test_user_change_is_subscribed():
+    from salid.platforms.slack import LIFECYCLE_EVENTS
+
+    assert LIFECYCLE_EVENTS.match("user_change")
+    text = (Path(__file__).parents[3] / "docs/platforms/slack.md").read_text()
+    assert "- user_change" in text

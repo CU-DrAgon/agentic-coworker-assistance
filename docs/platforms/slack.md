@@ -91,6 +91,7 @@ settings:
       - group_left
       - app_uninstalled
       - tokens_revoked
+      - user_change
   interactivity:
     is_enabled: false
   org_deploy_enabled: false
@@ -113,7 +114,8 @@ Workspace**). Until you do, Slack keeps the old token and the old subscriptions.
 12 hours and stop it.
 
 Event notes: `app_uninstalled` and `tokens_revoked` tell Salid the workspace removed it (see
-Privacy). The channel events (`channel_rename`, archive, delete, `member_left_channel`, ...) only
+Privacy). `user_change` makes Salid re-check a person at once (deactivated, switched to a guest, new
+email), which removes their verified link to the organization. The channel events (`channel_rename`, archive, delete, `member_left_channel`, ...) only
 refresh cached names and member lists sooner; without them the caches expire after 10 minutes.
 
 Scope notes: `users:read` gives names and the admin/owner flag; `users:read.email` lets Salid read the profile email to verify members of an organization (optional, see Linking accounts); `*:read` scopes let Salid list the

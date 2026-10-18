@@ -43,11 +43,12 @@ from ..identity_links import (
     REPLY_ATTACHED,
     REPLY_INVALID,
     REPLY_LINKED,
+    REPLY_ONE_CODE,
     REPLY_PRIVATE,
     REPLY_SLOW_DOWN,
     CodeError,
     IdentityLinks,
-    parse_command,
+    code_candidates,
 )
 from ..memory import MemoryService, build_message, message_text
 from ..memory_access import ChannelAccess, allowed_channel_ids
@@ -70,7 +71,7 @@ HISTORY_LINE_CHARS = 500
 LINK_ATTEMPTS = 5  # link-code attempts per platform user ...
 LINK_ATTEMPTS_TENANT = 30  # ... and per tenant, in LINK_WINDOW_S (guessing protection)
 LINK_WINDOW_S = 600.0
-VERIFY_TTL_S = 600.0  # re-check a Slack user's profile email at most this often
+VERIFY_TTL_S = 600.0  # re-verify a Slack user (still a full member, same email) this often
 FOLLOWUP_SECONDS = 120  # a bare "@Salid" picks up the same person's message from this recently
 GATE_HISTORY = 10
 GREETING_KEYS = ("greeting", "greeting_2", "greeting_3")
@@ -102,6 +103,14 @@ class FileRef:
     mime: str | None
     size: int
     fetch: Callable[[], bytes]
+
+
+@dataclass(frozen=True)
+class AccountState:
+    """What a platform says about a person right now (see `SlackPort.account_state`)."""
+
+    status: str  # member | revoked | unavailable
+    email: str = ""
 
 
 @dataclass
@@ -342,7 +351,10 @@ class Assistant:
         # verified identities / org workspaces (None: platforms run on their own, as before)
         self.identity = identity
         self._link_tries: dict[tuple, deque[float]] = {}
-        self._verified_at: OrderedDict[tuple[str, str], float] = OrderedDict()
+        # (tenant, user) -> (checked at, still a verified member?) and the messages whose sender
+        # could not be verified (identity_of answers None for them)
+        self._verdicts: OrderedDict[tuple[str, str], tuple[float, bool]] = OrderedDict()
+        self._denied: OrderedDict[tuple, None] = OrderedDict()
 
     # -------------------------------------------------------------- bookkeeping
     def _first_time(self, key: tuple) -> bool:
@@ -459,9 +471,10 @@ class Assistant:
     async def _handle(self, msg: Incoming, port: Port) -> None:
         if not self._first_time(msg.key):
             return
-        if self.identity is not None and (code := parse_command(msg.text)) is not None:
-            # a link / attach code: never remembered, never shown to the model
-            await self._link_command(msg, port, code)
+        if self.identity is not None and (codes := code_candidates(msg.text)):
+            # a link / attach code, even inside a sentence: never buffered, remembered, logged,
+            # gated or shown to the model (and never used in a group, where everyone reads it)
+            await self._link_command(msg, port, codes)
             return
         gid = ids.tenant_id(msg.platform, msg.tenant)
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
@@ -489,6 +502,8 @@ class Assistant:
 
     async def on_edit(self, msg: Incoming) -> None:
         """A message was edited: keep the memory text and the recent buffer current."""
+        if self.identity is not None and code_candidates(msg.text):
+            return  # an edit that adds a link code is as private as the original
         gid = ids.tenant_id(msg.platform, msg.tenant)
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
         self.buffer.edit(self._bkey(msg, gid, rid), msg.message, msg.text)
@@ -508,7 +523,7 @@ class Assistant:
     def identity_of(self, msg: Incoming) -> tuple[str, str] | None:
         """(org id, member email) when the sender is a VERIFIED member of the org that owns this
         tenant; None for a guest of the room (also when no org store is wired). Blocking."""
-        if self.identity is None:
+        if self.identity is None or msg.key in self._denied:
             return None
         try:
             return self.identity.identity_of(msg.platform, msg.tenant, msg.user)
@@ -541,14 +556,16 @@ class Assistant:
             self._link_tries = {k: v for k, v in self._link_tries.items() if v}
         return True
 
-    async def _link_command(self, msg: Incoming, port: Port, code: str) -> None:
-        """`link 1234-5678`: redeem in a private chat without the model, answer with a fixed
-        line. In a group the code is NOT used (everyone there can read it)."""
-        if not msg.is_direct:
+    async def _link_command(self, msg: Incoming, port: Port, codes: list[str]) -> None:
+        """A message with a link / attach code: in a private chat with exactly one code, redeem
+        it without the model and answer with a fixed line; with several codes, a fixed
+        instruction. In a group the code is NOT used (everyone there can read it)."""
+        if not msg.is_direct or len(codes) != 1:
             gid = ids.tenant_id(msg.platform, msg.tenant)
             if self._rate_ok(gid, ids.room_id(msg.platform, msg.tenant, msg.room)):
-                await self._say(msg, port, REPLY_PRIVATE)
+                await self._say(msg, port, REPLY_PRIVATE if not msg.is_direct else REPLY_ONE_CODE)
             return
+        code = codes[0]
         if not (
             self._tries_ok(("u", msg.platform, msg.tenant, msg.user), LINK_ATTEMPTS)
             and self._tries_ok(("t", msg.platform, msg.tenant), LINK_ATTEMPTS_TENANT)
@@ -571,31 +588,68 @@ class Assistant:
         await self._say(msg, port, REPLY_ATTACHED if done.kind == "attach" else REPLY_LINKED)
 
     async def _verify_account(self, msg: Incoming, port: Port) -> None:
-        """Slack: the profile email of a member of THIS team that equals a member email of the org
-        owning the workspace links the account (no code). Throttled; best effort."""
-        email_of = getattr(port, "profile_email", None)
-        if self.identity is None or email_of is None or msg.platform != "slack":
-            return
+        """Slack: keep the verified identity of the sender in step with the workspace.
+
+        The Slack profile email of a full member of THIS team that equals a member email of the
+        org owning the workspace links the account (no code); a linked account that is now
+        deleted, a guest, from another team or has another email loses its link. Re-checked at
+        most every `VERIFY_TTL_S` (and at once on a `user_change` event). When Slack cannot be
+        asked (error, missing scope) this request is treated as unverified, nothing is unlinked
+        and the next message asks again."""
         key = (msg.tenant, msg.user)
         now = self._clock()
-        last = self._verified_at.get(key)
-        if last is not None and now - last < VERIFY_TTL_S:
-            return
-        self._verified_at[key] = now
-        while len(self._verified_at) > SEEN_KEEP:
-            self._verified_at.popitem(last=False)
+        hit = self._verdicts.get(key)
+        if hit is not None and now - hit[0] < VERIFY_TTL_S:
+            ok = hit[1]
+        else:
+            ok = await self._check_account(msg.platform, msg.tenant, msg.user, port)
+            if ok is not None:
+                self._verdicts[key] = (now, ok)
+                self._verdicts.move_to_end(key)
+                while len(self._verdicts) > SEEN_KEEP:
+                    self._verdicts.popitem(last=False)
+        if ok is None or ok is False:
+            self._denied[msg.key] = None
+            while len(self._denied) > SEEN_KEEP:
+                self._denied.popitem(last=False)
+
+    async def recheck_account(self, platform: str, tenant: str, user: str, port: Port) -> None:
+        """The platform says the person changed: verify again now. Never raises."""
+        self._verdicts.pop((tenant, user), None)
         try:
-            if not await asyncio.to_thread(
-                self.identity.orgs.org_of_workspace, msg.platform, msg.tenant
-            ):
-                return
-            email = await email_of(msg.user)
-            if email:
-                await asyncio.to_thread(
-                    self.identity.auto_link, msg.platform, msg.tenant, msg.user, email
-                )
+            ok = await self._check_account(platform, tenant, user, port)
+        except Exception as e:  # pragma: no cover - _check_account already guards
+            logger.warning("could not re-verify the account (%s)", safe_exc(e))
+            return
+        if ok is not None:
+            self._verdicts[(tenant, user)] = (self._clock(), ok)
+
+    async def _check_account(
+        self, platform: str, tenant: str, user: str, port: Port
+    ) -> bool | None:
+        """True: a verified-or-verifiable member (or nothing to verify). False: revoked, the
+        link was removed. None: Slack could not tell, fail closed without touching any link."""
+        state_of = getattr(port, "account_state", None)
+        if self.identity is None or state_of is None or platform != "slack":
+            return True
+        try:
+            if not await asyncio.to_thread(self.identity.orgs.org_of_workspace, platform, tenant):
+                return True
+            state = await state_of(user)
+            if state.status == "unavailable":
+                return None
+            await asyncio.to_thread(
+                self.identity.reconcile,
+                platform,
+                tenant,
+                user,
+                state.status == "member",
+                state.email,
+            )
+            return state.status == "member"
         except Exception as e:
             logger.warning("could not verify the account (%s)", safe_exc(e))
+            return None
 
     # -------------------------------------------------------------- addressing
     @staticmethod
