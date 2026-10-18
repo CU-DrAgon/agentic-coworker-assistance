@@ -4379,7 +4379,9 @@ async def live_voice(
     try:
         hello = await asyncio.wait_for(websocket.receive_json(), 15)
         try:
-            email = hub.user_from_token(str(hello.get("token", "")), verify, orgs)
+            email = await run_in_threadpool(
+                hub.user_from_token, str(hello.get("token", "")), verify, orgs
+            )
         except HTTPException as exc:
             await websocket.send_json({"type": "error", "text": "auth", "status": exc.status_code})
             await websocket.close(code=4401)
@@ -4414,7 +4416,9 @@ async def live_voice(
             except Exception:  # tone is cosmetic: never block the call on it
                 pass
         profile = await run_in_threadpool(orgs.user_profile, email)
-        instruction = build_web_instruction(s, who_block(ctx, profile, page), lang, tone, note)
+        instruction = await run_in_threadpool(
+            build_web_instruction, s, who_block(ctx, profile, page), lang, tone, note
+        )
 
         def ask_fn(question: str) -> str:
             return answer_question(ctx, orgs, lib, ask, guilds, ws, question, page, language=lang)
@@ -4429,7 +4433,10 @@ async def live_voice(
 
         # the Live model is served from `live_location` (us-central1), not `global`: same client
         # settings as the Discord room
-        live_client = genai.Client(vertexai=True, project=s.gcp_project, location=s.live_location)
+        # built on a worker thread: creating the client can look up credentials synchronously
+        live_client = await run_in_threadpool(
+            genai.Client, vertexai=True, project=s.gcp_project, location=s.live_location
+        )
         live = WebLive(
             s, live_client, instruction=instruction, ask=ask_fn, out=out, connect=connect
         )
