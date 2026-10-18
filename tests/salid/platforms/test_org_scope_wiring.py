@@ -154,7 +154,7 @@ def wd(s, tmp_path):
             Workspace(id=workspace_id(platform, key), platform=platform, external_id=key),
         )
     w.orgs.link_identity("org_a", "mew@example.com", "slack", "U1")
-    w.orgs.link_identity("org_a", "mew@example.com", "line", "Lmew")
+    w.orgs.link_identity("org_a", "mew@example.com", "line", "Lmew", "Ubot")
     w.orgs.link_identity("org_a", "boss@example.com", "slack", "U2")
     w.links = IdentityLinks(w.orgs, clock=lambda: NOW)
     w.discord = FakeDiscord()
@@ -500,3 +500,26 @@ async def test_an_org_workspace_without_a_port_in_this_process_is_excluded(wd):
     assert await rooms(ws, "U1") is None
     rooms.add(SlackPort(FlagSlack(), TEAM, BOT, clock=Clock()))
     assert await rooms(Workspace(id=f"slack-{TEAM}", platform="slack", external_id=TEAM), "U1")
+
+
+# ------------------------------------------------------------------ provider-scoped identities
+@pytest.mark.parametrize("platform", ["line", "whatsapp"])
+async def test_an_identity_verified_in_workspace_a_is_unknown_in_workspace_b(wd, platform):
+    for key in ("A", "B"):
+        wd.orgs.attach_workspace(
+            "org_a",
+            Workspace(id=workspace_id(platform, key), platform=platform, external_id=key),
+        )
+    wd.orgs.link_identity("org_a", "ann@example.com", platform, "Xann", "A")
+    gid_a, gid_b = ids.tenant_id(platform, "A"), ids.tenant_id(platform, "B")
+
+    port = FakePort(platform=platform)
+    await ask(wd, platform=platform, tenant="A", user="Xann", port=port)
+    assert wd.a.ask_fn.stores[-1] is not wd.a.store  # A: verified, the org-wide view
+    assert memory_of(wd).guild_id == gid_a
+
+    port = FakePort(platform=platform)
+    await ask(wd, platform=platform, tenant="B", user="Xann", port=port)
+    assert wd.a.ask_fn.stores[-1] is wd.a.store  # B: not verified there, today's scope only
+    assert memory_of(wd).guild_id == gid_b
+    assert wd.a.identity_of(inc(platform=platform, tenant="B", user="Xann")) is None

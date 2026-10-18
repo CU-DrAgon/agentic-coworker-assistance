@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 
 from .orgs import (
     IDENTITY_PLATFORMS,
+    TENANT_BOUND_PLATFORMS,
     IdentityTaken,
     OrgStore,
     Workspace,
@@ -256,7 +257,7 @@ class IdentityLinks:
             tx.put(KIND, 0, digits, {**doc, "used": True, "used_at": stamp(now)})
             try:
                 if doc["kind"] == "identity":
-                    orgs._tx_link(tx, org.id, doc["email"], platform, pid)
+                    orgs._tx_link(tx, org.id, doc["email"], platform, pid, tenant)
                 elif owner is None:
                     orgs._tx_attach(
                         tx,
@@ -287,7 +288,12 @@ class IdentityLinks:
         if found is None or found[1].status != "connected":
             return None
         member = self.orgs.member_by_identity(found[0].id, platform, platform_user_id)
-        return (found[0].id, member.email.lower()) if member else None
+        if member is None:
+            return None
+        linked_in = member.identity_tenant(platform)
+        if platform in TENANT_BOUND_PLATFORMS and linked_in and linked_in != str(tenant_key):
+            return None  # verified in another workspace: its id means nothing here
+        return found[0].id, member.email.lower()
 
     def auto_link(
         self, platform: str, tenant_key: str, platform_user_id: str, email: str
@@ -332,7 +338,7 @@ class IdentityLinks:
             current = who.identity(platform)
             if current is None:
                 try:
-                    orgs._tx_link(tx, org.id, who.email, platform, pid)
+                    orgs._tx_link(tx, org.id, who.email, platform, pid, tenant_key)
                 except (IdentityTaken, ValueError):
                     return None
             elif current != pid:

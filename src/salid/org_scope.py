@@ -18,7 +18,8 @@ overwrites): owner and Administrator see everything, otherwise base permissions 
 role plus the member's roles, then the channel overwrites apply in the documented order
 (@everyone, then all the member's roles together, then the member itself, each one first removing
 its denies and then adding its allows). A channel is readable with View Channel and Read Message
-History (voice and stage text also need Connect).
+History; the text chat of a voice or stage channel is read the same way (Connect is only for
+joining the call, not for reading).
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from .orgs import Member, Org, Workspace, namespaced_id
+from .orgs import TENANT_BOUND_PLATFORMS, Member, Org, Workspace, namespaced_id
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,12 @@ PLATFORM_NAMES = {
 ADMINISTRATOR = 1 << 3
 VIEW_CHANNEL = 1 << 10
 READ_MESSAGE_HISTORY = 1 << 16
-CONNECT = 1 << 20
+CONNECT = 1 << 20  # joining a call; NOT needed to read a voice channel's text chat
 ALL_PERMISSIONS = (1 << 64) - 1
 
 # channel types whose message history Salid records (threads count under their parent)
 TEXT_TYPES = frozenset({0, 5, 15, 16})  # text, announcement, forum, media
-VOICE_TYPES = frozenset({2, 13})  # voice, stage: their text chat also needs Connect
+VOICE_TYPES = frozenset({2, 13})  # voice, stage: their text chat
 OVERWRITE_ROLE, OVERWRITE_MEMBER = 0, 1
 
 
@@ -122,7 +123,7 @@ def readable_channels(guild: Mapping, member: Mapping, channels: list[Mapping]) 
         if kind not in TEXT_TYPES and kind not in VOICE_TYPES:
             continue
         perms = channel_permissions(guild, member, ch, base)
-        need = VIEW_CHANNEL | READ_MESSAGE_HISTORY | (CONNECT if kind in VOICE_TYPES else 0)
+        need = VIEW_CHANNEL | READ_MESSAGE_HISTORY
         if perms & need == need:
             out[int(ch["id"])] = str(ch.get("name") or ch["id"])
     return out
@@ -195,6 +196,25 @@ def widening_allowed(*, is_direct: bool, audience: frozenset[str] | None, asker:
     return bool(is_direct) and audience is not None and audience == frozenset({asker})
 
 
+def account_for(member: Member, workspace: Workspace, asking: tuple[str, str] | None) -> str | None:
+    """The member's verified account id to use in THIS workspace, or None.
+
+    LINE user ids are per provider, Telegram's per bot and WhatsApp's per business, so such an
+    identity only counts in the exact workspace it was verified in (`identity_tenants`). One
+    with no recorded workspace counts only in the workspace the question is coming from;
+    anything else fails closed. Slack and Discord ids are global."""
+    account = member.all_identities().get(workspace.platform)
+    if not account:
+        return None
+    if workspace.platform not in TENANT_BOUND_PLATFORMS:
+        return account
+    linked_in = member.identity_tenant(workspace.platform)
+    if linked_in:
+        return account if linked_in == workspace.external_id else None
+    here = asking is not None and asking == (workspace.platform, workspace.external_id)
+    return account if here else None
+
+
 def _label(platform: str, name: str, workspace: Workspace, several: bool) -> str:
     base = PLATFORM_NAMES.get(platform, platform.title())
     if several:
@@ -210,16 +230,17 @@ async def resolve(
     audience: frozenset[str] | None,
     asker: str,
     providers: Mapping[str, RoomProvider],
+    asking: tuple[str, str] | None = None,
 ) -> OrgView | None:
     """The org-wide view of a verified member, or None when the message gets no widening
     (not a 1:1 with exactly the asker as reader, or not a member of the org). Never raises: a
-    workspace whose provider is missing or fails is left out and listed in `skipped`."""
+    workspace whose provider is missing or fails is left out and listed in `skipped`.
+    `asking` = (platform, tenant) the message comes from (see `account_for`)."""
     if not widening_allowed(is_direct=is_direct, audience=audience, asker=asker):
         return None
     member = member_of(org, email)
     if member is None:
         return None
-    accounts = member.all_identities()
     connected = [
         w for w in org.workspaces if w.status == "connected" and w.platform in CHAT_PLATFORMS
     ]
@@ -231,7 +252,7 @@ async def resolve(
     skipped: list[str] = []
     seen_channels: set[int] = set()
     for w in connected:
-        account = accounts.get(w.platform)
+        account = account_for(member, w, asking)
         guild = w.memory_id
         ledger.append(
             LedgerWorkspace(

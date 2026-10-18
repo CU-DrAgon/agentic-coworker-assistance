@@ -94,6 +94,11 @@ def _email_bucket(email: str) -> int:
     return int.from_bytes(hashlib.sha256(email.lower().encode()).digest()[:7], "big")
 
 
+# platforms whose account ids only mean something inside one workspace (LINE: per provider,
+# WhatsApp: per business, Telegram: per bot), so a verified link authorizes only that tenant
+TENANT_BOUND_PLATFORMS = frozenset({"line", "telegram", "whatsapp"})
+
+
 # ------------------------------------------------------------------ models
 class Member(BaseModel):
     email: str
@@ -102,6 +107,10 @@ class Member(BaseModel):
     # platform -> platform user id, VERIFIED by Salid (Slack profile email, or a one-time link
     # code). Discord stays in `discord_user_id`; read it through `identity("discord")`.
     identities: dict[str, str] = Field(default_factory=dict)
+    # platform -> the tenant key (LINE channel, WhatsApp number, ...) where that identity was
+    # verified. LINE user ids are per provider and WhatsApp ids per business, so a link made in
+    # one workspace must never vouch for another. Absent = linked before this was recorded.
+    identity_tenants: dict[str, str] = Field(default_factory=dict)
     department: str = ""  # PM dashboard: tech | business | finance | other | ""
     finance: bool = False  # PM dashboard: Authorized Approver, may see budgets
 
@@ -110,6 +119,10 @@ class Member(BaseModel):
         if platform == "discord":
             return self.identities.get("discord") or self.discord_user_id or None
         return self.identities.get(platform) or None
+
+    def identity_tenant(self, platform: str) -> str | None:
+        """The tenant key the platform account was verified in, or None (not recorded)."""
+        return self.identity_tenants.get(platform) or None
 
     def all_identities(self) -> dict[str, str]:
         out = {k: v for k, v in self.identities.items() if v}
@@ -366,7 +379,9 @@ class OrgStore:
         tx.put(ORG_WS, mid, "org", self._ws_index(org, ws.id))
         return org
 
-    def _tx_link(self, tx, org_id: str, email: str, platform: str, platform_user_id: str) -> Member:
+    def _tx_link(
+        self, tx, org_id: str, email: str, platform: str, platform_user_id: str, tenant: str = ""
+    ) -> Member:
         pid = str(platform_user_id or "").strip()
         if platform not in IDENTITY_PLATFORMS or not pid or len(pid) > MAX_IDENTITY_LEN:
             raise ValueError("bad platform or account id")
@@ -385,6 +400,10 @@ class OrgStore:
             who.identities.pop("discord", None)
         else:
             who.identities[platform] = pid
+        if tenant and platform != "discord":
+            who.identity_tenants[platform] = str(tenant)
+        else:
+            who.identity_tenants.pop(platform, None)
         self._tx_save(tx, org, old)
         return who
 
@@ -404,6 +423,7 @@ class OrgStore:
             return False
         old = org.model_copy(deep=True)
         who.identities.pop(platform, None)
+        who.identity_tenants.pop(platform, None)
         if platform == "discord":
             who.discord_user_id = None
         self._tx_save(tx, org, old)
@@ -447,6 +467,7 @@ class OrgStore:
             return
         for m in org.members:
             m.identities.pop(platform, None)
+            m.identity_tenants.pop(platform, None)
 
     def member_by_identity(
         self, org_id: str, platform: str, platform_user_id: str
@@ -457,12 +478,13 @@ class OrgStore:
         return next((m for m in org.members if m.identity(platform) == str(platform_user_id)), None)
 
     def link_identity(
-        self, org_id: str, email: str, platform: str, platform_user_id: str
+        self, org_id: str, email: str, platform: str, platform_user_id: str, tenant: str = ""
     ) -> Member:
         """Bind a platform account to a member. A second claim on the same account by another
-        member is refused (`IdentityTaken`); re-linking the same member replaces the old id."""
+        member is refused (`IdentityTaken`); re-linking the same member replaces the old id.
+        `tenant`: the workspace key where the account was verified (recorded per platform)."""
         return self.docs.transact(
-            lambda tx: self._tx_link(tx, org_id, email, platform, platform_user_id)
+            lambda tx: self._tx_link(tx, org_id, email, platform, platform_user_id, tenant)
         )
 
     def unlink_identity(
@@ -489,6 +511,8 @@ class OrgStore:
                 return
             old = org.model_copy(deep=True)
             changed = [m.identities.pop(platform, None) for m in org.members]
+            for m in org.members:
+                m.identity_tenants.pop(platform, None)
             if any(c is not None for c in changed):
                 self._tx_save(tx, org, old)
 

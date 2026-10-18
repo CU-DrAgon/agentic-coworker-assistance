@@ -30,7 +30,7 @@ CHUNK = 3000  # characters per message (Slack allows far more; shorter reads bet
 MAX_MESSAGES = 10
 MEMBERS_TTL_S = 60.0
 LIST_TTL_S = 300.0
-USER_TTL_S = 600.0
+USER_TTL_S = 300.0  # <= core.VERIFY_TTL_S: a deleted person must not outlive it in this cache
 USER_FAIL_TTL_S = 30.0  # a failed users.info is retried after this long, not after USER_TTL_S
 MAX_MEMBERS = 5000  # a bigger room: audience unknown, so memory stays in that room
 MAX_ROOMS = 60  # other rooms considered for memory scope
@@ -128,7 +128,7 @@ class SlackPort:
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
-        """users.info (cached 10 min); {} when it cannot be read."""
+        """users.info (cached 5 min); {} when it cannot be read."""
         hit = self._users.get(uid)
         if hit is not None and self._clock() - hit[0] < USER_TTL_S:
             return hit[1]
@@ -137,7 +137,7 @@ class SlackPort:
         except Exception as e:
             logger.warning("users.info failed (%s)", safe_exc(e))
             info = {}
-        # a failure is remembered only briefly, so one blip does not blind us for ten minutes
+        # a failure is remembered only briefly, so one blip does not blind us for five minutes
         stamp = self._clock() if info else self._clock() - USER_TTL_S + USER_FAIL_TTL_S
         self._users[uid] = (stamp, info)
         return info
@@ -152,7 +152,7 @@ class SlackPort:
         return prof.get("display_name") or u.get("real_name") or u.get("name") or uid
 
     async def account_state(self, uid: str) -> AccountState:
-        """What Slack says about this person NOW (users.info, cached up to 10 minutes):
+        """What Slack says about this person NOW (users.info, cached up to 5 minutes):
 
         * ``member``: a real, full member of THIS workspace with a readable profile email;
         * ``revoked``: a bot, deleted, guest (single / multi-channel) or a person of another

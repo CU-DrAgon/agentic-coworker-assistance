@@ -150,11 +150,16 @@ def test_permissions_in_a_channel_follow_the_documented_order():
     assert perms & CONNECT and not perms & VIEW_CHANNEL and perms & READ_MESSAGE_HISTORY
 
 
-def test_voice_text_needs_connect_and_threads_categories_are_skipped():
-    g = guild(everyone=READ)  # no Connect
+def test_voice_text_is_readable_with_view_and_history_connect_is_not_needed():
+    # the text chat of a voice / stage channel is read with View Channel + Read Message History
     voice, stage = chan(1, kind=2), chan(2, kind=13)
-    assert readable(g, member(), voice, stage) == set()
+    assert readable(guild(everyone=READ), member(), voice, stage) == {1, 2}
     assert readable(guild(everyone=READ | CONNECT), member(), voice, stage) == {1, 2}
+    assert readable(guild(everyone=VIEW_CHANNEL | CONNECT), member(), voice, stage) == set()
+    denied = chan(3, role_ow(GUILD, deny=CONNECT), kind=2)
+    assert readable(guild(everyone=READ | CONNECT), member(), denied) == {3}
+    g = guild(everyone=READ)
+    voice, stage = chan(1, kind=2), chan(2, kind=13)
     skipped = [chan(3, kind=4), chan(4, kind=11), chan(5, kind=12), chan(6, kind=10)]
     assert readable(g, member(), *skipped) == set()
     forum, announce = chan(7, kind=15), chan(8, kind=5)
@@ -204,6 +209,7 @@ def make_org(*, role="member", identities=None, extra=None):
         role=role,
         discord_user_id="42",
         identities=identities if identities is not None else {"slack": "U1", "line": "Lmew"},
+        identity_tenants={"line": "Ubot"},  # verified in the workspace below
     )
     return Org(
         id="o", name="Cafe", members=[mew, Member(email="boss@x.com", role="owner")], workspaces=ws
@@ -313,3 +319,72 @@ def test_a_workspace_with_no_account_has_no_own_receipts_but_exec_sees_it():
 @pytest.mark.parametrize("role,admin", [("owner", True), ("admin", True), ("member", False)])
 def test_org_owner_and_admin_are_flagged(role, admin):
     assert run(make_org(role=role), Providers(**FULL)).is_admin is admin
+
+
+# ------------------------------------------------------------------ provider-scoped identities
+def two_workspaces(platform, key_a, key_b, identity, tenants):
+    ws = [
+        Workspace(id=f"{platform}-{key_a}", platform=platform, external_id=key_a),
+        Workspace(id=f"{platform}-{key_b}", platform=platform, external_id=key_b),
+    ]
+    mew = Member(
+        email="mew@x.com",
+        identities={platform: identity},
+        identity_tenants=tenants,
+    )
+    return Org(id="o", name="Cafe", members=[mew], workspaces=ws)
+
+
+def run_from(org, providers, platform, tenant, asker):
+    import asyncio
+
+    return asyncio.run(
+        osc.resolve(
+            org,
+            "mew@x.com",
+            is_direct=True,
+            audience=frozenset({asker}),
+            asker=asker,
+            providers=providers,
+            asking=(platform, tenant),
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("platform", "ident"), [("line", "Lmew"), ("whatsapp", "bsuid-1"), ("telegram", "777")]
+)
+def test_an_identity_linked_in_workspace_a_authorizes_only_workspace_a(platform, ident):
+    org = two_workspaces(platform, "A", "B", ident, {platform: "A"})
+    providers = Providers(**{platform: {ident: ""}})
+    view = run_from(org, providers, platform, "A", ident)
+    assert {s.guild_id for s in view.sources} == {workspace_memory_id(platform, "A")}
+    by_ws = {w.guild_id: w.submitter_id for w in view.workspaces}
+    assert by_ws[workspace_memory_id(platform, "A")] is not None
+    assert by_ws[workspace_memory_id(platform, "B")] is None  # no ledger mapping either
+    assert [c[1] for c in providers.calls] == ["A"]  # B's provider was never even asked
+    assert view.ledger_sources(False) == [
+        (workspace_memory_id(platform, "A"), by_ws[workspace_memory_id(platform, "A")])
+    ]
+
+
+def test_asking_from_workspace_b_never_adds_b_for_an_identity_linked_in_a():
+    org = two_workspaces("line", "A", "B", "Lmew", {"line": "A"})
+    view = run_from(org, Providers(line={"Lmew": ""}), "line", "B", "Lmew")
+    assert {s.guild_id for s in view.sources} == {workspace_memory_id("line", "A")}
+
+
+def test_an_identity_without_a_recorded_tenant_authorizes_only_the_asking_workspace():
+    org = two_workspaces("whatsapp", "A", "B", "bsuid-1", {})
+    p = Providers(whatsapp={"bsuid-1": ""})
+    view = run_from(org, p, "whatsapp", "B", "bsuid-1")
+    assert {s.guild_id for s in view.sources} == {workspace_memory_id("whatsapp", "B")}
+    # asked from another platform: nothing to anchor it to, so nothing
+    view = run_from(org, p, "slack", "T1", "U1")
+    assert view.sources == ()
+
+
+def test_a_slack_or_discord_identity_is_not_tenant_bound():
+    org = make_org()
+    view = run(org, Providers(**FULL))
+    assert {s.platform for s in view.sources} == {"discord", "slack", "line"}

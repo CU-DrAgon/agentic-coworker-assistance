@@ -163,6 +163,7 @@ class OrgSources:
         asker: str,
         is_direct: bool,
         audience: frozenset[str] | None,
+        asking: tuple[str, str] | None = None,
     ) -> OrgView | None:
         org = await asyncio.to_thread(self._org, org_id)
         if org is None:
@@ -174,6 +175,7 @@ class OrgSources:
             audience=audience,
             asker=asker,
             providers=self.providers,
+            asking=asking,
         )
 
 

@@ -73,7 +73,9 @@ HISTORY_LINE_CHARS = 500
 LINK_ATTEMPTS = 5  # link-code attempts per platform user ...
 LINK_ATTEMPTS_TENANT = 30  # ... and per tenant, in LINK_WINDOW_S (guessing protection)
 LINK_WINDOW_S = 600.0
-VERIFY_TTL_S = 600.0  # re-verify a Slack user (still a full member, same email) this often
+# re-verify a Slack user (still a full member, same email) this often; also the oldest verdict
+# an org-wide widening may rest on
+VERIFY_TTL_S = 300.0
 FOLLOWUP_SECONDS = 120  # a bare "@Salid" picks up the same person's message from this recently
 GATE_HISTORY = 10
 GREETING_KEYS = ("greeting", "greeting_2", "greeting_3")
@@ -566,6 +568,7 @@ class Assistant:
                 asker=msg.user,
                 is_direct=msg.is_direct,
                 audience=frozenset({msg.user}) if msg.is_direct else None,
+                asking=(msg.platform, msg.tenant),
             )
         except Exception as e:
             logger.warning("could not resolve the org scope (%s)", safe_exc(e))
