@@ -206,9 +206,26 @@ def test_viewer_for_collects_verified_ids_and_executive_level():
     assert viewer_for(_org(5), "a@x.com", "admin").executive is False
     assert viewer_for(_org(0), "a@x.com", "admin").executive is False
     assert viewer_for(_org(0, "owner"), "a@x.com", "owner").executive is True
-    assert viewer_for(_org(1, "member"), "a@x.com", "member").executive is False
+    assert viewer_for(_org(1, "member"), "a@x.com", "member").executive is True
+    assert viewer_for(_org(5, "member"), "a@x.com", "member").executive is False
+    assert viewer_for(_org(0, "member"), "a@x.com", "member").executive is False
     ops = viewer_for(_org(3), "ops@salid.app", "super")
     assert (ops.role, ops.ids, ops.executive) == ("super", frozenset({"ops@salid.app"}), False)
+
+
+def test_exec_level_member_cancels_own_deep_task_but_sees_no_others():
+    # spec 4.1: members cancel their own jobs, deep tasks only when they are executives
+    def deep(requester: str) -> MonitorItem:
+        aud = Audience(exec_only=True, people=[requester])
+        return item("deep_task", audience=aud, requester_id=requester)
+
+    director = viewer_for(_org(2, "member"), "a@x.com", "member")
+    staff = viewer_for(_org(5, "member"), "a@x.com", "member")
+    assert controls(deep("discord:7"), director) == ["cancel"]
+    assert controls(deep("discord:7"), staff) == []
+    # being an executive never widens what a member may see
+    other = deep("discord:8")
+    assert not visible(other, director) and controls(other, director) == []
 
 
 def test_heartbeat_thresholds_and_clock_skew():

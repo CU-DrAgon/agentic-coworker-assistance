@@ -145,9 +145,10 @@ def person_key(platform: str, account_id: str | int) -> str:
 def viewer_for(org: Org, email: str, role: str) -> Viewer:
     """The viewer for `email` in `org` with the role the center resolved for them.
 
-    An executive is the owner, or an admin whose mirrored position level is an executive one
-    (the web cannot see Discord roles, so this fails closed). A non-member (a super admin) only
-    has their email and is never an executive.
+    An executive is the owner, or an admin or member whose mirrored position level is an
+    executive one (the web cannot see Discord roles, so this fails closed). For a member it only
+    unlocks cancelling their own deep tasks, never what they see. A non-member (a super admin)
+    only has their email and is never an executive.
     """
     email = email.lower()
     ids = {email}
@@ -155,7 +156,7 @@ def viewer_for(org: Org, email: str, role: str) -> Viewer:
     member = next((m for m in org.members if m.email.lower() == email), None)
     if member is not None:
         ids.update(person_key(p, i) for p, i in member.all_identities().items())
-        executive = role == "owner" or (role == "admin" and is_exec_level(member.level))
+        executive = role == "owner" or (role in ("admin", "member") and is_exec_level(member.level))
     return Viewer(email, role, frozenset(ids), executive)
 
 
