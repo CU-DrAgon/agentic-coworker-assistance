@@ -2419,7 +2419,7 @@ class SecretaryBot(
             *(
                 []
                 if interjection
-                else self._image_tools(message, guild, asker, files, spoken=spoken)
+                else self._image_tools(message, guild, asker, files, lang=lang, spoken=spoken)
             ),
             # create_video_ad: chat only (same voice gate), flag video_ads (default off); a
             # background job, in the answer's language `lang`

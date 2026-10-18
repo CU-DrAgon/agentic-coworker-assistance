@@ -65,7 +65,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from . import cards, imagegen, videogen
 from .cards import CardFonts
-from .i18n import t
+from .i18n import LANG_NAMES, PRIMARY, base_lang, lang_name, t
 from .llm import generate
 from .promo import ACCENTS
 
@@ -80,8 +80,17 @@ THUMB_SIDE = 768  # long side of the photo thumbnails the storyboard model sees
 THUMB_QUALITY = 85
 PHOTO_FORMATS = ["PNG", "JPEG", "WEBP"]
 _SOURCE = re.compile(r"ai|hero|photo:(\d+)")
-_LANGUAGE = {"th": "Thai", "en": "English"}
 NO_BRIEF = "No brief was given: advertise what the shop photos show, or the shop in general."
+
+
+def storyboard_language(lang: str) -> str:
+    """The language the storyboard's captions and narration are written in: the English name of
+    every supported reply language (the second tier with its native name, e.g. "Japanese
+    (日本語)"), else the base language (never Thai for zh ja ko vi ms id hi)."""
+    if lang not in LANG_NAMES:
+        return lang_name(base_lang(lang))
+    native, english, _ = LANG_NAMES[lang]
+    return english if lang in PRIMARY else f"{english} ({native})"
 
 
 class Scene(BaseModel):
@@ -310,7 +319,7 @@ def plan_storyboard(
     and narration in `lang`. One re-ask lists the problems (and the soft ones: narration too long
     for its scene, unused photos); a storyboard that still has hard problems raises
     StoryboardError. Narration is fitted to each scene by code."""
-    language = _LANGUAGE.get(lang, "Thai")
+    language = storyboard_language(lang)
     parts, shown = _photo_parts(photos)
     photo_rules = (
         PHOTO_RULES.format(count=len(shown), labels=", ".join(f"photo:{i}" for i in shown))
@@ -509,10 +518,17 @@ def caption_png(
         box = (max(x, x0), max(y, y0), min(x + f.width, x1), min(y + f.height, y1))
     if label:
         badge = cards.measure_badge(
-            t("video_ai_label", lang), fonts.bold, (LABEL_SIZE, LABEL_SIZE), x1 - x0, LABEL_PAD
+            ai_label(lang, fonts.bold), fonts.bold, (LABEL_SIZE, LABEL_SIZE), x1 - x0, LABEL_PAD
         )
         cards.draw_badge(overlay, badge, x0, y0, fonts.bold, fill=LABEL_FILL, text_fill="#FFFFFF")
     return overlay, box
+
+
+def ai_label(lang: str, path: str) -> str:
+    """`video_ai_label` in `lang`, or in English when the font at `path` cannot draw all of it
+    (a CJK / Devanagari label without its script font would show boxes): the label never goes."""
+    text = t("video_ai_label", lang)
+    return text if cards.drawable(text, path) == " ".join(text.split()) else t("video_ai_label")
 
 
 # ------------------------------------------------------------------ motion
@@ -898,7 +914,7 @@ def assemble(
     retry = int(kbps * RETRY_RATE)
     limit = budget_mib * 2**20
     with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
-        overlays = _overlays(captions, seconds, fonts or cards.card_fonts(), Path(tmp), lang)
+        overlays = _overlays(captions, seconds, fonts or cards.card_fonts(lang), Path(tmp), lang)
         for rate, size in ((kbps, (W, H)), (retry, (W, H)), (retry, SMALL)):
             args = _assemble_args(clips, seconds, overlays, audio, music, out, rate, size)
             _ffmpeg(args, timeout=ASSEMBLE_TIMEOUT_S)
@@ -1332,7 +1348,7 @@ def _video_steps(
     check(handle)
     _report(handle, "stills", f"{len(scenes)} scenes")
     t0 = time.monotonic()
-    fonts = cards.card_fonts()
+    fonts = cards.card_fonts(req.lang)  # CJK / Devanagari captions need their script font
     images, billed = scene_stills(
         client,
         settings.image_model,

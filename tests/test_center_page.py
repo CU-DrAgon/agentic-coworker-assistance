@@ -64,3 +64,12 @@ def test_new_i18n_keys_in_both_languages():
     th, en = src.split("\nen: {", 1)
     for key in re.findall(r"\b((?:gc|la|ab)_[a-z]+):", src):
         assert f"{key}:" in th and f"{key}:" in en, key
+
+
+def test_every_feature_flag_has_a_thai_label():
+    from salid.guild_settings import FEATURES
+
+    body = re.search(r"const FEAT_TH = \{(.*?)\};", html()).group(1)
+    labels = dict(re.findall(r'(\w+): "([^"]+)"', body))
+    missing = [f for f in FEATURES if not re.search(r"[฀-๿]", labels.get(f, ""))]
+    assert not missing, missing

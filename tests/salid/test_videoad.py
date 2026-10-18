@@ -25,6 +25,7 @@ from pydantic import ValidationError
 
 from salid import cards, promo, videoad
 from salid.coo_store import FirestoreDocStore, SQLiteDocStore
+from salid.i18n import EXTRA, PRIMARY, base_lang, lang_name
 from salid.i18n import t as tr
 
 FONTS = cards.card_fonts()
@@ -1381,3 +1382,51 @@ def test_assemble_passes_the_language_to_the_label(monkeypatch, tmp_path):
         [tmp_path / "a.mp4"], [4.0], caps, None, tmp_path / "o.mp4", budget_mib=9, lang="en"
     )
     assert seen == ["en"]
+
+
+# ------------------------------------------------------------------ every reply language
+@pytest.mark.parametrize("lang", [*PRIMARY, *EXTRA])
+def test_the_storyboard_asks_for_captions_and_narration_in_the_reply_language(lang):
+    c = fake_client(json_response(sb(5, 5, 5, 5).model_dump()))
+    videoad.plan_storyboard(c, "m", brief="latte", seconds=20, photos=[], hero_shots=0, lang=lang)
+    rules = c.models.calls[0][2].system_instruction
+    assert f"in {lang_name(lang)}" in rules
+    assert ("Thai" in rules) == (lang == "th")  # never Thai for zh ja ko vi ms id hi
+
+
+def test_an_unknown_language_falls_back_to_the_base_language():
+    c = fake_client(json_response(sb(5, 5, 5, 5).model_dump()))
+    videoad.plan_storyboard(c, "m", brief="latte", seconds=20, photos=[], hero_shots=0, lang="xx")
+    rules = c.models.calls[0][2].system_instruction
+    assert f"in {lang_name(base_lang('xx'))}" in rules and "Thai" not in rules
+
+
+def test_the_runner_draws_with_the_fonts_of_the_requests_language(
+    tmp_path, fake_pipeline, monkeypatch
+):
+    asked, real = [], cards.card_fonts
+    monkeypatch.setattr(videoad.cards, "card_fonts", lambda lang=None: asked.append(lang) or real())
+    run(tmp_path, lang="ja")
+    assert asked == ["ja"]  # Noto CJK where installed: Kanit would drop Japanese captions
+
+
+def test_assemble_without_fonts_picks_the_languages_fonts(monkeypatch, tmp_path):
+    asked, real = [], cards.card_fonts
+    monkeypatch.setattr(videoad.cards, "card_fonts", lambda lang=None: asked.append(lang) or real())
+    fake_ffmpeg(monkeypatch, [1000])
+    caps = caption_files(tmp_path, 1)
+    videoad.assemble(
+        [tmp_path / "a.mp4"], [4.0], caps, None, tmp_path / "o.mp4", budget_mib=9, lang="hi"
+    )
+    assert asked == ["hi"]
+
+
+def test_a_label_the_font_cannot_draw_is_shown_in_english_never_dropped():
+    ja = tr("video_ai_label", "ja")
+    assert cards.drawable(ja, FONTS.bold) != ja  # the bundled Kanit has no CJK glyphs
+    assert videoad.ai_label("ja", FONTS.bold) == tr("video_ai_label", "en")
+    english = videoad.label_png(FONTS, lang="en").tobytes()
+    assert videoad.label_png(FONTS, lang="ja").tobytes() == english
+    vi = tr("video_ai_label", "vi")
+    assert videoad.ai_label("vi", FONTS.bold) == vi  # Kanit draws Vietnamese
+    assert videoad.label_png(FONTS, lang="vi").tobytes() != english
