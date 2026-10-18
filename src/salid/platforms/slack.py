@@ -30,7 +30,7 @@ CHUNK = 3000  # characters per message (Slack allows far more; shorter reads bet
 MAX_MESSAGES = 10
 MEMBERS_TTL_S = 60.0
 LIST_TTL_S = 300.0
-USER_TTL_S = 600.0
+USER_TTL_S = 300.0  # <= core.VERIFY_TTL_S: a deleted person must not outlive it in this cache
 USER_FAIL_TTL_S = 30.0  # a failed users.info is retried after this long, not after USER_TTL_S
 MAX_MEMBERS = 5000  # a bigger room: audience unknown, so memory stays in that room
 MAX_ROOMS = 60  # other rooms considered for memory scope
@@ -128,7 +128,7 @@ class SlackPort:
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
-        """users.info (cached 10 min); {} when it cannot be read."""
+        """users.info (cached 5 min); {} when it cannot be read."""
         hit = self._users.get(uid)
         if hit is not None and self._clock() - hit[0] < USER_TTL_S:
             return hit[1]
@@ -137,7 +137,7 @@ class SlackPort:
         except Exception as e:
             logger.warning("users.info failed (%s)", safe_exc(e))
             info = {}
-        # a failure is remembered only briefly, so one blip does not blind us for ten minutes
+        # a failure is remembered only briefly, so one blip does not blind us for five minutes
         stamp = self._clock() if info else self._clock() - USER_TTL_S + USER_FAIL_TTL_S
         self._users[uid] = (stamp, info)
         return info
@@ -152,7 +152,7 @@ class SlackPort:
         return prof.get("display_name") or u.get("real_name") or u.get("name") or uid
 
     async def account_state(self, uid: str) -> AccountState:
-        """What Slack says about this person NOW (users.info, cached up to 10 minutes):
+        """What Slack says about this person NOW (users.info, cached up to 5 minutes):
 
         * ``member``: a real, full member of THIS workspace with a readable profile email;
         * ``revoked``: a bot, deleted, guest (single / multi-channel) or a person of another
@@ -270,6 +270,35 @@ class SlackPort:
             **kw,
         )
         return {r["id"]: (r.get("name") or r["id"], r.get("id", "")) for r in rows if r.get("id")}
+
+    async def readable_rooms(self, uid: str) -> dict[str, str] | None:
+        """Conversations Salid is in that this member of THIS workspace can read: channel id ->
+        name. Public non-shared channels (a full member may read any; guests get none of them),
+        plus private channels and group DMs that are not shared and where Slack lists the member
+        (users.conversations with ``user``). Slack Connect / org-shared rooms and rooms whose
+        share flags are missing are never included. None when the person is not a current member
+        of this team or Slack cannot answer: nothing is known, so the caller uses nothing."""
+        u = await self.user(uid)
+        if not u or u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
+            return None
+        guest = bool(u.get("is_restricted") or u.get("is_ultra_restricted"))
+        kw = dict(types="public_channel,private_channel,mpim", exclude_archived=True, limit=200)
+        try:
+            ours = await self._pages(self.client.users_conversations, "channels", **kw)
+            mine = await self._pages(self.client.users_conversations, "channels", user=uid, **kw)
+        except Exception as e:
+            logger.warning("users.conversations failed (%s)", safe_exc(e))
+            return None
+        member_of = {r["id"] for r in mine if r.get("id")}
+        out: dict[str, str] = {}
+        for r in ours:
+            cid = r.get("id")
+            if not cid or share_state(r) is not False:
+                continue
+            private = bool(r.get("is_private") or r.get("is_mpim"))
+            if (private and cid in member_of) or (not private and not guest):
+                out[cid] = r.get("name") or cid
+        return out
 
     async def bot_rooms(self) -> dict[str, tuple[str, str]]:
         """Conversations Salid is in (public, private, group DMs): id -> (name, id)."""

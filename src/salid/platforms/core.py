@@ -55,6 +55,8 @@ from ..memory_access import ChannelAccess, allowed_channel_ids
 from ..memory_summary import render_summary
 from ..message_control import is_thanks
 from ..naming import mentions_name
+from ..org_scope import OrgView
+from ..org_stores import MultiGuildLedgerStore, MultiGuildMemoryStore
 from ..qa import MAX_FILE_BYTES as MAX_FILE_BYTES
 from ..qa import MAX_TOTAL_BYTES as MAX_TOTAL_BYTES
 from ..qa import FileActions, FileInput, MemoryTools, ask, file_mime, select_files
@@ -71,7 +73,9 @@ HISTORY_LINE_CHARS = 500
 LINK_ATTEMPTS = 5  # link-code attempts per platform user ...
 LINK_ATTEMPTS_TENANT = 30  # ... and per tenant, in LINK_WINDOW_S (guessing protection)
 LINK_WINDOW_S = 600.0
-VERIFY_TTL_S = 600.0  # re-verify a Slack user (still a full member, same email) this often
+# re-verify a Slack user (still a full member, same email) this often; also the oldest verdict
+# an org-wide widening may rest on
+VERIFY_TTL_S = 300.0
 FOLLOWUP_SECONDS = 120  # a bare "@Salid" picks up the same person's message from this recently
 GATE_HISTORY = 10
 GREETING_KEYS = ("greeting", "greeting_2", "greeting_3")
@@ -321,6 +325,7 @@ class Assistant:
         choose: Callable = random.choice,
         names: dict[tuple[int, int], str] | None = None,
         identity: IdentityLinks | None = None,
+        org_sources=None,
     ) -> None:
         self.s, self.ps, self.store, self.llm, self.team = settings, ps, store, llm, team
         self.memory, self.memory_store, self.embedder = memory, memory_store, embedder
@@ -350,6 +355,9 @@ class Assistant:
         self.on_room_seen: Callable[[Incoming], None] | None = None  # e.g. start a history import
         # verified identities / org workspaces (None: platforms run on their own, as before)
         self.identity = identity
+        # platforms.org_sources.OrgSources: what a verified member may read across the org's
+        # workspaces; None = every message keeps its own tenant's scope
+        self.org_sources = org_sources
         self._link_tries: dict[tuple, deque[float]] = {}
         # (tenant, user) -> (checked at, still a verified member?) and the messages whose sender
         # could not be verified (identity_of answers None for them)
@@ -544,6 +552,28 @@ class Assistant:
         except Exception as e:
             logger.warning("could not drop identities of %s tenant (%s)", platform, safe_exc(e))
 
+    async def _org_view(self, msg: Incoming) -> OrgView | None:
+        """What this sender may use org-wide: only in a 1:1 (its one reader is the asker) with a
+        VERIFIED member of the org that owns the tenant. Anything else, and any error: None, so
+        the message keeps today's single-tenant scope."""
+        if self.org_sources is None or self.identity is None or not msg.is_direct:
+            return None
+        try:
+            who = await asyncio.to_thread(self.identity_of, msg)
+            if who is None:
+                return None
+            return await self.org_sources.view(
+                who[0],
+                who[1],
+                asker=msg.user,
+                is_direct=msg.is_direct,
+                audience=frozenset({msg.user}) if msg.is_direct else None,
+                asking=(msg.platform, msg.tenant),
+            )
+        except Exception as e:
+            logger.warning("could not resolve the org scope (%s)", safe_exc(e))
+            return None
+
     def _tries_ok(self, key: tuple, limit: int) -> bool:
         q = self._link_tries.setdefault(key, deque())
         now = self._clock()
@@ -737,7 +767,7 @@ class Assistant:
         self._enqueue(partial(self.memory.record, rec))
 
     async def _memory_tools(
-        self, msg: Incoming, port: Port, gid: int, rid: int
+        self, msg: Incoming, port: Port, gid: int, rid: int, wide: OrgView | None = None
     ) -> MemoryTools | None:
         """Memory tools scoped to what the asker AND everyone reading the answering room may
         see. Any failure -> no memory tools at all."""
@@ -771,17 +801,53 @@ class Assistant:
         except Exception as e:
             logger.warning("could not compute memory scope (%s)", safe_exc(e))
             return None
+        store, guilds = self.memory_store, [gid]
+        if wide is not None:
+            try:
+                store, allowed, guilds = self._widen_memory(wide, gid, allowed)
+            except Exception as e:  # fail closed: the asking tenant's scope, unchanged
+                logger.warning("could not widen the memory scope (%s)", safe_exc(e))
         return MemoryTools(
-            self.memory_store,
+            store,
             gid,
             allowed,
             self.s,
-            self.team.memory_retention_days(gid),
+            min(self.team.memory_retention_days(g) for g in guilds),
             opener=None,
             visibility=None,
             embedder=self.embedder,
-            retention_of=lambda: self.team.fresh_memory_retention_days(gid, fail_closed=True),
+            retention_of=lambda: min(
+                self.team.fresh_memory_retention_days(g, fail_closed=True) for g in guilds
+            ),
         )
+
+    def _widen_memory(self, wide: OrgView, gid: int, allowed: dict[int, str]):
+        """The asker's own tenant scope plus every channel of the org's workspaces they may read
+        (a workspace with memory switched off or a channel in mode off adds nothing).
+        Returns (store, channel scope, guilds involved)."""
+        routes: dict[int, int] = {c: gid for c in allowed}
+        scope = dict(allowed)
+        guilds = [gid]
+        for src in wide.sources:
+            if not self.team.enabled(src.guild_id, "memory"):
+                continue
+            added = False
+            for cid, label in src.channels.items():
+                if cid in scope:
+                    continue  # the tenant's own scope already names it
+                if (
+                    cid not in src.direct
+                    and self.team.channel_mode(src.guild_id, cid, label, set()) == "off"
+                ):
+                    continue
+                scope[cid] = label
+                routes[cid] = src.guild_id
+                added = True
+            if added and src.guild_id not in guilds:
+                guilds.append(src.guild_id)
+        if len(guilds) == 1:
+            return self.memory_store, scope, guilds
+        return MultiGuildMemoryStore(self.memory_store, routes, gid, self.embedder), scope, guilds
 
     async def _today_summary(self, gid: int, rid: int) -> str:
         if not self.team.enabled(gid, "memory"):
@@ -906,8 +972,17 @@ class Assistant:
             logger.warning("answer rate limit tenant=%s room=%s", gid, rid)
             return
         is_exec = await self._is_exec(msg, port)
+        wide = await self._org_view(msg)
+        store = self.store
+        if wide is not None:
+            # an org owner / admin counts as an executive for the ledger across the org
+            is_exec = is_exec or wide.is_admin
+            pairs = wide.ledger_sources(is_exec)
+            if not any(g == gid for g, _ in pairs):
+                pairs.append((gid, None if is_exec else uid))
+            store = MultiGuildLedgerStore(self.store, pairs)
         history = await self._history(msg, port, gid, rid)
-        memory = await self._memory_tools(msg, port, gid, rid)
+        memory = await self._memory_tools(msg, port, gid, rid, wide)
         kwargs: dict = {"language": setting, "memory": memory, **self._web_kw(gid)}
         if msg.files:
             files = await self._file_inputs(msg)
@@ -921,7 +996,7 @@ class Assistant:
                 ans = await asyncio.to_thread(
                     self.ask_fn,
                     self.s,
-                    self.store,
+                    store,
                     q,
                     guild_id=gid,
                     is_exec=is_exec,
