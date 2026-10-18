@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 
 from meeting_scribe import hub
 from meeting_scribe.config import get_settings
+from salid.change_outbox import ChangeOutbox, record_org_edit
 from salid.connectors import (
     COMING_SOON,
     ClickUpConnector,
@@ -449,6 +450,7 @@ async def add_member(
             return orgs.save(org)
 
     org = await run_in_threadpool(run)
+    await run_in_threadpool(record_org_edit, orgs.docs, ctx.org, org, ctx.email)  # change outbox
     return [MemberView(**m.model_dump()) for m in org.members]
 
 
@@ -466,6 +468,7 @@ def _remove_member(ctx: Ctx, orgs: OrgStore, email: str) -> list[MemberView]:
             raise HTTPException(409, "An organization needs at least one owner")
         org.members = [m for m in org.members if m.email.lower() != email]
         orgs.save(org)
+    record_org_edit(orgs.docs, ctx.org, org, ctx.email)  # change outbox (never raises)
     return [MemberView(**m.model_dump()) for m in org.members]
 
 
@@ -483,6 +486,17 @@ async def delete_member(
     email: str, ctx: Ctx = Depends(admin_ctx), orgs: OrgStore = Depends(get_orgs)
 ) -> list[MemberView]:
     return await run_in_threadpool(_remove_member, ctx, orgs, email)
+
+
+@router.get("/orgs/{org_id}/changes")
+async def list_changes(
+    limit: int = Query(50, ge=1, le=200),
+    ctx: Ctx = Depends(admin_ctx),
+    orgs: OrgStore = Depends(get_orgs),
+) -> list[dict]:
+    """Recent central changes with the status of every platform target (who confirmed)."""
+    found = await run_in_threadpool(ChangeOutbox(orgs.docs).list_changes, ctx.org.id, limit)
+    return [c.model_dump(exclude={"subject_ids", "subject_tenants"}) for c in found]
 
 
 # ------------------------------------------------------------------ workspaces

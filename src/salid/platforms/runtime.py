@@ -17,7 +17,7 @@ from ..memory import MemoryScheduler, MemoryService
 from ..memory_index import IndexedMemoryStore
 from ..memory_store import make_memory_store
 from ..store import make_store
-from . import ids
+from . import change_outbox_platform, ids
 from .config import PlatformSettings
 from .core import Assistant, safe_exc
 
@@ -131,6 +131,12 @@ async def import_loop(importer, wake: asyncio.Event) -> None:
         wake.clear()
 
 
+def _changes_pusher(a: Assistant, platform: str, tenant: str, push) -> None:
+    """Tell the change outbox that this tenant can be messaged 1:1 (see change_outbox_platform)."""
+    if a.changes is not None:
+        a.changes.add_pusher(platform, tenant, push)
+
+
 async def run_slack(a: Assistant, ps: PlatformSettings) -> None:
     from . import slack
     from .slack_import import SlackImporter
@@ -138,6 +144,7 @@ async def run_slack(a: Assistant, ps: PlatformSettings) -> None:
     handler, adapter, port = await slack.connect(ps, a)
     if a.org_sources is not None:
         a.org_sources.add_slack_port(port)  # org-wide scope reads this team's channel lists
+    _changes_pusher(a, "slack", port.team_id, change_outbox_platform.slack_pusher(port))
     tasks = [asyncio.create_task(handler.start_async())]
     if ps.slack_import:
         wake = asyncio.Event()
@@ -155,6 +162,7 @@ async def run_line(a: Assistant, ps: PlatformSettings) -> None:
     api = line.SdkLineApi(ps.line_channel_access_token)
     info = await asyncio.to_thread(api.bot_info)
     port = line.LinePort(api, ps)
+    _changes_pusher(a, "line", info["user_id"], change_outbox_platform.line_pusher(api))
     adapter = line.LineAdapter(a, port, info["user_id"])
     app = line.create_app(ps.line_channel_secret, adapter)
     config = uvicorn.Config(
@@ -174,6 +182,7 @@ async def run_telegram(a: Assistant, ps: PlatformSettings) -> None:
     try:
         me = await api.get_me()
         port = telegram.TelegramPort(api)
+        _changes_pusher(a, "telegram", str(me["id"]), change_outbox_platform.telegram_pusher(api))
         adapter = telegram.TelegramAdapter(a, port, str(me["id"]), me.get("username") or "")
         logger.info(
             "telegram ready bot=%s tenant=%d",
@@ -195,6 +204,9 @@ async def run_whatsapp(a: Assistant, ps: PlatformSettings) -> None:
     )
     try:
         port = whatsapp.WhatsAppPort(api)
+        _changes_pusher(
+            a, "whatsapp", ps.whatsapp_phone_number_id, change_outbox_platform.whatsapp_pusher(api)
+        )
         adapter = whatsapp.WhatsAppAdapter(a, port, ps.whatsapp_phone_number_id)
         app = whatsapp.create_app(ps.whatsapp_app_secret, ps.whatsapp_verify_token, adapter)
         config = uvicorn.Config(
@@ -213,6 +225,13 @@ async def run_whatsapp(a: Assistant, ps: PlatformSettings) -> None:
 async def run(s: Settings, ps: PlatformSettings) -> None:
     a = build_assistant(s, ps)
     jobs = [asyncio.create_task(memory_loop(a))]
+    if a.identity is not None:  # the org store exists: central changes can be delivered
+        from ..change_outbox import ChangeOutbox
+
+        a.changes = change_outbox_platform.PlatformChanges(
+            ChangeOutbox.from_settings(a.identity.orgs.docs, s), a.identity.orgs, a.team
+        )
+        jobs.append(asyncio.create_task(change_outbox_platform.changes_loop(a.changes)))
     if ps.slack_enabled:
         jobs.append(asyncio.create_task(run_slack(a, ps)))
     if ps.line_enabled:

@@ -30,6 +30,7 @@ from .briefings import DocInfo, split_names
 from .broadcast_bot import BroadcastMixin
 from .captions import captions_tools, parse_captions_default_command
 from .catchup_bot import CatchupMixin
+from .change_outbox_bot import ChangeButton, ChangeOutboxMixin
 from .channel_access import (
     access_flags,
     hidden_channels,
@@ -361,6 +362,7 @@ class SecretaryBot(
     DMGuildMixin,
     PeopleMixin,  # before PrivateChatMixin: chains on_member_remove (salid.people_bot)
     PositionsMixin,  # positions <-> Discord roles <-> the center (salid.positions_bot)
+    ChangeOutboxMixin,  # central changes sent, acknowledged, resent (salid.change_outbox_bot)
     PrivateChatMixin,
     BroadcastMixin,
     PlacesMixin,
@@ -557,6 +559,7 @@ class SecretaryBot(
         self._bizfin_init()  # finance calculators, benchmark, security (salid.bizfin_bot)
         self._people_init()  # who does what, whom to ask, handover (salid.people_bot)
         self._positions_init()  # positions <-> Discord roles <-> the center (salid.positions_bot)
+        self._change_outbox_init()  # central change notices + acks (salid.change_outbox_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -575,6 +578,7 @@ class SecretaryBot(
         self.voice_pool.start()  # voice helpers log in in the background
         self._register_commands()
         self.add_dynamic_items(DisclosureButton)  # approve/decline buttons survive restarts
+        self.add_dynamic_items(ChangeButton)  # "Got it" on central-change notices
         self.add_dynamic_items(ApprovalButton)  # same for approval requests
         self.add_dynamic_items(PlaybookButton)  # company-playbook suggestions for admins
         self.add_dynamic_items(VoteButton, VoteOfferButton)  # vote ballots + offers
@@ -1339,6 +1343,8 @@ class SecretaryBot(
         """A message to Salid that is the member's own business (a DM, resolved to `guild`, or their
         private channel in it): private-channel commands, replies to reminders and forms, the
         private note, then the answer. Nothing here leaves `guild`."""
+        if await self._change_ack_reply(message, guild):  # "รับทราบ" to a central-change notice
+            return
         if await self._private_command(message, guild, member):
             return
         if await self._personal_tone_command(message, guild, member):  # their own tone
@@ -2368,6 +2374,7 @@ class SecretaryBot(
             ),
             *([] if interjection else self._contest_tools(message, guild, asker, is_exec, lang)),
             *([] if interjection else self._bizfin_tools(guild, asker, is_exec, lang)),
+            *([] if interjection else self._change_tools(guild, is_exec)),  # change_status
             # make_promo_kit: with a photo, or a remembered kit (voice passes files=[]: revisions)
             *([] if interjection else self._promo_tools(message, guild, asker, files)),
             *([] if interjection else self._concept_tools(message, guild, asker, files, lang)),
@@ -3412,6 +3419,7 @@ class SecretaryBot(
         await self._pc_sweep()
         await self._people_due()
         await self._positions_due()
+        await self._change_outbox_due()
         await self._travel_due()
         await self._markets_due()
         await self._contests_due()

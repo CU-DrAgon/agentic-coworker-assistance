@@ -208,6 +208,10 @@ class Settings(BaseSettings):
     )
     memory_update_every: int = 30  # new messages in a channel that trigger a summary update
     memory_quiet_minutes: int = 20  # quiet time after which any new messages are summarised
+    change_resend_minutes: int = (
+        15  # a central change nobody confirmed is sent again (change_outbox)
+    )
+    change_max_attempts: int = 8  # sends before it is marked failed and the admins are told
     memory_messages_collection: str = "salid_messages"
     memory_summaries_collection: str = "salid_day_summaries"
     memory_channels_collection: str = "salid_memory_channels"  # history-import state per channel
