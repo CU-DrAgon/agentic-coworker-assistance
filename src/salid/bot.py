@@ -1785,6 +1785,33 @@ class SecretaryBot(
             start_deep_task=deep if self.team.enabled(gid, "deep_tasks") else None,
         )
 
+    async def _in_reply_language(self, gid: int, message, member, text: str) -> str:
+        """The company language is the rule: when the reply should be in ONE language (company
+        language only, or nobody adds a personal language) and the model answered mostly in
+        Thai on an English server (or the other way round), translate it before it is posted.
+        Fail-soft: any problem keeps the original text."""
+        try:
+            if message.guild is None or not text:
+                return text
+            langs = self.langs_for(gid, message.channel.id, member.id)
+            if len(langs) != 1:
+                return text
+            from .captions import translate_lines
+            from .i18n import thai_share
+
+            want = langs[0]
+            # English-only servers: a mostly-Thai answer is translated (Thai servers unchanged)
+            if want != "en" or thai_share(text) <= 0.3:
+                return text
+            logger.warning("chat answer came in the wrong language for %s: translating", want)
+            fixed = await asyncio.to_thread(
+                translate_lines, self.llm, self.s.gate_model, [text], want
+            )
+            return fixed[0] if fixed and fixed[0].strip() else text
+        except Exception:
+            logger.warning("reply language check failed", exc_info=True)
+            return text
+
     async def _answer(
         self,
         message: discord.Message,
@@ -1899,7 +1926,7 @@ class SecretaryBot(
             for name, data in list(getattr(ans, "attachments", ()))[:10]
         ]
         everyone = wants_everyone(q, self._may_configure(member))
-        text = ans.text
+        text = await self._in_reply_language(gid, message, member, ans.text)
         if not interjection and message.guild is not None:
             text = self._with_mode_notice(
                 message.channel.id, gid, text, self.langs_for(gid, message.channel.id, member.id)

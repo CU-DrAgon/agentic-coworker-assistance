@@ -81,6 +81,15 @@ def reply_language_line(lang: str | None) -> str:
     )
 
 
+def thai_share(text: str | None) -> float:
+    """Share of Thai letters among all letters (0..1): an English reply that quotes a Thai
+    name stays well under 0.3; a Thai reply is close to 1."""
+    letters = [c for c in (text or "") if c.isalpha()]
+    if not letters:
+        return 0.0
+    return sum(1 for c in letters if "\u0e00" <= c <= "\u0e7f") / len(letters)
+
+
 def detect_lang(text: str | None) -> str | None:
     """The language of `text` by script: Thai -> th, kana -> ja, Hangul -> ko, Han only -> zh,
     Devanagari -> hi, Latin with Vietnamese diacritics -> vi, other letters -> en, no letters ->
