@@ -361,8 +361,7 @@ class SlackWorkspace:
         if uid is None:
             return None
         try:
-            opened = await self.port._call(self.port.client.conversations_open, users=uid)
-            channel = (opened.get("channel") or {}).get("id")
+            channel = await self.port.open_dm(uid)  # conversations.open (im:write), cached
             if not channel:
                 return None
             return await self._send(channel, text, None, files, buttons)

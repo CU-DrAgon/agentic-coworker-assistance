@@ -1066,6 +1066,7 @@ class Assistant:
             kwargs.update(files=files, actions=self._file_actions(msg, gid, rid, lang))
             lang = resolve_lang(setting, q)
         t_ctx = self._clock()
+        await _port_hook(port, "mark", msg, "👀")  # "seen, working on it" (the port removes it)
         slow = _Slow(self, msg, port, q, lang, rid)
         slow.start()
         try:
@@ -1094,6 +1095,12 @@ class Assistant:
             ",".join(name for name, _ in ans.tool_calls),
         )  # fmt: skip
         await self._reply(msg, port, gid, rid, ans.text, ack=ack, cap=lang)
+        # Optional port hooks (a port without them ignores generated files / receipt flags):
+        if ans.attachments:
+            await _port_hook(port, "send_files", msg, list(ans.attachments))
+        for _receipt, flag in ans.receipts:
+            if flag:
+                await _port_hook(port, "mark", msg, flag)  # ✅ recorded / ⚠️ needs a check
 
     async def _reply(
         self,
@@ -1133,6 +1140,17 @@ class Assistant:
             key = key or f"salid:{msg.message}:{i}"
             self.buffer.add(bkey, key, HistLine(self._now(), "Salid", chunk, mine=True))
             self._record(msg, gid, rid, text=chunk, mine=True, key=key)
+
+
+async def _port_hook(port: object, name: str, *args) -> None:
+    """Call an optional `Port` method if the port has it; a failure never breaks the answer."""
+    fn = getattr(port, name, None)
+    if fn is None:
+        return
+    try:
+        await fn(*args)
+    except Exception as e:
+        logger.warning("port hook %s failed (%s)", name, safe_exc(e))
 
 
 def t_trunc(lang: str) -> str:
