@@ -39,11 +39,24 @@ from ..fillers import RecentLines, pick_fallback
 from ..gate import GateLine
 from ..guild_settings import BotGuildSettings
 from ..i18n import resolve_lang, t
+from ..identity_links import (
+    REPLY_ATTACHED,
+    REPLY_INVALID,
+    REPLY_LINKED,
+    REPLY_ONE_CODE,
+    REPLY_PRIVATE,
+    REPLY_SLOW_DOWN,
+    CodeError,
+    IdentityLinks,
+    code_candidates,
+)
 from ..memory import MemoryService, build_message, message_text
 from ..memory_access import ChannelAccess, allowed_channel_ids
 from ..memory_summary import render_summary
 from ..message_control import is_thanks
 from ..naming import mentions_name
+from ..org_scope import OrgView
+from ..org_stores import MultiGuildLedgerStore, MultiGuildMemoryStore
 from ..qa import MAX_FILE_BYTES as MAX_FILE_BYTES
 from ..qa import MAX_TOTAL_BYTES as MAX_TOTAL_BYTES
 from ..qa import FileActions, FileInput, MemoryTools, ask, file_mime, select_files
@@ -57,6 +70,12 @@ HISTORY_MESSAGES = 30
 HISTORY_SECONDS = 3 * 3600
 HISTORY_CHARS = 8000
 HISTORY_LINE_CHARS = 500
+LINK_ATTEMPTS = 5  # link-code attempts per platform user ...
+LINK_ATTEMPTS_TENANT = 30  # ... and per tenant, in LINK_WINDOW_S (guessing protection)
+LINK_WINDOW_S = 600.0
+# re-verify a Slack user (still a full member, same email) this often; also the oldest verdict
+# an org-wide widening may rest on
+VERIFY_TTL_S = 300.0
 FOLLOWUP_SECONDS = 120  # a bare "@Salid" picks up the same person's message from this recently
 GATE_HISTORY = 10
 GREETING_KEYS = ("greeting", "greeting_2", "greeting_3")
@@ -88,6 +107,14 @@ class FileRef:
     mime: str | None
     size: int
     fetch: Callable[[], bytes]
+
+
+@dataclass(frozen=True)
+class AccountState:
+    """What a platform says about a person right now (see `SlackPort.account_state`)."""
+
+    status: str  # member | revoked | unavailable
+    email: str = ""
 
 
 @dataclass
@@ -297,6 +324,8 @@ class Assistant:
         sleep: Callable[[float], Awaitable] = asyncio.sleep,
         choose: Callable = random.choice,
         names: dict[tuple[int, int], str] | None = None,
+        identity: IdentityLinks | None = None,
+        org_sources=None,
     ) -> None:
         self.s, self.ps, self.store, self.llm, self.team = settings, ps, store, llm, team
         self.memory, self.memory_store, self.embedder = memory, memory_store, embedder
@@ -324,6 +353,16 @@ class Assistant:
         self._worker: asyncio.Task | None = None
         self._bg: set[asyncio.Task] = set()
         self.on_room_seen: Callable[[Incoming], None] | None = None  # e.g. start a history import
+        # verified identities / org workspaces (None: platforms run on their own, as before)
+        self.identity = identity
+        # platforms.org_sources.OrgSources: what a verified member may read across the org's
+        # workspaces; None = every message keeps its own tenant's scope
+        self.org_sources = org_sources
+        self._link_tries: dict[tuple, deque[float]] = {}
+        # (tenant, user) -> (checked at, still a verified member?) and the messages whose sender
+        # could not be verified (identity_of answers None for them)
+        self._verdicts: OrderedDict[tuple[str, str], tuple[float, bool]] = OrderedDict()
+        self._denied: OrderedDict[tuple, None] = OrderedDict()
 
     # -------------------------------------------------------------- bookkeeping
     def _first_time(self, key: tuple) -> bool:
@@ -440,6 +479,11 @@ class Assistant:
     async def _handle(self, msg: Incoming, port: Port) -> None:
         if not self._first_time(msg.key):
             return
+        if self.identity is not None and (codes := code_candidates(msg.text)):
+            # a link / attach code, even inside a sentence: never buffered, remembered, logged,
+            # gated or shown to the model (and never used in a group, where everyone reads it)
+            await self._link_command(msg, port, codes)
+            return
         gid = ids.tenant_id(msg.platform, msg.tenant)
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
         if not await asyncio.to_thread(self._owner_ok, msg, gid):
@@ -461,10 +505,13 @@ class Assistant:
             self.on_room_seen(msg)
         if not await self._addressed(msg, port, gid, rid, mode):
             return
+        await self._verify_account(msg, port)
         await self._answer(msg, port, gid, rid)
 
     async def on_edit(self, msg: Incoming) -> None:
         """A message was edited: keep the memory text and the recent buffer current."""
+        if self.identity is not None and code_candidates(msg.text):
+            return  # an edit that adds a link code is as private as the original
         gid = ids.tenant_id(msg.platform, msg.tenant)
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
         self.buffer.edit(self._bkey(msg, gid, rid), msg.message, msg.text)
@@ -479,6 +526,160 @@ class Assistant:
         # a deleted / unsent message must not reach the next model call through the live buffer
         self.buffer.remove((gid, ids.room_id(platform, tenant, room)), message)
         self._enqueue(partial(self.memory.delete, gid, [mid]))
+
+    # -------------------------------------------------------------- verified identity
+    def identity_of(self, msg: Incoming) -> tuple[str, str] | None:
+        """(org id, member email) when the sender is a VERIFIED member of the org that owns this
+        tenant; None for a guest of the room (also when no org store is wired). Blocking."""
+        if self.identity is None or msg.key in self._denied:
+            return None
+        try:
+            return self.identity.identity_of(msg.platform, msg.tenant, msg.user)
+        except Exception as e:
+            logger.warning("identity lookup failed (%s)", safe_exc(e))
+            return None
+
+    def tenant_revoked(self, platform: str, tenant: str) -> None:
+        """The platform workspace was uninstalled: forget the member links of that platform in
+        its org (unless the org keeps another workspace there). Blocking, never raises."""
+        if self.identity is None:
+            return
+        try:
+            orgs = self.identity.orgs
+            found = orgs.org_of_workspace(platform, tenant)
+            if found:
+                orgs.drop_platform_identities(found[0].id, platform, keep_workspace=found[1].id)
+        except Exception as e:
+            logger.warning("could not drop identities of %s tenant (%s)", platform, safe_exc(e))
+
+    async def _org_view(self, msg: Incoming) -> OrgView | None:
+        """What this sender may use org-wide: only in a 1:1 (its one reader is the asker) with a
+        VERIFIED member of the org that owns the tenant. Anything else, and any error: None, so
+        the message keeps today's single-tenant scope."""
+        if self.org_sources is None or self.identity is None or not msg.is_direct:
+            return None
+        try:
+            who = await asyncio.to_thread(self.identity_of, msg)
+            if who is None:
+                return None
+            return await self.org_sources.view(
+                who[0],
+                who[1],
+                asker=msg.user,
+                is_direct=msg.is_direct,
+                audience=frozenset({msg.user}) if msg.is_direct else None,
+                asking=(msg.platform, msg.tenant),
+            )
+        except Exception as e:
+            logger.warning("could not resolve the org scope (%s)", safe_exc(e))
+            return None
+
+    def _tries_ok(self, key: tuple, limit: int) -> bool:
+        q = self._link_tries.setdefault(key, deque())
+        now = self._clock()
+        while q and now - q[0] > LINK_WINDOW_S:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        if len(self._link_tries) > 5000:  # stale keys of people who never came back
+            self._link_tries = {k: v for k, v in self._link_tries.items() if v}
+        return True
+
+    async def _link_command(self, msg: Incoming, port: Port, codes: list[str]) -> None:
+        """A message with a link / attach code: in a private chat with exactly one code, redeem
+        it without the model and answer with a fixed line; with several codes, a fixed
+        instruction. In a group the code is NOT used (everyone there can read it)."""
+        if not msg.is_direct or len(codes) != 1:
+            gid = ids.tenant_id(msg.platform, msg.tenant)
+            if self._rate_ok(gid, ids.room_id(msg.platform, msg.tenant, msg.room)):
+                await self._say(msg, port, REPLY_PRIVATE if not msg.is_direct else REPLY_ONE_CODE)
+            return
+        code = codes[0]
+        if not (
+            self._tries_ok(("u", msg.platform, msg.tenant, msg.user), LINK_ATTEMPTS)
+            and self._tries_ok(("t", msg.platform, msg.tenant), LINK_ATTEMPTS_TENANT)
+        ):
+            await self._say(msg, port, REPLY_SLOW_DOWN)
+            return
+        try:
+            done = await asyncio.to_thread(
+                self.identity.redeem, code, msg.platform, msg.user, msg.tenant
+            )
+        except CodeError as e:
+            logger.info("link refused platform=%s reason=%s", msg.platform, e.reason)
+            await self._say(msg, port, REPLY_INVALID)
+            return
+        except Exception as e:
+            logger.error("link failed platform=%s (%s)", msg.platform, safe_exc(e))
+            await self._say(msg, port, REPLY_INVALID)
+            return
+        logger.info("link ok platform=%s kind=%s", msg.platform, done.kind)
+        await self._say(msg, port, REPLY_ATTACHED if done.kind == "attach" else REPLY_LINKED)
+
+    async def _verify_account(self, msg: Incoming, port: Port) -> None:
+        """Slack: keep the verified identity of the sender in step with the workspace.
+
+        The Slack profile email of a full member of THIS team that equals a member email of the
+        org owning the workspace links the account (no code); a linked account that is now
+        deleted, a guest, from another team or has another email loses its link. Re-checked at
+        most every `VERIFY_TTL_S` (and at once on a `user_change` event). When Slack cannot be
+        asked (error, missing scope) this request is treated as unverified, nothing is unlinked
+        and the next message asks again."""
+        key = (msg.tenant, msg.user)
+        now = self._clock()
+        hit = self._verdicts.get(key)
+        if hit is not None and now - hit[0] < VERIFY_TTL_S:
+            ok = hit[1]
+        else:
+            ok = await self._check_account(msg.platform, msg.tenant, msg.user, port)
+            if ok is not None:
+                self._verdicts[key] = (now, ok)
+                self._verdicts.move_to_end(key)
+                while len(self._verdicts) > SEEN_KEEP:
+                    self._verdicts.popitem(last=False)
+        if ok is None or ok is False:
+            self._denied[msg.key] = None
+            while len(self._denied) > SEEN_KEEP:
+                self._denied.popitem(last=False)
+
+    async def recheck_account(self, platform: str, tenant: str, user: str, port: Port) -> None:
+        """The platform says the person changed: verify again now. Never raises."""
+        self._verdicts.pop((tenant, user), None)
+        try:
+            ok = await self._check_account(platform, tenant, user, port)
+        except Exception as e:  # pragma: no cover - _check_account already guards
+            logger.warning("could not re-verify the account (%s)", safe_exc(e))
+            return
+        if ok is not None:
+            self._verdicts[(tenant, user)] = (self._clock(), ok)
+
+    async def _check_account(
+        self, platform: str, tenant: str, user: str, port: Port
+    ) -> bool | None:
+        """True: a verified-or-verifiable member (or nothing to verify). False: revoked, the
+        link was removed. None: Slack could not tell, fail closed without touching any link."""
+        state_of = getattr(port, "account_state", None)
+        if self.identity is None or state_of is None or platform != "slack":
+            return True
+        try:
+            if not await asyncio.to_thread(self.identity.orgs.org_of_workspace, platform, tenant):
+                return True
+            state = await state_of(user)
+            if state.status == "unavailable":
+                return None
+            await asyncio.to_thread(
+                self.identity.reconcile,
+                platform,
+                tenant,
+                user,
+                state.status == "member",
+                state.email,
+            )
+            return state.status == "member"
+        except Exception as e:
+            logger.warning("could not verify the account (%s)", safe_exc(e))
+            return None
 
     # -------------------------------------------------------------- addressing
     @staticmethod
@@ -566,7 +767,7 @@ class Assistant:
         self._enqueue(partial(self.memory.record, rec))
 
     async def _memory_tools(
-        self, msg: Incoming, port: Port, gid: int, rid: int
+        self, msg: Incoming, port: Port, gid: int, rid: int, wide: OrgView | None = None
     ) -> MemoryTools | None:
         """Memory tools scoped to what the asker AND everyone reading the answering room may
         see. Any failure -> no memory tools at all."""
@@ -600,17 +801,53 @@ class Assistant:
         except Exception as e:
             logger.warning("could not compute memory scope (%s)", safe_exc(e))
             return None
+        store, guilds = self.memory_store, [gid]
+        if wide is not None:
+            try:
+                store, allowed, guilds = self._widen_memory(wide, gid, allowed)
+            except Exception as e:  # fail closed: the asking tenant's scope, unchanged
+                logger.warning("could not widen the memory scope (%s)", safe_exc(e))
         return MemoryTools(
-            self.memory_store,
+            store,
             gid,
             allowed,
             self.s,
-            self.team.memory_retention_days(gid),
+            min(self.team.memory_retention_days(g) for g in guilds),
             opener=None,
             visibility=None,
             embedder=self.embedder,
-            retention_of=lambda: self.team.fresh_memory_retention_days(gid, fail_closed=True),
+            retention_of=lambda: min(
+                self.team.fresh_memory_retention_days(g, fail_closed=True) for g in guilds
+            ),
         )
+
+    def _widen_memory(self, wide: OrgView, gid: int, allowed: dict[int, str]):
+        """The asker's own tenant scope plus every channel of the org's workspaces they may read
+        (a workspace with memory switched off or a channel in mode off adds nothing).
+        Returns (store, channel scope, guilds involved)."""
+        routes: dict[int, int] = {c: gid for c in allowed}
+        scope = dict(allowed)
+        guilds = [gid]
+        for src in wide.sources:
+            if not self.team.enabled(src.guild_id, "memory"):
+                continue
+            added = False
+            for cid, label in src.channels.items():
+                if cid in scope:
+                    continue  # the tenant's own scope already names it
+                if (
+                    cid not in src.direct
+                    and self.team.channel_mode(src.guild_id, cid, label, set()) == "off"
+                ):
+                    continue
+                scope[cid] = label
+                routes[cid] = src.guild_id
+                added = True
+            if added and src.guild_id not in guilds:
+                guilds.append(src.guild_id)
+        if len(guilds) == 1:
+            return self.memory_store, scope, guilds
+        return MultiGuildMemoryStore(self.memory_store, routes, gid, self.embedder), scope, guilds
 
     async def _today_summary(self, gid: int, rid: int) -> str:
         if not self.team.enabled(gid, "memory"):
@@ -735,8 +972,17 @@ class Assistant:
             logger.warning("answer rate limit tenant=%s room=%s", gid, rid)
             return
         is_exec = await self._is_exec(msg, port)
+        wide = await self._org_view(msg)
+        store = self.store
+        if wide is not None:
+            # an org owner / admin counts as an executive for the ledger across the org
+            is_exec = is_exec or wide.is_admin
+            pairs = wide.ledger_sources(is_exec)
+            if not any(g == gid for g, _ in pairs):
+                pairs.append((gid, None if is_exec else uid))
+            store = MultiGuildLedgerStore(self.store, pairs)
         history = await self._history(msg, port, gid, rid)
-        memory = await self._memory_tools(msg, port, gid, rid)
+        memory = await self._memory_tools(msg, port, gid, rid, wide)
         kwargs: dict = {"language": setting, "memory": memory, **self._web_kw(gid)}
         if msg.files:
             files = await self._file_inputs(msg)
@@ -750,7 +996,7 @@ class Assistant:
                 ans = await asyncio.to_thread(
                     self.ask_fn,
                     self.s,
-                    self.store,
+                    store,
                     q,
                     guild_id=gid,
                     is_exec=is_exec,

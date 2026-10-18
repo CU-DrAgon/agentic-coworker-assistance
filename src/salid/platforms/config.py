@@ -49,6 +49,11 @@ class PlatformSettings(BaseSettings):
     whatsapp_host: str = "127.0.0.1"  # TLS in front (Meta only calls https); 0.0.0.0 in a container
     whatsapp_port: int = 8092
 
+    # Optional: the Discord bot token, ONLY to read guild roles / channel overwrites over REST so a
+    # verified member's cross-platform questions can use the Discord channels they may read
+    # (org_scope). Absent: Discord is left out of that scope. Never logged.
+    discord_token: str = Field(default="", repr=False)
+
     # Behaviour shared by all platforms.
     platform_window_seconds: float = 180.0  # follow-ups of the person Salid just answered
     platform_thread_seconds: float = 3600.0  # a thread Salid answered in keeps counting this long

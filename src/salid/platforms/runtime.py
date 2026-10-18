@@ -82,6 +82,14 @@ def build_assistant(
         embedder=embedder,
     )
     from ..archive import make_archive
+    from ..identity_links import IdentityLinks
+    from ..orgs import make_org_store
+    from .org_sources import OrgSources
+
+    options = {"identity": IdentityLinks(make_org_store(s, store))} | kw
+    identity = options["identity"]
+    if "org_sources" not in options and identity is not None:
+        options["org_sources"] = OrgSources(identity.orgs, discord_token=ps.discord_token)
 
     return Assistant(
         settings=s,
@@ -95,7 +103,7 @@ def build_assistant(
         archive=make_archive(s),
         guilds_store=team.store,
         names=names,
-        **kw,
+        **options,
     )
 
 
@@ -128,6 +136,8 @@ async def run_slack(a: Assistant, ps: PlatformSettings) -> None:
     from .slack_import import SlackImporter
 
     handler, adapter, port = await slack.connect(ps, a)
+    if a.org_sources is not None:
+        a.org_sources.add_slack_port(port)  # org-wide scope reads this team's channel lists
     tasks = [asyncio.create_task(handler.start_async())]
     if ps.slack_import:
         wake = asyncio.Event()

@@ -1,6 +1,6 @@
 # Salid on every workspace: one brain, thin platform adapters
 
-Status: agreed direction, not built yet (2026-10-18). Read this before adding a Salid feature.
+Status: agreed direction (2026-10-18). Step 1 (ids) and step 2a (the `Workspace` interface in `salid/workspace.py`, `DiscordWorkspace` in `workspace_discord.py`, `SlackWorkspace` in `platforms/workspace_slack.py`, plus a `FakeWorkspace` for tests) are done; 2b is next: `_agent_kwargs` takes a `Workspace`, one tool group at a time. Read this before adding a Salid feature.
 
 ## Goal
 
@@ -116,17 +116,139 @@ Events + OAuth when it goes to the Marketplace, see `docs/platforms/slack.md`).
 hashes workspace + channel + `ts` because the memory key has no channel), and the Slack connector
 calls the same functions, so the tenant/room/user/message helpers are shared.
 
+## Central identity and cross-platform memory
+
+Agreed 2026-10-18. The company (`orgs.Org`) is the centre: its members, its workspaces on every
+platform, and one shared store. A question asked on any platform can use what the asker may see
+from all of the org's workspaces, under the same fail-closed audience rule.
+
+### One person, many platform accounts
+
+- `orgs.Member` (keyed by the Google login email) gets `identities: dict[str, str]`
+  (`platform -> platform user id`, e.g. `{"slack": "U0..", "line": "U4..", "telegram": "8629..",
+  "whatsapp": "<BSUID or phone>"}`); `discord_user_id` stays and is read as `identities["discord"]`.
+- An identity counts only when **verified**; unverified accounts are guests of their room (today's
+  behaviour: own receipts, that room's memory).
+  - Discord: the existing `/ตั้งค่า` link + Discord login (done).
+  - Slack: automatic when the Slack profile email (`users.info` `profile.email`, scope
+    `users:read.email`) equals a member email of the org that owns the workspace, and the user is
+    a member of that Slack team (`team_id` check as in `SlackPort.is_admin_user`).
+  - LINE, Telegram, WhatsApp (no reliable email): a one-time link code. The member signs in on
+    the web with Google, presses "Link LINE / Telegram / WhatsApp", gets a 15-minute single-use
+    code, and sends it to Salid in a 1:1 chat ("link 1234-5678" / "เชื่อมบัญชี 1234-5678"). The code
+    is redeemed in a transaction (same pattern as `salid_link_codes`), binding the sender's platform
+    id to that member. Never accept a code in a group chat.
+  - Unlink from the web, and on uninstall / revocation of that platform.
+- One platform account belongs to at most one member per org; a second claim is refused.
+
+### Workspaces of an org
+
+- Every platform tenant is an `orgs.Workspace` (`platform` in discord, slack, line, telegram,
+  whatsapp, clickup, web) whose `memory_id` = `workspace_memory_id(platform, external_id)` (the one
+  id scheme, done in step 1). Slack attaches through the OAuth connector; LINE / Telegram /
+  WhatsApp bots attach once with an admin link code (like Discord's `/ตั้งค่า`).
+- A platform tenant that belongs to no org keeps working alone (today's behaviour).
+
+### Verified identities: API and flow (step 3, done)
+
+Code: `salid/identity_links.py` (codes, redeem, `identity_of`, `auto_link`), `orgs.Member.identities`
++ `OrgStore.member_by_identity / link_identity / unlink_identity / drop_platform_identities`,
+`platforms/core.py` (`Assistant.identity_of(msg) -> (org_id, member_email) | None`, link command,
+Slack auto verification), `platforms/slack.py` (`SlackPort.profile_email`).
+
+Routes (all under `/api/center`, Bearer Google ID token like the rest):
+
+- `POST /orgs/{org}/identities/{platform}/code` (any member; platform `slack|line|telegram|whatsapp`)
+  -> `{code: "1234-5678", platform, kind: "identity", expires_at, command: "link 1234-5678"}`.
+  The button shows the code, the expiry and the command to send to Salid in a PRIVATE chat.
+  403 not a member (a super admin who is not a member too), 400 unknown platform / discord, 429 when
+  5 unused codes are live (wait up to 15 minutes).
+- `GET /orgs/{org}/identities` -> `[{platform, account_hint}]`, the caller's own linked accounts
+  (`account_hint` = last 4 characters; Discord is listed read-only). Poll it after showing a code
+  (or on focus) to flip the button to "Linked".
+- `DELETE /orgs/{org}/identities/{platform}` -> the updated list; 404 when nothing is linked.
+- `POST /orgs/{org}/workspaces/{platform}/attach-code` (owner / admin / super) -> same shape with
+  `kind: "attach"`. The admin sends `link 1234-5678` to the BOT in a private chat; the bot tenant
+  (LINE channel, Telegram bot, WhatsApp number, Slack team) becomes an `orgs.Workspace`
+  (`id = <platform>-<tenant>`, `external_id` = tenant key) and then shows up in
+  `GET /orgs/{org}/workspaces`. Refused (generic "invalid or expired" in the chat) when that bot
+  belongs to another org.
+
+Chat side, same for both kinds: only in a 1:1 (a group gets "please send the code in a private
+chat" and the code is not used); fixed Thai + English reply; the message never reaches the model,
+the memory log or the room buffer; 5 attempts per person and 30 per bot in 10 minutes. A member
+code from a bot attached to ANOTHER org is refused; from a bot attached to no org it links the
+account (usable once the admin attaches the bot). Slack needs no code when `users:read.email` is
+granted (see `docs/platforms/slack.md`).
+
+Decisions: one account id per platform per member (a second Slack workspace in the same org uses
+the same slot, so the first link wins and is not replaced automatically); `identity_of` requires
+the sender's tenant to belong to the org that holds the link, so an id linked in org A never counts
+in org B's bot; guests (Slack restricted accounts) are never auto-verified; removing the last
+workspace of a platform from an org, or uninstalling Slack, forgets that platform's links.
+The OAuth connector's `SCOPES` (`salid/connectors/slack.py`) still lacks `users:read.email`; add it
+if the OAuth-installed app (not only the Socket Mode app) must auto-verify.
+
+### Scope across platforms (the security rule, unchanged in spirit)
+
+The answer may use a source only if **the asker may read it and so can everyone who reads the
+answer**. Across platforms this means:
+
+- **1:1 with a verified member** (Discord DM / private channel, Slack DM, LINE / Telegram /
+  WhatsApp 1:1): audience = that person, so Salid may use everything that member may read in every
+  workspace of the org (per-platform readability computed with that platform's `Workspace` for the
+  member's identity on it). This is where cross-platform questions are answered.
+- **A room with an exact audience** (Discord channel with complete member cache, Slack private
+  non-shared channel): sources from other workspaces only if every reader of the room is a verified
+  member who may read them.
+- **A room with an unknown audience** (LINE / Telegram groups, Slack public or shared channels,
+  any room whose readers cannot be proven): that room's own memory only, never another platform's.
+  Salid may offer "ask me in a private chat" instead.
+- Ledger, tasks, projects, people, wiki: stored per workspace today; org-wide views query the
+  org's `memory_id`s and filter by the same per-member permissions (non-executives see their own
+  receipts across all their linked accounts; executives = org owner/admin role or the platform's
+  executive rule).
+- Platform data policies still apply per platform (LINE: friend/group information must not be kept
+  more than 24 h; see `docs/platforms/line.md`). Retention "forever" therefore does not apply to
+  LINE rooms until that is settled.
+
+### Google services (Calendar, Meet)
+
+- Google login (Firebase Auth) only proves who the member is; it gives no Calendar access.
+  Calendar needs a separate "Connect Google Calendar" consent on the web (OAuth web server flow,
+  `access_type=offline`, scope `https://www.googleapis.com/auth/calendar.events`), storing the
+  member's refresh token encrypted, revocable from the web, never logged.
+- `scheduling.GoogleCalendar` (a `CalendarBackend`): create / move / cancel events in the
+  organiser's calendar, invite attendees by member email, `conferenceData.createRequest` for a
+  Meet link; Salid's meeting record keeps the Google event id. Works from any platform; the
+  existing confirm-before-acting rule stays.
+- Free/busy (`freetime.py`) can use the same token (`freeBusy.query`).
+
 ## Build order
 
-1. Unify the workspace id scheme (above).
-2. `Workspace` protocol + `DiscordWorkspace`; move `_agent_kwargs` to take a `Workspace`.
-   No behaviour change; the existing Discord tests are the safety net.
-3. `SlackWorkspace` and the first tool group on Slack: tasks + follow-ups + task cards, projects
-   and progress pictures, briefs and reports, reminders, documents (PDF / decks / quotations),
-   deliver-file, profiles, catch-up, wiki.
-4. Meetings on Slack: Salid store + reminders, then `GoogleCalendar` behind the Google OAuth link.
-5. Buttons on Slack (Block Kit): task cards, approvals, votes, polls, video-ad cancel.
-6. Parity test and a capability table in this file, updated with every feature.
+1. Unify the workspace id scheme. **Done** (#32).
+2. `Workspace` protocol + `DiscordWorkspace` + `SlackWorkspace`. **Done** (#33, step 2a).
+3. Verified identities: `Member.identities`, Slack email match, link codes for LINE / Telegram /
+   WhatsApp (web button + 1:1 redeem), platform workspaces attached to the org. **Done** (API and
+   bot side; the web buttons are for the web teammate, see "Verified identities: API" below).
+4. Org-wide scope: in a 1:1 with a verified member, memory / ledger / tasks / projects / people
+   across all the org's workspaces; rooms keep the fail-closed rule above.
+   **Done for askers on Slack / LINE / Telegram / WhatsApp (memory + ledger)**: `org_scope.py`
+   (pure rules + Discord permission resolver over REST data), `org_stores.py`
+   (`MultiGuildMemoryStore`, `MultiGuildLedgerStore` adapters for the unchanged `qa` tools),
+   `platforms/org_sources.py` (Slack rooms by the member's account; LINE / Telegram / WhatsApp: the
+   member's own 1:1 only, never groups; Discord via REST with `SALID_DISCORD_TOKEN` in the
+   platforms process, absent or failing = Discord left out). Retention = the shortest of the
+   workspaces involved. **Remaining**: Discord-side askers seeing other platforms (needs the bot
+   to build the same `OrgView`), tasks / projects / people org-wide.
+5. `_agent_kwargs` takes a `Workspace` (step 2b, no behaviour change on Discord), then the first
+   tool group on Slack and the other platforms: tasks + follow-ups + task cards, projects and
+   progress pictures, people / handover, briefs and reports, reminders, documents (PDF / decks /
+   quotations), deliver-file, profiles, catch-up, wiki.
+6. Google Calendar + Meet: "Connect Google Calendar" consent, `GoogleCalendar` backend, meetings
+   and reminders from any platform.
+7. Buttons on Slack (Block Kit): task cards, approvals, votes, polls, video-ad cancel.
+8. Parity test and a capability table in this file, updated with every feature.
 
 ## Not on other platforms (by design)
 

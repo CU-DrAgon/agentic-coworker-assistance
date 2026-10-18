@@ -39,6 +39,14 @@ from salid.connectors import (
 )
 from salid.connectors.base import TOKENS
 from salid.guild_settings import LinkError
+from salid.identity_links import (
+    CODE_PLATFORMS,
+    CodeError,
+    IdentityLinks,
+    IssuedCode,
+    NotAMember,
+    TooManyCodes,
+)
 from salid.library import (
     CATEGORIES as LIB_CATEGORIES,
 )
@@ -1334,3 +1342,111 @@ async def slack_events(
         logger.warning("slack ingest failed", exc_info=True)
         n = 0
     return {"ok": True, "stored": n}
+
+
+# ------------------------------------------------------------------ verified identities
+def get_identity_links(orgs: OrgStore = Depends(get_orgs)) -> IdentityLinks:
+    return IdentityLinks(orgs)
+
+
+class IssuedCodeView(BaseModel):
+    code: str  # "1234-5678"
+    platform: str
+    kind: str  # identity | attach
+    expires_at: str
+    command: str  # what to send to Salid in a private chat
+
+
+class IdentityView(BaseModel):
+    platform: str
+    account_hint: str  # the last characters of the linked account id, never the whole id
+
+
+def _issued_view(issued: IssuedCode) -> IssuedCodeView:
+    return IssuedCodeView(
+        code=issued.code,
+        platform=issued.platform,
+        kind=issued.kind,
+        expires_at=issued.expires_at,
+        command=f"link {issued.code}",
+    )
+
+
+def _code_platform(platform: str) -> str:
+    if platform not in CODE_PLATFORMS:
+        raise HTTPException(
+            400, f"Linking by code works for: {', '.join(CODE_PLATFORMS)} (Discord uses /setup)"
+        )
+    return platform
+
+
+@router.post("/orgs/{org_id}/identities/{platform}/code")
+async def create_identity_code(
+    platform: str,
+    ctx: Ctx = Depends(member_ctx),
+    links: IdentityLinks = Depends(get_identity_links),
+) -> IssuedCodeView:
+    """A 15-minute single-use code that links the caller's `platform` chat account to their
+    member record: they send `link 1234-5678` to Salid in a private chat. At most 5 live codes
+    per member (429)."""
+    _code_platform(platform)
+
+    def run() -> IssuedCode:
+        try:
+            return links.create_code(ctx.org.id, ctx.email, platform)
+        except NotAMember as exc:
+            raise HTTPException(403, "Only members of the organization can link accounts") from exc
+        except TooManyCodes as exc:
+            raise HTTPException(429, "Too many unused codes; wait for one to expire") from exc
+        except CodeError as exc:
+            raise HTTPException(400, "Cannot create a code") from exc
+
+    return _issued_view(await run_in_threadpool(run))
+
+
+def _identity_views(org: Org, email: str) -> list[IdentityView]:
+    me = next((m for m in org.members if m.email.lower() == email.lower()), None)
+    linked = me.all_identities() if me else {}
+    return [IdentityView(platform=p, account_hint=v[-4:]) for p, v in sorted(linked.items())]
+
+
+@router.get("/orgs/{org_id}/identities")
+async def my_identities(ctx: Ctx = Depends(member_ctx)) -> list[IdentityView]:
+    """The caller's own linked chat accounts in this organization."""
+    return _identity_views(ctx.org, ctx.email)
+
+
+@router.delete("/orgs/{org_id}/identities/{platform}")
+async def unlink_identity(
+    platform: str,
+    ctx: Ctx = Depends(member_ctx),
+    orgs: OrgStore = Depends(get_orgs),
+) -> list[IdentityView]:
+    """Unlink the caller's own `platform` account. Discord is managed in the hub, not here."""
+    _code_platform(platform)
+    removed = await run_in_threadpool(orgs.unlink_identity, ctx.org.id, ctx.email, platform)
+    if not removed:
+        raise HTTPException(404, "Nothing is linked for this platform")
+    return _identity_views(await run_in_threadpool(orgs.get, ctx.org.id), ctx.email)
+
+
+@router.post("/orgs/{org_id}/workspaces/{platform}/attach-code")
+async def create_attach_code(
+    platform: str,
+    ctx: Ctx = Depends(admin_ctx),
+    links: IdentityLinks = Depends(get_identity_links),
+) -> IssuedCodeView:
+    """A 15-minute single-use code that attaches a bot (LINE channel, Telegram bot, WhatsApp
+    number, Slack team) to this organization when sent to that bot in a private chat:
+    `link 1234-5678`. The bot's tenant must not belong to another organization."""
+    _code_platform(platform)
+
+    def run() -> IssuedCode:
+        try:
+            return links.create_attach_code(ctx.org.id, ctx.email, platform)
+        except TooManyCodes as exc:
+            raise HTTPException(429, "Too many unused codes; wait for one to expire") from exc
+        except CodeError as exc:
+            raise HTTPException(400, "Cannot create a code") from exc
+
+    return _issued_view(await run_in_threadpool(run))

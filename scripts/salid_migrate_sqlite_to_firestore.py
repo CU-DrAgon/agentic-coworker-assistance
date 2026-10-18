@@ -12,6 +12,7 @@ settings are the ones the owner tuned). Nothing is deleted. Counts only are prin
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
@@ -33,7 +34,9 @@ def rows(c: sqlite3.Connection, sql: str) -> list[sqlite3.Row]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=os.path.expanduser("~/.salid-dev/ledger.db"))
-    ap.add_argument("--project", default=os.environ.get("SALID_GCP_PROJECT", "meeting-scribe-hackathon"))
+    ap.add_argument(
+        "--project", default=os.environ.get("SALID_GCP_PROJECT", "meeting-scribe-hackathon")
+    )
     ap.add_argument("--apply", action="store_true", help="write to Firestore (default: dry run)")
     ap.add_argument("--receipts-collection", default="salid_receipts")
     ap.add_argument("--guild-collection", default="salid_guilds")
@@ -77,15 +80,17 @@ def main() -> int:
     # 4. Team memory: raw messages, day summaries, channel / guild state
     for r in rows(c, "SELECT * FROM salid_messages"):
         d = dict(r)
-        create(db.collection("salid_messages").document(f"{d['guild_id']}_{d['message_id']}"), d, "salid_messages")
+        create(
+            db.collection("salid_messages").document(f"{d['guild_id']}_{d['message_id']}"),
+            d,
+            "salid_messages",
+        )
     for r in rows(c, "SELECT * FROM salid_day_summaries"):
         d = dict(r)
         for k in ("summary", "vec_hashes"):
             if isinstance(d.get(k), str):
-                try:
+                with contextlib.suppress(ValueError):
                     d[k] = json.loads(d[k])
-                except ValueError:
-                    pass
         d["final"] = bool(d.get("final"))
         d["dirty"] = bool(d.get("dirty"))
         if d.get("vecs") is None:
@@ -101,7 +106,11 @@ def main() -> int:
             "salid_memory_channels",
         )
     for r in rows(c, "SELECT guild_id, doc FROM salid_memory_guilds"):
-        create(db.collection("salid_memory_guilds").document(str(r["guild_id"])), json.loads(r["doc"]), "salid_memory_guilds")
+        create(
+            db.collection("salid_memory_guilds").document(str(r["guild_id"])),
+            json.loads(r["doc"]),
+            "salid_memory_guilds",
+        )
 
     # 5. Receipts: keep ids; bump the counter so new receipts never collide
     max_id = 0
@@ -109,15 +118,17 @@ def main() -> int:
         d = dict(r)
         max_id = max(max_id, int(d.get("id") or 0))
         if isinstance(d.get("items"), str):
-            try:
+            with contextlib.suppress(ValueError):
                 d["items"] = json.loads(d["items"])
-            except ValueError:
-                pass
         sha = d.get("sha256")
         if not sha:
             kept["receipts(no sha)"] += 1
             continue
-        create(db.collection(a.receipts_collection).document(f"{d['guild_id']}_{sha}"), d, a.receipts_collection)
+        create(
+            db.collection(a.receipts_collection).document(f"{d['guild_id']}_{sha}"),
+            d,
+            a.receipts_collection,
+        )
     if max_id:
         meta = db.collection(f"{a.receipts_collection}_meta").document("counter")
         snap = meta.get()

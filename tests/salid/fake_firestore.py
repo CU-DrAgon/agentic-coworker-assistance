@@ -1,8 +1,9 @@
 """Tiny in-memory fake of the Firestore surface FirestoreStore uses (offline tests)."""
 
 import operator
+import threading
 
-from google.api_core.exceptions import AlreadyExists
+from google.api_core.exceptions import Aborted, AlreadyExists
 
 from salid.firestore_store import FirestoreStore
 
@@ -35,8 +36,11 @@ class FakeRef:
     def __init__(self, col, doc_id):
         self.col, self.id = col, doc_id
 
-    def get(self, **_):
-        return FakeSnap(self, self.col.docs.get(self.id))
+    def get(self, transaction=None, **_):
+        data = self.col.docs.get(self.id)
+        if transaction is not None:
+            transaction.reads[(self.col.name, self.id)] = None if data is None else dict(data)
+        return FakeSnap(self, data)
 
     def create(self, data):
         if self.id in self.col.docs:
@@ -90,10 +94,54 @@ class FakeCollection(FakeQuery):
         return FakeRef(self, doc_id)
 
 
+class FakeTransaction:
+    """Optimistic transaction with the surface `firestore.transactional` drives: reads record
+    what they saw, writes are queued, and `_commit` aborts (so the decorator retries) when a
+    document that was read has changed since."""
+
+    _max_attempts = 5
+    _read_only = False
+
+    def __init__(self, client):
+        self.client, self._id, self.reads, self.writes = client, None, {}, []
+
+    def _clean_up(self):
+        self._id, self.reads, self.writes = None, {}, []
+
+    def _begin(self, retry_id=None):
+        self._id = b"tx"
+
+    def set(self, ref, data):
+        self.writes.append((ref, dict(data)))
+
+    def delete(self, ref):
+        self.writes.append((ref, None))
+
+    def _commit(self):
+        with self.client.commit_lock:
+            for (col, doc_id), seen in self.reads.items():
+                if self.client.collection(col).docs.get(doc_id) != seen:
+                    self.client.aborts += 1
+                    raise Aborted("contention")
+            for ref, data in self.writes:
+                if data is None:
+                    ref.delete()
+                else:
+                    ref.set(data)
+        self._clean_up()
+
+    def _rollback(self):
+        self._clean_up()
+
+
 class FakeFirestore:
     def __init__(self):
         self.cols, self.queries = {}, []
         self.streams = []  # one (collection, filters) entry per executed query
+        self.commit_lock, self.aborts = threading.Lock(), 0
+
+    def transaction(self):
+        return FakeTransaction(self)
 
     def collection(self, name):
         return self.cols.setdefault(name, FakeCollection(self, name))

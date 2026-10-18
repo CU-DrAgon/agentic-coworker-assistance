@@ -40,7 +40,10 @@ LICENSE_REQS = "salid_license_reqs"
 CENTER_CHAT = "salid_center_chat"
 
 ROLES = ("owner", "admin", "member")
-PLATFORMS = ("discord", "slack", "clickup", "web")
+PLATFORMS = ("discord", "slack", "line", "telegram", "whatsapp", "clickup", "web")
+# Platforms where a person has a chat account that can be linked to an org member
+IDENTITY_PLATFORMS = ("discord", "slack", "line", "telegram", "whatsapp")
+MAX_IDENTITY_LEN = 200
 PLANS = ("trial", "monthly", "yearly", "enterprise")
 STATUSES = ("active", "past_due", "expired", "suspended")
 CATEGORIES = ("documents", "wiki", "places", "minutes", "ledger", "tasks")
@@ -91,13 +94,41 @@ def _email_bucket(email: str) -> int:
     return int.from_bytes(hashlib.sha256(email.lower().encode()).digest()[:7], "big")
 
 
+# platforms whose account ids only mean something inside one workspace (LINE: per provider,
+# WhatsApp: per business, Telegram: per bot), so a verified link authorizes only that tenant
+TENANT_BOUND_PLATFORMS = frozenset({"line", "telegram", "whatsapp"})
+
+
 # ------------------------------------------------------------------ models
 class Member(BaseModel):
     email: str
     role: str = "member"  # owner | admin | member
     discord_user_id: str | None = None
+    # platform -> platform user id, VERIFIED by Salid (Slack profile email, or a one-time link
+    # code). Discord stays in `discord_user_id`; read it through `identity("discord")`.
+    identities: dict[str, str] = Field(default_factory=dict)
+    # platform -> the tenant key (LINE channel, WhatsApp number, ...) where that identity was
+    # verified. LINE user ids are per provider and WhatsApp ids per business, so a link made in
+    # one workspace must never vouch for another. Absent = linked before this was recorded.
+    identity_tenants: dict[str, str] = Field(default_factory=dict)
     department: str = ""  # PM dashboard: tech | business | finance | other | ""
     finance: bool = False  # PM dashboard: Authorized Approver, may see budgets
+
+    def identity(self, platform: str) -> str | None:
+        """The verified platform account id of this member, or None."""
+        if platform == "discord":
+            return self.identities.get("discord") or self.discord_user_id or None
+        return self.identities.get(platform) or None
+
+    def identity_tenant(self, platform: str) -> str | None:
+        """The tenant key the platform account was verified in, or None (not recorded)."""
+        return self.identity_tenants.get(platform) or None
+
+    def all_identities(self) -> dict[str, str]:
+        out = {k: v for k, v in self.identities.items() if v}
+        if self.discord_user_id and "discord" not in out:
+            out["discord"] = self.discord_user_id
+        return out
 
 
 class License(BaseModel):
@@ -111,7 +142,7 @@ class License(BaseModel):
 
 class Workspace(BaseModel):
     id: str
-    platform: str  # discord | slack | clickup | web
+    platform: str  # discord | slack | line | telegram | whatsapp | clickup | web
     external_id: str  # guild id / slack team id / clickup team id / org id (web)
     name: str = ""
     icon_url: str = ""
@@ -180,6 +211,18 @@ class WorkspaceTaken(Exception):
         self.org_id = org_id
 
 
+class IdentityTaken(Exception):
+    """That platform account is already linked to another member of the org."""
+
+    def __init__(self, email: str):
+        super().__init__("platform account already linked to another member")
+        self.email = email
+
+
+class UnknownMember(KeyError):
+    """The email is not a member of the org."""
+
+
 # ------------------------------------------------------------------ store
 def trial_license(days: int = TRIAL_DAYS, now: datetime | None = None) -> License:
     until = ((now or _now()) + timedelta(days=days)).date().isoformat()
@@ -187,8 +230,15 @@ def trial_license(days: int = TRIAL_DAYS, now: datetime | None = None) -> Licens
 
 
 class OrgStore:
-    """Organizations on a `DocStore` (SQLite or Firestore). Read-modify-write helpers take a
-    process lock; cross-instance races on the same org are accepted (admin-rate writes)."""
+    """Organizations on a `DocStore` (SQLite or Firestore).
+
+    The workspace and identity read-modify-writes (`attach_workspace`, `detach_workspace`,
+    `link_identity`, `unlink_identity`, `drop_platform_identities`, and the code redemption in
+    `salid.identity_links`) run in ONE `DocStore.transact`, so they are atomic across processes
+    and store instances. The `_tx_*` helpers take the transaction handle; they read through it
+    and never touch the store directly. Other writes (`save`, member edits in the web layer)
+    still take only the process lock: they are admin-rate and last-writer-wins.
+    """
 
     def __init__(self, docs: DocStore, clock=_now):
         self.docs, self._clock = docs, clock
@@ -289,38 +339,184 @@ class OrgStore:
         orgs = [o for r in rows if (o := self.get(r["org_id"])) and o.role_of(e)]
         return sorted(orgs, key=lambda o: (o.name.casefold(), o.id))
 
+    # ---- transactional building blocks (see class docstring)
+    def _tx_org(self, tx, org_id: str) -> Org | None:
+        d = tx.get(ORGS, 0, org_id)
+        return Org.model_validate(d) if d else None
+
+    def _tx_save(self, tx, org: Org, old: Org | None) -> None:
+        """Replace the org document and refresh the member index, inside a transaction."""
+        tx.put(ORGS, 0, org.id, org.model_dump())
+        now_emails = {m.email.lower() for m in org.members}
+        for e in now_emails:
+            tx.put(ORG_EMAIL, _email_bucket(e), org.id, {"email": e, "org_id": org.id})
+        for m in old.members if old else []:
+            e = m.email.lower()
+            if e not in now_emails:
+                tx.delete(ORG_EMAIL, _email_bucket(e), org.id)
+
+    def _tx_workspace_owner(
+        self, tx, platform: str, external_id: str
+    ) -> tuple[Org, Workspace] | None:
+        idx = tx.get(ORG_WS, workspace_memory_id(platform, external_id), "org")
+        if not idx:
+            return None
+        org = self._tx_org(tx, idx["org_id"])
+        ws = org.workspace(idx["workspace_id"]) if org else None
+        return (org, ws) if org and ws else None
+
+    def _tx_attach(self, tx, org_id: str, ws: Workspace) -> Org:
+        org = self._tx_org(tx, org_id)
+        if org is None:
+            raise KeyError(org_id)
+        mid = ws.memory_id
+        idx = tx.get(ORG_WS, mid, "org")
+        if idx and idx["org_id"] != org_id and self._tx_org(tx, idx["org_id"]) is not None:
+            raise WorkspaceTaken(idx["org_id"])
+        old = org.model_copy(deep=True)
+        org.workspaces = [w for w in org.workspaces if w.id != ws.id] + [ws]
+        self._tx_save(tx, org, old)
+        tx.put(ORG_WS, mid, "org", self._ws_index(org, ws.id))
+        return org
+
+    def _tx_link(
+        self, tx, org_id: str, email: str, platform: str, platform_user_id: str, tenant: str = ""
+    ) -> Member:
+        pid = str(platform_user_id or "").strip()
+        if platform not in IDENTITY_PLATFORMS or not pid or len(pid) > MAX_IDENTITY_LEN:
+            raise ValueError("bad platform or account id")
+        org = self._tx_org(tx, org_id)
+        if org is None:
+            raise KeyError(org_id)
+        old = org.model_copy(deep=True)
+        who = next((m for m in org.members if m.email.lower() == email.lower()), None)
+        if who is None:
+            raise UnknownMember(email)
+        for m in org.members:
+            if m is not who and m.identity(platform) == pid:
+                raise IdentityTaken(m.email)
+        if platform == "discord":
+            who.discord_user_id = pid
+            who.identities.pop("discord", None)
+        else:
+            who.identities[platform] = pid
+        if tenant and platform != "discord":
+            who.identity_tenants[platform] = str(tenant)
+        else:
+            who.identity_tenants.pop(platform, None)
+        self._tx_save(tx, org, old)
+        return who
+
+    def _tx_unlink(
+        self, tx, org_id: str, email: str, platform: str, only_if: str | None = None
+    ) -> bool:
+        org = self._tx_org(tx, org_id)
+        who = (
+            next((m for m in org.members if m.email.lower() == email.lower()), None)
+            if org
+            else None
+        )
+        if org is None or who is None or platform not in IDENTITY_PLATFORMS:
+            return False
+        current = who.identity(platform)
+        if current is None or (only_if is not None and current != str(only_if)):
+            return False
+        old = org.model_copy(deep=True)
+        who.identities.pop(platform, None)
+        who.identity_tenants.pop(platform, None)
+        if platform == "discord":
+            who.discord_user_id = None
+        self._tx_save(tx, org, old)
+        return True
+
     # ---- workspaces
     def attach_workspace(self, org_id: str, ws: Workspace) -> Org:
-        """Add (or refresh) a workspace. WorkspaceTaken when another org already has it."""
-        with self._lock:
-            org = self.get(org_id)
-            if org is None:
-                raise KeyError(org_id)
-            mid = ws.memory_id
-            idx = self.docs.get(ORG_WS, mid, "org")
-            if idx and idx["org_id"] != org_id and self.get(idx["org_id"]) is not None:
-                raise WorkspaceTaken(idx["org_id"])
-            org.workspaces = [w for w in org.workspaces if w.id != ws.id] + [ws]
-            self.save(org)
-            self.docs.put(ORG_WS, mid, "org", self._ws_index(org, ws.id))
-            return org
+        """Add (or refresh) a workspace. WorkspaceTaken when another org already has it. One
+        transaction: two orgs racing for the same tenant cannot both win."""
+        return self.docs.transact(lambda tx: self._tx_attach(tx, org_id, ws))
 
     def detach_workspace(self, org_id: str, ws_id: str) -> Org:
         """Remove a workspace and every share link touching it. The web workspace stays."""
-        with self._lock:
-            org = self.get(org_id)
+
+        def run(tx):
+            org = self._tx_org(tx, org_id)
             ws = org.workspace(ws_id) if org else None
             if org is None or ws is None:
                 raise KeyError(ws_id)
             if ws.platform == "web":
                 raise ValueError("the web workspace cannot be removed")
+            old = org.model_copy(deep=True)
             org.workspaces = [w for w in org.workspaces if w.id != ws_id]
             org.sharing = [
                 s for s in org.sharing if ws_id not in (s.from_workspace, s.to_workspace)
             ]
-            self.save(org)
-            self.docs.delete(ORG_WS, ws.memory_id, "org")
+            self._drop_orphan_identities(org, ws.platform)
+            self._tx_save(tx, org, old)
+            tx.delete(ORG_WS, ws.memory_id, "org")
             return org
+
+        return self.docs.transact(run)
+
+    # ---- verified platform identities (see salid.identity_links)
+    @staticmethod
+    def _drop_orphan_identities(org: Org, platform: str) -> None:
+        """No workspace of this platform left in the org: its member links mean nothing."""
+        if platform not in IDENTITY_PLATFORMS or platform == "discord":
+            return
+        if any(w.platform == platform for w in org.workspaces):
+            return
+        for m in org.members:
+            m.identities.pop(platform, None)
+            m.identity_tenants.pop(platform, None)
+
+    def member_by_identity(
+        self, org_id: str, platform: str, platform_user_id: str
+    ) -> Member | None:
+        org = self.get(org_id)
+        if org is None or not platform_user_id:
+            return None
+        return next((m for m in org.members if m.identity(platform) == str(platform_user_id)), None)
+
+    def link_identity(
+        self, org_id: str, email: str, platform: str, platform_user_id: str, tenant: str = ""
+    ) -> Member:
+        """Bind a platform account to a member. A second claim on the same account by another
+        member is refused (`IdentityTaken`); re-linking the same member replaces the old id.
+        `tenant`: the workspace key where the account was verified (recorded per platform)."""
+        return self.docs.transact(
+            lambda tx: self._tx_link(tx, org_id, email, platform, platform_user_id, tenant)
+        )
+
+    def unlink_identity(
+        self, org_id: str, email: str, platform: str, only_if: str | None = None
+    ) -> bool:
+        """Remove one linked account of a member. True when something was removed. With
+        `only_if`, only when the member is still linked to exactly that account id."""
+        return self.docs.transact(lambda tx: self._tx_unlink(tx, org_id, email, platform, only_if))
+
+    def drop_platform_identities(
+        self, org_id: str, platform: str, keep_workspace: str = ""
+    ) -> None:
+        """A platform workspace was uninstalled / revoked: forget the member links of that
+        platform unless the org still has another workspace there (`keep_workspace` = the one
+        going away, still listed in the org document)."""
+        if platform not in IDENTITY_PLATFORMS or platform == "discord":
+            return
+
+        def run(tx):
+            org = self._tx_org(tx, org_id)
+            if org is None:
+                return
+            if any(w.platform == platform and w.id != keep_workspace for w in org.workspaces):
+                return
+            old = org.model_copy(deep=True)
+            changed = [m.identities.pop(platform, None) for m in org.members]
+            for m in org.members:
+                m.identity_tenants.pop(platform, None)
+            if any(c is not None for c in changed):
+                self._tx_save(tx, org, old)
+
+        self.docs.transact(run)
 
     # ---- license requests
     def add_license_request(self, req: LicenseRequest) -> LicenseRequest:

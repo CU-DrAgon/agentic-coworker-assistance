@@ -75,6 +75,7 @@ class FakeSlack:
         self.updates: list[dict] = []
         self.deleted: list[dict] = []
         self.calls: list[str] = []
+        self.omit_share_fields: set[str] = set()  # flags Slack leaves out of conversations.info
         self.fail_update = False
         self.history: dict[str, list[dict]] = {}
         self.replies: dict[str, list[dict]] = {}
@@ -96,7 +97,11 @@ class FakeSlack:
 
     async def conversations_info(self, channel):
         self.calls.append("info:" + channel)
-        return {"channel": self.channels[channel]}
+        info = {k: False for k in ("is_shared", "is_ext_shared", "is_org_shared")}
+        info.update(self.channels[channel])  # Slack states the share flags explicitly
+        for k in self.omit_share_fields:
+            info.pop(k, None)
+        return {"channel": info}
 
     async def conversations_members(self, channel, limit=200, cursor=None):
         self.calls.append("members:" + channel)
@@ -426,6 +431,14 @@ async def test_a_shared_room_limits_memory_to_that_room(fx, flag):
     assert view.audience is None and view.rooms == []
     await adapter.on_message(ev(text=f"<@{BOT}> what did leads say?"), TEAM)
     assert list(a.ask_fn.calls[0][1]["memory"].allowed.values()) == ["general"]
+
+
+@pytest.mark.parametrize("omitted", ["is_shared", "is_ext_shared", "is_org_shared"])
+async def test_omitted_share_flags_mean_unknown_audience(fx, omitted):
+    client, a, port, adapter = fx
+    client.omit_share_fields = {omitted}  # not explicitly non-shared: fail closed
+    view = await port.room_view(inc(room="C1", user="U1"))
+    assert view.audience is None and view.rooms == []
 
 
 async def test_the_shared_flag_is_cached_and_refreshed_after_a_room_event(fx):

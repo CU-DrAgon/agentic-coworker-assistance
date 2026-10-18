@@ -21,7 +21,7 @@ import httpx
 from ..qa import MAX_FILE_BYTES
 from . import ids, textfmt
 from .config import PlatformSettings
-from .core import Assistant, FileRef, HistLine, Incoming, RoomInfo, RoomView, safe_exc
+from .core import AccountState, Assistant, FileRef, HistLine, Incoming, RoomInfo, RoomView, safe_exc
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,8 @@ CHUNK = 3000  # characters per message (Slack allows far more; shorter reads bet
 MAX_MESSAGES = 10
 MEMBERS_TTL_S = 60.0
 LIST_TTL_S = 300.0
-USER_TTL_S = 600.0
+USER_TTL_S = 300.0  # <= core.VERIFY_TTL_S: a deleted person must not outlive it in this cache
+USER_FAIL_TTL_S = 30.0  # a failed users.info is retried after this long, not after USER_TTL_S
 MAX_MEMBERS = 5000  # a bigger room: audience unknown, so memory stays in that room
 MAX_ROOMS = 60  # other rooms considered for memory scope
 MAX_PAGES = 20
@@ -44,13 +45,16 @@ POST_WAIT_MAX_S = 60.0
 MENTION_WAIT_S = 1.0  # an app_mention waits this long for its twin `message` event
 MAX_FILE_LOOKUPS = 4
 REVOKED_EVENTS = {"app_uninstalled", "tokens_revoked"}
+USER_EVENTS = {"user_change"}  # a profile / role / deactivation change: re-verify the person
 ROOM_EVENTS = {
     "channel_rename", "group_rename", "channel_archive", "group_archive", "channel_unarchive",
     "group_unarchive", "channel_left", "group_left", "channel_deleted", "group_deleted",
     "member_joined_channel", "member_left_channel",
 }  # fmt: skip
 # One Bolt listener for every non-message event (keeps the listener count at three).
-LIFECYCLE_EVENTS = re.compile("^(" + "|".join(sorted(ROOM_EVENTS | REVOKED_EVENTS)) + ")$")
+LIFECYCLE_EVENTS = re.compile(
+    "^(" + "|".join(sorted(ROOM_EVENTS | REVOKED_EVENTS | USER_EVENTS)) + ")$"
+)
 
 
 def retry_after(e: BaseException) -> float | None:
@@ -66,6 +70,20 @@ def retry_after(e: BaseException) -> float | None:
     except (TypeError, ValueError):
         pass
     return 1.0
+
+
+SHARE_FIELDS = ("is_shared", "is_ext_shared", "is_org_shared")
+
+
+def share_state(info: dict) -> bool | None:
+    """Tri-state Slack Connect / org-share flag of a conversation (users.conversations row or
+    conversations.info): True when any flag is set, False ONLY when all three flags are present
+    and explicitly False, None (unknown) when Slack omitted any of them."""
+    if any(bool(info.get(k)) for k in SHARE_FIELDS):
+        return True
+    if all(info.get(k) is False for k in SHARE_FIELDS):
+        return False
+    return None
 
 
 class SlackPort:
@@ -106,11 +124,11 @@ class SlackPort:
         self._users: dict[str, tuple[float, dict]] = {}
         self._room_names: dict[str, tuple[float, str]] = {}
         self._room_private: dict[str, tuple[float, bool]] = {}
-        self._room_shared: dict[str, tuple[float, bool]] = {}
+        self._room_shared: dict[str, tuple[float, bool | None]] = {}
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
-        """users.info (cached 10 min); {} when it cannot be read."""
+        """users.info (cached 5 min); {} when it cannot be read."""
         hit = self._users.get(uid)
         if hit is not None and self._clock() - hit[0] < USER_TTL_S:
             return hit[1]
@@ -119,19 +137,51 @@ class SlackPort:
         except Exception as e:
             logger.warning("users.info failed (%s)", safe_exc(e))
             info = {}
-        self._users[uid] = (self._clock(), info)
+        # a failure is remembered only briefly, so one blip does not blind us for five minutes
+        stamp = self._clock() if info else self._clock() - USER_TTL_S + USER_FAIL_TTL_S
+        self._users[uid] = (stamp, info)
         return info
+
+    def forget_user(self, uid: str) -> None:
+        """The person changed (user_change): the next lookup asks Slack again."""
+        self._users.pop(uid, None)
 
     async def user_name(self, uid: str) -> str:
         u = await self.user(uid)
         prof = u.get("profile") or {}
         return prof.get("display_name") or u.get("real_name") or u.get("name") or uid
 
+    async def account_state(self, uid: str) -> AccountState:
+        """What Slack says about this person NOW (users.info, cached up to 5 minutes):
+
+        * ``member``: a real, full member of THIS workspace with a readable profile email;
+        * ``revoked``: a bot, deleted, guest (single / multi-channel) or a person of another
+          workspace (Slack Connect): not a member whose address means anything here;
+        * ``unavailable``: the lookup failed or the email is not readable (scope missing).
+          Nothing is known, so the caller must fail closed without removing any link."""
+        u = await self.user(uid)
+        if not u:
+            return AccountState("unavailable", "")
+        if u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
+            return AccountState("revoked", "")
+        if u.get("is_restricted") or u.get("is_ultra_restricted"):
+            return AccountState("revoked", "")  # guests: their address is not the company's
+        email = str((u.get("profile") or {}).get("email") or "").strip().lower()
+        return AccountState("member", email) if email else AccountState("unavailable", "")
+
+    async def profile_email(self, uid: str) -> str:
+        """The verified-by-Slack profile email (lower case) of a real, current member of THIS
+        workspace; "" otherwise (see `account_state`). Fails closed."""
+        return (await self.account_state(uid)).email
+
     async def is_admin(self, msg: Incoming) -> bool:
+        return await self.is_admin_user(msg.user)
+
+    async def is_admin_user(self, uid: str) -> bool:
         """Workspace admin/owner of THIS workspace only. A Slack Connect user from another
         workspace can be an admin there (users.info says so in a shared channel): that must never
         make them an executive here. A bot, a deleted user or a missing team_id fails closed."""
-        u = await self.user(msg.user)
+        u = await self.user(uid)
         if u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
             return False
         return bool(u.get("is_admin") or u.get("is_owner") or u.get("is_primary_owner"))
@@ -162,8 +212,7 @@ class SlackPort:
             self._room_private[channel] = (self._clock(), private)
         # Slack Connect / org-shared: people of other workspaces or orgs are in the room, so its
         # audience cannot be listed from this workspace.
-        shared = any(bool(info.get(k)) for k in ("is_shared", "is_ext_shared", "is_org_shared"))
-        self._room_shared[channel] = (self._clock(), shared)
+        self._room_shared[channel] = (self._clock(), share_state(info))
         if info.get("name"):
             self._room_names[channel] = (self._clock(), info["name"])
         return info
@@ -222,6 +271,35 @@ class SlackPort:
         )
         return {r["id"]: (r.get("name") or r["id"], r.get("id", "")) for r in rows if r.get("id")}
 
+    async def readable_rooms(self, uid: str) -> dict[str, str] | None:
+        """Conversations Salid is in that this member of THIS workspace can read: channel id ->
+        name. Public non-shared channels (a full member may read any; guests get none of them),
+        plus private channels and group DMs that are not shared and where Slack lists the member
+        (users.conversations with ``user``). Slack Connect / org-shared rooms and rooms whose
+        share flags are missing are never included. None when the person is not a current member
+        of this team or Slack cannot answer: nothing is known, so the caller uses nothing."""
+        u = await self.user(uid)
+        if not u or u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
+            return None
+        guest = bool(u.get("is_restricted") or u.get("is_ultra_restricted"))
+        kw = dict(types="public_channel,private_channel,mpim", exclude_archived=True, limit=200)
+        try:
+            ours = await self._pages(self.client.users_conversations, "channels", **kw)
+            mine = await self._pages(self.client.users_conversations, "channels", user=uid, **kw)
+        except Exception as e:
+            logger.warning("users.conversations failed (%s)", safe_exc(e))
+            return None
+        member_of = {r["id"] for r in mine if r.get("id")}
+        out: dict[str, str] = {}
+        for r in ours:
+            cid = r.get("id")
+            if not cid or share_state(r) is not False:
+                continue
+            private = bool(r.get("is_private") or r.get("is_mpim"))
+            if (private and cid in member_of) or (not private and not guest):
+                out[cid] = r.get("name") or cid
+        return out
+
     async def bot_rooms(self) -> dict[str, tuple[str, str]]:
         """Conversations Salid is in (public, private, group DMs): id -> (name, id)."""
         if self._bot_rooms and self._clock() - self._bot_rooms[0] < LIST_TTL_S:
@@ -231,23 +309,29 @@ class SlackPort:
         return rooms
 
     # ------------------------------------------------------------ core.Port
+    async def room_audience(self, channel: str) -> frozenset[str] | None:
+        """Readers of a channel when Slack lists them exactly, else None (fail closed).
+        Shared (Slack Connect) and unknown-privacy channels are None; conversations.members is
+        the full audience only for private conversations (a public channel is readable by people
+        who have not joined)."""
+        private = self._fresh(self._room_private, channel)
+        hit = self._room_shared.get(channel)
+        fresh = hit is not None and self._clock() - hit[0] < ROOM_TTL_S
+        if private is None or not fresh:
+            await self._conversation_info(channel)
+            private = self._fresh(self._room_private, channel)
+            hit = self._room_shared.get(channel)
+            fresh = hit is not None and self._clock() - hit[0] < ROOM_TTL_S
+        shared = hit[1] if fresh and hit is not None else None
+        if shared is not False or not private:  # shared, unknown (fields omitted) or public
+            return None
+        return await self.members(channel, fresh=True)
+
     async def room_view(self, msg: Incoming) -> RoomView:
         if msg.is_direct:
             audience: frozenset[str] | None = frozenset({msg.user})
         else:
-            private = self._fresh(self._room_private, msg.room)
-            shared = self._fresh(self._room_shared, msg.room)
-            if private is None or shared is None:
-                await self._conversation_info(msg.room)
-                private = self._fresh(self._room_private, msg.room)
-                shared = self._fresh(self._room_shared, msg.room)
-            if shared is not False:  # shared, or unknown: fail closed
-                return RoomView(None, [])
-            # conversations.members is the full audience only for private conversations. Public
-            # channels are readable by people who have not joined, so their audience is unknown.
-            if not private:
-                return RoomView(None, [])
-            audience = await self.members(msg.room, fresh=True)
+            audience = await self.room_audience(msg.room)
         if audience is None:
             return RoomView(None, [])
         mine = await self._convs(user=msg.user)  # the asker's conversations, read live
@@ -601,6 +685,9 @@ class SlackAdapter:
         if kind in REVOKED_EVENTS:
             await self._revoked(kind, event, team)
             return
+        if kind in USER_EVENTS:
+            await self._user_changed(event, team)
+            return
         if self.port.revoked or kind not in ROOM_EVENTS:
             return
         ch = event.get("channel")
@@ -617,6 +704,17 @@ class SlackAdapter:
             return
         self.port.forget_room(channel)  # archived, unarchived, left, deleted
 
+    async def _user_changed(self, event: dict, team: str) -> None:
+        """user_change: forget what we cached about the person and re-verify the account at
+        once, so a deactivation, a switch to guest or a new email takes effect now instead of
+        after the next refresh."""
+        user = event.get("user")
+        uid = user.get("id") if isinstance(user, dict) else user
+        if not uid or self.port.revoked or team != self.port.team_id:
+            return
+        self.port.forget_user(uid)
+        await self.a.recheck_account(PLATFORM, team, uid, self.port)
+
     async def _revoked(self, kind: str, event: dict, team: str) -> None:
         """app_uninstalled / tokens_revoked: stop answering this workspace and erase what Salid
         remembered of it (memory with its vectors). Only a revoked *bot* token counts."""
@@ -627,6 +725,7 @@ class SlackAdapter:
         self.port.revoked = True
         gid = ids.tenant_id(PLATFORM, team)
         logger.warning("slack %s: this workspace is removed, no more answers tenant=%d", kind, gid)
+        await asyncio.to_thread(self.a.tenant_revoked, PLATFORM, team)
         if not self.delete_data:
             return
         try:
