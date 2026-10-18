@@ -178,7 +178,10 @@ build order: `docs/superpowers/specs/2026-10-18-salid-workspace-parity-design.md
 - A capability a platform lacks is declared (`supports(...)` False) and the tool is left out; never fake it.
 - Memory scope stays fail-closed: unknown room audience = that room's own memory only.
 - Meetings: Salid's own store + reminders everywhere; Google Calendar (per-user Google OAuth) is the calendar.
-- Platform tenant ids must use the one workspace id scheme (see the design doc; two schemes exist today).
+- Platform tenant ids use the one workspace id scheme (`orgs.workspace_memory_id` / `namespaced_id`).
+- The org is the centre: a person is one `orgs.Member` with verified platform identities; cross-platform answers
+  only in a 1:1 with a verified member, rooms with an unknown audience use their own memory only.
+- Google Calendar / Meet need a separate per-member Calendar consent (Google login alone gives no Calendar access).
 
 ## Infrastructure that already exists — never recreate
 
