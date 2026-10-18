@@ -72,6 +72,8 @@ async def test_slack_app_is_wired_without_a_network(tmp_path, monkeypatch):
     ps = PlatformSettings(_env_file=None, slack_bot_token="xoxb-a", slack_app_token="xapp-b")
     handler, adapter, port = await slack.connect(ps, a)
     assert (port.team_id, port.bot_user_id) == ("T9", "UBOT")
-    assert len(handler.app._async_listeners) == 3  # message, app_mention, member_joined_channel
+    assert (
+        len(handler.app._async_listeners) == 4
+    )  # message, app_mention, /salid command, lifecycle events
     info = await slack.check(ps)
     assert info == {"team": "Acme", "team_id": "T9", "bot_user_id": "UBOT"}

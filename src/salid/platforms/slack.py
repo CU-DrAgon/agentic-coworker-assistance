@@ -8,6 +8,7 @@ no public endpoint is needed. Tokens never reach a log line.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
 import time
@@ -50,6 +51,32 @@ HUDDLE_EVENTS = {"user_huddle_changed", "file_shared"}  # huddle presence (log o
 CANVAS_TYPES = {"quip", "canvas"}  # files.info filetype / mode of a canvas (UNVERIFIED, see docs)
 MAX_HUDDLE_FILES = 6
 MAX_HUDDLE_ROOTS = 500
+GROUP_EVENTS = {"subteam_members_changed", "subteam_updated"}  # drop that group's cache at once
+REACTION_EVENTS = {"reaction_added"}  # a person reacted: ids only are logged, ✅ confirms a notice
+GROUP_TTL_S = 600.0  # usergroup handle / member caches (display labels) expire after this long
+GROUP_AUTH_TTL_S = 60.0  # ... but membership used to authorize (executive) is at most this old
+GROUP_FAIL_TTL_S = 30.0
+UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # one generated file Salid uploads (Slack itself allows more)
+MAX_UPLOADS = 5
+MAX_SLASH = 200  # slash-command headers remembered (by trigger id) until the answer is posted
+# Unicode emoji Salid uses (the Discord habit: 👀 working, ✅ / ⚠️ receipt) -> Slack short names
+EMOJI = {
+    "👀": "eyes", "✅": "white_check_mark", "⚠️": "warning", "👍": "+1", "👂": "ear",
+    "❌": "x", "🙏": "pray",
+}  # fmt: skip
+CONFIRM_REACTIONS = frozenset({"white_check_mark", "heavy_check_mark", "ballot_box_with_check"})
+DECLINE_REACTIONS = frozenset({"x", "negative_squared_cross_mark"})
+SUBTEAM = re.compile(r"<!subteam\^([A-Z0-9]+)(?:\|([^<>]*))?>")
+GROUP_ID = re.compile(r"^S[A-Z0-9]+$")  # ids are upper case, handles lower case
+SLASH = "/salid"
+SLASH_HELP = (
+    "*Salid* — ask in plain words, or:\n"
+    "• `/salid <question>`: Salid answers in this channel\n"
+    "• `/salid help`: this text\n"
+    "You can also @mention Salid, reply in its thread or DM it. สลิดตอบได้ทั้งไทยและอังกฤษ"
+)
+SLASH_THINKING = "One moment… / สักครู่นะคะ"
+SLASH_OFF = "Salid is switched off in this channel. / สลิดปิดอยู่ในห้องนี้"
 ROOM_EVENTS = {
     "channel_rename", "group_rename", "channel_archive", "group_archive", "channel_unarchive",
     "group_unarchive", "channel_left", "group_left", "channel_deleted", "group_deleted",
@@ -57,7 +84,18 @@ ROOM_EVENTS = {
 }  # fmt: skip
 # One Bolt listener for every non-message event (keeps the listener count at three).
 LIFECYCLE_EVENTS = re.compile(
-    "^(" + "|".join(sorted(ROOM_EVENTS | REVOKED_EVENTS | USER_EVENTS | HUDDLE_EVENTS)) + ")$"
+    "^("
+    + "|".join(
+        sorted(
+            ROOM_EVENTS
+            | REVOKED_EVENTS
+            | USER_EVENTS
+            | HUDDLE_EVENTS
+            | REACTION_EVENTS
+            | GROUP_EVENTS
+        )
+    )
+    + ")$"
 )
 
 
@@ -138,6 +176,14 @@ class SlackPort:
         self._room_names: dict[str, tuple[float, str]] = {}
         self._room_private: dict[str, tuple[float, bool]] = {}
         self._room_shared: dict[str, tuple[float, bool | None]] = {}
+        self._marks: OrderedDict[tuple[str, str, str], None] = OrderedDict()  # reactions we added
+        self._dms: dict[str, str] = {}  # Slack user id -> DM channel id (conversations.open)
+        self._groups: dict[str, tuple[float, str, frozenset[str] | None]] = {}
+        self._group_list: tuple[float, dict[str, str]] | None = None  # group id -> handle
+        self.exec_usergroups: frozenset[str] = frozenset()  # handles / ids: members are executives
+        # slash-command messages: trigger id -> quoted question put above the answer. They have
+        # no real `ts`, so they are answered at the top level and cannot carry a reaction.
+        self.slash: OrderedDict[str, str] = OrderedDict()
 
     # ------------------------------------------------------------ lookups
     async def user(self, uid: str) -> dict:
@@ -191,13 +237,84 @@ class SlackPort:
         return await self.is_admin_user(msg.user)
 
     async def is_admin_user(self, uid: str) -> bool:
-        """Workspace admin/owner of THIS workspace only. A Slack Connect user from another
-        workspace can be an admin there (users.info says so in a shared channel): that must never
-        make them an executive here. A bot, a deleted user or a missing team_id fails closed."""
+        """Workspace admin/owner of THIS workspace only (or a member of a user group listed in
+        `exec_usergroups`). A Slack Connect user from another workspace can be an admin there
+        (users.info says so in a shared channel): that must never make them an executive here.
+        A bot, a deleted user or a missing team_id fails closed."""
         u = await self.user(uid)
         if u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
             return False
-        return bool(u.get("is_admin") or u.get("is_owner") or u.get("is_primary_owner"))
+        if u.get("is_admin") or u.get("is_owner") or u.get("is_primary_owner"):
+            return True
+        if u.get("is_restricted") or u.get("is_ultra_restricted") or not self.exec_usergroups:
+            return False  # guests never become executives through a group
+        return await self.in_exec_group(uid)
+
+    # ------------------------------------------------------------ user groups (usergroups:read)
+    async def _group_handles(self) -> dict[str, str]:
+        """usergroups.list: group id -> handle (cached 10 min; {} when unreadable)."""
+        hit = self._group_list
+        if hit is not None and self._clock() - hit[0] < GROUP_TTL_S:
+            return hit[1]
+        try:
+            rows = (await self.client.usergroups_list()).get("usergroups") or []
+            out = {r["id"]: str(r.get("handle") or "") for r in rows if r.get("id")}
+            stamp = self._clock()
+        except Exception as e:
+            logger.warning("usergroups.list failed (%s)", safe_exc(e))
+            out, stamp = {}, self._clock() - GROUP_TTL_S + GROUP_FAIL_TTL_S
+        self._group_list = (stamp, out)
+        return out
+
+    async def usergroup(
+        self, gid: str, hint: str = "", max_age: float = GROUP_TTL_S
+    ) -> tuple[str, frozenset[str] | None]:
+        """(handle, members) of a Slack user group. ``hint`` is the ``@handle`` Slack put in the
+        mention. Members are None when usergroups.users.list failed (scope missing...). A cached
+        answer older than ``max_age`` seconds is read again (a failure is remembered 30 s)."""
+        hit = self._groups.get(gid)
+        if hit is not None:
+            age = self._clock() - hit[0]
+            if age < (GROUP_FAIL_TTL_S if hit[2] is None else max_age):
+                return hit[1], hit[2]
+        handle = hint.lstrip("@") or (await self._group_handles()).get(gid, "")
+        try:
+            users = (await self.client.usergroups_users_list(usergroup=gid)).get("users") or []
+            members: frozenset[str] | None = frozenset(users)
+        except Exception as e:
+            logger.warning("usergroups.users.list failed (%s)", safe_exc(e))
+            members = None
+        self._groups[gid] = (self._clock(), handle, members)
+        return handle, members
+
+    def group_changed(self, gid: str, *, renamed: bool = False) -> None:
+        """subteam_members_changed / subteam_updated: forget what we know of that group."""
+        self._groups.pop(gid, None)
+        if renamed:
+            self._group_list = None
+
+    async def group_label(self, gid: str, hint: str = "") -> str:
+        """``@design-team (3 people)`` for a ``<!subteam^ID|@handle>`` mention."""
+        handle, members = await self.usergroup(gid, hint)
+        name = f"@{handle or gid}"
+        return name if members is None else f"{name} ({len(members)} people)"
+
+    async def in_exec_group(self, uid: str) -> bool:
+        """True when ``uid`` is in a group named by `exec_usergroups` (id or handle)."""
+        for want in sorted(self.exec_usergroups):
+            gid = want if GROUP_ID.match(want) else None
+            if gid is None:
+                handle = want.lstrip("@").lower()
+                gid = next(
+                    (g for g, h in (await self._group_handles()).items() if h.lower() == handle),
+                    None,
+                )
+            if gid is None:
+                continue
+            _handle, members = await self.usergroup(gid, max_age=GROUP_AUTH_TTL_S)
+            if members is not None and uid in members:
+                return True
+        return False
 
     def _fresh(self, cache: dict, channel: str):
         hit = cache.get(channel)
@@ -361,6 +478,8 @@ class SlackPort:
         return textfmt.split_text(textfmt.to_slack(text), CHUNK)
 
     def _thread(self, msg: Incoming) -> str | None:
+        if msg.message in self.slash:
+            return msg.thread  # a slash command has no message to thread under
         return msg.thread or (None if msg.is_direct else msg.message)
 
     async def _pace(self, channel: str) -> None:
@@ -391,8 +510,8 @@ class SlackPort:
         raise AssertionError("unreachable")
 
     async def ack(self, msg: Incoming, text: str) -> object | None:
-        if self.revoked:
-            return None
+        if self.revoked or msg.private:
+            return None  # a private answer has no public "one moment" to edit later
         resp = await self._call(
             self.client.chat_postMessage,
             channel=msg.room,
@@ -416,6 +535,18 @@ class SlackPort:
             return []  # uninstalled while the answer was in flight: post nothing
         sent: list[str] = []
         rest = list(texts)
+        quote = self.slash.get(msg.message, "")
+        if quote and rest:
+            rest[0] = f"{quote}\n{rest[0]}"
+            self.slash[msg.message] = ""  # only the first answer carries the question
+        try:
+            return await self._deliver(msg, rest, ack, sent)
+        finally:
+            await self.unmark(msg, "👀")
+
+    async def _deliver(
+        self, msg: Incoming, rest: list[str], ack: object | None, sent: list[str]
+    ) -> list[str]:
         if ack is not None and rest:
             channel, ts = ack
             try:
@@ -430,15 +561,26 @@ class SlackPort:
         failure: Exception | None = None
         for i, text in enumerate(rest):
             try:
-                resp = await self._call(
-                    self.client.chat_postMessage,
-                    channel=msg.room,
-                    thread_ts=self._thread(msg),
-                    text=text,
-                    mrkdwn=True,
-                    unfurl_links=False,
-                    reply_broadcast=False,
-                )
+                if msg.private:  # only the invoker sees it
+                    resp = await self._call(
+                        self.client.chat_postEphemeral,
+                        channel=msg.room,
+                        user=msg.user,
+                        thread_ts=self._thread(msg),
+                        text=text,
+                        mrkdwn=True,
+                    )
+                    resp = {"ts": resp.get("message_ts")}
+                else:
+                    resp = await self._call(
+                        self.client.chat_postMessage,
+                        channel=msg.room,
+                        thread_ts=self._thread(msg),
+                        text=text,
+                        mrkdwn=True,
+                        unfurl_links=False,
+                        reply_broadcast=False,
+                    )
             except Exception as e:
                 logger.error(
                     "reply chunk %d/%d was not delivered (%s)", i + 1, len(rest), safe_exc(e)
@@ -450,6 +592,112 @@ class SlackPort:
         if failure is not None:
             raise failure
         return sent
+
+    # ------------------------------------------------------------ reactions (reactions:write)
+    async def react(self, channel: str, ts: str, name: str) -> bool:
+        """reactions.add; False (and a log line) when it cannot be done. Never raises."""
+        return await self._reaction(self.client.reactions_add, channel, ts, name)
+
+    async def unreact(self, channel: str, ts: str, name: str) -> bool:
+        return await self._reaction(self.client.reactions_remove, channel, ts, name)
+
+    async def _reaction(self, fn, channel: str, ts: str, name: str) -> bool:
+        if self.revoked or not (channel and ts and name):
+            return False
+        try:
+            # no `channel=` kwarg for _call: reactions are not paced like chat messages
+            await self._call(lambda **kw: fn(channel=channel, **kw), timestamp=ts, name=name)
+            return True
+        except Exception as e:
+            code = _slack_error(e)
+            if code not in ("already_reacted", "no_reaction", "message_not_found"):
+                logger.warning("reaction %s failed (%s)", name, code or safe_exc(e))
+            return False
+
+    def _reactable(self, msg: Incoming) -> bool:
+        return bool(msg.message) and msg.message not in self.slash
+
+    async def mark(self, msg: Incoming, emoji: str) -> None:
+        """`core.Port` hook: put ``emoji`` (a unicode emoji of the Discord habit) on the message."""
+        name = EMOJI.get(emoji)
+        if name and self._reactable(msg) and await self.react(msg.room, msg.message, name):
+            self._marks[(msg.room, msg.message, name)] = None
+            while len(self._marks) > 500:
+                self._marks.popitem(last=False)
+
+    async def unmark(self, msg: Incoming, emoji: str) -> None:
+        name = EMOJI.get(emoji)
+        if name and self._marks.pop((msg.room, msg.message, name), "no") is None:
+            await self.unreact(msg.room, msg.message, name)  # only what Salid itself added
+
+    # ------------------------------------------------------------ DMs (im:write)
+    async def open_dm(self, uid: str) -> str | None:
+        """The DM channel with ``uid`` (conversations.open, cached); None when it cannot be
+        opened (no im:write, a bot, a deleted person...)."""
+        if self.revoked:
+            return None
+        if uid in self._dms:
+            return self._dms[uid]
+        try:
+            opened = await self._call(self.client.conversations_open, users=uid)
+        except Exception as e:
+            logger.warning("conversations.open failed (%s)", _slack_error(e) or safe_exc(e))
+            return None
+        channel = (opened.get("channel") or {}).get("id")
+        if channel:
+            self._dms[uid] = channel
+        return channel or None
+
+    async def send_dm(self, uid: str, text: str) -> str | None:
+        """A proactive DM (brief, reminder...): ``text`` is model markdown. Returns the ts of the
+        last message, None when the DM could not be opened or sent. Never raises."""
+        channel = await self.open_dm(uid)
+        if channel is None:
+            return None
+        ts: str | None = None
+        for part in self.format(text) or [" "]:
+            try:
+                resp = await self._call(
+                    self.client.chat_postMessage,
+                    channel=channel,
+                    text=part,
+                    mrkdwn=True,
+                    unfurl_links=False,
+                )
+            except Exception as e:
+                logger.warning("DM not delivered (%s)", _slack_error(e) or safe_exc(e))
+                return ts
+            ts = resp.get("ts") or ts
+        return ts
+
+    # ------------------------------------------------------------ files (files:write)
+    async def send_files(self, msg: Incoming, files: list[tuple[str, bytes]]) -> int:
+        """`core.Port` hook: upload the generated files (name, data) of an answer into the
+        thread the answer went to (files.getUploadURLExternal + completeUploadExternal through
+        `files_upload_v2`). Empty and over-size files are skipped. Returns how many were sent."""
+        if self.revoked:
+            return 0
+        if msg.private:  # an upload is public to the channel: never for a private answer
+            logger.warning("%d generated file(s) not uploaded (private answer)", len(files))
+            return 0
+        ok = [(n, d) for n, d in files if d and len(d) <= UPLOAD_MAX_BYTES][:MAX_UPLOADS]
+        if len(ok) < len(files):
+            logger.warning("%d generated file(s) not uploaded (empty, over size or too many)",
+                           len(files) - len(ok))  # fmt: skip
+        if not ok:
+            return 0
+        kw: dict = {
+            "channel": msg.room,
+            "file_uploads": [{"file": d, "filename": n, "title": n} for n, d in ok],
+        }
+        if thread := self._thread(msg):
+            kw["thread_ts"] = thread
+        try:
+            await self._call(self.client.files_upload_v2, **kw)
+        except Exception as e:
+            logger.error("file upload failed (%s)", _slack_error(e) or safe_exc(e))
+            return 0
+        return len(ok)
 
     def _history_failed(self, why: str, wait: float = 0.0) -> None:
         if wait:
@@ -525,6 +773,15 @@ class SlackPort:
             return ""
         content = resp.get("content") if resp is not None else None
         return content if isinstance(content, str) else ""
+
+
+def _slack_error(e: BaseException) -> str:
+    """The Slack error code of a SlackApiError ("" for anything else); never the payload."""
+    resp = getattr(e, "response", None)
+    try:
+        return str(resp.get("error") or "") if resp is not None else ""
+    except Exception:
+        return ""
 
 
 def _ts(ts: str | None) -> datetime:
@@ -738,6 +995,7 @@ class SlackAdapter:
     async def _incoming(self, event: dict, team: str, mention: bool) -> Incoming:
         raw = event.get("text") or ""
         bot = self.port.bot_user_id
+        raw, groups = await self._resolve_groups(raw)
         mentioned = textfmt.slack_mentions(raw)
         names = {}
         for uid in dict.fromkeys(m for m in mentioned if m != bot):
@@ -758,12 +1016,115 @@ class SlackAdapter:
             at=_ts(ts),
             is_direct=direct,
             mentions_bot=mention or bot in mentioned,
-            mentions_others=any(m != bot for m in mentioned),
+            mentions_others=groups or any(m != bot for m in mentioned),
             thread=thread if thread and thread != ts else None,
             replies_to_bot=bool(event.get("parent_user_id") == bot and thread and thread != ts),
             files=await self._files(event.get("files") or []),
             room_name=room_name,
         )
+
+    async def _resolve_groups(self, raw: str) -> tuple[str, bool]:
+        """``<!subteam^S1|@design-team>`` -> ``@design-team (3 people)`` (usergroups:read, cached);
+        without the scope the handle alone. Returns the text and whether a group was named."""
+        found = list(dict.fromkeys(SUBTEAM.findall(raw)))[:5]
+        if not found:
+            return raw, False
+        labels = {gid: await self.port.group_label(gid, hint) for gid, hint in found}
+        return SUBTEAM.sub(lambda m: labels.get(m.group(1), m.group(0)), raw), True
+
+    # ------------------------------------------------------------ slash command (commands)
+    async def on_command(self, command: dict, team_id: str | None = None, ack=None) -> None:
+        """``/salid <question>``: answered in the channel as if the person had addressed Salid
+        there (the channel's mode still applies); ``/salid`` or ``/salid help``: the help text.
+        ``ack`` is Bolt's ack(): it is called first, within Slack's 3 seconds, with an ephemeral
+        line only the caller sees. Never raises."""
+
+        async def say(text: str) -> None:
+            if ack is not None:
+                await ack({"response_type": "ephemeral", "text": text})
+
+        try:
+            await self._command(command, team_id or self.port.team_id, say)
+        except Exception as e:
+            logger.error("slash command failed (%s)", safe_exc(e))
+            if ack is not None:
+                with contextlib.suppress(Exception):
+                    await say(SLASH_THINKING)
+
+    async def _command(self, command: dict, team: str, say) -> None:
+        question = (command.get("text") or "").strip()
+        channel, user = command.get("channel_id"), command.get("user_id")
+        if self.port.revoked or not channel or not user or not command.get("trigger_id"):
+            await say(SLASH_HELP)
+            return
+        if not question or question.lower() in ("help", "?", "ช่วยเหลือ"):
+            await say(SLASH_HELP)
+            return
+        direct = channel.startswith("D")
+        room_name = "" if direct else await self.port.room_name(channel)
+        gid, rid = ids.tenant_id(PLATFORM, team), ids.room_id(PLATFORM, team, channel)
+        await asyncio.to_thread(self.a.team.current, gid)
+        if self.a._mode(gid, rid, room_name, direct) == "off":
+            await say(SLASH_OFF)
+            return
+        await say(SLASH_THINKING)
+        plain = textfmt.slack_to_plain(question, self.port.bot_user_id)
+        trigger = str(command["trigger_id"])
+        self.port.slash[trigger] = "> " + textfmt.to_slack(plain)[:300].replace("\n", " ")
+        while len(self.port.slash) > MAX_SLASH:
+            self.port.slash.popitem(last=False)
+        msg = Incoming(
+            platform=PLATFORM,
+            tenant=team,
+            room=channel,
+            user=user,
+            user_name=await self.port.user_name(user),
+            text=plain,
+            message=trigger,
+            at=datetime.now(UTC),
+            is_direct=direct,
+            mentions_bot=True,
+            room_name=room_name,
+            private=not direct,  # answered to the invoker alone, never buffered or remembered
+        )
+        await self.a.handle(msg, self.port)
+
+    # ------------------------------------------------------------ reactions (reactions:read)
+    async def on_reaction(self, event: dict, team_id: str | None = None) -> None:
+        """`reaction_added`: ids and the emoji name are logged, nothing else. A ✅ by the person
+        on a Salid message in their DM counts as the "OK" of an open central-change notice
+        (`assistant.changes`, when wired); any other reaction is only recorded for now."""
+        team = team_id or event.get("team") or self.port.team_id
+        item = event.get("item") if isinstance(event.get("item"), dict) else {}
+        user, name = event.get("user"), str(event.get("reaction") or "").split("::")[0]
+        channel, ts = item.get("channel") or "", item.get("ts") or ""
+        logger.info(
+            "slack reaction_added user=%s name=%s channel=%s ts=%s on_salid=%s",
+            user, name, channel, ts, event.get("item_user") == self.port.bot_user_id,
+        )  # fmt: skip
+        if (
+            self.port.revoked
+            or not user
+            or user == self.port.bot_user_id
+            or item.get("type") != "message"
+            or event.get("item_user") != self.port.bot_user_id
+            or not channel.startswith("D")
+            or name not in CONFIRM_REACTIONS
+        ):
+            return
+        changes = getattr(self.a, "changes", None)
+        if changes is None:
+            return
+        msg = Incoming(
+            platform=PLATFORM, tenant=team, room=channel, user=user, user_name="",
+            text="", message=f"reaction:{ts}", at=datetime.now(UTC), is_direct=True,
+        )  # fmt: skip
+        try:
+            thanks = await changes.ack_message(f"{PLATFORM}-{team}", user, ts)
+            if thanks:
+                await self.port.deliver(msg, self.port.format(thanks), None)
+        except Exception as e:
+            logger.warning("reaction confirm failed (%s)", safe_exc(e))
 
     async def _files(self, raw: list[dict]) -> list[FileRef]:
         out = []
@@ -828,8 +1189,17 @@ class SlackAdapter:
         if kind in USER_EVENTS:
             await self._user_changed(event, team)
             return
+        if kind in GROUP_EVENTS:
+            sub = event.get("subteam") if isinstance(event.get("subteam"), dict) else {}
+            gid = event.get("subteam_id") or sub.get("id")
+            if gid:
+                self.port.group_changed(str(gid), renamed=kind == "subteam_updated")
+            return
         if kind == "file_shared":
             await self.on_file_shared(event, team)
+            return
+        if kind in REACTION_EVENTS:
+            await self.on_reaction(event, team)
             return
         if kind == "user_huddle_changed":
             user = event.get("user")
@@ -914,6 +1284,7 @@ async def connect(ps: PlatformSettings, assistant: Assistant):
     auth = await client.auth_test()
     team, bot = auth["team_id"], auth["user_id"]
     port = SlackPort(client, team, bot, history_client=live, import_client=plain)
+    port.exec_usergroups = frozenset(ps.slack_exec_usergroups)
     token = ps.slack_bot_token
 
     adapter = SlackAdapter(assistant, port, lambda url: download(token, url))
@@ -926,6 +1297,10 @@ async def connect(ps: PlatformSettings, assistant: Assistant):
     @app.event("app_mention")
     async def _mention(event, context):
         await adapter.on_message(event, context.team_id, mention=True)
+
+    @app.command(SLASH)
+    async def _command(ack, command, context):
+        await adapter.on_command(command, context.team_id, ack)
 
     @app.event(LIFECYCLE_EVENTS)
     async def _lifecycle(event, context):

@@ -46,6 +46,11 @@ display_information:
   description: "Team assistant: questions, receipts and team memory"
   background_color: "#2d3142"
 features:
+  slash_commands:
+    - command: /salid
+      description: Ask Salid a question (answered in this channel)
+      usage_hint: "[question | help]"
+      should_escape: false
   app_home:
     home_tab_enabled: false
     messages_tab_enabled: true
@@ -70,6 +75,12 @@ oauth_config:
       - users:read
       - users:read.email
       - canvases:read   # huddle AI notes (optional, see Huddle notes)
+      - files:write         # upload generated PDFs, decks and images into the thread
+      - im:write            # open a DM first (briefs, reminders, notices)
+      - reactions:write     # 👀 while working, ✅ / ⚠️ on recorded receipts
+      - reactions:read      # reaction_added: ✅ confirms a notice
+      - commands            # the /salid slash command
+      - usergroups:read     # resolve @group mentions, optional executive groups
 settings:
   event_subscriptions:
     bot_events:
@@ -95,8 +106,11 @@ settings:
       - user_change
       - file_shared            # huddle AI notes canvas (optional)
       - user_huddle_changed    # huddle presence, logged only (optional)
+      - reaction_added         # ✅ on a Salid DM confirms a notice; others are only logged
+      - subteam_members_changed  # user group membership changed: drop its cache at once
+      - subteam_updated          # user group renamed / edited: same
   interactivity:
-    is_enabled: false
+    is_enabled: true   # slash commands need it; Salid handles no buttons yet
   org_deploy_enabled: false
   socket_mode_enabled: true
   token_rotation_enabled: false
@@ -122,8 +136,44 @@ email), which removes their verified link to the organization. The channel event
 refresh cached names and member lists sooner; without them the caches expire after 10 minutes.
 
 Scope notes: `users:read` gives names and the admin/owner flag; `users:read.email` lets Salid read the profile email to verify members of an organization (optional, see Linking accounts); `*:read` scopes let Salid list the
-conversations it is in and who is in them (for memory scope). `reactions:write` is not needed.
+conversations it is in and who is in them (for memory scope). The six newer scopes are each optional and
+degrade quietly when missing (see "Files, DMs, reactions, /salid and user groups" below).
 `canvases:read` and the `file_shared` / `user_huddle_changed` events are only for Huddle notes (below); drop them if you keep `SALID_SLACK_HUDDLE_NOTES=false`.
+
+## Files, DMs, reactions, /salid and user groups
+
+All of these need the app to be **reinstalled** after the scopes are added (Install App → Reinstall).
+A missing scope never breaks an answer: the call is logged (error code only) and skipped.
+
+- **Files (`files:write`)**: when an answer carries generated files (PDF reports, slide decks,
+  images) Salid uploads them into the same thread with `files_upload_v2` (the
+  `getUploadURLExternal` + `completeUploadExternal` pair; `files.upload` is retired). At most 5 files
+  per answer, each up to 20 MB; empty or larger files are skipped and logged.
+- **Proactive DMs (`im:write`)**: `SlackPort.open_dm(user)` (`conversations.open`, cached) and
+  `SlackPort.send_dm(user, text)`; `SlackWorkspace.dm()` uses them, so briefs, reminders and notices
+  can reach people who never wrote first. App Home → Messages Tab must be on (the manifest does it).
+- **Reactions (`reactions:write`)**: Salid puts 👀 (`eyes`) on a message it is working on and removes
+  it with the answer; recorded receipts get ✅ and receipts that need a check ⚠️ (as on Discord).
+  Only reactions Salid added are ever removed.
+- **Reactions (`reactions:read`, event `reaction_added`)**: the event is logged with ids only (user,
+  emoji name, channel, ts). A ✅ by a person on a Salid message in their DM counts as "OK" only for the notice message it was put on (others: nothing) for an open
+  central-change notice. Other reactions are only recorded; approving or voiding receipts with ❌ is a
+  next step.
+- **`/salid <question>` (`commands`)**: acknowledged within 3 seconds with a private "one moment",
+  then answered **ephemerally** (`chat.postEphemeral`: only the person who typed it sees the
+  answer; the question is quoted above it; the channel mode still applies, `off` replies privately
+  that Salid is off). The question and answer are never put in the channel's memory or recent
+  buffer, no files are uploaded, and the model may use only that channel's own memory. In a DM it
+  answers normally in the DM.
+  `/salid` and `/salid help` show a private help text. Salid must be a **member of the channel**
+  (invite it); in a DM it answers in the DM.
+- **User groups (`usergroups:read`)**: `<!subteam^S123|@design-team>` in a message reaches the model as
+  `@design-team (3 people)` (display cache 10 minutes; without the scope just the handle). Membership used to decide who is
+  an executive is at most 60 seconds old, and `subteam_members_changed` / `subteam_updated` drop
+  the group's cache at once. To
+  make the members of some groups executives, set `SALID_SLACK_EXEC_USERGROUPS=leadership,S0123ABC`
+  (handles or ids, comma separated). Guests and people of other workspaces never qualify; a failed
+  lookup means "not an executive".
 
 ## Huddle notes (optional, experimental)
 

@@ -21,6 +21,9 @@ class PlatformSettings(BaseSettings):
     slack_bot_token: str = Field(default="", repr=False)  # xoxb-...
     slack_app_token: str = Field(default="", repr=False)  # xapp-... (connections:write)
     slack_exec_user_ids: Annotated[set[str], NoDecode] = Field(default_factory=set)
+    # User groups (handles like "leadership" or ids like "S0123ABC") whose members are
+    # executives; needs usergroups:read. Workspace admins / owners always count.
+    slack_exec_usergroups: Annotated[set[str], NoDecode] = Field(default_factory=set)
     slack_import: bool = True  # read channel history within the retention window
     # Remember the AI notes canvas of a huddle (needs canvases:read + the file_shared event). Off
     # for a workspace that must not store huddle transcripts.
@@ -87,6 +90,7 @@ class PlatformSettings(BaseSettings):
 
     @field_validator(
         "slack_exec_user_ids",
+        "slack_exec_usergroups",
         "line_exec_user_ids",
         "telegram_exec_user_ids",
         "whatsapp_exec_numbers",

@@ -144,6 +144,31 @@ async def test_ok_from_someone_else_or_in_a_group_acks_nothing(wd):
     assert states(wd, c)[("line-Ubot", "notify")] == "sent"
 
 
+async def test_a_reaction_acks_only_the_notice_it_was_put_on(wd):
+    wd.changes.add_pusher("line", "Ubot", wd.pusher("line"))
+    c1 = make_change(wd, title="CTO")
+    c2 = make_change(wd, title="CFO")
+    await wd.changes.tick()
+    refs = {
+        c.id: next(x.message_ref for x in wd.outbox.get(c.id).targets
+                   if x.kind == "notify" and x.workspace_id == "line-Ubot")
+        for c in (c1, c2)
+    }  # fmt: skip
+    assert set(refs) == {c1.id, c2.id} and len(set(refs.values())) == 2
+    # a reaction on some other Salid message (an answer, not a notice): nothing is confirmed
+    assert await wd.changes.ack_message("line-Ubot", "U-mew", "other-ref") is None
+    # someone else's reaction on the notice: nothing
+    assert await wd.changes.ack_message("line-Ubot", "U-boss", refs[c1.id]) is None
+    assert states(wd, c1)[("line-Ubot", "notify")] == "sent"
+    assert states(wd, c2)[("line-Ubot", "notify")] == "sent"
+    # the right message confirms that notice only
+    assert await wd.changes.ack_message("line-Ubot", "U-mew", refs[c1.id])
+    assert states(wd, c1)[("line-Ubot", "notify")] == "acked"
+    assert states(wd, c2)[("line-Ubot", "notify")] == "sent"
+    assert await wd.changes.ack_message("line-Ubot", "U-mew", refs[c1.id]) is None  # idempotent
+    assert await wd.changes.ack_message("line-Ubot", "U-mew", "") is None  # no ref, no match
+
+
 async def test_a_push_that_fails_is_counted_and_retried(wd):
     async def broken(user, text):
         raise RuntimeError("push refused")
