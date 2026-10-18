@@ -66,8 +66,8 @@ class ChangeButton(
 
 class ChangeOutboxMixin:
     """Needs `self.docs`, `self.s`, `self.team`, `self.guilds`, `_clock`, `deliver_to_person`,
-    `positions_sync`, `_positions_on`, `_deliver_langs`. Call `_change_outbox_init()` after
-    `_positions_init()`."""
+    `positions_sync`, `_positions_on`, `_deliver_langs`, `_monitor_note_queue`. Call
+    `_change_outbox_init()` after `_positions_init()`."""
 
     def _change_outbox_init(self) -> None:
         self.change_outbox = ChangeOutbox.from_settings(self.docs, self.s)
@@ -133,6 +133,7 @@ class ChangeOutboxMixin:
         await asyncio.to_thread(outbox.prune)
         due = await asyncio.to_thread(outbox.due)
         mine = [(c, x) for c, x in due if x.platform == "discord" and x.workspace_id in guilds]
+        self._monitor_note_queue("outbox_pending", len(mine))  # the monitor heartbeat's queue
         orgs: dict[str, str] = {}
         synced: dict[str, str] = {}  # workspace id -> "" (ok) or the error
 

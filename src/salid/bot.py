@@ -150,6 +150,7 @@ from .modes import (
     mode_label,
     parse_snooze_command,
 )
+from .monitor_bot import MonitorMixin
 from .naming import command_text, mentions_name
 from .nodue_bot import NoDeadlineMixin
 from .pdf_report import find_fonts, font_note
@@ -411,6 +412,7 @@ class SecretaryBot(
     ContestsMixin,
     BizfinMixin,
     CooMixin,
+    MonitorMixin,  # change-log emitter + heartbeat, last in every tick (salid.monitor_bot)
     ActionsMixin,
     BriefingMixin,
     HintsMixin,
@@ -559,6 +561,7 @@ class SecretaryBot(
         self._recent_swept = float("-inf")
         self._viewers: dict[tuple[int, int], tuple[float, frozenset[int]]] = {}  # (guild, channel)
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
+        self._monitor_init()  # workflow monitor emitter + heartbeat (salid.monitor_bot)
         self._init_actions()  # web -> Discord actions (salid.actions); needs self.docs
         self._polls_init()  # polls and DM forms (salid.polls_bot)
         self._votes_init()  # meeting votes with button ballots (salid.votes_bot)
@@ -3510,7 +3513,7 @@ class SecretaryBot(
         await self._votes_due()
         await self._reminders_due()
         await self._nodue_due()
-        await self._actions_due()
+        self._monitor_note_queue("actions", await self._actions_due())
         await self._pc_sweep()
         await self._people_due()
         await self._positions_due()
@@ -3518,6 +3521,7 @@ class SecretaryBot(
         await self._travel_due()
         await self._markets_due()
         await self._contests_due()
+        await self._monitor_due()  # last: flushes what this tick's producers buffered
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""
