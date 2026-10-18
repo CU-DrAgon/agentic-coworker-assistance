@@ -703,25 +703,31 @@ def test_pending_action_is_stuck_after_60_s_only_while_the_bot_is_online(w):
     assert reasons() == {fresh: ("queued", "bot_offline"), slow: ("queued", "bot_offline")}
 
 
-def test_running_video_is_stuck_after_10_min(w, monkeypatch):
-    """The real `video_ad` source over the bot's job records (Bangkok times, as the bot writes
-    them): a step not updated for more than 600 s is stuck."""
+def real_video_source(monkeypatch):
     real = (monitor_sources.video_source, monitor_sources.video_finder)
     monkeypatch.setitem(monitor_sources.SOURCES, "video_ad", real)
 
-    def job(key, seconds_ago, *, requester=7, guild=GUILD):
-        at = (NOW - timedelta(seconds=seconds_ago)).astimezone(BKK).isoformat(timespec="seconds")
-        step = {"name": "stills", "state": "running", "started_at": at, "ms": None,
-                "attempts": 1, "error_code": ""}  # fmt: skip
-        rec = {"guild_id": guild, "channel_id": 55, "requester_id": requester, "state": "stills",
-               "created_at": at, "updated_at": at, "cost_usd": 0.1008, "reason": "",
-               "hero_id": SENTINEL, "brief": SENTINEL, "steps": [step]}  # fmt: skip
-        w.docs.put(monitor_sources.VIDEO_JOBS, guild, key, rec)
 
-    job("v_slow", 601)
-    job("v_fresh", 599)
-    job("v_other", 601, requester=8)
-    job("v_elsewhere", 601, guild=2000)  # a server of no org: never read
+def put_video(w, key, seconds_ago=60, *, requester=7, guild=GUILD, **extra):
+    """A job record as the bot writes it (Bangkok times), at the `stills` step."""
+    at = (NOW - timedelta(seconds=seconds_ago)).astimezone(BKK).isoformat(timespec="seconds")
+    step = {"name": "stills", "state": "running", "started_at": at, "ms": None, "attempts": 1,
+            "error_code": ""}  # fmt: skip
+    rec = {"guild_id": guild, "channel_id": 55, "requester_id": requester, "state": "stills",
+           "created_at": at, "updated_at": at, "cost_usd": 0.1008, "reason": "",
+           "hero_id": SENTINEL, "brief": SENTINEL, "steps": [step], **extra}  # fmt: skip
+    w.docs.put(monitor_sources.VIDEO_JOBS, guild, key, rec)
+    return rec
+
+
+def test_running_video_is_stuck_after_10_min(w, monkeypatch):
+    """The real `video_ad` source over the bot's job records: a step not updated for more than
+    600 s is stuck."""
+    real_video_source(monkeypatch)
+    put_video(w, "v_slow", 601)
+    put_video(w, "v_fresh", 599)
+    put_video(w, "v_other", 601, requester=8)
+    put_video(w, "v_elsewhere", 601, guild=2000)  # a server of no org: never read
     rows = {
         r["id"]: r for r in get(w, "boss", "/items", params={"kind": "video_ad"}).json()["items"]
     }
@@ -747,6 +753,36 @@ def test_running_video_is_stuck_after_10_min(w, monkeypatch):
     assert get(w, "boss", "/items/video_ad/v_elsewhere").status_code == 404
     bodies = [get(w, "boss", "/items").json(), d, get(w, "boss", "/summary").json()]
     assert SENTINEL not in "".join(strings(bodies)) and "audience" not in set(strings(bodies))
+
+
+def test_a_dm_requested_video_job_is_private_to_its_requester(w, monkeypatch):
+    """Spec 4.1: owners see everything except DM-scope items. A job asked for in a DM (or a
+    private Salid channel) shows to its requester only, without a link; a server job is
+    unchanged."""
+    real_video_source(monkeypatch)
+    dm = put_video(w, "v_dm", dm=True)
+    shared = put_video(w, "v_srv", dm=False)
+    batch = {"ids": "video_ad:v_dm,video_ad:v_srv"}
+    for who in ("boss", "adm"):
+        assert ids_of(get(w, who, "/items")) == ["v_srv"], who
+        assert ids_of(get(w, who, "/items", params=batch)) == ["v_srv"], who
+        assert get(w, who, "/items/video_ad/v_dm").status_code == 404, who
+        assert get(w, who, "/summary").json()["by_kind"] == {"video_ad": 1}, who
+    assert ids_of(get(w, "root", "/items", base=OPS)) == ["v_srv"]  # super admin: read-only view
+    assert ids_of(get(w, "root", "/items", base=OPS, params=batch)) == ["v_srv"]
+    assert get(w, "root", "/items/video_ad/v_dm").status_code == 404
+    assert sorted(ids_of(get(w, "mem", "/items"))) == ["v_dm", "v_srv"]
+    d = get(w, "mem", "/items/video_ad/v_dm").json()
+    assert (d["mine"], d["controls"], d["links"]) == (True, ["cancel"], {})
+    assert get(w, "mem", "/items/video_ad/v_srv").json()["links"] == {
+        "discord": f"https://discord.com/channels/{GUILD}/55"
+    }
+    items = [monitor_sources.adapt_video("v_dm", dm), monitor_sources.adapt_video("v_srv", shared)]
+    monitor.emit_items(w.docs, ORG, items)  # as the bot's flush writes them
+    for who, seen in (("boss", ["v_srv"]), ("root", ["v_srv"]), ("mem", ["v_dm", "v_srv"])):
+        r = get(w, who, "/changes?since=0")
+        assert r.status_code == 200, who
+        assert [e["id"] for e in r.json()["events"]] == seen, who
 
 
 # ------------------------------------------------------------------ web producers

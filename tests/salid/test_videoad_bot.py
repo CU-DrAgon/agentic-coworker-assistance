@@ -20,7 +20,7 @@ from test_modes import Chan, TMsg, bot  # fixture
 from salid import monitor_sources, videoad, videoad_bot
 from salid.guild_settings import FEATURES, Features, GuildSettingsUpdate
 from salid.i18n import resolve_lang, t
-from salid.monitor import read_log
+from salid.monitor import FINAL, read_log
 from salid.profiles import Profile, effective_language
 from salid.qa import FileInput
 
@@ -42,7 +42,7 @@ Args:
     music: add background music (only when enabled for this server)."""
 RECORD_KEYS = {
     "guild_id", "channel_id", "requester_id", "state", "created_at", "updated_at", "cost_usd",
-    "reason", "hero_id", "steps",
+    "reason", "hero_id", "steps", "dm",
 }  # fmt: skip
 FILE = "ad-20261014-1200.mp4"
 AT = "2026-10-14T12:00:00+07:00"  # FixedClockSettings.now()
@@ -212,6 +212,28 @@ async def until(cond):
 
 def records(bot):
     return bot.docs.find("salid_video_jobs", GUILD)
+
+
+def capture_records(bot) -> list[dict]:
+    """Every job record written from now on, in order (the `_active` index left out)."""
+    seen, real = [], bot.docs.put
+
+    def put(kind, gid, key, doc):
+        if kind == "salid_video_jobs" and key != "_active":
+            seen.append(json.loads(json.dumps(doc)))
+        return real(kind, gid, key, doc)
+
+    bot.docs.put = put
+    return seen
+
+
+def step_states(rec) -> list[tuple[str, str]]:
+    return [(s["name"], s["state"]) for s in rec["steps"]]
+
+
+def no_running_step_once_final(rec) -> bool:
+    item = monitor_sources.adapt_video("j", rec)
+    return item.status not in FINAL or all(s.state != "running" for s in item.steps)
 
 
 def active(bot) -> dict:
@@ -763,30 +785,73 @@ async def test_a_job_cancelled_before_anything_was_billed_never_shows_as_failed(
 ):
     """Cancel pressed while the storyboard is planned: the real runner records RETURNED (with
     reason "cancelled") before it gives the ad back, then the job ends cancelled."""
-    seen = []
-    real_put = on.docs.put
-
-    def put(kind, gid, key, doc):
-        if kind == "salid_video_jobs" and key != "_active":
-            seen.append((doc["state"], doc["reason"]))
-        return real_put(kind, gid, key, doc)
+    seen = capture_records(on)
 
     def plan(*a, **kw):
         on._video_jobs[GUILD].handle.cancelled.set()  # pressed during the storyboard
         return board()
 
-    on.docs.put = put
     monkeypatch.setattr(videoad, "plan_storyboard", plan)
     on.monitor.enabled = True
     tool, _ = tool_for(on, world)
     assert tool(brief="a") == STARTED
     await settle(on)
     await on._monitor_due()
-    assert seen == [("queued", ""), ("storyboard", ""), ("returned", "cancelled"),
-                    ("cancelled", "")]  # fmt: skip
+    assert [(d["state"], d["reason"], step_states(d)) for d in seen] == [
+        ("queued", "", []),
+        ("storyboard", "", [("storyboard", "running")]),
+        ("returned", "cancelled", [("storyboard", "cancelled")]),  # closed with the job
+        ("cancelled", "", [("storyboard", "cancelled")]),
+    ]
+    assert all(no_running_step_once_final(d) for d in seen)
     statuses = [e["status"] for e in read_log(on.docs, f"guild:{GUILD}")["events"]]
     assert statuses == ["queued", "running", "cancelled", "cancelled"]
     assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 0}  # given back
+
+
+async def test_a_returned_job_that_failed_closes_its_running_step(on, world, monkeypatch):
+    """The storyboard fails, nothing was billed: the RETURNED record already ends the step (the
+    item is final), and the job's final record keeps it that way."""
+    seen = capture_records(on)
+
+    def plan(*a, **kw):
+        raise videoad.StoryboardError("no usable storyboard")
+
+    monkeypatch.setattr(videoad, "plan_storyboard", plan)
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert [(d["state"], d["reason"], step_states(d)) for d in seen] == [
+        ("queued", "", []),
+        ("storyboard", "", [("storyboard", "running")]),
+        ("returned", "", [("storyboard", "failed")]),
+        ("failed", "storyboard", [("storyboard", "failed")]),
+    ]
+    assert all(no_running_step_once_final(d) for d in seen)
+    assert seen[-1]["steps"] == [{**ANY_STEP, "name": "storyboard", "state": "failed"}]
+
+
+async def test_step_bookkeeping_never_stops_the_records(on, world, monkeypatch, caplog):
+    """Broken step helpers: every record is still written, RETURNED included (so a restart's
+    sweep never gives the ad back a second time), and the logs carry the error type only."""
+    seen = capture_records(on)
+
+    def broken(*a, **kw):
+        raise RuntimeError("secret H")
+
+    def plan(*a, **kw):
+        raise videoad.StoryboardError("no usable storyboard")
+
+    monkeypatch.setattr(videoad_bot, "step_started", broken)
+    monkeypatch.setattr(videoad_bot, "steps_closed", broken)
+    monkeypatch.setattr(videoad, "plan_storyboard", plan)
+    on.docs.put("salid_media_usage", GUILD, "2026-10", {"ads": 3})
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert [d["state"] for d in seen] == ["queued", "storyboard", "returned", "failed"]
+    assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 3}  # back once
+    assert "RuntimeError" in caplog.text and "secret H" not in caplog.text
 
 
 async def test_video_jobs_emit_nothing_while_the_monitor_is_off(on, world, runner, monkeypatch):
@@ -797,6 +862,39 @@ async def test_video_jobs_emit_nothing_while_the_monitor_is_off(on, world, runne
     tool(brief="a")
     await settle(on)
     assert added == [] and records(on)[0]["state"] == "done"
+
+
+async def test_the_record_says_whether_the_ad_was_asked_in_private(on, world, runner):
+    """A DM or a member's private Salid channel (from the cache `on_message` fills, else the
+    store) -> `dm` true, so the monitor shows the job to its requester only."""
+    private = Chan(902)
+    on.private_chats.put(GUILD, world.staff.id, private.id)  # not cached yet: read from the store
+    on._pc_owners[903] = world.boss.id  # cached: somebody's private channel
+    asks = [
+        RMsg(world.g, world.pub, world.staff, "x"),  # a server channel
+        RMsg(None, Chan(901), world.staff, "x"),  # a DM about this server
+        RMsg(world.g, private, world.staff, "x"),
+        RMsg(world.g, Chan(903), world.staff, "x"),
+    ]
+    flags = []
+    for msg in asks:
+        tool, _ = tool_for(on, world, msg=msg)
+        assert tool(brief="a") == STARTED
+        job_id = on._video_jobs[GUILD].job_id
+        await settle(on)
+        flags.append(on.docs.get("salid_video_jobs", GUILD, job_id)["dm"])
+    assert flags == [False, True, True, True]
+
+
+async def test_a_failed_private_channel_lookup_counts_as_private(on, world, runner, monkeypatch):
+    def broken(*a):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(on.private_chats, "owner_of", broken)
+    tool, _ = tool_for(on, world, msg=RMsg(world.g, Chan(904), world.staff, "x"))
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert records(on)[0]["dm"] is True  # fail closed: hidden from admins, not exposed
 
 
 async def test_a_monitor_failure_never_breaks_the_job(on, world, runner, monkeypatch, caplog):

@@ -20,10 +20,12 @@
 - job records in DocStore kind `salid_video_jobs` (written on every state change, with the
   pending Omni interaction id `hero_id` while a hero clip is made and `steps`: each step's
   name, state, start, duration in ms (the bot's clock), attempts and error code, kept by
-  `videoad.step_started` / `steps_closed`; never the brief, the storyboard or media); every
-  record written also buffers a workflow-monitor event (`monitor_sources.adapt_video`, flushed
-  by `MonitorMixin`; nothing while the monitor is off, and a monitor failure never touches the
-  job), and one active-jobs index in the same kind (guild 0, key `_active`,
+  `videoad.step_started` / `steps_closed` (a step still running when the runner gives the ad
+  back, RETURNED, ends there), and `dm`: true when the ad was asked for in a DM or in a
+  member's private Salid channel, so the monitor shows the job to its requester only; never the
+  brief, the storyboard or media); every record written also buffers a workflow-monitor event
+  (`MonitorMixin._monitor_video`; nothing while the monitor is off, and a monitor failure never
+  touches the job), and one active-jobs index in the same kind (guild 0, key `_active`,
   `{job id: guild id}`), changed under the slot lock when a job is reserved and when it ends;
   `_sweep_video_jobs`: on the first `on_ready`, it reads only that index and the jobs in it:
   jobs a restart cut off are marked failed (their running step too, with error code
@@ -60,8 +62,6 @@ from .dm import send_dm
 from .i18n import CATALOG, resolve_lang, t
 from .imagegen_bot import looks_spoken
 from .llm import make_media_client
-from .monitor import event_for
-from .monitor_sources import adapt_video
 from .promo import usable_photos
 from .videoad import (
     LENGTHS,
@@ -121,6 +121,7 @@ class VideoJob:
     final: bool = False
     steps: list[dict] = field(default_factory=list)  # the record's `steps` (videoad.step_started)
     step_t0: float = 0.0  # bot clock when the running step started
+    dm: bool = False  # asked in a DM or a private Salid channel: the requester's eyes only
 
 
 class CancelView(discord.ui.View):
@@ -141,9 +142,10 @@ class CancelView(discord.ui.View):
 
 
 class VideoAdMixin:
-    """Needs `self.s`, `self.llm`, `self.team`, `self.docs`, `self.monitor` (`MonitorMixin`),
-    `self._clock`, `self._sleep`, `_lang`, `_interaction_lang`, `_may_configure` and
-    `_reply_with_uploads`. Call `_init_video_ads()` once after `self.docs` exists."""
+    """Needs `self.s`, `self.llm`, `self.team`, `self.docs`, `self._clock`, `self._sleep`,
+    `_lang`, `_interaction_lang`, `_may_configure`, `_reply_with_uploads`, `_monitor_video`
+    (`MonitorMixin`) and the private-channel lookup of `PrivateChatMixin` (`_pc_owners`,
+    `private_chats`). Call `_init_video_ads()` once after `self.docs` exists."""
 
     def _init_video_ads(self) -> None:
         self._video_jobs: dict[int, Any] = {}  # guild -> its job, reserved before the launch
@@ -258,6 +260,7 @@ class VideoAdMixin:
             requester_id=asker.id,
             lang=lang,
             created_at=now.isoformat(timespec="seconds"),
+            dm=self._video_private(message),
         )
         req = VideoRequest(
             guild_id=gid,
@@ -294,6 +297,24 @@ class VideoAdMixin:
             out["note"] += f" Also say that {what} {'is' if len(ignored) == 1 else 'are'} not"
             out["note"] += " enabled on this server."
         return out
+
+    def _video_private(self, message) -> bool:
+        """The ad was asked for in a private conversation: a DM, or a member's private Salid
+        channel (theirs alone, like a DM). The channel's owner comes from the cache `on_message`
+        fills before any answer; a channel missing from it is read from the store (blocking, like
+        the month peek). A failed lookup counts as private (fail closed)."""
+        if message.guild is None:
+            return True
+        try:
+            cid = message.channel.id
+            owners = self._pc_owners
+            owner = (
+                owners[cid] if cid in owners else self.private_chats.owner_of(message.guild.id, cid)
+            )
+        except Exception as e:
+            logger.warning("video job: private channel lookup failed: %s", type(e).__name__)
+            return True
+        return owner is not None
 
     # ------------------------------------------------------------- the background job
     def _launch_video(self, job: VideoJob, message, req: VideoRequest) -> None:
@@ -341,14 +362,11 @@ class VideoAdMixin:
         job.last_edit = self._clock()
 
         def progress(step: str, detail: str) -> None:  # in the job's worker thread
-            now = self._clock()
-            at = self.s.now().isoformat(timespec="seconds")
-            elapsed = self._video_elapsed_ms(job, now)
-            if step_started(job.steps, step, at=at, elapsed_ms=elapsed):
-                job.step_t0 = now
             # the ad goes back after a cancel: the record says so, so it never shows as failed
             cancelled = step == RETURNED and job.handle.cancelled.is_set()
-            self._video_save(job, step, reason="cancelled" if cancelled else "")
+            reason = "cancelled" if cancelled else ""
+            self._video_note_step(job, step, reason)
+            self._video_save(job, step, reason=reason)  # always, even if the note failed
             with contextlib.suppress(RuntimeError):  # the loop is closing
                 loop.call_soon_threadsafe(self._video_progress, job, step)
 
@@ -459,8 +477,7 @@ class VideoAdMixin:
             job.edit_task.cancel()
         if job.view is not None:
             job.view.stop()
-        elapsed = self._video_elapsed_ms(job, self._clock())
-        steps_closed(job.steps, state, elapsed_ms=elapsed, error_code=reason)
+        self._video_close_steps(job, state, reason)
         await self._video_record(job, state, reason=reason)
         # it ended in this process: out of the index even if the record could not be written
         await asyncio.to_thread(self._video_unindex, job.job_id)
@@ -542,6 +559,7 @@ class VideoAdMixin:
                 "cost_usd": round(job.handle.cost_usd, 4),
                 "reason": reason,
                 "steps": [dict(s) for s in job.steps],
+                "dm": job.dm,
                 # the Omni clip being made: a restart cancels it (`_sweep_video_jobs`)
                 **({"hero_id": job.handle.hero_id} if job.handle.hero_id else {}),
             }
@@ -549,19 +567,36 @@ class VideoAdMixin:
         except Exception:
             logger.warning("video job record not saved", exc_info=True)
             return False
-        self._video_emit(job.guild_id, job.job_id, rec)
+        self._monitor_video(job.guild_id, job.job_id, rec)
         return True
 
-    def _video_emit(self, guild_id: int, job_id: str, rec: dict) -> None:
-        """Buffer the monitor event of a job record just written (the monitor's own loop writes
-        it to the guild's org log). Nothing while the monitor is off; never raises, logs the
-        error type only."""
+    def _video_note_step(self, job: VideoJob, step: str, reason: str) -> None:
+        """Keep `job.steps` up to date for a progress report: a step of STEPS starts (the one
+        running closes as done), RETURNED ends the running step (cancelled when `reason` says
+        so, else failed: the job ends right after). Never raises (logs the error type only), so
+        bookkeeping never stops the record that follows."""
         try:
-            if not self.monitor.enabled:
+            now = self._clock()
+            elapsed = self._video_elapsed_ms(job, now)
+            if step == RETURNED:
+                state = "cancelled" if reason == "cancelled" else "failed"
+                code = reason if state == "failed" else ""
+                steps_closed(job.steps, state, elapsed_ms=elapsed, error_code=code)
                 return
-            self.monitor.add_for_guild(guild_id, event_for(adapt_video(job_id, rec)))
-        except Exception as e:  # the type only (the text may quote the record)
-            logger.warning("monitor video event failed: %s", type(e).__name__)
+            at = self.s.now().isoformat(timespec="seconds")
+            if step_started(job.steps, step, at=at, elapsed_ms=elapsed):
+                job.step_t0 = now
+        except Exception as e:
+            logger.warning("video job steps not noted: %s", type(e).__name__)
+
+    def _video_close_steps(self, job: VideoJob, state: str, reason: str) -> None:
+        """The job ended: its running step ends with it. Never raises (logs the error type
+        only), so the final record is always written."""
+        try:
+            elapsed = self._video_elapsed_ms(job, self._clock())
+            steps_closed(job.steps, state, elapsed_ms=elapsed, error_code=reason)
+        except Exception as e:
+            logger.warning("video job steps not closed: %s", type(e).__name__)
 
     def _video_elapsed_ms(self, job: VideoJob, now: float) -> int:
         """How long the running step has taken by the bot's clock (`now`)."""
@@ -678,7 +713,7 @@ class VideoAdMixin:
             except Exception:
                 logger.warning("video job %s not marked failed", key, exc_info=True)
                 continue
-            self._video_emit(gid, key, update)
+            self._monitor_video(gid, key, update)
             month = self._video_refundable(doc)
             if month:
                 await asyncio.to_thread(self._video_give_back, gid, month)

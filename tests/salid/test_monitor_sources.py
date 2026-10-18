@@ -285,6 +285,15 @@ def test_adapt_video_mapping():
     assert restarted.error.code == "restarted"
 
 
+def test_a_video_asked_for_in_private_is_the_requesters_alone():
+    private = adapt_video("j1", video("stills", dm=True))
+    assert private.audience == Audience(dm=True, people=["discord:7"])
+    assert private.links == {}  # never a link that names the DM channel
+    shared = adapt_video("j1", video("stills", dm=False))
+    assert shared.audience == Audience(people=["discord:7"]) and shared.links
+    assert adapt_video("j1", video("stills")).audience.dm is False  # records from before
+
+
 def test_adapt_video_never_echoes_stored_text():
     rec = video(
         SENTINEL,

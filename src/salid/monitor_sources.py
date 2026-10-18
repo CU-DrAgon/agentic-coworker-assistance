@@ -374,9 +374,10 @@ def adapt_video(job_id: str, rec: dict) -> MonitorItem:
     """One video-ad job record (`salid_video_jobs`) as an item: queued -> queued, a step ->
     running (that step), done -> done, failed -> failed with attention and its reason code,
     cancelled -> cancelled, RETURNED -> cancelled or failed by its reason. Every step of
-    `VIDEO_STEPS` is listed. Seen by the requester (`discord:<id>`) and by owners and admins.
-    Never the brief, storyboard, captions or Omni interaction id; `org_id` is left for the
-    source to set."""
+    `VIDEO_STEPS` is listed. Seen by the requester (`discord:<id>`) and by owners and admins;
+    a job asked for in a private conversation (record `dm`: a DM or a private Salid channel;
+    missing = false) only by its requester, and without the Discord link. Never the brief,
+    storyboard, captions or Omni interaction id; `org_id` is left for the source to set."""
     raw, reason = str(rec.get("state") or ""), str(rec.get("reason") or "")
     status = _video_status(raw, reason)
     final = status in FINAL
@@ -384,6 +385,8 @@ def adapt_video(job_id: str, rec: dict) -> MonitorItem:
     requester = person_key("discord", rid) if rid else ""
     gid, cid = _discord_id(rec.get("guild_id")), _discord_id(rec.get("channel_id"))
     created, updated = _utc(rec.get("created_at")), _utc(rec.get("updated_at"))
+    dm = bool(rec.get("dm"))
+    linked = gid and cid and not dm
     return MonitorItem(
         kind="video_ad",
         id=str(job_id),
@@ -400,8 +403,8 @@ def adapt_video(job_id: str, rec: dict) -> MonitorItem:
         finished_at=_iso(updated or created) if final else "",
         cost_usd=_number(rec.get("cost_usd")),
         error=safe_error(reason) if status == "failed" else None,
-        links={"discord": f"{DISCORD_URL}channels/{gid}/{cid}"} if gid and cid else {},
-        audience=Audience(people=[requester] if requester else []),
+        links={"discord": f"{DISCORD_URL}channels/{gid}/{cid}"} if linked else {},
+        audience=Audience(dm=dm, people=[requester] if requester else []),
     )
 
 
