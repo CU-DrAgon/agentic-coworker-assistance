@@ -32,6 +32,7 @@ from typing import Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 
+from ..i18n import t as tr
 from ..naming import mentions_name
 from ..qa import MAX_FILE_BYTES
 from . import ids, textfmt
@@ -385,12 +386,17 @@ STOP_DIRECT = ("บล็อกหรือลบแชทกับสลิด"
 
 
 def notice_text(days: int | None, direct: bool) -> str:
-    """The join / follow message (Thai, then English; no links). `days` None: memory is off."""
+    """The join / follow message (Thai, then English; no links). `days` None: memory is off;
+    0: kept forever (said in words, `line_memory_forever`), never a number of days."""
     th, en = NOTICE_TH, NOTICE_EN
     if days is not None:
         stop_th, stop_en = STOP_DIRECT if direct else STOP_GROUP
-        th += MEMORY_TH.format(days=days, stop_th=stop_th)
-        en += MEMORY_EN.format(days=days, stop_en=stop_en)
+        if days <= 0:
+            th += "\n\n" + tr("line_memory_forever", "th", stop=stop_th)
+            en += "\n\n" + tr("line_memory_forever", "en", stop=stop_en)
+        else:
+            th += MEMORY_TH.format(days=days, stop_th=stop_th)
+            en += MEMORY_EN.format(days=days, stop_en=stop_en)
     return f"{th}\n\n— — —\n\n{en}"
 
 
@@ -493,7 +499,7 @@ class LineAdapter:
                     )
             except Exception as e:
                 logger.warning("could not set LINE memory retention (%s)", safe_exc(e))
-        return team.memory_retention_days(gid)
+        return team.retention_shown(gid)  # the stored days, 0 = keep forever
 
     def _welcome_info(
         self, gid: int, rid: int, tenant: str, direct: bool

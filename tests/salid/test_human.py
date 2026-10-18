@@ -341,6 +341,8 @@ async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     # it points to the server language and the person's own language instead.
     r = await asyncio.to_thread(a.set_channel_language, "en", None)
     assert r["error"] == "no_channel_languages" and "set_server_language" in r["use"]
+    assert "Ask the person first" in r["use"]
+    assert "never call set_server_language" in r["use"]  # one room is not the whole server
     assert bot.guilds_store.get(GUILD).channel_languages == {}  # nothing written
     assert bot.team.channel_language(GUILD, 10) == "th"
     assert (await asyncio.to_thread(a.set_channel_language, "fr", None))[

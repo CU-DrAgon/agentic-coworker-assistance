@@ -17,7 +17,7 @@ def mode_label(mode: str, lang: str = "en") -> str:
     return t(f"mode_label_{mode}", lang)
 
 
-def mode_help(mode: str, lang: str = "en", days: int = 90) -> str:
+def mode_help(mode: str, lang: str = "en", days: int = 0) -> str:
     """The mode's help text with the memory retention `days` (0 = kept forever, said in words)."""
     return t_days(f"mode_help_{mode}", lang, days)
 

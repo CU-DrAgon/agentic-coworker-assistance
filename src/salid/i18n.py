@@ -1143,6 +1143,18 @@ CATALOG: dict[str, dict[str, str]] = {
         "answer questions like “what did we discuss yesterday?”, and will only share information "
         "from it with people who can see this channel. To stop, type /mode and pick 🔇 Off.",
     },
+    # LINE join / follow notice when the company keeps memory forever (salid.platforms.line)
+    "line_memory_forever": {
+        "th": "ในแชทนี้สลิดจะจำข้อความไว้เป็นความจำของทีม เพื่อช่วยตอบเรื่องที่เคยคุยกัน "
+        "เก็บไว้ถาวร และใช้เฉพาะในแชทนี้เท่านั้น\n"
+        "• ให้ลืมข้อความหนึ่ง: ยกเลิกการส่งข้อความนั้น สลิดจะลบออกจากความจำ\n"
+        "• ให้หยุดจำ: {stop} ข้อความที่จำไว้แล้วจะยังเก็บไว้ (ผู้ดูแลเปลี่ยนระยะเวลาเก็บได้ที่ศูนย์บัญชาการ)",
+        "en": "In this chat I remember messages as team memory, to help answer things you "
+        "discussed before. They are kept forever and used only in this chat.\n"
+        "• To make me forget a message: unsend it and I delete it from memory.\n"
+        "• To stop me remembering: {stop} What is already stored stays (an admin can change how "
+        "long it is kept in the command center).",
+    },
     # ---------------------------------------------------------------- slash command texts
     # (Discord shows one description, so these are bilingual in both columns)
     "cmd_setup": _bi("เชื่อมเซิร์ฟเวอร์กับศูนย์บัญชาการ (ผู้ดูแล)", "Link server to command center (admins)"),

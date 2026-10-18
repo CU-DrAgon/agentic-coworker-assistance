@@ -647,6 +647,15 @@ def test_tools_without_a_retention_read_the_forever_window_not_one_day(mstore, s
     assert live.retention_days == FOREVER_DAYS
 
 
+@pytest.mark.parametrize("live, expected", [(None, 30), (-5, 30), (0, FOREVER_DAYS), (7, 7)])
+def test_a_missing_or_negative_live_retention_falls_back_to_the_construction_value(
+    mstore, settings, live, expected
+):
+    tools = MemoryTools(mstore, GUILD, {10: "g"}, settings, retention_days=30,
+                        retention_of=lambda: live)  # fmt: skip
+    assert tools.retention_days == expected
+
+
 def test_memory_tools_on_the_keep_forever_default_read_the_forever_window(mstore, settings):
     """Without a per-guild retention (e.g. the web chat) the tools use the settings default:
     0 = keep forever must be the 10-year window, not clamped to one day."""
@@ -1081,6 +1090,7 @@ def test_keep_forever_is_said_in_words_never_as_a_number_of_days(key):
             assert text != t(f"{key}_forever", "en"), (key, lang)
         assert t_days(key, lang, 30, **fmt) == t(key, lang, days=30, **fmt)
     assert mode_help("off", "th", 0) == t("mode_help_off", "th")  # no memory in Off
+    assert mode_help("call") == t("mode_help_call_forever", "en")  # the default: keep forever
 
 
 def test_the_shown_retention_is_zero_for_keep_forever(bot):
@@ -1267,7 +1277,7 @@ async def test_shortening_retention_purges_the_guild_and_drops_its_index(bot, wo
 
 
 async def test_hub_shortening_applies_to_live_tools_before_the_settings_cache_expires(bot, world):
-    """The hub writes the guild store directly; the bot's cached settings stay at the forever window for
+    """The hub writes the guild store directly; the bot's cached settings stay at 90 days for
     up to the TTL. A tool must still clamp to the shortened window at once (fail closed)."""
     topic_day(bot.memory_store, "2026-10-08", 10, "ประชุมเก่า")  # 6 days before "today"
     choose_retention(bot, 90)
@@ -1276,7 +1286,7 @@ async def test_hub_shortening_applies_to_live_tools_before_the_settings_cache_ex
     assert tools.chat_days("2026-10-01", "2026-10-14")["count"] == 1
     bot.team.store.set_memory_retention_days(GUILD, 1)  # what the hub does: bypasses the cache
     assert tools.chat_days("2026-10-01", "2026-10-14")["count"] == 0
-    bot._memory_cfg_seen[GUILD] = (True, FOREVER_DAYS)
+    bot._memory_cfg_seen[GUILD] = (True, 90)
     bot._memory_triggers()  # the purge detector must see the hub change too
     await asyncio.gather(*bot._bg_tasks)
     assert bot.memory_store.summaries(GUILD, {10}, "2026-10-01", "2026-10-31") == []

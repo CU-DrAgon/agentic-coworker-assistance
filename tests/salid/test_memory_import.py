@@ -15,7 +15,7 @@ from test_modes import STAFF, TMsg, bot, set_mode, world
 
 from salid import bot as botmod
 from salid.extract import IngestResult
-from salid.guild_settings import FOREVER_DAYS, GuildSettingsUpdate
+from salid.guild_settings import GuildSettingsUpdate
 from salid.image_memory import ImageNote, format_note, image_mime
 from salid.memory_import import import_progress
 from salid.models import Receipt

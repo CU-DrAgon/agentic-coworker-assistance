@@ -3036,3 +3036,17 @@ def test_overlay_includes_the_persons_google_calendar(w, monkeypatch):
     monkeypatch.setattr(center, "get_google_http", lambda: Http([500]))
     r = w.client.get(url + "?mine=1", headers=H["mem"])
     assert r.status_code == 200 and r.json()["google"]["error"] == "failed"
+
+
+def test_web_chat_settings_say_keep_forever_like_the_bot(w):
+    """A stored 0 is "keep forever": the web chat's show_settings must not hand the model a bare
+    0 (it would say "0 days"); it says forever, like the Discord bot's show_settings."""
+    r = w.client.post(
+        f"/api/center/orgs/{w.org.id}/chat", json={"message": "ตั้งค่าตอนนี้เป็นยังไง"}, headers=H["boss"]
+    )
+    assert r.status_code == 200
+    tools = {getattr(f, "__name__", ""): f for f in w.asks[-1][1]["extra_tools"]}
+    assert w.guilds.get(A).memory_retention_days == 0
+    assert tools["show_settings"]()["memory_days"] == "forever"
+    w.guilds.set_memory_retention_days(A, 45)
+    assert tools["show_settings"]()["memory_days"] == 45

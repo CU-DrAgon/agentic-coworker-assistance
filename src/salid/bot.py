@@ -2134,8 +2134,12 @@ class SecretaryBot(
             # stored and never read, so nothing is written and the model is told what works.
             return {
                 "error": "no_channel_languages",
-                "use": "set_server_language for the whole server (admins / executives); each "
-                "person sets their own extra language with /language or by saying it",
+                "use": "Language is set per server and per person, never per channel. A request "
+                "for one room is not a request for the whole server: never call "
+                "set_server_language for it on your own. Ask the person first whether they mean "
+                "their own extra language (/language, or remember_my_preference language) or the "
+                "whole server's language (set_server_language, admins / executives only, and "
+                "only after they confirm).",
             }
 
         def set_server_lang(language: str, apply_to_all_channels: bool = True) -> dict:

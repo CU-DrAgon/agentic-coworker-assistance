@@ -651,7 +651,8 @@ class GuildStore:
         self._in_transaction(run)
 
     def set_memory_retention_days(self, guild_id: int, days: int) -> None:
-        """Set how long this guild's chat memory is kept (1-3650 days)."""
+        """Set how long this guild's chat memory is kept: 0 = keep forever (the default), else
+        1-3650 days."""
         ok = valid_retention_days(days)
         if ok is None:
             raise ValueError(f"retention must be {MIN_RETENTION_DAYS}-{MAX_RETENTION_DAYS} days")

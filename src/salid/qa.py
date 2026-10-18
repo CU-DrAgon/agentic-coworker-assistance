@@ -478,7 +478,11 @@ class MemoryTools:
         """The guild's CURRENT retention (not the value at construction)."""
         if self._retention_of is not None:
             try:
-                return effective_retention_days(self._retention_of())
+                live = self._retention_of()
+                # 0 = keep forever; None or a negative value is no answer: use the construction
+                # value instead of widening to the forever window
+                if live is not None and int(live) >= 0:
+                    return effective_retention_days(int(live))
             except Exception:  # fail closed on the construction value
                 pass
         return self._retention_days

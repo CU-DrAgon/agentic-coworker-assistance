@@ -24,7 +24,7 @@ from test_memory_import import (
     set_llm,
     settle,
 )
-from test_modes import EXEC, MANAGER, STAFF, Sent, TMsg, bot, manager, say, send, set_mode, world
+from test_modes import EXEC, STAFF, Sent, TMsg, bot, manager, say, send, set_mode, world
 
 from salid import bot as botmod
 from salid import gate, qa
