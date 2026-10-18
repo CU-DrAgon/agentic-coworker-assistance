@@ -3097,3 +3097,29 @@ def test_two_uploads_of_the_same_file_at_once_store_one_copy(w):
     assert (
         len([d for d in w.docs.find(ORG_DOCS, web) if d.get("filename") == "certificate.pdf"]) == 1
     )
+
+
+def test_positions_hold_people_without_an_account(w):
+    base = "/api/center/orgs/org_t/positions"
+    p = w.client.post(
+        base,
+        json={
+            "title": "Backend Engineer",
+            "placeholders": ["สมชาย ใจดี (ชาย)", " ", "สมชาย ใจดี (ชาย)", "Nok"],
+        },
+        headers=H["adm"],
+    ).json()
+    assert p["placeholders"] == ["สมชาย ใจดี (ชาย)", "Nok"] and p["holders"] == []
+    vac = w.client.post(base, json={"title": "Office Manager"}, headers=H["adm"]).json()
+    org = w.orgs.get("org_t")
+    assert {x.title: x.vacant for x in org.positions} == {
+        "Backend Engineer": False,
+        "Office Manager": True,
+    }
+    p = w.client.put(
+        f"{base}/{p['id']}",
+        json={"holders": ["mem@example.com"], "placeholders": ["Nok"]},
+        headers=H["adm"],
+    ).json()
+    assert p["holders"] == ["mem@example.com"] and p["placeholders"] == ["Nok"]
+    assert vac["placeholders"] == []

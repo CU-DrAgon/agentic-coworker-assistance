@@ -1565,6 +1565,7 @@ class PositionBody(BaseModel):
     policies: str | None = Field(default=None, max_length=50_000)
     skills: list[str] | None = Field(default=None, max_length=100)
     holders: list[str] | None = Field(default=None, max_length=20)
+    placeholders: list[str] | None = Field(default=None, max_length=200)
 
 
 @router.get("/orgs/{org_id}/positions")
