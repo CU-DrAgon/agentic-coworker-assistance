@@ -2105,13 +2105,13 @@ class SecretaryBot(
         def set_language(language: str, ref: str | None = None) -> dict:
             if language not in LANGS:
                 return {"error": "unknown language", "languages": list(LANGS)}
-            if not allowed():
-                return {"error": "not_allowed", "needs": "server manager or executive"}
-            target = pick(ref)
-            if target is None:
-                return {"error": "channel_not_found"}
-            self.team.set_channel_language(gid, target.id, language)
-            return {"status": "ok", "channel": target.name, "language": language}
+            # Language is per server and per person only (b2378eb): a channel entry would be
+            # stored and never read, so nothing is written and the model is told what works.
+            return {
+                "error": "no_channel_languages",
+                "use": "set_server_language for the whole server (admins / executives); each "
+                "person sets their own extra language with /language or by saying it",
+            }
 
         def set_server_lang(language: str, apply_to_all_channels: bool = True) -> dict:
             if language not in LANGS or language == "auto":
@@ -2929,8 +2929,8 @@ class SecretaryBot(
         voice_cb = app_commands.describe(mode=t("cmd_voice_arg"))(voice_cb)
         voice_cb = app_commands.choices(
             mode=[
-                app_commands.Choice(name="🔇 listen only / ฟังอย่างเดียว", value="listen_only"),
-                app_commands.Choice(name="🔊 may talk / พูดได้", value="may_talk"),
+                app_commands.Choice(name=t("cmd_voice_listen"), value="listen_only"),
+                app_commands.Choice(name=t("cmd_voice_may"), value="may_talk"),
             ]
         )(voice_cb)
         for name in ("voice", "เสียง"):
@@ -2966,17 +2966,16 @@ class SecretaryBot(
         captions_default_cb = app_commands.describe(mode=t("cmd_voice_arg"))(captions_default_cb)
         captions_default_cb = app_commands.choices(
             mode=[
-                app_commands.Choice(name="on / เปิดทุกประชุม", value="on"),
-                app_commands.Choice(name="off / ปิด (ค่าเริ่มต้น)", value="off"),
+                app_commands.Choice(name=t("cmd_captions_default_on"), value="on"),
+                app_commands.Choice(name=t("cmd_captions_default_off"), value="off"),
             ]
         )(captions_default_cb)
-        self.tree.add_command(
-            app_commands.Command(
-                name="captions-default",
-                description=t("cmd_captions_default"),
-                callback=captions_default_cb,
+        for name in ("captions-default", "คำบรรยายทุกประชุม"):
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name, description=t("cmd_captions_default"), callback=captions_default_cb
+                )
             )
-        )
 
         async def quiet_cb(interaction: discord.Interaction):
             await self.handle_quiet(interaction)

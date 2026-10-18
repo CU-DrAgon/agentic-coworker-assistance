@@ -337,12 +337,17 @@ async def test_set_channel_mode_by_talking_follows_the_slash_rules(bot, world):
 
 async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     a = await tools_for(bot, world, EXEC)
+    # b2378eb: no per-channel languages. The old tool must not report a change it cannot make;
+    # it points to the server language and the person's own language instead.
     r = await asyncio.to_thread(a.set_channel_language, "en", None)
-    assert r == {"status": "ok", "channel": "ทั่วไป", "language": "en"}
-    assert bot.team.channel_language(GUILD, 10) == "en"
+    assert r["error"] == "no_channel_languages" and "set_server_language" in r["use"]
+    assert bot.guilds_store.get(GUILD).channel_languages == {}  # nothing written
+    assert bot.team.channel_language(GUILD, 10) == "th"
     assert (await asyncio.to_thread(a.set_channel_language, "fr", None))[
         "error"
     ] == "unknown language"
+    r = await asyncio.to_thread(a.set_server_language, "en")
+    assert r["status"] == "ok" and bot.team.channel_language(GUILD, 10) == "en"
     assert (await asyncio.to_thread(a.set_memory_days, 30)) == {"status": "ok", "days": 30}
     assert bot.team.memory_retention_days(GUILD) == 30
     # 0 is "keep forever" since b0d78be; out-of-range values are refused

@@ -35,6 +35,7 @@ from .flights import FLIGHT_PROMPT
 from .freetime import FREETIME_PROMPT
 from .gate import extract_keywords
 from .gmaps import MAPS_PROMPT
+from .guild_settings import effective_retention_days
 from .i18n import EXTRA, base_lang, lang_name, reply_language_line, resolve_lang, t
 from .ideas import IDEAS_PROMPT
 from .markets import MARKETS_PROMPT
@@ -447,7 +448,10 @@ class MemoryTools:
     ):
         self.opener = opener  # (channel id | None, message id, file index) -> {"text": ...}
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
-        self._retention_days = retention_days or settings.memory_retention_days
+        # 0 (the default) = keep forever: the 10-year window, never a 1-day one
+        self._retention_days = effective_retention_days(
+            retention_days or settings.memory_retention_days
+        )
         self._retention_of = retention_of  # read at call time: a shortened setting applies at once
         # With `visibility` the role hierarchy and disclosure grants apply (salid.memory_access);
         # `hidden` collects matching records the asker may not see (never shown, only counted, so
@@ -473,10 +477,10 @@ class MemoryTools:
         """The guild's CURRENT retention (not the value at construction)."""
         if self._retention_of is not None:
             try:
-                return max(int(self._retention_of()), 1)
+                return effective_retention_days(self._retention_of())
             except Exception:  # fail closed on the construction value
                 pass
-        return max(self._retention_days, 1)
+        return self._retention_days
 
     def floor(self) -> date:
         """Oldest day any tool may read: what the daily purge keeps (see `cutoff_date`)."""
@@ -1118,9 +1122,9 @@ HUMAN_STYLE_PROMPT = (
 
 # Settings by talking: the tools are bound in code to the guild, channel and author.
 CHAT_TOOLS_PROMPT = (
-    "\nตั้งค่าด้วยการพูดคุย (เครื่องมือ set_channel_mode, set_channel_language, set_memory_days, show_settings, "
+    "\nตั้งค่าด้วยการพูดคุย (เครื่องมือ set_channel_mode, set_memory_days, show_settings, "
     "hidden_channels, cancel_deep_task, send_dm, send_dm_many, post_message, deliver_file, set_my_notifications, show_my_notifications ถ้ามีให้ใช้): ทุกอย่างที่คำสั่ง / (slash) ทำได้ ผู้ใช้แค่บอกเป็นคำพูดก็พอ "
-    "เช่น “ห้องนี้ไม่ต้องตอบนะ” (set_channel_mode off), “ช่วยพูดอังกฤษในห้องนี้” (set_channel_language en), “ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์” / “speak English everywhere” (set_server_language en; กลับเป็นไทยด้วย th; ยืนยันด้วยภาษาใหม่), "
+    "เช่น “ห้องนี้ไม่ต้องตอบนะ” (set_channel_mode off), “ช่วยพูดอังกฤษกับผมด้วย” (remember_my_preference language en: ภาษาส่วนตัวของคนพูด เพิ่มต่อจากภาษาบริษัท ไม่มีภาษาแยกรายห้อง), “ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์” / “speak English everywhere” (set_server_language en; กลับเป็นไทยด้วย th; ยืนยันด้วยภาษาใหม่), "
     "“จำแค่ 30 วันพอ” (set_memory_days 30), “ตั้งค่าตอนนี้เป็นไง” (show_settings), “ทำไมสลิดไม่เห็นห้องบัญชี” (hidden_channels), "
     "“ยกเลิกงานที่ทำอยู่” (cancel_deep_task). เรียกเครื่องมือแล้วยืนยันสั้นๆ ประโยคเดียว (เช่น “ได้เลยค่ะ ห้องนี้สลิดเงียบไว้ให้นะคะ”). "
     "ถ้าเครื่องมือตอบ not_allowed ให้บอกเป็นกันเองว่าต้องให้แอดมินหรือผู้บริหารเป็นคนสั่ง. "

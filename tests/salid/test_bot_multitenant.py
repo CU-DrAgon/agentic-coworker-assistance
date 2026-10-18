@@ -441,6 +441,7 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "show-captions",
         "ซ่อนคำบรรยาย",
         "hide-captions",
+        "คำบรรยายทุกประชุม",
         "captions-default",
         "เงียบ",
         "quiet",

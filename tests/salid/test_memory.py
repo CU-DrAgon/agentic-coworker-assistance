@@ -635,6 +635,17 @@ def test_chat_days_reads_each_tail_day_once(settings):
     assert len(msg_reads) == 2 and len(r["newer_than_summary"]) == 6
 
 
+def test_tools_without_a_retention_read_the_forever_window_not_one_day(mstore, settings):
+    """SALID_MEMORY_RETENTION_DAYS=0 means keep forever: tools built without an explicit
+    retention read the 10-year window, never a 1-day one."""
+    assert settings.memory_retention_days == 0
+    tools = MemoryTools(mstore, GUILD, {10: "general"}, settings)
+    assert tools.retention_days == FOREVER_DAYS
+    assert tools.floor() == settings.now().date() - timedelta(days=FOREVER_DAYS)
+    live = MemoryTools(mstore, GUILD, {10: "general"}, settings, retention_of=lambda: 0)
+    assert live.retention_days == FOREVER_DAYS
+
+
 def test_chat_days_output_is_capped_newest_days_first(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "general"}, settings)
     for d in range(1, 15):
