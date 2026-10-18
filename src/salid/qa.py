@@ -1817,7 +1817,8 @@ def build_tools(
 
     Permission scoping lives in `ledger.forced`: none of these signatures has a submitter
     parameter, so the model cannot pass one (ADK also drops undeclared arguments). Errors are
-    returned to the model as data instead of raised, so a bad date never kills the turn.
+    returned to the model as data instead of raised, so a bad date never kills the turn; any other
+    failure (a Firestore or network error) is logged and reported as "internal error".
     `timings` (tool name -> milliseconds, summed) receives how long each tool took.
     """
     log = calls if calls is not None else []
@@ -1830,6 +1831,9 @@ def build_tools(
             return fn()
         except (TypeError, ValueError) as e:
             return {"error": str(e)}
+        except Exception:  # never log the arguments: they carry what the user asked
+            logger.exception("tool %s failed", name)
+            return {"error": "internal error"}
         finally:
             spent[name] = spent.get(name, 0.0) + (time.monotonic() - started) * 1000
 
