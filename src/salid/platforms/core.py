@@ -62,6 +62,7 @@ from ..qa import MAX_TOTAL_BYTES as MAX_TOTAL_BYTES
 from ..qa import FileActions, FileInput, MemoryTools, ask, file_mime, select_files
 from ..web_read import extract_urls
 from . import ids
+from .calendar_glue import calendar_tools_for
 from .config import PlatformSettings
 
 logger = logging.getLogger(__name__)
@@ -1065,6 +1066,8 @@ class Assistant:
             files = await self._file_inputs(msg)
             kwargs.update(files=files, actions=self._file_actions(msg, gid, rid, lang))
             lang = resolve_lang(setting, q)
+        if tools := await calendar_tools_for(self, msg, gid, rid, lang, is_exec):
+            kwargs["extra_tools"] = tools  # Google Calendar for a verified, connected asker
         t_ctx = self._clock()
         slow = _Slow(self, msg, port, q, lang, rid)
         slow.start()
