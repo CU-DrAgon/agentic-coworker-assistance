@@ -2953,3 +2953,86 @@ def test_company_calendar_with_an_optional_personal_overlay(w):
     assert ("deadline", "company", "Secret") in flat(
         w.client.get(url, headers=H["adm"])
     )  # admins see all
+
+
+def test_overlay_includes_the_persons_google_calendar(w, monkeypatch):
+    """'Overlay my calendar' also shows the person's own Google Calendar events (personal
+    layer); a Google failure never breaks the company calendar."""
+
+    class G:
+        evicted = 0
+
+        def enabled(self):
+            return True
+
+        def is_connected(self, org_id, email):
+            return email == "mem@example.com"
+
+        def access_token(self, org_id, email):
+            return "tok"
+
+        def evict(self, org_id, email):
+            G.evicted += 1
+
+    calls = []
+
+    class Resp:
+        def __init__(self, code, body):
+            self.status_code, self._b = code, body
+
+        def json(self):
+            return self._b
+
+    class Http:
+        def __init__(self, codes):
+            self.codes = codes
+
+        def get(self, url, params=None, headers=None):
+            calls.append((url, params, headers))
+            code = self.codes.pop(0)
+            return Resp(
+                code,
+                {
+                    "items": [
+                        {
+                            "summary": "Dentist",
+                            "start": {"dateTime": "2026-10-20T09:00:00+07:00"},
+                            "end": {"dateTime": "2026-10-20T10:00:00+07:00"},
+                            "htmlLink": "https://calendar.google.com/x",
+                        },
+                        {
+                            "summary": "Holiday",
+                            "start": {"date": "2026-10-23"},
+                            "end": {"date": "2026-10-24"},
+                        },
+                        {"summary": "gone", "status": "cancelled", "start": {"date": "2026-10-22"}},
+                    ]
+                },
+            )
+
+    monkeypatch.setattr(center, "get_google_oauth", lambda orgs: G())
+    monkeypatch.setattr(center, "get_google_http", lambda: Http([401, 200]))  # stale token, then ok
+    url = "/api/center/orgs/org_t/calendar"
+    r = w.client.get(url + "?mine=1", headers=H["mem"]).json()
+    items = [i for d in r["days"] for i in d["items"] if i["kind"] == "gcal"]
+    assert [(i["title"], i["layer"], i["all_day"]) for i in items] == [
+        ("Dentist", "personal", False),
+        ("Holiday", "personal", True),
+    ]
+    assert r["google"]["connected"] and r["sources"]["google_calendar"] is True and G.evicted == 1
+    assert (
+        calls[-1][0].endswith("/calendars/primary/events")
+        and calls[-1][2]["Authorization"] == "Bearer tok"
+    )
+    assert calls[-1][1]["singleEvents"] == "true"
+    # company view only: Google is not asked
+    n = len(calls)
+    w.client.get(url, headers=H["mem"])
+    assert len(calls) == n
+    # not connected / Google down: the calendar still answers, the reason is reported
+    assert (
+        w.client.get(url + "?mine=1", headers=H["adm"]).json()["google"]["error"] == "not_connected"
+    )
+    monkeypatch.setattr(center, "get_google_http", lambda: Http([500]))
+    r = w.client.get(url + "?mine=1", headers=H["mem"])
+    assert r.status_code == 200 and r.json()["google"]["error"] == "failed"
