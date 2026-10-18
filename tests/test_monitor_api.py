@@ -1,6 +1,6 @@
 """Workflow monitor API (`/api/center/orgs/{org}/monitor/*`, `/api/center/admin/monitor/*`):
-fake Google tokens, a SQLite / fake-Firestore doc store, a fake `video_ad` source and a fixed
-clock. No network."""
+fake Google tokens, a SQLite / fake-Firestore doc store, a fake `video_ad` source, the real change
+outbox and action queue sources, and a fixed clock. No network."""
 
 import logging
 import sys
@@ -20,6 +20,9 @@ from meeting_scribe import center, hub, monitor_api  # noqa: E402
 from meeting_scribe.app import app  # noqa: E402
 from meeting_scribe.config import get_settings  # noqa: E402
 from salid import monitor, monitor_sources  # noqa: E402
+from salid.actions import ActionQueue  # noqa: E402
+from salid.change_outbox import KIND as OUTBOX  # noqa: E402
+from salid.change_outbox import Change, Target, org_guild  # noqa: E402
 from salid.coo_store import FirestoreDocStore, SQLiteDocStore  # noqa: E402
 from salid.monitor import Audience, MonitorItem, Step  # noqa: E402
 from salid.orgs import License, Member, OrgStore, Workspace  # noqa: E402
@@ -64,11 +67,12 @@ def item(
     at=NOW - timedelta(minutes=1),
     ws=WS,
     steps=(),
+    org=ORG,
 ):
     return MonitorItem(
         kind=kind,
         id=item_id,
-        org_id=ORG,
+        org_id=org,
         workspace=ws,
         title="Video ad",
         status=status,
@@ -112,6 +116,7 @@ def w(docs, monkeypatch):
     monkeypatch.setenv("MONITOR_ENABLED", "true")
     get_settings.cache_clear()
     monkeypatch.setattr(monitor_api, "now", lambda: NOW)
+    monkeypatch.setattr(monitor_sources, "wall_clock", lambda: NOW)
     monkeypatch.setattr(monitor_api, "LIMITER", monitor_api.TokenBucket())
     runtime = (SimpleNamespace(deep_task_timeout=600), None)
     monkeypatch.setattr(hub, "get_salid_runtime", lambda: runtime)
@@ -460,7 +465,7 @@ def test_web_only_org_is_empty_and_never_bot_offline(w, monkeypatch):
     assert body["counts"] == {} and body["by_kind"] == {} and body["attention"] == 0
     assert body["heartbeat"] == {} and body["seq"] == 0
     assert get(w, "solo", "/items", base=base).json() == {"items": [], "next_cursor": None}
-    web = item("r1", kind="research", ws="web")
+    web = item("r1", kind="research", ws="web", org="org_web")
     monkeypatch.setitem(
         monitor_sources.SOURCES,
         "research",
@@ -555,3 +560,144 @@ def test_audience_and_sentinels_never_returned(w):
     assert "audience" not in set(strings(bodies))  # never a key anywhere
     item_keys = set(bodies[1]["items"][0]) | set(bodies[3]) | set(bodies[5]["events"][0])
     assert "audience" not in item_keys and "mine" in item_keys
+
+
+# ------------------------------------------------------------------ tenant guard
+def test_an_item_of_another_org_is_never_returned(w):
+    w.items += [item("mine"), item("theirs", org="org_other"), item("blank", org="")]
+    for who in ("boss", "root"):
+        assert ids_of(get(w, who, "/items")) == ["mine"], who
+        batch = {"ids": "video_ad:mine,video_ad:theirs,video_ad:blank"}
+        assert ids_of(get(w, who, "/items", params=batch)) == ["mine"], who
+        assert get(w, who, "/items/video_ad/mine").status_code == 200, who
+        assert get(w, who, "/items/video_ad/theirs").status_code == 404, who
+        assert get(w, who, "/items/video_ad/blank").status_code == 404, who
+        assert get(w, who, "/summary").json()["counts"] == {"running": 1}, who
+    assert ids_of(get(w, "root", "/items", base=OPS)) == ["mine"]
+    assert get(w, "root", "/summary", base=OPS).json()["orgs"][0]["counts"] == {"running": 1}
+
+
+# ------------------------------------------------------------------ delivery sources
+def put_change(w, change_id, targets, *, at=NOW - timedelta(minutes=5), org=ORG):
+    c = Change(
+        id=change_id,
+        org_id=org,
+        at=at.isoformat(),
+        by="boss@example.com",
+        kind="title",
+        subject_email=SENTINEL + "@x.com",
+        subject_name=SENTINEL,
+        before=SENTINEL,
+        after=SENTINEL,
+        subject_ids={"discord": "7"},
+        targets=targets,
+    )
+    w.docs.put(OUTBOX, org_guild(org), c.id, c.model_dump())
+    return c
+
+
+def test_delivery_items_through_the_api_hide_raw_text(w):
+    q = ActionQueue(w.docs, clock=lambda: NOW - timedelta(minutes=3))
+    args = {"channel": "general", "text": SENTINEL}
+    failed = q.enqueue(GUILD, "post_message", args, by="Adm@Example.com")
+    q.finish(GUILD, failed["id"], error="discord: " + SENTINEL)
+    url = f"https://discord.com/channels/{GUILD}/1/2"
+    done = q.enqueue(GUILD, "send_dm", {"user_id": "7", "text": SENTINEL}, by="adm@example.com")
+    q.finish(GUILD, done["id"], result={"url": url, "delivered_to": SENTINEL})
+    put_change(
+        w,
+        "c_failed",
+        [
+            Target(workspace_id=WS, platform="discord", kind="apply", status="acked"),
+            Target(
+                workspace_id=WS,
+                platform="discord",
+                kind="notify",
+                person="7",
+                status="failed",
+                attempts=8,
+                last_error=SENTINEL,
+            ),
+        ],
+    )
+    put_change(w, "c_other_org", [], org="org_other")  # another org's guild: never read
+    keys = ["change:c_failed", f"action:{failed['id']}", f"action:{done['id']}"]
+    for who in ("boss", "adm", "root"):
+        rows = {r["id"]: r for r in get(w, who, "/items").json()["items"]}
+        assert set(rows) == {"c_failed", failed["id"], done["id"]}, who
+        batch = ids_of(get(w, who, "/items", params={"ids": ",".join(keys)}))
+        assert sorted(batch) == sorted(k.split(":")[1] for k in keys), who
+    assert ids_of(get(w, "mem", "/items")) == []
+    assert ids_of(get(w, "mem", "/items", params={"ids": ",".join(keys)})) == []
+    assert get(w, "mem", "/items/change/c_failed").status_code == 404
+    assert get(w, "mem", f"/items/action/{failed['id']}").status_code == 404
+    assert get(w, "boss", "/items/change/c_other_org").status_code == 404
+
+    c = get(w, "boss", "/items/change/c_failed").json()
+    assert (c["title"], c["workspace"], c["raw_status"]) == ("Change · title", "web", "1/2 acked")
+    assert (c["status"], c["attention_reason"]) == ("failed", "failed")
+    assert c["error"]["code"] == "delivery_failed"
+    assert [(s["name"], s["state"]) for s in c["steps"]] == [
+        ("discord apply", "done"),
+        ("discord notify", "failed"),
+    ]
+    assert c["controls"] == ["resend"]
+    a = get(w, "boss", f"/items/action/{failed['id']}").json()
+    assert (a["title"], a["status"], a["error"]["code"]) == (
+        "Discord action · post_message",
+        "failed",
+        "discord_error",
+    )
+    assert (a["requester_id"], a["workspace"], a["controls"]) == ("adm@example.com", WS, ["retry"])
+    assert get(w, "adm", f"/items/action/{failed['id']}").json()["mine"] is True
+    d = get(w, "boss", f"/items/action/{done['id']}").json()
+    assert (d["status"], d["links"], d["error"]) == ("done", {"discord": url}, None)
+    assert get(w, "root", f"/items/action/{done['id']}").json()["controls"] == []
+
+    responses = [
+        get(w, "boss", "/summary"),
+        get(w, "boss", "/items"),
+        get(w, "adm", "/items", params={"ids": ",".join(keys)}),
+        get(w, "boss", "/items/change/c_failed"),
+        get(w, "boss", f"/items/action/{failed['id']}"),
+        get(w, "boss", f"/items/action/{done['id']}"),
+        get(w, "root", "/summary", base=OPS),
+        get(w, "root", "/items", base=OPS),
+    ]
+    assert [r.status_code for r in responses] == [200] * len(responses)
+    bodies = [r.json() for r in responses]
+    assert SENTINEL not in "".join(strings(bodies))
+    assert "audience" not in set(strings(bodies))
+    assert bodies[0]["by_kind"] == {"change": 1, "action": 2}
+
+
+def test_an_open_change_past_its_resend_deadline_is_stuck(w):
+    open_target = [Target(workspace_id=WS, platform="discord", kind="apply", attempts=0)]
+    put_change(w, "c_new", open_target, at=NOW - timedelta(minutes=10))
+    put_change(w, "c_old", open_target, at=NOW - timedelta(minutes=15 * 9))
+    rows = {r["id"]: r for r in get(w, "boss", "/items", params={"kind": "change"}).json()["items"]}
+    assert {k: (r["status"], r["attention_reason"]) for k, r in rows.items()} == {
+        "c_new": ("queued", ""),
+        "c_old": ("queued", "stuck"),
+    }
+    assert get(w, "boss", "/items/change/c_old").json()["attention_reason"] == "stuck"
+    assert get(w, "boss", "/items/change/c_new").json()["attention_reason"] == ""
+
+
+def test_pending_action_is_stuck_after_60_s_only_while_the_bot_is_online(w):
+    def enqueue(seconds_ago):
+        q = ActionQueue(w.docs, clock=lambda: NOW - timedelta(seconds=seconds_ago))
+        return q.enqueue(GUILD, "announce", {"text": SENTINEL}, by="adm@example.com")["id"]
+
+    fresh, slow = enqueue(30), enqueue(61)
+
+    def reasons():
+        rows = get(w, "boss", "/items", params={"kind": "action"}).json()["items"]
+        return {r["id"]: (r["status"], r["attention_reason"]) for r in rows}
+
+    assert reasons() == {fresh: ("queued", ""), slow: ("queued", "stuck")}
+    assert get(w, "boss", f"/items/action/{slow}").json()["attention_reason"] == "stuck"
+    monitor.write_heartbeat(w.docs, "bot", queues={}, now=NOW - timedelta(seconds=120))  # delayed
+    assert reasons() == {fresh: ("queued", ""), slow: ("queued", "")}
+    monitor.write_heartbeat(w.docs, "bot", queues={}, now=NOW - timedelta(minutes=6))  # offline
+    assert reasons() == {fresh: ("queued", "bot_offline"), slow: ("queued", "bot_offline")}

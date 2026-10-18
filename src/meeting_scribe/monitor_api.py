@@ -10,7 +10,8 @@ Design: `docs/superpowers/specs/2026-10-18-salid-workflow-monitor-design.md` sec
   operations view is read-only and has no licence gate.
 - Items come from the per-kind sources in `salid.monitor_sources`; who sees an item and which
   controls are offered is decided here by `salid.monitor` (`visible`, `controls`), never by the
-  client. An item the viewer may not see answers 404, like an unknown one.
+  client. An item the viewer may not see answers 404, like an unknown one. An item whose
+  `org_id` is not the requested org is never returned, to anyone (tenant guard).
 - No response carries an item's `audience`, a prompt, a name or raw error text.
 - `changes` is one change-log read: `ETag: "<seq>"`, 304 on `If-None-Match`, and at most one
   call per 2 s per person (token bucket, burst 3; in process, enough with max-instances=1).
@@ -258,10 +259,13 @@ def _newest_first(items: list[MonitorItem]) -> list[MonitorItem]:
 
 
 def _seen(m: Mon, items: Iterable[MonitorItem | None], deep_timeout_s: int) -> list[MonitorItem]:
-    """The items `m.viewer` may see, attention applied, newest first."""
+    """The items of the requested org that `m.viewer` may see, attention applied, newest first.
+
+    Tenant guard: an item whose `org_id` is not the requested org (or is empty) is dropped
+    whoever asks, even though every source reads only that org's records."""
     out = []
     for it in items:
-        if it is None:
+        if it is None or it.org_id != m.ctx.org.id:
             continue
         it = M.apply_attention(it, m.when, m.bot, deep_timeout_s=deep_timeout_s)
         if M.visible(it, m.viewer):
