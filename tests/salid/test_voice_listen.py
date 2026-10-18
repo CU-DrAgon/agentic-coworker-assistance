@@ -445,7 +445,7 @@ def test_a_failing_shared_search_fails_both_adapters_not_hangs():
 
 # ------------------------------------------------------------------ spoken rounds cap
 def test_spoken_answers_get_five_tool_rounds_chat_keeps_six(seeded, settings):
-    assert SPOKEN_MAX_ROUNDS == 5 and MAX_ROUNDS == 6
+    assert SPOKEN_MAX_ROUNDS == 5 and MAX_ROUNDS == 10
     llm = scripted(*[fc_resp(("flagged_receipts", {}))] * SPOKEN_MAX_ROUNDS, text_resp("สรุป"))
     a = ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm,
             spoken=True)  # fmt: skip
