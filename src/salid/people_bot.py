@@ -355,6 +355,7 @@ class PeopleMixin:
                 tag=lambda uid: self._pos_tag_now(guild, loop, uid),
                 sync=lambda: self._pos_sync_now(guild, loop),
                 unlinked=lambda: self._pos_unlinked_names(guild),
+                center=lambda uid: self._pos_chart_of(guild, uid),
             )
             return people_tools(ctx)
         except Exception:

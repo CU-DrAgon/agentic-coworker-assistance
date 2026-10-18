@@ -1575,11 +1575,15 @@ async def list_positions(ctx: Ctx = Depends(member_ctx)) -> list[Position]:
 
 def _save_position(ctx: Ctx, orgs: OrgStore, pid: str | None, body: PositionBody) -> Position:
     try:
-        return orgs.save_position(ctx.org.id, by=ctx.email, pid=pid, **body.model_dump())
+        pos = orgs.save_position(ctx.org.id, by=ctx.email, pid=pid, **body.model_dump())
     except KeyError as exc:
         raise HTTPException(404, "Unknown position") from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    after = orgs.get(ctx.org.id)
+    if after is not None:  # a holder change reaches the person as a "company position" notice
+        record_org_edit(orgs.docs, ctx.org, after, ctx.email)  # change outbox (never raises)
+    return pos
 
 
 @router.post("/orgs/{org_id}/positions")
@@ -1606,6 +1610,9 @@ async def delete_position(
 ) -> dict:
     if not await run_in_threadpool(orgs.delete_position, ctx.org.id, pid):
         raise HTTPException(404, "Unknown position")
+    after = await run_in_threadpool(orgs.get, ctx.org.id)
+    if after is not None:
+        await run_in_threadpool(record_org_edit, orgs.docs, ctx.org, after, ctx.email)
     return {"deleted": pid}
 
 

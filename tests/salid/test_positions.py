@@ -176,9 +176,9 @@ class Rig:
         return "pending"
 
 
-def test_without_a_book_the_ten_original_tools_only():
+def test_without_a_book_the_eleven_base_tools_only():
     r = Rig(book=False, is_exec=True)
-    assert len(r.tools) == 10 and not {"org_chart", "sync_roles", "positions_catalog"} & set(
+    assert len(r.tools) == 11 and not {"org_chart", "sync_roles", "positions_catalog"} & set(
         r.tools
     )
     assert r.tools["set_role"]("Mali", "CEO")["status"] == "saved"  # the old behaviour

@@ -159,6 +159,38 @@ def diff_members(
 
 
 # ------------------------------------------------------------------ the store
+def diff_positions(
+    before: Org, after: Org, *, by: str = "salid", at: datetime | None = None
+) -> list[Change]:
+    """One "company position" (`title`) change per member whose held website positions changed
+    (holders edited, a held position renamed or deleted), before / after = the titles they hold,
+    most senior first. Members who are new or gone are `diff_members`' business. Pure."""
+    from .positions_center import held_titles
+
+    stamp = _iso(at or _utcnow())
+    old = {m.email.lower() for m in before.members}
+    out: list[Change] = []
+    for m in after.members:
+        e = m.email.lower()
+        if e not in old:
+            continue
+        was, now = held_titles(before, e), held_titles(after, e)
+        if was != now:
+            out.append(_change(after.id, m, "title", was, now, by, stamp))
+    return out
+
+
+def diff_org(
+    before: Org, after: Org, *, by: str = "salid", at: datetime | None = None
+) -> list[Change]:
+    """`diff_members` plus `diff_positions`; a person whose `Member.title` changed is not told twice."""
+    changes = diff_members(before, after, by=by, at=at)
+    told = {c.subject_email for c in changes if c.kind == "title"}
+    return changes + [
+        c for c in diff_positions(before, after, by=by, at=at) if c.subject_email not in told
+    ]
+
+
 class ChangeOutbox:
     def __init__(
         self,
@@ -397,7 +429,7 @@ def record_org_edit(
     """Record what changed between two versions of an org. NEVER raises: a failure here must not
     break the request or the sync that called it. Returns how many changes were stored."""
     try:
-        changes = diff_members(before, after, by=by)
+        changes = diff_org(before, after, by=by)
         if not changes:
             return 0
         outbox = ChangeOutbox.from_settings(docs, settings) if settings else ChangeOutbox(docs)

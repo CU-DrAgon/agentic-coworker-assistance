@@ -8,9 +8,14 @@ Discord -> center (never overrides a stated position):
   role was taken away loses a `discord` position;
 - Administrator / Manage Server makes the linked org member `admin` (never lowered; the owner
   stays the owner);
-- the org member (linked by `discord_user_id`) gets `title` and `level` mirrored, and `department`
-  when it is one of the dashboard codes and still empty. A title edited in the central system
-  (differs from what Salid last wrote) becomes the position (source `org`).
+- a position stated in Salid for a member linked by `discord_user_id` is written to the website's
+  company positions (`org.positions`, their email in `holders`; `positions_center.py`); the org
+  member only gets `level` (and `department` when it is a dashboard code and still empty).
+  `Member.title` is no longer written.
+- the website is the only truth for a linked member: the most senior `org.positions` entry that
+  lists their email (else `Member.title`, what v0.15 mirrored) is their position (source `org`);
+  a renamed website position renames the Discord role Salid made, a removed holder / deleted
+  position removes the tag. Owner / admin / member is website access, never a position.
 Center -> Discord:
 - a position stated in Salid (`set_role`, or an org title) gets a Discord role with that title
   (no permissions, mentionable so it can be tagged, hoisted for levels 1-3, just below Salid's own
@@ -41,6 +46,14 @@ from .positions import (
     PositionBook,
     is_exec_level,
     norm_title,
+)
+from .positions_center import (
+    center_position,
+    held_by,
+    level_for,
+    management_chain,
+    position_card,
+    put_on_site,
 )
 
 logger = logging.getLogger(__name__)
@@ -204,17 +217,21 @@ class PositionsMixin:
     # ------------------------------------------------------------- daily job
     def _positions_center_print(self, guild) -> str:
         """What the central system says about this server's people (blocking): one string that
-        changes whenever a member's role, title, level, department or Discord link changes."""
+        changes whenever a member's role, title, level, department or Discord link changes, or a
+        company position (title, holders, who it reports to) is edited on the website."""
         _, org, _ = self._pos_linked(guild)
         if org is None:
             return ""
-        return "|".join(
-            sorted(
-                f"{m.email}:{m.role}:{getattr(m, 'title', '')}:{getattr(m, 'level', 0)}:"
-                f"{getattr(m, 'department', '')}:{m.identity('discord') or ''}"
-                for m in org.members
-            )
+        people = sorted(
+            f"{m.email}:{m.role}:{getattr(m, 'title', '')}:{getattr(m, 'level', 0)}:"
+            f"{getattr(m, 'department', '')}:{m.identity('discord') or ''}"
+            for m in org.members
         )
+        jobs = sorted(
+            f"P:{p.id}:{p.title}:{','.join(sorted(h.lower() for h in p.holders))}:{p.reports_to}"
+            for p in getattr(org, "positions", None) or []
+        )
+        return "|".join([*people, *jobs])
 
     async def _positions_center_watch(self) -> None:
         """An edit on the central website reaches Discord within ``CENTER_POLL_S``."""
@@ -388,26 +405,38 @@ class PositionsMixin:
             rep.admins_set += len(done)
 
     def _pos_pull_org(self, guild, rep: _Report) -> None:
-        """A title edited in the central system (not what Salid last wrote) becomes the position."""
+        """A linked member's company position comes from the website: the most senior position
+        in `org.positions` that lists them as a holder, else `Member.title` (what v0.15 mirrored).
+        The access role (owner / admin / member) is never a position."""
         gid = guild.id
         _, org, linked = self._pos_linked(guild)
         if org is None:
             return
         book = self.positions
         here = {m.id for m in self._members(guild)}
+        live = {x.id for x in org.positions}
         stale: list[int] = []  # titles Salid itself wrote from a Discord guess: taken back
         for uid, mem in linked.items():
             if uid not in here:
                 continue
-            title = (getattr(mem, "title", "") or "").strip()
+            title, wpos = center_position(org, mem)
             cur = book.of(gid, uid)
             if cur is not None and cur[0].source in ("discord", "heard"):
                 # a linked person's position comes from the central system only
-                if title and norm_title(title) == norm_title(cur[0].mirrored):
+                if wpos is None and title and norm_title(title) == norm_title(cur[0].mirrored):
                     stale.append(uid)
                     title = ""
                 if book.unassign(gid, uid):
                     rep.dropped += 1
+            entry = None
+            if wpos is not None:
+                try:  # the catalog follows the website: renames, level, the position id
+                    entry, _ = book.sync_center(
+                        gid, wpos.id, wpos.title, level_for(org, wpos), live
+                    )
+                except CatalogFull:
+                    rep.skipped_other += 1
+                    continue
             if not title:
                 # no company position in the central system. Its owner / admin / member is the
                 # website access right, NOT a job: it never becomes a position.
@@ -424,8 +453,10 @@ class PositionsMixin:
                 a, p = cur
                 if norm_title(title) in (norm_title(a.mirrored), norm_title(p.title)):
                     continue  # nothing new since Salid wrote it
+                if a.source == "stated" and not a.mirrored:
+                    continue  # stated in Salid a moment ago, not yet written to the website
             try:
-                pos = book.find(gid, title)
+                pos = entry or book.find(gid, title)
                 if pos is None:
                     pos, _ = book.add(gid, title)
             except CatalogFull:
@@ -433,6 +464,8 @@ class PositionsMixin:
                 continue
             if book.assign(gid, uid, pos.key, "org", force=True):
                 rep.from_org += 1
+            if wpos is not None:  # remember the website position: a later change in Salid moves it
+                book.set_mirrored(gid, uid, wpos.title, wpos.id)
 
         if stale:
             ids = {str(u) for u in stale}
@@ -447,6 +480,23 @@ class PositionsMixin:
             store = OrgStore(self.docs)
             if store.update_members(org.id, unset):
                 logger.info("positions: took back %d guessed title(s) guild=%s", len(stale), gid)
+
+    def _pos_chart_of(self, guild, uid: int) -> dict:
+        """(blocking) A linked person's position card and management chain from the website:
+        {"position": {...} | None, "chain": [{"name", "title"}]}; {} when not linked."""
+        store, org, linked = self._pos_linked(guild)
+        mem = linked.get(uid)
+        if org is None or mem is None:
+            return {}
+        by_email = {m.email.lower(): m for m in org.members}
+        chain = []
+        for e in management_chain(org, mem.email):
+            m = by_email.get(e)
+            did = str(m.identity("discord") or "") if m else ""
+            gm = guild.get_member(int(did)) if did.isdigit() else None
+            name = getattr(gm, "display_name", "") or store.user_profile(e).name or e.split("@")[0]
+            chain.append({"name": name, "title": center_position(org, m)[0] if m else ""})
+        return {"position": position_card(org, mem.email), "chain": chain}
 
     def _pos_unlinked_names(self, guild, linked=None) -> list[str]:
         """Humans of the server with no org member linked to their Discord account. Blocking; []
@@ -463,6 +513,9 @@ class PositionsMixin:
 
     # ---- positions -> org document (blocking)
     def _pos_mirror_org(self, guild, rep: _Report) -> None:
+        """Positions -> the website. A linked member's position is written to `org.positions`
+        (their email in `holders`); `Member.title` is no longer written, only `level` (and an
+        empty `department`)."""
         gid = guild.id
         store, org, linked = self._pos_linked(guild)
         if org is None:
@@ -488,9 +541,9 @@ class PositionsMixin:
                 w = want.get(uid)
                 if w is None:
                     continue
-                title, level, dept, u = w
-                if m.title != title or m.level != level:
-                    m.title, m.level, changed = title, level, True
+                _, level, dept, u = w
+                if m.level != level:
+                    m.level, changed = level, True
                     changed_uids.append(u)
                 if dept and not m.department:
                     m.department, changed = dept, True
@@ -501,8 +554,26 @@ class PositionsMixin:
             rep.mirrored += len(set(changed_uids))
         for uid, a in held.items():
             p = cat.get(a.position_key)
-            if p is not None and uid in linked:
-                book.set_mirrored(gid, uid, p.title)
+            if p is None or uid not in linked or a.source != "stated":
+                continue  # a position that came from the website is already there
+            email = linked[uid].email.lower()
+            site = store.get(org.id) or org
+            mine = {x.id for x in held_by(site, email)}
+            if p.center_id in mine and a.mirrored_id == p.center_id and a.mirrored == p.title:
+                continue  # the website already says so
+            # Salid's own change moves the person off the position it last gave them, only that one
+            prev = a.mirrored_id
+            pid = put_on_site(
+                store, org.id, email, p.title,
+                department=p.department or (a.department or ""), prev_id=prev, aliases=p.aliases,
+            )  # fmt: skip
+            if not pid:
+                continue
+            if pid not in mine or a.mirrored_id != pid:
+                rep.mirrored += 1
+            if p.center_id != pid:
+                book.set_center_id(gid, p.key, pid)
+            book.set_mirrored(gid, uid, p.title, pid)
 
     def _pos_dossiers(self, guild) -> None:
         """The position is the source of truth of a person's role in the dossiers."""
@@ -532,6 +603,8 @@ class PositionsMixin:
         gid = guild.id
         book = self.positions
         lang = self._guild_lang(gid)
+        if self._pos_can_manage_roles(guild):
+            await self._pos_rename_roles(guild, rep, lang)
         held = await asyncio.to_thread(book.assignments, gid)
         cat = {p.key: p for p in await asyncio.to_thread(book.catalog, gid)}
         # everybody with a known position wears its tag, without waiting for a command; a position
@@ -622,10 +695,29 @@ class PositionsMixin:
         if role is not None:
             return role
         name = book.discord_role_name(pos, lang)
+        made = rep.created
         role = await self._pos_find_or_create(guild, name, hoist=1 <= pos.level <= 3, rep=rep)
         if role is not None:
-            await asyncio.to_thread(book.set_role_id, guild.id, pos.key, role.id)
+            await asyncio.to_thread(
+                book.set_role_id, guild.id, pos.key, role.id, rep.created > made
+            )
         return role
+
+    async def _pos_rename_roles(self, guild, rep: _Report, lang: str) -> None:
+        """A website position that was renamed renames the Discord role Salid made for it. Roles
+        Salid did not create are never touched."""
+        book = self.positions
+        for pos in await asyncio.to_thread(book.catalog, guild.id):
+            if not (pos.role_made and pos.center_id and pos.discord_role_id):
+                continue
+            role = guild.get_role(pos.discord_role_id)
+            name = book.discord_role_name(pos, lang)
+            if role is None or role.name == name:
+                continue
+            try:
+                await role.edit(name=name, reason=TAG_REASON)
+            except discord.HTTPException:
+                rep.skipped_other += 1
 
     async def _pos_find_or_create(self, guild, name: str, hoist: bool, rep: _Report):
         same = [
