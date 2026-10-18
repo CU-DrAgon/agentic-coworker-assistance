@@ -700,6 +700,77 @@ async def test_a_failed_interjection_stays_quiet(bot, world, monkeypatch):
     assert rec.texts == []  # nobody asked Salid: no apology either
 
 
+def test_answer_deadline_default_and_env(monkeypatch):
+    from salid.config import Settings
+
+    monkeypatch.delenv("SALID_ANSWER_TIMEOUT_SECONDS", raising=False)
+    assert Settings(_env_file=None).answer_timeout_seconds == 120.0
+    monkeypatch.setenv("SALID_ANSWER_TIMEOUT_SECONDS", "45")
+    assert Settings(_env_file=None).answer_timeout_seconds == 45.0
+
+
+class TypingProbe:
+    """channel.typing(): records when the indicator starts and stops."""
+
+    def __init__(self):
+        self.log = []
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        self.log.append("on")
+
+    async def __aexit__(self, *a):
+        self.log.append("off")
+
+
+@pytest.mark.parametrize(
+    ("text", "atts"),
+    [
+        ("เดือนนี้จ่ายไปเท่าไร", []),  # the 6 s ack never went out: the apology is a reply
+        ("", [("a.pdf", "application/pdf")]),  # instant ack: it becomes the apology
+    ],
+)
+async def test_an_answer_past_the_deadline_gets_the_apology_and_stops_typing(
+    bot, world, monkeypatch, caplog, text, atts
+):
+    """A Vertex call that hangs used to leave "one moment..." and typing up forever."""
+    wire(bot, monkeypatch)
+    bot._sleep = never_fires
+    bot.s.answer_timeout_seconds = 0.05
+    hung = Slow()
+    monkeypatch.setattr(botmod, "ask", hung)
+    world.chat.typing = typing = TypingProbe()
+    m = TMsg(world.g, world.chat, member(world.g, STAFF), text, attachments=[att(*a) for a in atts])
+    rec = recording(m)
+    try:
+        with caplog.at_level("WARNING", logger="salid.bot"):
+            await bot.on_message(m)
+    finally:
+        hung.release.set()  # the abandoned worker thread ends
+    assert m.replies == [t("qa_failed", "th")] and len(rec.texts) == 1
+    assert typing.log == ["on", "off"]
+    (warn,) = [r for r in caplog.records if r.name == "salid.bot" and r.levelname == "WARNING"]
+    assert str(m.id) in warn.getMessage() and str(world.chat.id) in warn.getMessage()
+    assert "เดือนนี้" not in warn.getMessage()  # ids only, never the question
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]  # handled, not a crash
+
+
+async def test_an_interjection_past_the_deadline_stays_quiet(bot, world, monkeypatch):
+    wire(bot, monkeypatch)
+    bot.s.answer_timeout_seconds = 0.05
+    hung = Slow()
+    monkeypatch.setattr(botmod, "ask", hung)
+    m = TMsg(world.g, world.gen, member(world.g, STAFF), "ดู https://example.com ไหม")
+    rec = recording(m)
+    try:
+        assert await bot._answer(m, world.g, m.author, interjection=True) is False
+    finally:
+        hung.release.set()
+    assert rec.texts == []
+
+
 async def test_reply_summary_acks_by_the_referenced_message_and_registers_the_edit(
     bot, world, monkeypatch
 ):

@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     deep_task_timeout: int = 600  # seconds
     deep_task_model: str = "gemini-3-flash-preview"  # see deep_task.build_cli_settings
     research_daily_cap: int = 10  # deep_research runs per guild per day (salid.research)
+    # One typed chat answer (the agent's whole run: every model call and tool) gets this long; past
+    # it the asker gets a short apology instead of "one moment..." forever
+    # (SALID_ANSWER_TIMEOUT_SECONDS). Voice answers have their own limits (live_ask_timeout_seconds).
+    answer_timeout_seconds: float = 120.0
     # Cheap model for the "is this addressed to Salid?" yes/no gates (see salid.gate).
     gate_model: str = "gemini-3.5-flash-lite"
     low_confidence: float = 0.7

@@ -1865,8 +1865,7 @@ class SecretaryBot(
         ack = None if interjection else await self._start_ack(message, q, lang)
         try:
             async with message.channel.typing():
-                ans = await asyncio.to_thread(
-                    ask,
+                ans = await self._ask_in_time(
                     self.s,
                     self.store,
                     q,
@@ -1882,6 +1881,13 @@ class SecretaryBot(
         except BaseException:
             await self._ack_failed(ack, lang)
             raise
+        if ans is None:  # past the deadline: an apology, not "one moment..." forever
+            logger.warning(
+                "answer deadline passed guild=%s channel=%s message=%s after %.0fs",
+                gid, message.channel.id, message.id, time.monotonic() - t_ctx,
+            )  # fmt: skip
+            await self._ack_failed(ack, lang)
+            return not interjection
         self._log_answer(gid, message.channel.id, is_exec, ans, t0, t_ctx, time.monotonic())
         if interjection and is_no_reply(ans.text):
             logger.info("interjection suppressed (nothing useful to add)")
@@ -1925,6 +1931,19 @@ class SecretaryBot(
                 )
         self._note_answer(message, sent)
         return True
+
+    async def _ask_in_time(self, *args, **kwargs):
+        """`ask` in a worker thread, or None when the answer deadline (answer_timeout_seconds)
+        passes first. The thread cannot be stopped: it ends on its own, bounded by the model's
+        request timeout (qa.build_agent), and its late answer is dropped."""
+        deadline = float(getattr(self.s, "answer_timeout_seconds", 120.0))
+        try:
+            async with asyncio.timeout(deadline) as budget:
+                return await asyncio.to_thread(ask, *args, **kwargs)
+        except TimeoutError:
+            if budget.expired():
+                return None
+            raise  # a TimeoutError of the answer itself is an ordinary failure
 
     async def _start_ack(self, message, text: str, lang: str, *, target=None):
         """Acknowledge slow work at once (files, links, audio: `target` is the message that has
