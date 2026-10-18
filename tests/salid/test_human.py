@@ -337,15 +337,16 @@ async def test_set_channel_mode_by_talking_follows_the_slash_rules(bot, world):
 
 async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     a = await tools_for(bot, world, EXEC)
-    r = await asyncio.to_thread(a.set_channel_language, "en", None)
-    assert r == {"status": "ok", "channel": "ทั่วไป", "language": "en"}
-    assert bot.team.channel_language(GUILD, 10) == "en"
-    assert (await asyncio.to_thread(a.set_channel_language, "fr", None))[
+    # the language is the company's (no per-channel language any more): set_server_language
+    r = await asyncio.to_thread(a.set_server_language, "en", True)
+    assert r["status"] == "ok" and r["language"] == "en"
+    assert bot.team.channel_language(GUILD, 10) == bot.team.channel_language(GUILD, 12) == "en"
+    assert (await asyncio.to_thread(a.set_server_language, "fr", True))[
         "error"
     ] == "unknown language"
     assert (await asyncio.to_thread(a.set_memory_days, 30)) == {"status": "ok", "days": 30}
     assert bot.team.memory_retention_days(GUILD) == 30
-    assert (await asyncio.to_thread(a.set_memory_days, 0))["error"] == "bad_days"
+    assert (await asyncio.to_thread(a.set_memory_days, -1))["error"] == "bad_days"  # 0 = forever
     shown = await asyncio.to_thread(a.show_settings)
     assert (
         shown["mode"] == "call" and shown["reply_language"] == "en" and shown["memory_days"] == 30
@@ -423,9 +424,9 @@ async def test_ack_is_sent_at_once_then_edited_into_the_answer(
     assert bot._answers.get(Sent.id) is not None  # delete-by-reply finds the edited message
 
 
-async def test_english_channel_gets_an_english_ack(bot, world, monkeypatch):
+async def test_an_english_server_gets_an_english_ack(bot, world, monkeypatch):
     wire(bot, monkeypatch)
-    bot.guilds_store.set_channel_language(GUILD, world.chat.id, "en")
+    bot.guilds_store.set_server_language(GUILD, "en")  # the company language
     bot.team._cache.clear()
     m = TMsg(
         world.g,

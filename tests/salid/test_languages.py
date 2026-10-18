@@ -237,7 +237,8 @@ def test_validators_accept_every_language():
         store.set_server_language(1, "auto")
     with pytest.raises(ValueError):
         store.set_server_language(1, "xx")
-    assert i18n.resolve_language(5, channel_languages={"5": "ja"}, default_language="hi") == "ja"
+    # a stored channel value is ignored: the server language applies everywhere
+    assert i18n.resolve_language(5, channel_languages={"5": "ja"}, default_language="hi") == "hi"
     assert i18n.resolve_language(6, channel_languages={}, default_language="hi") == "hi"
 
 

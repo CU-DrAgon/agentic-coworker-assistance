@@ -322,19 +322,17 @@ def test_save_settings_replaces_the_channel_language_map(gstore):
     assert g.channel_languages == {"6": "th"} and g.default_language == "en"
 
 
-def test_bot_cache_sees_a_language_change_at_once_and_resolves_override_then_default(gstore):
+def test_bot_cache_sees_a_language_change_at_once_and_ignores_channel_overrides(gstore):
     team = gs.BotGuildSettings(gstore, ttl=3600)
-    assert team.channel_language(GUILD, 5) == "auto"  # never chosen: follow the words written
-    gstore.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "a@x.com")
-    team._cache.clear()
-    assert team.channel_language(GUILD, 5) == "en"
-    team.set_channel_language(GUILD, 5, "th")
-    assert team.channel_language(GUILD, 5) == "th"  # override, no waiting for the TTL
-    assert team.channel_language(GUILD, 6) == "en"  # other channels follow the default
+    assert team.channel_language(GUILD, 5) == "en"  # never chosen: English, never the words
+    team.set_server_language(GUILD, "th")
+    assert team.channel_language(GUILD, 5) == "th"  # no waiting for the TTL
+    team.set_channel_language(GUILD, 5, "en")  # a stored channel value changes nothing
+    assert team.channel_language(GUILD, 5) == team.channel_language(GUILD, 6) == "th"
     team.set_channel_language(GUILD, 5, "auto")
-    assert team.channel_language(GUILD, 5) == "en"  # an `auto` override is ignored once chosen
+    assert team.channel_language(GUILD, 5) == "th"
     team.set_channel_language(GUILD, 5, None)
-    assert team.channel_language(GUILD, 5) == "en"
+    assert team.channel_language(GUILD, 5) == "th"
 
 
 def test_identity_code_proves_one_discord_user_without_granting_admin():

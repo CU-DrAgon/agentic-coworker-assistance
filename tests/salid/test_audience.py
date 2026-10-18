@@ -56,7 +56,7 @@ def test_company_only_ignores_personal_languages():
 def test_company_and_person_language_readers():
     chosen = GuildSettings(default_language="en", language_chosen=True)
     assert aud.company_lang(chosen) == "en"
-    assert aud.company_lang(GuildSettings()) == "auto"
+    assert aud.company_lang(GuildSettings()) == "en"  # unchosen: English, the base language
     assert aud.person_lang(Profile(language="th")) == "th"
     assert aud.person_lang(Profile()) == "" and aud.person_lang("auto") == ""
     assert aud.person_lang(Profile(language="th"), allowed=False) == ""
@@ -271,7 +271,7 @@ def test_personal_settings_off_and_company_only_both_drop_the_personal_language(
     assert FakeBot(only, {7: "th"}).langs_for(1, 5, 7) == ["en"]
 
 
-def test_an_auto_channel_override_is_ignored_once_chosen_but_kept_when_unchosen():
+def test_channel_overrides_are_ignored_and_an_unchosen_server_runs_in_english():
     store = _chosen("en")
     store.set_channel_language(1, 5, "auto")
     bot = FakeBot(store)
@@ -279,8 +279,8 @@ def test_an_auto_channel_override_is_ignored_once_chosen_but_kept_when_unchosen(
     unchosen = MemoryGuildStore()
     unchosen.set_channel_language(1, 5, "auto")
     ub = FakeBot(unchosen, {7: "th"})
-    assert ub.langs_for(1, 5, 7) == ["auto"]  # today's path: follow the words
-    assert ub.team.channel_language(1, 5) == "auto"
+    assert ub.langs_for(1, 5, 7) == ["en", "th"]  # English, then their own; never the words
+    assert ub.team.channel_language(1, 5) == "en"
 
 
 def test_a_channel_command_on_an_unchosen_server_does_not_choose_for_it():

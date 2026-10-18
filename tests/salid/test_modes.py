@@ -11,6 +11,7 @@ import pytest
 from conftest import GUILD, FixedClockSettings, ThaiGuildStore
 from test_bot_multitenant import ME, FakeChannel, FakeGuild, Msg, member, photo
 
+from salid import audience as aud
 from salid import bot as botmod
 from salid.bot import SecretaryBot
 from salid.gate import is_join_candidate
@@ -24,6 +25,7 @@ from salid.modes import (
     resolve_mode,
 )
 from salid.naming import mentions_name
+from salid.profiles import Profile
 from salid.store import SQLiteStore
 
 MANAGER, STAFF, EXEC = 3, 4, 6
@@ -652,20 +654,23 @@ def manager(world):
 
 
 def unchosen(bot, monkeypatch):
-    """A server that never answered the language question: it runs on `auto` (follows the words);
-    the Thai-default test store would otherwise call it chosen."""
+    """A server that never answered the language question: it runs in English, the base
+    language, whatever the words people write; the Thai-default test store would otherwise call it
+    chosen."""
     monkeypatch.setattr(type(bot.guilds_store), "get", MemoryGuildStore.get)
     bot.team._cache.clear()
 
 
-def set_lang(bot, channel_id, language):
-    bot.guilds_store.set_channel_language(GUILD, channel_id, language)
+def set_lang(bot, language):
+    """The company language: one language for the whole server (there is no per-channel language
+    any more; a person adds their own with a personal language)."""
+    bot.guilds_store.set_server_language(GUILD, language)
     bot.team._cache.clear()
 
 
 async def test_english_snooze_and_unsnooze_by_mention(bot, world):
     ch = world.gen
-    set_lang(bot, 10, "en")
+    set_lang(bot, "en")
     ack = await send(bot, world, ch, "<@999> Be quiet!", mention=True)
     assert ack.replies == [t("snooze", "en")] and "stay quiet" in ack.replies[0]
     assert bot._is_snoozed(10)
@@ -675,22 +680,21 @@ async def test_english_snooze_and_unsnooze_by_mention(bot, world):
     assert again.replies == [t("not_snoozed", "en")]
 
 
-async def test_fixed_replies_are_thai_by_default_and_english_when_set(bot, world):
+async def test_fixed_replies_follow_the_company_language_not_the_words(bot, world):
     th = await send(
         bot, world, world.gen, "<@999> shh", mention=True
-    )  # English words, Thai channel
+    )  # English words, Thai company
     assert th.replies == [t("snooze", "th")]
-    set_lang(bot, 12, "en")
+    set_lang(bot, "en")
     en = await send(bot, world, world.named, "<@999> เงียบก่อน", mention=True)  # Thai words, English
     assert en.replies == [t("snooze", "en")]
 
 
-async def test_auto_replies_follow_the_language_the_person_wrote_in(bot, world, monkeypatch):
-    unchosen(bot, monkeypatch)  # `auto` is the unchosen server's behaviour
-    set_lang(bot, 10, "auto")
+async def test_an_unchosen_server_replies_in_english_whatever_the_words(bot, world, monkeypatch):
+    unchosen(bot, monkeypatch)  # never "follow the words": English until the server chooses
     en = await send(bot, world, world.gen, "<@999> snooze", mention=True)
     th = await send(bot, world, world.gen, "<@999> เงียบก่อน", mention=True)
-    assert en.replies == [t("snooze", "en")] and th.replies == [t("snooze", "th")]
+    assert en.replies == th.replies == [t("snooze", "en")]
 
 
 async def test_english_meeting_commands_by_mention(bot, world, monkeypatch):
@@ -707,7 +711,6 @@ async def test_english_meeting_commands_by_mention(bot, world, monkeypatch):
     monkeypatch.setattr(bot.meetings, "join", join)
     monkeypatch.setattr(bot.meetings, "leave", leave)
     unchosen(bot, monkeypatch)
-    set_lang(bot, 10, "auto")
     author = member(world.g, STAFF)
     author.voice = object()
     for text in ("join the meeting", "Come to the meeting", "JOIN", "leave meeting", "end meeting"):
@@ -717,12 +720,12 @@ async def test_english_meeting_commands_by_mention(bot, world, monkeypatch):
     assert seen == [("join", "en")] * 3 + [("leave", "en")] * 2
     thai = TMsg(world.g, world.gen, author, "<@999> เข้าประชุม", mention=True)
     await bot.on_message(thai)
-    assert seen[-1] == ("join", "th")  # Thai still works, and auto follows the Thai text
+    assert seen[-1] == ("join", "en")  # Thai still works; the language is the company's (English)
 
 
-async def test_greeting_and_signoff_follow_the_channel_language(bot, world, monkeypatch):
+async def test_greeting_and_signoff_follow_the_company_language(bot, world, monkeypatch):
     del bot._answer  # the real one: a bare mention greets
-    set_lang(bot, 10, "en")
+    set_lang(bot, "en")
     m = await send(bot, world, world.gen, "<@999>", mention=True)
     assert m.replies == [t("greeting", "en")] and "what can I do" in m.replies[0]
     monkeypatch.setattr(
@@ -746,27 +749,28 @@ async def test_answer_passes_the_language_setting_and_follows_it_for_fixed_text(
     )
     del bot._answer
     unchosen(bot, monkeypatch)
-    for ch, setting in ((world.gen, "th"), (world.named, "en"), (world.chat, "auto")):
-        set_lang(bot, ch.id, setting)
+    m = TMsg(world.g, world.gen, member(world.g, STAFF), "<@999> ยอดเท่าไร?", mention=True)
+    await bot._answer(m, world.g, m.author)  # unchosen: English, even for Thai words
+    for ch, setting in ((world.named, "th"), (world.chat, "en")):
+        set_lang(bot, setting)
         m = TMsg(world.g, ch, member(world.g, STAFF), "<@999> hello?", mention=True)
         await bot._answer(m, world.g, m.author)
-    assert seen == ["th", "en", "auto"]
-    # features off: the refusal speaks the resolved language (auto + English text -> English)
+    assert seen == ["en", "th", "en"]
+    # features off: the refusal speaks the company language, whatever the words
     bot.guilds_store.save_settings(
-        GUILD, GuildSettingsUpdate(features=dict(qa=False), default_language="auto"), "x"
+        GUILD, GuildSettingsUpdate(features=dict(qa=False), default_language="th"), "x"
     )
     bot.team._cache.clear()
-    set_lang(bot, 11, "auto")
-    m = TMsg(world.g, world.chat, member(world.g, STAFF), "hello?")
-    await bot._answer(m, world.g, m.author)
-    assert m.replies == [t("qa_off", "en")]
-    m = TMsg(world.g, world.chat, member(world.g, STAFF), "ยอดเท่าไร")
-    await bot._answer(m, world.g, m.author)
-    assert m.replies == [t("qa_off", "th")]
+    for text in ("hello?", "ยอดเท่าไร"):
+        m = TMsg(world.g, world.chat, member(world.g, STAFF), text)
+        await bot._answer(m, world.g, m.author)
+        assert m.replies == [t("qa_off", "th")]
 
 
-async def test_direct_messages_use_auto(bot, world, monkeypatch):
-    # companies that never chose a language: the DM follows the words (English when none)
+async def test_direct_messages_of_unchosen_companies_are_english_whatever_the_words(
+    bot, world, monkeypatch
+):
+    # companies that never chose a language: English, never the words of the DM
     monkeypatch.setattr(type(bot.guilds_store), "get", MemoryGuildStore.get)
     bot.team._cache.clear()
     author = member(world.g, STAFF)
@@ -779,7 +783,7 @@ async def test_direct_messages_use_auto(bot, world, monkeypatch):
     for m in (en, th):
         await bot.on_message(m)
     assert en.replies[0].startswith(t("dmg_ask", "en"))  # two shared servers: asks which company
-    assert th.replies[0].startswith(t("dmg_ask", "th"))
+    assert th.replies[0].startswith(t("dmg_ask", "en"))
 
 
 async def test_direct_messages_use_the_chosen_language_of_the_company(bot, world, monkeypatch):
@@ -794,47 +798,55 @@ async def test_direct_messages_use_the_chosen_language_of_the_company(bot, world
 
 
 # ------------------------------------------------------------------ typed language commands
+def personal(bot, uid):
+    return bot.profiles.get(GUILD, uid).language
+
+
 @pytest.mark.parametrize(
     "text, expected",
     [("พูดภาษาอังกฤษ", "en"), ("speak English", "en"), ("English please", "en"),
      ("พูดไทย", "th"), ("speak Thai", "th"), ("ภาษาไทย", "th"),
      ("auto language", "auto"), ("ภาษาอัตโนมัติ", "auto")],
 )  # fmt: skip
-async def test_manager_changes_the_channel_language_by_mention(
-    bot, world, monkeypatch, text, expected
-):
-    unchosen(bot, monkeypatch)
-    set_lang(bot, 10, "en" if expected != "en" else "th")
+async def test_a_typed_language_command_sets_the_persons_own_language(bot, world, text, expected):
+    # no per-channel language any more: "speak X" without a scope is the speaker's own language
+    company = "en" if expected != "en" else "th"
+    set_lang(bot, company)
+    bot.profiles.save(GUILD, MANAGER, Profile(language="ja"))
     m = await send(bot, world, world.gen, f"<@999> {text}", who=manager(world), mention=True)
-    assert bot.guilds_store.get(GUILD).channel_languages == {"10": expected}
-    assert bot.team.channel_language(GUILD, 10) == expected  # immediate, no cache wait
+    assert personal(bot, MANAGER) == (None if expected == "auto" else expected)
+    assert bot.guilds_store.get(GUILD).channel_languages == {}  # nothing stored per channel
+    assert bot.team.channel_language(GUILD, 10) == company  # the company language is unchanged
     assert len(m.replies) == 1 and bot.calls == []  # a command, not a question
-    # the server never chose: other channels still follow the words (auto)
-    assert bot.team.channel_language(GUILD, 11) == "auto"
 
 
-async def test_language_command_confirms_in_the_new_language(bot, world):
+async def test_a_personal_language_confirms_in_the_company_language_then_the_new_one(bot, world):
     en = await send(bot, world, world.gen, "<@999> speak English", who=manager(world), mention=True)
-    assert en.replies == [t("lang_set", "en", label=t("lang_label_en", "en"))]
+    assert en.replies == [aud.tt("aud_personal_set", ["th", "en"], lname=aud.name_in("en"))]
+    assert t("aud_personal_set", "en", lname="English") in en.replies[0]
     th = await send(bot, world, world.gen, "<@999> พูดไทย", who=manager(world), mention=True)
-    assert th.replies == [t("lang_set", "th", label=t("lang_label_th", "th"))]
+    assert th.replies == [t("aud_personal_same", "th", lname="ไทย")]  # Thai is the company's
 
 
-async def test_language_command_is_refused_for_regular_members(bot, world):
+async def test_anyone_may_set_their_own_language_but_not_the_company_language(bot, world):
     m = await send(bot, world, world.gen, "<@999> speak English", who=STAFF, mention=True)
-    assert m.replies == [t("lang_denied", "th")]  # refusal in the channel's (Thai) language
-    assert bot.guilds_store.get(GUILD).channel_languages == {}
-    set_lang(bot, 10, "en")
-    m = await send(bot, world, world.gen, "<@999> พูดไทย", who=STAFF, mention=True)
+    assert personal(bot, STAFF) == "en" and len(m.replies) == 1
+    m = await send(
+        bot, world, world.gen, "<@999> speak English everywhere", who=STAFF, mention=True
+    )
+    assert m.replies == [t("lang_denied", "th")]  # refusal in the company (Thai) language
+    assert bot.team.channel_language(GUILD, 10) == "th"
+    set_lang(bot, "en")
+    m = await send(bot, world, world.gen, "<@999> ใช้ภาษาไทยทั้งเซิร์ฟเวอร์", who=STAFF, mention=True)
     assert m.replies == [t("lang_denied", "en")] and "Only server admins" in m.replies[0]
-    assert bot.guilds_store.get(GUILD).channel_languages == {"10": "en"}
+    assert bot.team.channel_language(GUILD, 10) == "en"
 
 
-async def test_executives_may_change_the_language_by_mention(bot, world):
-    await send(bot, world, world.gen, "<@999> speak English", who=EXEC, mention=True)
+async def test_executives_may_change_the_company_language_by_mention(bot, world):
+    await send(bot, world, world.gen, "<@999> speak English everywhere", who=EXEC, mention=True)
     assert bot.team.channel_language(GUILD, 10) == "en"
     boss = member(world.g, 7, roles=["Executive"])
-    await send(bot, world, world.gen, "<@999> speak Thai", who=boss, mention=True)
+    await send(bot, world, world.gen, "<@999> speak Thai everywhere", who=boss, mention=True)
     assert bot.team.channel_language(GUILD, 10) == "th"
 
 
@@ -856,66 +868,74 @@ async def test_language_command_needs_a_mention(bot, world):
     assert bot.guilds_store.get(GUILD).channel_languages == {}
 
 
-# ------------------------------------------------------------------ /ภาษา
-async def test_language_without_argument_shows_the_current_language(bot, world):
+# ------------------------------------------------------------------ /ภาษา /ภาษาบริษัท
+async def test_language_without_argument_shows_the_company_and_the_personal_language(bot, world):
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
     await bot.handle_language(it, None)
     ((text, ephemeral),) = it.sent
     assert ephemeral and text.startswith(t("lang_current", "th", label="ไทย"))
-    set_lang(bot, 10, "en")
+    set_lang(bot, "en")
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
     await bot.handle_language(it, None)
-    assert it.sent[0][0].startswith("Salid's reply language in this channel right now: English")
+    assert it.sent[0][0].startswith(t("lang_current", "en", label="English"))
+    bot.profiles.save(GUILD, STAFF, Profile(language="th"))  # their own language is added
+    it = Interaction(world.g, member(world.g, STAFF), world.gen)
+    await bot.handle_language(it, None)
+    assert it.sent[0][0].startswith(t("lang_current", "en", label="English + Thai"))
 
 
-async def test_language_change_is_refused_for_regular_members(bot, world):
+async def test_company_language_change_is_refused_for_regular_members(bot, world):
     it = Interaction(world.g, member(world.g, STAFF, roles=["พนักงาน"]), world.gen)
-    await bot.handle_language(it, "en")
+    await bot.handle_company_language(it, "en")
     assert it.sent == [(t("lang_denied", "th"), True)]
-    assert bot.guilds_store.get(GUILD).channel_languages == {}
+    assert bot.guilds_store.get(GUILD).default_language == "th"
+    await bot.handle_language(it, "en")  # their own language: anyone, privately
+    assert it.sent[-1][1] is True and personal(bot, STAFF) == "en"
+    assert bot.guilds_store.get(GUILD).default_language == "th"
 
 
-async def test_language_change_by_manager_is_persisted_and_immediate(bot, world, monkeypatch):
+async def test_company_language_change_by_manager_is_persisted_and_immediate(
+    bot, world, monkeypatch
+):
     unchosen(bot, monkeypatch)
+    assert bot.team.channel_language(GUILD, 10) == "en"  # unchosen: English
     it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
-    await bot.handle_language(it, "en")
-    assert it.sent == [(t("lang_set", "en", label="English"), False)]
-    assert bot.guilds_store.get(GUILD).channel_languages == {"10": "en"}
-    assert bot.team.channel_language(GUILD, 10) == "en"
-    assert bot.team.channel_language(GUILD, 12) == "auto"  # the unchosen default, now stored
-    assert not bot.guilds_store.get(GUILD).language_chosen  # a channel command is not the choice
+    await bot.handle_company_language(it, "th")
+    assert it.sent == [(t("server_lang_set", "th", label=t("lang_label_th", "th")), False)]
+    g = bot.guilds_store.get(GUILD)
+    assert g.default_language == "th" and g.language_chosen and g.channel_languages == {}
+    assert bot.team.channel_language(GUILD, 10) == bot.team.channel_language(GUILD, 12) == "th"
     ex = Interaction(world.g, member(world.g, EXEC), world.gen)
-    await bot.handle_language(ex, "auto")
-    assert bot.team.channel_language(GUILD, 10) == "auto"
-    await bot.handle_language(ex, "fr")  # not a choice
-    assert ex.sent[-1][1] is True  # an ephemeral failure notice, nothing saved
-    assert bot.team.channel_language(GUILD, 10) == "auto"
+    await bot.handle_company_language(ex, "en")
+    assert bot.team.channel_language(GUILD, 10) == "en"
+    for bad in ("auto", "fr"):  # not a company language
+        await bot.handle_company_language(ex, bad)
+        assert ex.sent[-1] == (t("lang_failed", "en"), True)  # nothing saved
+    assert bot.team.channel_language(GUILD, 10) == "en"
 
 
-async def test_default_language_of_the_guild_applies_until_a_channel_overrides(bot, world):
+async def test_the_company_language_applies_in_every_channel_and_overrides_are_ignored(bot, world):
     bot.guilds_store.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "x")
-    bot.guilds_store.set_channel_language(GUILD, 99, "th")  # a language choice was made
+    bot.guilds_store.set_channel_language(GUILD, 12, "th")  # an old per-channel override
     bot.team._cache.clear()
     m = await send(bot, world, world.gen, "<@999> shh", mention=True)
     assert m.replies == [t("snooze", "en")]
-    set_lang(bot, 12, "th")
     m = await send(bot, world, world.named, "<@999> shh", mention=True)
-    assert m.replies == [t("snooze", "th")]
+    assert m.replies == [t("snooze", "en")]
 
 
-async def test_interaction_language_for_auto_follows_the_discord_locale(bot, world, monkeypatch):
+async def test_interaction_language_is_the_company_language_never_the_locale(
+    bot, world, monkeypatch
+):
     unchosen(bot, monkeypatch)
-    set_lang(bot, 10, "auto")
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
-    assert bot._interaction_lang(it) == "en"  # empty / unknown locale: English
-    it.locale = "xx-YY"
-    assert bot._interaction_lang(it) == "en"
-    it.locale = "en-US"
-    assert bot._interaction_lang(it) == "en"
-    for locale, lang in (("th", "th"), ("th-TH", "th"), ("zh-CN", "zh"), ("ja", "ja"),
-                         ("ko", "ko"), ("hi", "hi"), ("ms", "ms"), ("id", "id"), ("vi", "vi")):  # fmt: skip
+    assert bot._interaction_lang(it) == "en"  # unchosen: English
+    for locale in ("xx-YY", "en-US", "th", "th-TH", "zh-CN", "ja", "ko", "hi", "ms", "id", "vi"):
         it.locale = locale
-        assert bot._interaction_lang(it) == lang
+        assert bot._interaction_lang(it) == "en", locale
+    set_lang(bot, "th")
+    it.locale = "en-US"
+    assert bot._interaction_lang(it) == "th"
 
 
 def test_language_command_has_three_choices_in_both_languages(bot):
@@ -940,7 +960,7 @@ def test_mode_choices_are_bilingual(bot):
 
 
 async def test_mode_help_and_confirmation_in_english(bot, world):
-    set_lang(bot, 10, "en")
+    set_lang(bot, "en")
     set_mode(bot, 10, "join")
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
     await bot.handle_mode(it, None)
@@ -1071,28 +1091,34 @@ def test_language_choice_labels_name_both_languages(bot):
         assert " · " in ch.name
 
 
-async def test_ephemeral_replies_follow_locale_for_auto(bot, world, monkeypatch):
-    unchosen(bot, monkeypatch)
-    set_lang(bot, 10, "auto")
+async def test_ephemeral_replies_follow_the_company_language_not_the_locale(
+    bot, world, monkeypatch
+):
+    unchosen(bot, monkeypatch)  # English until the server chooses, whatever the Discord locale
     for cb in (
         lambda it: bot.handle_mode(it, "bogus"),
         lambda it: bot.handle_mode(it, "join"),  # refused for a regular member
     ):
-        for locale, lang in (("en-US", "en"), ("th", "th")):
+        for locale in ("en-US", "th"):
             it = Interaction(world.g, member(world.g, STAFF, roles=["x"]), world.gen)
             it.locale = locale
             await cb(it)
             ((text, ephemeral),) = it.sent
-            assert ephemeral and text in (t("mode_failed", lang), t("mode_denied", lang))
+            assert ephemeral and text in (t("mode_failed", "en"), t("mode_denied", "en"))
     it = Interaction(world.g, member(world.g, STAFF, roles=["x"]), world.gen)
-    it.locale = "en-GB"
+    it.locale = "th"
     await bot.handle_mode(it, None)
-    assert "Mode" in it.sent[0][0] or "mode" in it.sent[0][0].lower()
-    # in a DM (no guild) the denial also follows the locale
+    assert "mode" in it.sent[0][0].lower() and "โหมด" not in it.sent[0][0]
+    set_lang(bot, "th")
+    it = Interaction(world.g, member(world.g, STAFF, roles=["x"]), world.gen)
+    it.locale = "en-US"
+    await bot.handle_mode(it, "bogus")
+    assert it.sent[0][0] in (t("mode_failed", "th"), t("mode_denied", "th"))
+    # in a DM (no guild) the denial speaks the person's company language
     dm = Interaction(None, member(world.g, STAFF), None)
     dm.locale = "en-US"
     await bot.handle_language(dm, None)
-    assert dm.sent == [(t("setup_denied", "en"), True)]
+    assert dm.sent == [(t("setup_denied", "th"), True)]
 
 
 def test_typed_commands_have_thai_and_english_forms():
