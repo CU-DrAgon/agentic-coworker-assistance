@@ -1047,9 +1047,14 @@ class Assistant:
         wide = await self._org_view(msg)
         store = self.store
         if wide is not None:
-            # an org owner / admin counts as an executive for the ledger across the org
+            # every receipt of every workspace only for an org owner / admin; a local executive
+            # (workspace admin, SALID_*_EXEC_USER_IDS) gets all of THIS workspace, elsewhere only
+            # their own receipts like any member
             is_exec = is_exec or wide.is_admin
-            pairs = wide.ledger_sources(is_exec)
+            pairs = [
+                (g, None if g == gid and is_exec else s)
+                for g, s in wide.ledger_sources(wide.is_admin)
+            ]
             if not any(g == gid for g, _ in pairs):
                 pairs.append((gid, None if is_exec else uid))
             store = MultiGuildLedgerStore(self.store, pairs)
