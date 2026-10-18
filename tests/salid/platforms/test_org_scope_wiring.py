@@ -361,10 +361,25 @@ async def test_an_org_owner_sees_every_receipt_of_every_org_workspace(money):
     assert totals(money, "exec") == {"THB": 1132.0, "USD": 50.0}
 
 
-async def test_the_platform_executive_rule_also_gives_the_org_wide_ledger(money):
-    money.a.exec_ids["slack"] = {"U1"}
-    await ask(money)
-    assert totals(money, "exec") == {"THB": 1132.0, "USD": 50.0}
+@pytest.mark.parametrize("how", ["exec_ids", "workspace_admin"])
+async def test_a_local_executive_sees_only_their_own_workspace_in_full(money, how):
+    """A Slack workspace admin (or a SALID_SLACK_EXEC_USER_IDS id) who is a plain org member is an
+    executive in that Slack workspace only: every receipt there, elsewhere only their own (the
+    Discord receipt of user 99 stays out). Org-wide `everything` is for org owners / admins."""
+    port = FakePort(platform="slack", admin=how == "workspace_admin")
+    if how == "exec_ids":
+        money.a.exec_ids["slack"] = {"U1"}
+    await ask(money, port=port)
+    assert money.a.ask_fn.calls[-1][1]["is_exec"] is True  # executive rights at home
+    assert totals(money, "exec") == {"THB": 132.0, "USD": 50.0}  # Slack all, Discord + LINE own
+    assert sorted(money.a.ask_fn.stores[-1].sources, key=str) == sorted(
+        [
+            (money.slack_gid, None),
+            (GUILD, 42),
+            (money.line_gid, ids.user_id("line", "Lmew")),
+        ],
+        key=str,
+    )
 
 
 async def test_a_group_asker_keeps_the_single_tenant_ledger(money):

@@ -10,7 +10,7 @@ import discord
 import pytest
 from conftest import GUILD, FakeClient, json_resp
 from test_bot_multitenant import ME, member
-from test_memory import RChan, bkk, mk, summary_json
+from test_memory import RChan, bkk, choose_retention, mk, summary_json
 from test_modes import STAFF, TMsg, bot, set_mode, world
 
 from salid import bot as botmod
@@ -98,7 +98,7 @@ def ago(days, hours=0):
 
 # ------------------------------------------------------------------ import
 async def test_import_covers_the_retention_window_including_pre_memory_history(bot, iw, world):
-    bot.team.set_memory_retention_days(GUILD, 90)  # a chosen window (the default keeps forever)
+    choose_retention(bot, 90)  # an explicit window (the default is keep forever)
     hmsg(world, iw.a, 1, ago(100), "too old")
     hmsg(world, iw.a, 2, ago(40), "forty days")
     hmsg(world, iw.a, 3, ago(5), "five days")
@@ -110,12 +110,12 @@ async def test_import_covers_the_retention_window_including_pre_memory_history(b
     assert after == NOW - timedelta(days=90)  # bounded by the guild's retention
 
 
-async def test_import_on_the_forever_default_reads_ten_years_of_history(bot, iw, world):
-    hmsg(world, iw.a, 1, ago(400), "last year")
+async def test_import_on_the_keep_forever_default_takes_all_history(bot, iw, world):
+    hmsg(world, iw.a, 1, ago(100), "hundred days")
     hmsg(world, iw.a, 2, ago(5), "five days")
     await run_import(bot)
-    assert [m.text for m in logged(bot, start="2025-01-01")] == ["last year", "five days"]
-    assert iw.a.fetches[0]["after"] == NOW - timedelta(days=FOREVER_DAYS)
+    assert [m.text for m in logged(bot)] == ["hundred days", "five days"]
+    assert iw.a.fetches[0]["after"] == NOW - timedelta(days=3650)  # the 10-year forever window
 
 
 async def test_import_is_idempotent_and_resumes_as_a_catch_up(bot, iw, world):
@@ -217,10 +217,8 @@ async def test_import_disabled_by_the_memory_flag(bot, iw, world):
 async def test_triggers_start_an_import(bot, iw, world, monkeypatch):
     started = []
     monkeypatch.setattr(bot, "_start_import", lambda: started.append(1))
-    bot._memory_triggers()  # first look: just remembers the config (keep forever)
-    assert started == []
-    bot.team.set_memory_retention_days(GUILD, 60)  # shortened from forever: no import
-    bot._memory_triggers()
+    choose_retention(bot, 90)  # an explicit window (the default is keep forever)
+    bot._memory_triggers()  # first look: just remembers the config
     assert started == []
     bot.team.set_memory_retention_days(GUILD, 120)
     bot._memory_triggers()
@@ -240,6 +238,9 @@ async def test_triggers_start_an_import(bot, iw, world, monkeypatch):
     bot._import_resume_at = bot._clock() - 1
     bot._memory_triggers()
     assert started == [1, 1, 1] and bot._import_resume_at is None
+    bot.team.set_memory_retention_days(GUILD, 0)  # back to keep forever = lengthened
+    bot._memory_triggers()
+    assert started == [1, 1, 1, 1]
 
 
 async def test_switching_a_channel_on_starts_an_import(bot, iw, world, monkeypatch):

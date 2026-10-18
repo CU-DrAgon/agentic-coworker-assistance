@@ -483,9 +483,11 @@ class LineAdapter:
             self._retention_set.add(tenant)
             from ..guild_settings import default_retention_days, effective_retention_days
 
-            try:  # the STORED value: "keep forever" (0) is not for LINE rooms (docs/platforms)
-                default = default_retention_days()
-                if team.current(gid).memory_retention_days == default:
+            try:
+                # The STORED value (0 = keep forever, the global default), not the effective
+                # window. A hub save (updated_at) makes even the default a company choice.
+                g, default = team.current(gid), default_retention_days()
+                if g.memory_retention_days == default and not g.updated_at:
                     team.set_memory_retention_days(
                         gid, min(LINE_RETENTION_DAYS, effective_retention_days(default))
                     )

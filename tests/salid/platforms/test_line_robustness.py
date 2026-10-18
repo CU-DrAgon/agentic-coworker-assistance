@@ -8,6 +8,7 @@ from conftest import FixedClockSettings
 from platform_fakes import Clock, inc, make_assistant, stored
 from test_line import BOT, FakeLineApi, api_error, big, mev
 
+from salid.guild_settings import GuildSettingsUpdate
 from salid.platforms import ids, line
 from salid.platforms.line import LineAdapter, LinePort, notice_text, retry_key
 
@@ -312,6 +313,18 @@ async def test_a_retention_an_admin_chose_is_left_alone(fx):
     await adapter.on_event(join_ev("join"), BOT)
     assert a.team.memory_retention_days(gid) == 30
     assert "30 days" in api.replies[0][1][0]
+
+
+async def test_keep_forever_chosen_in_the_hub_is_never_cut_to_lines_default(fx):
+    """0 (keep forever) is also the global default: once the hub saved the settings it is a
+    company choice, and a join after a restart must not cut it to 7 days (a purge)."""
+    api, a, port, adapter, clock = fx
+    gid = ids.tenant_id("line", BOT)
+    a.team.store.save_settings(gid, GuildSettingsUpdate(memory_retention_days=0), "boss@x.com")
+    a.team._cache.clear()
+    await adapter.on_event(join_ev("join"), BOT)
+    assert a.team.store.get(gid).memory_retention_days == 0
+    assert a.team.memory_retention_days(gid) > line.LINE_RETENTION_DAYS
 
 
 def test_the_notice_without_memory_says_nothing_about_storing():

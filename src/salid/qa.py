@@ -38,6 +38,7 @@ from .gmaps import MAPS_PROMPT
 from .guild_settings import effective_retention_days
 from .i18n import EXTRA, base_lang, lang_name, reply_language_line, resolve_lang, t
 from .ideas import IDEAS_PROMPT
+from .llm import REQUEST_TIMEOUT_MS
 from .markets import MARKETS_PROMPT
 from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
@@ -448,7 +449,7 @@ class MemoryTools:
     ):
         self.opener = opener  # (channel id | None, message id, file index) -> {"text": ...}
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
-        # 0 (the default) = keep forever: the 10-year window, never a 1-day one
+        # 0 (keep forever, the settings default) is the 10-year window, never clamped to 1 day
         self._retention_days = effective_retention_days(
             retention_days or settings.memory_retention_days
         )
@@ -1821,7 +1822,8 @@ def build_tools(
 
     Permission scoping lives in `ledger.forced`: none of these signatures has a submitter
     parameter, so the model cannot pass one (ADK also drops undeclared arguments). Errors are
-    returned to the model as data instead of raised, so a bad date never kills the turn.
+    returned to the model as data instead of raised, so a bad date never kills the turn; any other
+    failure (a Firestore or network error) is logged and reported as "internal error".
     `timings` (tool name -> milliseconds, summed) receives how long each tool took.
     """
     log = calls if calls is not None else []
@@ -1834,6 +1836,9 @@ def build_tools(
             return fn()
         except (TypeError, ValueError) as e:
             return {"error": str(e)}
+        except Exception:  # never log the arguments: they carry what the user asked
+            logger.exception("tool %s failed", name)
+            return {"error": "internal error"}
         finally:
             spent[name] = spent.get(name, 0.0) + (time.monotonic() - started) * 1000
 
@@ -2254,8 +2259,13 @@ def build_agent(
         # A callable skips ADK's {placeholder} templating of the instruction string.
         instruction=lambda _ctx: prompt,
         tools=tools,
+        # http_options here are per-request options: genai merges the timeout into the model's
+        # own client (retry_options above stay), so a stuck Vertex call ends after
+        # REQUEST_TIMEOUT_MS instead of hanging the answer and its worker thread.
         generate_content_config=types.GenerateContentConfig(
-            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
+            temperature=0.6,
+            thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
+            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
         ),
         before_model_callback=before_model,
         before_tool_callback=before_tool,

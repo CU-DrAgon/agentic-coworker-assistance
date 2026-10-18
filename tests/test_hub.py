@@ -629,12 +629,13 @@ def test_hub_saves_and_validates_memory_retention(client):
     assert put.json()["memory_retention_days"] == 30 and put.json()["features"]["memory"] is False
     assert client.guilds.get(A).memory_retention_days == 30
     assert client.guilds.get(B).memory_retention_days == 0  # per guild
+    put = client.put(url, json={"memory_retention_days": 0}, headers=AUTH)  # back to forever
+    assert put.json()["memory_retention_days"] == 0
+    assert client.guilds.get(A).memory_retention_days == 0
+    client.put(url, json={"memory_retention_days": 30}, headers=AUTH)
     for bad in (3651, -3, "abc", None):  # invalid values fall back to the default (forever)
         got = client.put(url, json={"memory_retention_days": bad}, headers=AUTH).json()
         assert got["memory_retention_days"] == 0
-    client.put(url, json={"memory_retention_days": 30}, headers=AUTH)
-    got = client.put(url, json={"memory_retention_days": 0}, headers=AUTH).json()
-    assert got["memory_retention_days"] == 0  # the hub's "keep forever" option
     assert (
         client.put(url, json={"memory_retention_days": "365"}, headers=AUTH).json()[
             "memory_retention_days"
@@ -643,24 +644,52 @@ def test_hub_saves_and_validates_memory_retention(client):
     )
 
 
-def test_the_hub_shows_and_saves_keep_forever_as_zero():
-    """A stored 0 is "keep forever": the page must select that option, never turn it into 90 days
-    (the next save would then delete memory older than 90 days)."""
-    import re
-    from pathlib import Path
-
-    html = (Path(__file__).parent.parent / "src/meeting_scribe/static/hub.html").read_text()
-    assert '<option value="0" data-i18n="days_forever">' in html
-    assert "fillRetention(s.memory_retention_days ?? 0)" in html
-    collect = html.split("function collectRetention() {", 1)[1].split("\n}", 1)[0]
-    assert re.search(r"n >= 0 && n <= 3650 \? n : 0", collect), collect
-
-
 def test_hub_page_has_the_memory_controls(client):
     html = (
         __import__("pathlib").Path("src/meeting_scribe/static/hub.html").read_text(encoding="utf-8")
     )
     assert 'id="mem-days"' in html and 'id: "memory"' in html and "memory_retention_days" in html
+
+
+@pytest.mark.skipif(__import__("shutil").which("node") is None, reason="node not installed")
+def test_hub_form_round_trips_keep_forever_retention(tmp_path):
+    """A stored 0 (keep forever, the default) must come back as 0 when ANY setting is saved: the
+    form used to show 90 for it and save 90, and the bot then purged everything older."""
+    import json
+    import subprocess
+    from pathlib import Path
+
+    html = (Path(__file__).parents[1] / "src/meeting_scribe/static/hub.html").read_text("utf-8")
+    assert "memory_retention_days ||" not in html  # 0 is falsy: never `|| <days>` on load
+    select = re.search(r'<select id="mem-days">(.*?)</select>', html, re.S).group(1)
+    options = re.findall(r'<option value="([^"]+)"', select)
+    assert options[0] == "0"  # "Keep forever" is offered first
+    fns = html[html.index("function fillRetention(") : html.index("// Channels Salid cannot read")]
+    probe = tmp_path / "retention.js"
+    probe.write_text(
+        f"const opts = {json.dumps(options)}.map((value) => ({{ value }}));\n"
+        "const el = { 'mem-days': { options: opts, value: '' },"
+        " 'mem-days-custom': { hidden: true, value: '' } };\n"
+        "const $ = (id) => el[id];\n"
+        f"{fns}\n"
+        "const out = {};\n"
+        "for (const d of [0, 7, 30, 90, 365, 45, 3650, null, undefined]) {\n"
+        "  fillRetention(d); out[String(d)] = collectRetention();\n"
+        "}\n"
+        "el['mem-days'].value = 'custom';\n"
+        "for (const bad of ['abc', '-1', '3651', '12.5']) {\n"
+        "  el['mem-days-custom'].value = bad; out['custom:' + bad] = collectRetention();\n"
+        "}\n"
+        "console.log(JSON.stringify(out));\n",
+        encoding="utf-8",
+    )
+    run = subprocess.run(["node", str(probe)], check=True, capture_output=True, text=True)
+    got = json.loads(run.stdout)
+    for d in (0, 7, 30, 90, 365, 45, 3650):
+        assert got[str(d)] == d, d
+    assert got["null"] == 0 and got["undefined"] == 0  # missing = the default, keep forever
+    for bad in ("abc", "-1", "3651", "12.5"):  # an invalid entry never shortens retention
+        assert got[f"custom:{bad}"] == 0, bad
 
 
 def test_hub_memory_status_shows_import_progress(client):

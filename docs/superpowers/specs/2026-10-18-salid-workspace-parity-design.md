@@ -206,8 +206,9 @@ answer**. Across platforms this means:
   Salid may offer "ask me in a private chat" instead.
 - Ledger, tasks, projects, people, wiki: stored per workspace today; org-wide views query the
   org's `memory_id`s and filter by the same per-member permissions (non-executives see their own
-  receipts across all their linked accounts; executives = org owner/admin role or the platform's
-  executive rule).
+  receipts across all their linked accounts; every receipt of every workspace only for the org
+  owner/admin role; the platform's executive rule (workspace admin, `SALID_*_EXEC_USER_IDS`) makes
+  someone an executive of THAT workspace only, elsewhere they see their own receipts).
 - Platform data policies still apply per platform (LINE: friend/group information must not be kept
   more than 24 h; see `docs/platforms/line.md`). Retention "forever" therefore does not apply to
   LINE rooms until that is settled.

@@ -322,17 +322,13 @@ def test_save_settings_replaces_the_channel_language_map(gstore):
     assert g.channel_languages == {"6": "th"} and g.default_language == "en"
 
 
-def test_bot_cache_sees_a_language_change_at_once_and_uses_the_server_language(gstore):
+def test_bot_cache_sees_a_language_change_at_once_and_ignores_channel_overrides(gstore):
     team = gs.BotGuildSettings(gstore, ttl=3600)
-    assert team.channel_language(GUILD, 5) == "en"  # never chosen: English (24eea93)
-    gstore.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "a@x.com")
-    team._cache.clear()
-    assert team.channel_language(GUILD, 5) == "en"
-    team.set_channel_language(GUILD, 5, "th")
-    assert gstore.get(GUILD).channel_languages == {"5": "th"}  # stored ...
-    assert team.channel_language(GUILD, 5) == "en"  # ... but not used (b2378eb: per server)
+    assert team.channel_language(GUILD, 5) == "en"  # never chosen: English, never the words
     team.set_server_language(GUILD, "th")
-    assert team.channel_language(GUILD, 5) == team.channel_language(GUILD, 6) == "th"  # no TTL wait
+    assert team.channel_language(GUILD, 5) == "th"  # no waiting for the TTL
+    team.set_channel_language(GUILD, 5, "en")  # a stored channel value changes nothing
+    assert team.channel_language(GUILD, 5) == team.channel_language(GUILD, 6) == "th"
     team.set_channel_language(GUILD, 5, "auto")
     assert team.channel_language(GUILD, 5) == "th"
     team.set_channel_language(GUILD, 5, None)

@@ -1867,8 +1867,7 @@ class SecretaryBot(
         ack = None if interjection else await self._start_ack(message, q, lang)
         try:
             async with message.channel.typing():
-                ans = await asyncio.to_thread(
-                    ask,
+                ans = await self._ask_in_time(
                     self.s,
                     self.store,
                     q,
@@ -1884,6 +1883,13 @@ class SecretaryBot(
         except BaseException:
             await self._ack_failed(ack, lang)
             raise
+        if ans is None:  # past the deadline: an apology, not "one moment..." forever
+            logger.warning(
+                "answer deadline passed guild=%s channel=%s message=%s after %.0fs",
+                gid, message.channel.id, message.id, time.monotonic() - t_ctx,
+            )  # fmt: skip
+            await self._ack_failed(ack, lang)
+            return not interjection
         self._log_answer(gid, message.channel.id, is_exec, ans, t0, t_ctx, time.monotonic())
         if interjection and is_no_reply(ans.text):
             logger.info("interjection suppressed (nothing useful to add)")
@@ -1927,6 +1933,19 @@ class SecretaryBot(
                 )
         self._note_answer(message, sent)
         return True
+
+    async def _ask_in_time(self, *args, **kwargs):
+        """`ask` in a worker thread, or None when the answer deadline (answer_timeout_seconds)
+        passes first. The thread cannot be stopped: it ends on its own, bounded by the model's
+        request timeout (qa.build_agent), and its late answer is dropped."""
+        deadline = float(getattr(self.s, "answer_timeout_seconds", 120.0))
+        try:
+            async with asyncio.timeout(deadline) as budget:
+                return await asyncio.to_thread(ask, *args, **kwargs)
+        except TimeoutError:
+            if budget.expired():
+                return None
+            raise  # a TimeoutError of the answer itself is an ordinary failure
 
     async def _start_ack(self, message, text: str, lang: str, *, target=None):
         """Acknowledge slow work at once (files, links, audio: `target` is the message that has
@@ -1981,13 +2000,17 @@ class SecretaryBot(
         return line or t("deep_ack", lang)
 
     async def _ack_failed(self, ack: Ack | None, lang: str) -> None:
-        """The answer blew up: do not leave "one moment..." hanging."""
+        """The answer blew up: do not leave "one moment..." hanging. The ack becomes the apology;
+        a failure before the ack went out (a quick 400 / 403) still gets it, as a reply. No ack
+        (an interjection, nobody asked): stay quiet."""
         if ack is None:
             return
         await ack.finish()
-        if ack.sent is not None:
-            with contextlib.suppress(discord.HTTPException):
+        with contextlib.suppress(discord.HTTPException):
+            if ack.sent is not None:
                 await ack.sent.edit(content=t("qa_failed", lang))
+            else:
+                await ack.message.reply(t("qa_failed", lang), mention_author=False)
 
     async def _deliver(self, message, guild, ack, text: str, uploads=(), everyone: bool = False):
         """Post an answer: mentions resolved (`@[name]` -> real tags, see salid.mentions), the
@@ -2931,8 +2954,8 @@ class SecretaryBot(
         voice_cb = app_commands.describe(mode=t("cmd_voice_arg"))(voice_cb)
         voice_cb = app_commands.choices(
             mode=[
-                app_commands.Choice(name=t("cmd_voice_listen"), value="listen_only"),
-                app_commands.Choice(name=t("cmd_voice_may"), value="may_talk"),
+                app_commands.Choice(name=t("cmd_voice_choice_listen"), value="listen_only"),
+                app_commands.Choice(name=t("cmd_voice_choice_talk"), value="may_talk"),
             ]
         )(voice_cb)
         for name in ("voice", "เสียง"):
@@ -2968,14 +2991,16 @@ class SecretaryBot(
         captions_default_cb = app_commands.describe(mode=t("cmd_voice_arg"))(captions_default_cb)
         captions_default_cb = app_commands.choices(
             mode=[
-                app_commands.Choice(name=t("cmd_captions_default_on"), value="on"),
-                app_commands.Choice(name=t("cmd_captions_default_off"), value="off"),
+                app_commands.Choice(name=t("cmd_captions_choice_on"), value="on"),
+                app_commands.Choice(name=t("cmd_captions_choice_off"), value="off"),
             ]
         )(captions_default_cb)
         for name in ("captions-default", "คำบรรยายทุกประชุม"):
             self.tree.add_command(
                 app_commands.Command(
-                    name=name, description=t("cmd_captions_default"), callback=captions_default_cb
+                    name=name,
+                    description=t("cmd_captions_default"),
+                    callback=captions_default_cb,
                 )
             )
 

@@ -1,5 +1,5 @@
 """English by default, and the main-language question each server answers once: unchosen servers
-run on `auto`, the join/startup question with its persistent select menu, who may answer, what
+run in English (never the words people write), the join/startup question with its persistent select menu, who may answer, what
 the answer changes, and the settings rules behind it. Discord objects are small fakes."""
 
 from types import SimpleNamespace
@@ -100,11 +100,11 @@ def test_locale_lang_table(locale, expected):
     assert locale_lang(locale) == expected
 
 
-def test_interaction_language_is_english_until_chosen_then_the_setting(bot, world):
+def test_interaction_language_is_the_setting_never_the_locale(bot, world):
     ch = world.gen
     for locale in ("", "fr", "th", "th-TH", "zh-CN", "ja", "ko"):
         it = SimpleNamespace(guild=world.g, channel=ch, locale=locale)
-        assert bot._interaction_lang(it) == "en"  # unchosen server: English (24eea93)
+        assert bot._interaction_lang(it) == "en", locale  # unchosen server: English
     bot.guilds_store.set_server_language(GUILD, "th")
     bot.team._cache.clear()
     assert bot._interaction_lang(SimpleNamespace(guild=world.g, channel=ch, locale="ja")) == "th"
@@ -112,7 +112,7 @@ def test_interaction_language_is_english_until_chosen_then_the_setting(bot, worl
 
 # ------------------------------------------------------------------ unchosen = English, chosen = fixed
 def test_unchosen_server_runs_in_english_and_chosen_is_fixed(bot):
-    assert bot.team.channel_language(GUILD, 10) == "en"  # 24eea93: never follow-the-words
+    assert bot.team.channel_language(GUILD, 10) == "en"
     assert not bot.team.language_chosen(GUILD)
     bot.guilds_store.set_server_language(GUILD, "ja")
     bot.team._cache.clear()
@@ -132,6 +132,8 @@ def test_a_document_with_a_default_language_counts_as_chosen_without_a_write():
     ref2 = store._ref(2)
     ref2.set({"guild_name": "New"})
     assert not store.get(2).language_chosen and store.get(2).language_setting == "en"
+    # the stored value of a server that never chose reads `auto` (what the hub shows); the bot
+    # runs it in English
     assert GuildSettings().default_language == "auto" and not GuildSettings().language_chosen
     assert GuildSettings().language_setting == "en"  # stored `auto` = unchosen, runs in English
 
@@ -150,7 +152,7 @@ def test_a_channel_language_command_on_an_unchosen_server_no_longer_answers_the_
     store = MemoryGuildStore()
     store.set_channel_language(1, 5, "en")
     g = store.get(1)
-    # the company language is still to be chosen (salid.audience): only the channel has an entry
+    # the company language is still to be chosen: the stored override is ignored (English)
     assert not g.language_chosen and g.language_setting == "en"
     assert g.channel_languages == {"5": "en"}
     store.set_channel_language(1, 5, None)  # removing an override changes nothing about the choice
@@ -376,11 +378,11 @@ async def test_on_ready_asks_after_the_guilds_are_synced(bot, world):
 
 
 # ------------------------------------------------------------------ DMs
-def test_dm_setting_is_the_company_language_and_english_until_it_has_chosen(bot, world):
+def test_dm_setting_is_the_chosen_company_language_else_english(bot, world):
     bot._shared_guilds = lambda uid: [(world.g, None)]
     bot._profile_of = lambda gid, uid: SimpleNamespace(language="")
     dm = SimpleNamespace(author=SimpleNamespace(id=7))
-    assert bot._dm_setting(dm) == "en"  # the company has not chosen: English (24eea93)
+    assert bot._dm_setting(dm) == "en"  # the company has not chosen: English
     bot.guilds_store.set_server_language(GUILD, "ja")
     bot.team._cache.clear()
     assert bot._dm_setting(dm) == "ja"

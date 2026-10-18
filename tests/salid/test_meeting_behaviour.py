@@ -54,7 +54,7 @@ async def test_live_config_has_vad_proactivity_and_meeting_tools(lv):
     s, live = await lv.join(5)
     cfg = lv.connect.configs[0]
     vad = cfg.realtime_input_config.automatic_activity_detection
-    # ~1 s of silence before she may answer (1a77b48)
+    # docs/voice_behaviour.md: she may start after `live_silence_ms` (1000) of silence
     assert vad.silence_duration_ms == 1000 and vad.prefix_padding_ms == 300
     assert cfg.proactivity.proactive_audio is True
     names = [d.name for d in cfg.tools[0].function_declarations]
@@ -501,11 +501,12 @@ async def test_leave_phrase_while_engaged_leaves_the_room(env, monkeypatch):
 async def test_engaged_times_out_back_to_listening(env):
     s = await listening_session(env)
     env.mgr._set_engaged(s, True)
-    window = env.mgr._engage_s()  # 5 min of silence toward her (c1f1085)
-    assert window == 300.0
-    env.mgr._consent_tick(s, time.monotonic() + window - 10)
+    quiet = env.bot.s.engaged_timeout_seconds  # docs/voice_behaviour.md: 300 s by default
+    env.mgr._consent_tick(s, time.monotonic() + 10)
     assert s.engaged is True
-    env.mgr._consent_tick(s, time.monotonic() + window + 10)
+    env.mgr._consent_tick(s, time.monotonic() + quiet - 10)
+    assert s.engaged is True
+    env.mgr._consent_tick(s, time.monotonic() + quiet + 10)
     assert s.engaged is False
     await env.mgr.end((1000, 77), "shutdown")
 

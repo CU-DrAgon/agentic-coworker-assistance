@@ -40,13 +40,13 @@ def test_has_thai():
     assert has_thai("สวัสดี") and has_thai("hi สลิด") and not has_thai("hello 123")
 
 
-def test_the_guild_default_wins_over_stored_channel_entries():
-    # b2378eb: language is per server and per person; per-channel overrides are not used
+def test_the_guild_language_applies_and_channel_overrides_are_ignored():
+    # language is set for the whole server and per person, never per channel
     langs = {"10": "en", "11": "auto", "12": "bogus"}
     kw = dict(channel_languages=langs)
     assert resolve_language(10, default_language="th", **kw) == "th"
     assert resolve_language(11, default_language="th", **kw) == "th"
-    assert resolve_language(12, default_language="en", **kw) == "en"  # unknown value: default
+    assert resolve_language(12, default_language="en", **kw) == "en"
     assert resolve_language(99, default_language="en", **kw) == "en"
     assert resolve_language(99, channel_languages={}) == "en"  # no settings at all
     assert resolve_language(99, channel_languages={}, default_language="zzz") == "en"

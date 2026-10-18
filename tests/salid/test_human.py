@@ -346,8 +346,13 @@ async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     assert (await asyncio.to_thread(a.set_channel_language, "fr", None))[
         "error"
     ] == "unknown language"
-    r = await asyncio.to_thread(a.set_server_language, "en")
-    assert r["status"] == "ok" and bot.team.channel_language(GUILD, 10) == "en"
+    # the language is the company's (no per-channel language any more): set_server_language
+    r = await asyncio.to_thread(a.set_server_language, "en", True)
+    assert r["status"] == "ok" and r["language"] == "en"
+    assert bot.team.channel_language(GUILD, 10) == bot.team.channel_language(GUILD, 12) == "en"
+    assert (await asyncio.to_thread(a.set_server_language, "fr", True))[
+        "error"
+    ] == "unknown language"
     assert (await asyncio.to_thread(a.set_memory_days, 30)) == {"status": "ok", "days": 30}
     assert bot.team.memory_retention_days(GUILD) == 30
     # 0 is "keep forever" since b0d78be; out-of-range values are refused
@@ -433,9 +438,9 @@ async def test_ack_is_sent_at_once_then_edited_into_the_answer(
     assert bot._answers.get(Sent.id) is not None  # delete-by-reply finds the edited message
 
 
-async def test_english_channel_gets_an_english_ack(bot, world, monkeypatch):
+async def test_an_english_server_gets_an_english_ack(bot, world, monkeypatch):
     wire(bot, monkeypatch)
-    bot.guilds_store.set_server_language(GUILD, "en")  # one language per server (b2378eb)
+    bot.guilds_store.set_server_language(GUILD, "en")  # the company language
     bot.team._cache.clear()
     m = TMsg(
         world.g,
@@ -674,6 +679,111 @@ async def test_a_crashing_answer_does_not_leave_the_ack_hanging(bot, world, monk
     )
     await bot.on_message(m)  # on_message logs the failure
     assert m.replies == [t("qa_failed", "th")]
+
+
+async def never_fires(seconds):  # the 6 second ack timer, on a clock that never gets there
+    await asyncio.Event().wait()
+
+
+async def test_a_question_that_fails_before_the_ack_still_gets_a_reply(bot, world, monkeypatch):
+    """A quick failure (a 400 / 403, the model-call cap) inside the 6 s ack delay left no ack to
+    edit, so the user got no reply at all."""
+    wire(bot, monkeypatch)
+    bot._sleep = never_fires
+
+    def boom(*a, **k):
+        raise RuntimeError("400 bad request")
+
+    monkeypatch.setattr(botmod, "ask", boom)
+    m = TMsg(world.g, world.chat, member(world.g, STAFF), "เดือนนี้จ่ายไปเท่าไร")
+    rec = recording(m)
+    await bot.on_message(m)  # on_message logs the failure
+    assert rec.texts == [t("qa_failed", "th")] and m.replies == [t("qa_failed", "th")]
+
+
+async def test_a_failed_interjection_stays_quiet(bot, world, monkeypatch):
+    wire(bot, monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(botmod, "ask", boom)
+    m = TMsg(world.g, world.gen, member(world.g, STAFF), "ดู https://example.com ไหม")
+    rec = recording(m)
+    with pytest.raises(RuntimeError):
+        await bot._answer(m, world.g, m.author, interjection=True)
+    assert rec.texts == []  # nobody asked Salid: no apology either
+
+
+def test_answer_deadline_default_and_env(monkeypatch):
+    from salid.config import Settings
+
+    monkeypatch.delenv("SALID_ANSWER_TIMEOUT_SECONDS", raising=False)
+    assert Settings(_env_file=None).answer_timeout_seconds == 120.0
+    monkeypatch.setenv("SALID_ANSWER_TIMEOUT_SECONDS", "45")
+    assert Settings(_env_file=None).answer_timeout_seconds == 45.0
+
+
+class TypingProbe:
+    """channel.typing(): records when the indicator starts and stops."""
+
+    def __init__(self):
+        self.log = []
+
+    def __call__(self):
+        return self
+
+    async def __aenter__(self):
+        self.log.append("on")
+
+    async def __aexit__(self, *a):
+        self.log.append("off")
+
+
+@pytest.mark.parametrize(
+    ("text", "atts"),
+    [
+        ("เดือนนี้จ่ายไปเท่าไร", []),  # the 6 s ack never went out: the apology is a reply
+        ("", [("a.pdf", "application/pdf")]),  # instant ack: it becomes the apology
+    ],
+)
+async def test_an_answer_past_the_deadline_gets_the_apology_and_stops_typing(
+    bot, world, monkeypatch, caplog, text, atts
+):
+    """A Vertex call that hangs used to leave "one moment..." and typing up forever."""
+    wire(bot, monkeypatch)
+    bot._sleep = never_fires
+    bot.s.answer_timeout_seconds = 0.05
+    hung = Slow()
+    monkeypatch.setattr(botmod, "ask", hung)
+    world.chat.typing = typing = TypingProbe()
+    m = TMsg(world.g, world.chat, member(world.g, STAFF), text, attachments=[att(*a) for a in atts])
+    rec = recording(m)
+    try:
+        with caplog.at_level("WARNING", logger="salid.bot"):
+            await bot.on_message(m)
+    finally:
+        hung.release.set()  # the abandoned worker thread ends
+    assert m.replies == [t("qa_failed", "th")] and len(rec.texts) == 1
+    assert typing.log == ["on", "off"]
+    (warn,) = [r for r in caplog.records if r.name == "salid.bot" and r.levelname == "WARNING"]
+    assert str(m.id) in warn.getMessage() and str(world.chat.id) in warn.getMessage()
+    assert "เดือนนี้" not in warn.getMessage()  # ids only, never the question
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]  # handled, not a crash
+
+
+async def test_an_interjection_past_the_deadline_stays_quiet(bot, world, monkeypatch):
+    wire(bot, monkeypatch)
+    bot.s.answer_timeout_seconds = 0.05
+    hung = Slow()
+    monkeypatch.setattr(botmod, "ask", hung)
+    m = TMsg(world.g, world.gen, member(world.g, STAFF), "ดู https://example.com ไหม")
+    rec = recording(m)
+    try:
+        assert await bot._answer(m, world.g, m.author, interjection=True) is False
+    finally:
+        hung.release.set()
+    assert rec.texts == []
 
 
 async def test_reply_summary_acks_by_the_referenced_message_and_registers_the_edit(
