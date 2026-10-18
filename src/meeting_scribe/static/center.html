@@ -268,6 +268,9 @@ th: {
   mem_h:"สมาชิก", mem_email:"อีเมล", mem_role:"บทบาท", mem_invite:"เชิญสมาชิก", mem_none:"ยังไม่มีสมาชิก", mem_ro:"เฉพาะเจ้าของและผู้ดูแลที่จัดการสมาชิกได้", confirm_rm:"ลบ {e} ออกจากองค์กร?", invited:"เชิญแล้ว",
   lic_h:"แพ็กเกจ", plan:"แพ็กเกจ", status:"สถานะ", seats:"จำนวนที่นั่ง", valid_until:"ใช้ได้ถึง", req_h:"ขอเปลี่ยนแพ็กเกจ", req_note:"หมายเหตุ", req_send:"ส่งคำขอ", req_sent:"ส่งคำขอแล้ว ทีมงานจะติดต่อกลับ", req_p:"ยังไม่มีการชำระเงินออนไลน์ ส่งคำขอแล้วทีมงานจะอนุมัติให้",
   super_h:"ผู้ดูแลระบบ: กำหนดแพ็กเกจ", notes:"บันทึก",
+  gc_h:"Google Calendar", gc_connected:"เชื่อมต่อแล้ว: {e}", gc_none:"ยังไม่ได้เชื่อมต่อปฏิทินของคุณ", gc_disconnect:"ยกเลิกการเชื่อมต่อ", gc_confirm:"ยกเลิกการเชื่อมต่อ Google Calendar?", gc_off:"ยกเลิกการเชื่อมต่อแล้ว", gc_ok:"เชื่อมต่อ Google Calendar แล้ว", gc_err:"เชื่อมต่อ Google Calendar ไม่สำเร็จ ({r})",
+  la_h:"บัญชีที่เชื่อม", la_p:"เชื่อมบัญชีแชทของคุณเพื่อให้สลิดรู้ว่าคุณเป็นสมาชิกคนไหน", la_get:"รับรหัส", la_unlink:"ยกเลิกการเชื่อม", la_confirm:"ยกเลิกการเชื่อมบัญชี {p}?", la_none:"ยังไม่ได้เชื่อม", la_ro:"จัดการใน Discord ด้วย /ตั้งค่า", la_unlinked:"ยกเลิกการเชื่อมแล้ว", la_linked:"เชื่อมบัญชีแล้ว", la_busy:"ขอรหัสมากเกินไป รอสักครู่แล้วลองใหม่", la_send:"ส่งข้อความนี้ถึงสลิดในแชทส่วนตัว (ไม่ใช่ในกลุ่ม)", la_cmd:"เชื่อมบัญชี {c}", la_left:"หมดอายุใน {m}:{s}", la_expired:"รหัสหมดอายุแล้ว", la_account:"บัญชี …{h}",
+  ab_h:"เชื่อมบอทเข้าองค์กร", ab_p:"สำหรับผู้ดูแล: ขอรหัสแล้วส่งให้บอทของ LINE, Telegram หรือ WhatsApp", ab_instr:"ส่งรหัสนี้ให้บอทในแชทส่วนตัว",
   set_h:"ตั้งค่าเซิร์ฟเวอร์", set_p:"การตั้งค่าเฉพาะเซิร์ฟเวอร์ เช่น เปิด/ปิดฟีเจอร์ อยู่ที่หน้า Hub", set_go:"เปิดหน้า Hub",
   org_settings:"ตั้งค่าองค์กร",
 },
@@ -297,6 +300,9 @@ en: {
   mem_h:"Members", mem_email:"Email", mem_role:"Role", mem_invite:"Invite a member", mem_none:"No members yet", mem_ro:"Only owners and admins can manage members.", confirm_rm:"Remove {e} from the organization?", invited:"Invited",
   lic_h:"License", plan:"Plan", status:"Status", seats:"Seats", valid_until:"Valid until", req_h:"Request a plan", req_note:"Note", req_send:"Send request", req_sent:"Request sent. We will get back to you.", req_p:"No online payment yet. Send a request and our team will approve it.",
   super_h:"Admin: set license", notes:"Notes",
+  gc_h:"Google Calendar", gc_connected:"Connected: {e}", gc_none:"Your calendar is not connected", gc_disconnect:"Disconnect", gc_confirm:"Disconnect Google Calendar?", gc_off:"Disconnected", gc_ok:"Google Calendar connected", gc_err:"Could not connect Google Calendar ({r})",
+  la_h:"Linked accounts", la_p:"Link your chat accounts so Salid knows which member you are", la_get:"Get code", la_unlink:"Unlink", la_confirm:"Unlink your {p} account?", la_none:"Not linked", la_ro:"Managed in Discord with /setup", la_unlinked:"Unlinked", la_linked:"Account linked", la_busy:"Too many codes. Wait a moment and try again", la_send:"Send this to Salid in a private chat (not in a group)", la_cmd:"link {c}", la_left:"Expires in {m}:{s}", la_expired:"Code expired", la_account:"Account …{h}",
+  ab_h:"Connect a bot workspace", ab_p:"For admins: get a code and send it to your LINE, Telegram or WhatsApp bot", ab_instr:"Send this code to the bot in a private chat",
   set_h:"Server settings", set_p:"Per-server settings such as feature toggles live on the Hub page.", set_go:"Open Hub",
   org_settings:"Organization settings",
 }};
@@ -686,8 +692,77 @@ VIEWS.apps = async (body, my) => {
       isAdmin() ? el("button", { class: "btn" + (c.connected ? " ghost" : ""), type: "button", onclick: () => startConnector(c.platform) }, c.platform === "discord" ? t("add_discord") : t("connect")) : null);
     return el("div", { class: "card" }, el("div", { class: "hd" }, platBadge(c.platform.startsWith("google") || c.platform === "gmail" ? "soon" : c.platform), el("div", {}, el("strong", { text: c.name }), el("div", { class: "muted small", text: t(names[c.platform] || "") }))), action);
   };
-  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).map(card)));
+  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).map((c) => c.platform === "google_calendar" ? calendarCard(c) : card(c))),
+    linkedCard(), isAdmin() ? attachCard() : null);
 };
+
+/* ---------- Google Calendar, linked accounts, bot attach (inside the apps view) ---------- */
+const PNAME = { line: "LINE", telegram: "Telegram", whatsapp: "WhatsApp", slack: "Slack", discord: "Discord" };
+const LINKABLE = ["line", "telegram", "whatsapp", "slack"], ATTACHABLE = ["line", "telegram", "whatsapp"];
+const failText = (e) => e instanceof ApiError && e.status === 429 ? t("la_busy") : errText(e);
+function calendarCard(c) {
+  const GC = O("/google/calendar"), status = el("div", { "aria-live": "polite" }), act = el("div", { class: "row" });
+  const card = el("div", { class: "card" }, el("div", { class: "hd" }, platBadge("google_calendar"), el("div", {}, el("strong", { text: c.name || t("gc_h") }), el("div", { class: "muted small", text: t("app_calendar") }))), status, act);
+  const off = () => { status.replaceChildren(el("span", { class: "badge", text: t("not_enabled") })); act.replaceChildren(); };
+  const draw = (g) => {
+    status.replaceChildren(g.connected ? el("span", { class: "badge ok", text: t("gc_connected", { e: g.email || "" }) }) : el("span", { class: "muted small", text: t("gc_none") }));
+    act.replaceChildren(g.connected
+      ? el("button", { class: "btn ghost", type: "button", onclick: async () => { if (!confirm(t("gc_confirm"))) return; try { await api(GC, { method: "DELETE" }); toast(t("gc_off")); draw({ connected: false }); } catch (e) { fail(e); } } }, t("gc_disconnect"))
+      : el("button", { class: "btn", type: "button", onclick: async () => { try { const r = await api(GC + "/connect", { method: "POST" }); if (MOCK) { toast("mock: " + r.auth_url); return; } window.location = r.auth_url; } catch (e) { fail(e); } } }, t("connect")));
+  };
+  // api() reports 503 as AuthError("not_configured"); for this feature that only means "not switched on"
+  const fail = (e) => { if (e instanceof AuthError && e.message === "not_configured") off(); else if (!handleAuth(e)) toast(errText(e), "error"); };
+  api(GC).then(draw).catch(fail);
+  return card;
+}
+function codeBox(r, onTick) {
+  const exp = new Date(r.expires_at).getTime(), left = el("span", { class: "muted small", role: "timer" });
+  const cmd = t("la_cmd", { c: r.code });
+  const copy = el("button", { class: "btn ghost sm", type: "button", onclick: async () => { try { await navigator.clipboard.writeText(cmd); toast(t("copied")); } catch { toast(t("err_net"), "error"); } } }, t("copy"));
+  const box = el("div", { class: "notice ok" }, el("div", { class: "small", text: t("la_send") }),
+    el("div", { style: "font-size:32px;font-weight:700;letter-spacing:.08em;font-variant-numeric:tabular-nums", text: r.code }),
+    el("div", { class: "row" }, el("code", { text: cmd }), copy), left);
+  let n = 0;
+  const tick = () => {
+    if (!box.isConnected) return clearInterval(iv);
+    const s = Math.max(0, Math.round((exp - Date.now()) / 1000));
+    if (isNaN(exp)) left.textContent = "";
+    else if (!s) { left.textContent = t("la_expired"); clearInterval(iv); } else left.textContent = t("la_left", { m: Math.floor(s / 60), s: String(s % 60).padStart(2, "0") });
+    if (onTick && ++n % 5 === 0) onTick();
+  };
+  const iv = setInterval(tick, 1000); tick();
+  return box;
+}
+function linkedCard() {
+  const list = el("div"), card = el("div", { class: "card" }, el("h2", { text: t("la_h") }), el("p", { class: "muted small", text: t("la_p") }), list);
+  let linked = {}, shown = null;
+  const load = async () => {
+    const r = await api(O("/identities")), was = linked; linked = {}; items(r).forEach((x) => { linked[x.platform] = x.account_hint; });
+    if (shown && linked[shown] && !was[shown]) { shown = null; toast(t("la_linked")); }
+    draw();
+  };
+  const run = async (fn) => { try { await fn(); } catch (e) { if (!handleAuth(e)) toast(failText(e), "error"); } };
+  const draw = () => {
+    list.replaceChildren(...["discord", ...LINKABLE].map((p) => {
+      const slot = el("div"), has = p in linked;
+      const row = el("div", { class: "row", style: "align-items:center" }, platBadge(p), el("strong", { text: PNAME[p] }),
+        has ? el("span", { class: "chip", text: t("la_account", { h: linked[p] }) }) : el("span", { class: "muted small", text: t("la_none") }),
+        p === "discord" ? (has ? el("span", { class: "muted small", text: t("la_ro") }) : null)
+          : has ? el("button", { class: "btn danger sm", type: "button", onclick: () => { if (confirm(t("la_confirm", { p: PNAME[p] }))) run(async () => { await api(O("/identities/" + p), { method: "DELETE" }); toast(t("la_unlinked")); await load(); }); } }, t("la_unlink"))
+            : el("button", { class: "btn sm", type: "button", onclick: () => run(async () => { const r = await api(O("/identities/" + p + "/code"), { method: "POST" }); shown = p; slot.replaceChildren(codeBox(r, () => run(load))); }) }, t("la_get")));
+      return el("div", {}, row, slot);
+    }));
+  };
+  load().catch((e) => { if (!handleAuth(e)) list.replaceChildren(el("div", { class: "notice error", text: errText(e) })); });
+  return card;
+}
+function attachCard() {
+  const out = el("div", { "aria-live": "polite" });
+  return el("div", { class: "card" }, el("h2", { text: t("ab_h") }), el("p", { class: "muted small", text: t("ab_p") }),
+    el("div", { class: "row" }, ATTACHABLE.map((p) => el("button", { class: "btn ghost", type: "button", onclick: async () => {
+      try { const r = await api(O("/workspaces/" + p + "/attach-code"), { method: "POST" }); const b = codeBox(r); b.firstChild.textContent = PNAME[p] + ": " + t("ab_instr"); out.replaceChildren(b); }
+      catch (e) { if (!handleAuth(e)) toast(failText(e), "error"); } } }, PNAME[p]))), out);
+}
 
 VIEWS.members = async (body, my) => {
   const r = await api(O("/members")); if (stale(my)) return; done(body);
@@ -840,6 +915,14 @@ function mockApi(method, path, body) {
     if (method === "DELETE") s.members = s.members.filter((y) => y.email !== qp.get("email"));
     return ok(s.members);
   }
+  if (sub === "/google/calendar") { if (method === "DELETE") s.gcal = false; return ok({ connected: !!s.gcal, email: s.gcal ? "owner@example.co.th" : null, connected_at: null }); }
+  if (sub === "/google/calendar/connect") { s.gcal = true; return ok({ auth_url: "https://accounts.google.com/o/oauth2/v2/auth?mock=1" }); }
+  if (sub === "/identities") return ok(Object.entries(s.ids || { discord: "1234" }).map(([platform, account_hint]) => ({ platform, account_hint })));
+  if ((m = sub.match(/^\/identities\/(\w+)(\/code)?$/))) {
+    if (m[2]) return ok({ code: "1234-5678", platform: m[1], kind: "identity", expires_at: new Date(Date.now() + 9e5).toISOString(), command: "link 1234-5678" });
+    s.ids = s.ids || { discord: "1234" }; delete s.ids[m[1]]; return ok(Object.entries(s.ids).map(([platform, account_hint]) => ({ platform, account_hint })));
+  }
+  if ((m = sub.match(/^\/workspaces\/(\w+)\/attach-code$/))) return ok({ code: "8765-4321", platform: m[1], kind: "attach", expires_at: new Date(Date.now() + 9e5).toISOString(), command: "link 8765-4321" });
   if (sub === "/license") { if (method === "PUT") Object.assign(org.license, body); return ok({ license: org.license, requests: [] }); }
   if (sub === "/license/request") return ok({ id: "r" + Date.now(), status: "pending", ...body });
   if (sub === "/documents/reindex") return ok({ indexed: mockDocs.length });
@@ -860,8 +943,19 @@ function oauthReturn() {
     setTimeout(() => toast(c ? t("conn_ok", { p: c }) : t("conn_err", { e: er }), c ? "ok" : "error"), 400);
   } catch { /* ignore */ }
 }
+function calendarReturn() {
+  try {
+    const u = new URLSearchParams(location.search), c = u.get("calendar");
+    if (c !== "connected" && c !== "error") return;
+    const reason = u.get("reason") || "unknown";
+    ["calendar", "reason", "org"].forEach((k) => u.delete(k));
+    history.replaceState(null, "", location.pathname + (u.toString() ? "?" + u.toString() : "") + (location.hash || "#/apps"));
+    setTimeout(() => toast(c === "connected" ? t("gc_ok") : t("gc_err", { r: reason }), c === "connected" ? "ok" : "error"), 400);
+  } catch { /* ignore */ }
+}
 applyStatic();
 oauthReturn();
+calendarReturn();
 if (MOCK) { $("mockbar").hidden = false; token = "mock"; start(); }
 else { show("login"); renderGoogleButton(); }
 </script>
