@@ -481,8 +481,98 @@ details.sys > .inner { padding-top: 12px; }
 .signins { display: flex; flex-direction: column; gap: 8px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
 .signins h3 { font-size: 14px; color: var(--muted); font-weight: 600; }
 .sirow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
+/* monitor:css */
+/* Monitor: text in --muted (AA on white and on the tints), every control at least 24 px tall, the row highlight
+   (.mon-flash) is an animation, so the reduced-motion rule below turns it off. */
+#side nav a > span.mon-nbadge { width: auto; min-width: 22px; margin-left: auto; padding: 0 7px; border-radius: 99px; background: var(--err-bg); color: var(--err-ink);
+  font-size: 12px; font-weight: 700; line-height: 20px; }
+.mon-note { margin-bottom: 12px; }
+.mon-health { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; font-size: 14px; color: var(--muted); margin-bottom: 14px; }
+.mon-health .mon-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
+.mon-health .btn.sm { min-height: 34px; }
+.mon-state { display: inline-flex; align-items: center; gap: 7px; min-height: 24px; font-weight: 600; color: var(--ink); }
+.mon-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--ok-ink); }
+.mon-state.delayed .mon-dot { background: var(--warn-ink); } .mon-state.offline .mon-dot { background: var(--err-ink); }
+.mon-state.paused .mon-dot, .mon-state.hidden .mon-dot { background: var(--muted); }
+.mon-bot { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; color: var(--muted); }
+.mon-bot.offline { color: var(--err-ink); font-weight: 600; } .mon-bot.delayed { color: var(--warn-ink); font-weight: 600; }
+.mon-banner { margin-bottom: 12px; }
+.mon-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.mon-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 24px; padding: 14px 16px; border: 1px solid var(--line); border-radius: var(--radius);
+  background: var(--card); color: var(--ink); text-align: left; box-shadow: var(--shadow); transition: border-color .15s, transform .15s; }
+.mon-tile:hover { border-color: var(--lavender); transform: translateY(-1px); }
+.mon-tile .stat { font-size: 28px; }
+.mon-tile .lbl { font-size: 14px; font-weight: 500; color: var(--muted); }
+.mon-tile.warn .stat { color: var(--warn-ink); } .mon-tile.err .stat { color: var(--err-ink); } .mon-tile.ok .stat { color: var(--ok-ink); }
+.ktabs.mon-tabs { flex-wrap: wrap; } /* four tabs for super admins: wrap rather than overflow on a phone */
+.ktabs.mon-tabs button { flex: 1 1 auto; justify-content: center; }
+.mon-fsheet > summary { display: flex; align-items: center; gap: 8px; min-height: 40px; cursor: pointer; font-weight: 600; color: var(--indigo); list-style: none; }
+.mon-fsheet > summary::-webkit-details-marker { display: none; }
+.mon-fsheet > summary::before { content: "\25B8"; font-size: 14px; color: var(--muted); }
+.mon-fsheet[open] > summary::before { content: "\25BE"; }
+.mon-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px 12px; align-items: end; }
+.mon-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.mon-chips:empty { display: none; }
+.mon-chip { display: inline-flex; align-items: center; gap: 2px; min-height: 28px; padding: 2px 2px 2px 12px; border-radius: 99px; background: var(--chip); color: var(--indigo); font-size: 13.5px; font-weight: 500; }
+.mon-x { display: grid; place-items: center; min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--indigo); font-size: 17px; line-height: 1; }
+.mon-x:hover { background: #fff; }
+.mon-newpill { align-self: center; min-height: 32px; padding: 4px 14px; border-radius: 99px; border: 1px solid var(--lavender); background: var(--nav-active); color: var(--indigo); font-weight: 600; font-size: 14px; }
+.mon-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.mon-row { display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line-soft); border-radius: 10px; }
+.mon-row:last-child { border-bottom: 0; }
+.mon-open { flex: 1 1 auto; min-width: 0; min-height: 24px; display: flex; gap: 12px; align-items: flex-start; padding: 12px 8px; border: 0; border-radius: 10px;
+  background: transparent; color: var(--ink); text-align: left; }
+.mon-open:hover { background: #FBFAFF; }
+.mon-ic { width: 30px; height: 30px; border-radius: 9px; flex: none; display: grid; place-items: center; font-size: 15px; font-weight: 700; background: var(--chip); color: var(--indigo); }
+.mon-ic.done { background: var(--ok-bg); color: var(--ok-ink); } .mon-ic.failed { background: var(--err-bg); color: var(--err-ink); }
+.mon-ic.queued, .mon-ic.waiting { background: var(--warn-bg); color: var(--warn-ink); } .mon-ic.paused, .mon-ic.cancelled { background: var(--soon-bg); color: var(--muted); }
+.mon-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.mon-title { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.mon-kind { font-weight: 500; color: var(--muted); }
+.mon-meta { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 13px; color: var(--muted); }
+.mon-att { color: var(--err-ink); font-weight: 600; }
+.mon-dismiss { flex: none; margin-right: 6px; }
+.mon-flash { animation: monflash 1.6s ease-out; }
+@keyframes monflash { from { background: var(--nav-active); } to { background: transparent; } }
+.mon-more { display: flex; justify-content: center; padding-top: 8px; }
+.mon-scrim { z-index: 62; }
+.mon-drawer { z-index: 63; gap: 14px; }
+.mon-drawer:focus { outline: none; } /* the dialog takes focus on open so its name is read; the controls inside show focus */
+.mon-drawer .dh { display: flex; align-items: flex-start; gap: 10px; }
+.mon-drawer .dh h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.mon-drawer .x { flex: none; width: 38px; height: 38px; min-height: 24px; border-radius: 10px; border: 1px solid var(--line); background: #fff; color: var(--muted); font-size: 22px; line-height: 1; }
+.mon-drawer .x:hover { color: var(--indigo); border-color: var(--lavender); }
+.mon-drawer h3 { font-size: 15px; }
+.mon-facts { display: flex; flex-direction: column; gap: 4px; font-size: 14px; color: var(--muted); }
+.mon-facts .mon-st { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mon-raw { font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 6px; background: var(--bg-2); color: var(--muted); }
+.mon-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.mon-steps li { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; }
+.mon-steps .mon-ic { width: 26px; height: 26px; font-size: 13px; }
+.mon-steps .sx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.mon-steps .sd { font-size: 13px; color: var(--muted); }
+.mon-links { display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.mon-links a { display: inline-flex; align-items: center; min-height: 24px; }
+.mon-evtools { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 150px); gap: 10px; align-items: end; }
+.mon-evs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.mon-evs li { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line-soft); }
+.mon-evs li:last-child { border-bottom: 0; }
+.mon-evs .when { color: var(--muted); font-size: 13px; }
+.mon-ops { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.mon-ops .mono { font-size: 12.5px; color: var(--muted); }
+.mon-toast { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+#content:focus { outline: none; } /* route() focuses the page container for screen readers; it is not a control */
+@media (min-width: 641px) { .mon-fsheet > summary { display: none; } }
+@media (max-width: 640px) {
+  .mon-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mon-health .mon-acts { margin-left: 0; }
+  .mon-row { flex-wrap: wrap; }
+  .mon-dismiss { margin: 0 0 10px 50px; }
+  .mon-evtools { grid-template-columns: 1fr; }
+}
+/* monitor:css:end */
 
-@media (prefers-reduced-motion: reduce) { .skeleton, .typing span, .call .ring, .call .orb, .call .dots span, .call .ovl, .livebtn i { animation: none !important; } }
+@media (prefers-reduced-motion: reduce) { .skeleton, .typing span, .call .ring, .call .orb, .call .dots span, .call .ovl, .livebtn i, .mon-flash { animation: none !important; } }
 @media (max-width: 900px) { #login { grid-template-columns: 1fr; gap: 28px; align-items: start; padding: 32px 16px 40px; } #login .panel { place-items: start; } #login .box { max-width: 480px; } }
 @media (max-width: 720px) {
   #app { flex-direction: column; }
@@ -733,6 +823,7 @@ const DISCORD_LOGIN = "__DISCORD_LOGIN__" === "1"; // server: Discord OAuth + se
 const INVITE_URL = "__INVITE_URL__";
 // DEV preview only: active solely when the page URL explicitly carries ?mock=1.
 const MOCK = (() => { try { return new URLSearchParams(location.search).get("mock") === "1"; } catch { return false; } })();
+const MONITOR = "__MONITOR__" === "1" || MOCK; // server: MONITOR_ENABLED turns the Monitor page and its nav item on
 
 const $ = (id) => document.getElementById(id);
 function el(tag, attrs, ...kids) {
@@ -843,6 +934,24 @@ th: {
   salid_here:"สลิดทำอะไรที่นี่บ้าง", sh_lang:"ภาษา", sh_tone:"โทน", sh_features:"ฟีเจอร์ที่เปิด", sh_channels:"{n} ช่อง", sh_none:"ยังไม่ได้เชื่อมต่อเซิร์ฟเวอร์ Discord", sh_hint:"ผู้ดูแลเปลี่ยนได้ที่ ตั้งค่าเซิร์ฟเวอร์ หรือบอกสลิดในแชท",
   tone_cheerful:"ร่าเริง", tone_friendly:"เป็นกันเอง", tone_professional:"ทางการ", tone_concise:"กระชับ", tone_calm:"สุขุม", lang_auto:"อัตโนมัติ",
   set_embed_p:"ตั้งค่าเฉพาะเซิร์ฟเวอร์: ฟีเจอร์ ช่อง ภาษา และโทน", set_open_tab:"เปิดในแท็บใหม่",
+  n_monitor:"ติดตามงาน", mon_live:"อัปเดตสด", mon_reconnecting:"กำลังเชื่อมต่อใหม่…", mon_offline:"ออฟไลน์", mon_paused:"หยุดอัปเดตสดไว้", mon_updated:"อัปเดต {t}", mon_pause:"หยุดอัปเดตสด", mon_resume:"อัปเดตสดต่อ", mon_notify:"แจ้งเตือนบนเครื่อง",
+  mon_bot_online:"บอทออนไลน์", mon_bot_delayed:"บอทตอบช้า", mon_bot_offline:"บอทออฟไลน์", mon_banner_bot:"บอทสลิดไม่ได้ส่งสัญญาณมาเกิน 5 นาทีแล้วค่ะ งานที่บอททำอาจค้างอยู่ และจะทำต่อเมื่อบอทกลับมา", mon_banner_delayed:"การอัปเดตสดล่าช้าค่ะ ข้อมูลที่เห็นเป็นของเมื่อ {t} สลิดกำลังลองเชื่อมต่อใหม่ให้อยู่",
+  mon_t_running:"กำลังทำ", mon_t_queued:"รอคิว", mon_t_attention:"ต้องดูแล", mon_t_failed24:"ล้มเหลว (24 ชม.)", mon_t_done_today:"เสร็จวันนี้",
+  mon_tab_attention:"ต้องดูแล", mon_tab_active:"กำลังดำเนินการ", mon_tab_history:"ประวัติ", mon_ops:"ภาพรวมระบบ", mon_ops_unlinked:"พื้นที่ทำงานที่ยังไม่ผูกกับบริษัท",
+  mon_filters:"ตัวกรอง", mon_f_kind:"ประเภท", mon_f_status:"สถานะ", mon_f_owner:"เจ้าของงาน", mon_f_workspace:"พื้นที่ทำงาน", mon_f_from:"ตั้งแต่", mon_f_to:"ถึง", mon_f_priority:"ความสำคัญ", mon_f_q:"ค้นหา", mon_chip_remove:"ลบตัวกรอง: {name}",
+  mon_p_high:"สูง", mon_p_medium:"ปานกลาง", mon_p_low:"ต่ำ",
+  mon_new:"ใหม่ {n} รายการ", mon_load_more:"โหลดเพิ่ม", mon_empty:"ตอนนี้ยังไม่มีรายการที่นี่ค่ะ", mon_member_note:"คุณเห็นงานที่คุณสั่ง ได้รับมอบหมาย หรือที่รอคุณอยู่ค่ะ เจ้าของและผู้ดูแลเห็นงานของทั้งบริษัท", mon_steps:"ขั้นตอน {d}/{n}", mon_waiting_on:"รอ {who} · {d}", mon_you:"คุณ",
+  mon_k_video_ad:"โฆษณาวิดีโอ", mon_k_deep_task:"งานใหญ่", mon_k_research:"ค้นคว้าเชิงลึก", mon_k_change:"ส่งการเปลี่ยนแปลง", mon_k_action:"คำสั่งบน Discord", mon_k_meeting:"บันทึกประชุม", mon_k_task:"งาน", mon_k_approval:"การอนุมัติ", mon_k_vote:"โหวต", mon_k_form:"แบบฟอร์ม", mon_k_reminder:"การเตือน",
+  mon_s_queued:"รอคิว", mon_s_running:"กำลังทำ", mon_s_waiting:"รออยู่", mon_s_paused:"หยุดชั่วคราว", mon_s_done:"เสร็จแล้ว", mon_s_failed:"ล้มเหลว", mon_s_cancelled:"ยกเลิกแล้ว",
+  mon_a_failed:"ทำไม่สำเร็จ", mon_a_stuck:"อาจค้างอยู่", mon_a_waiting_too_long:"รอนานเกินไป", mon_a_overdue:"เลยกำหนด", mon_a_bot_offline:"บอทออฟไลน์ อาจค้างอยู่",
+  mon_err_unknown:"เกิดข้อผิดพลาดบางอย่างค่ะ", mon_err_restarted:"สลิดรีสตาร์ตระหว่างที่งานนี้กำลังทำอยู่ค่ะ", mon_err_failed:"งานนี้ทำไม่เสร็จค่ะ", mon_err_error:"มีข้อผิดพลาดที่ไม่คาดคิดทำให้งานนี้หยุดค่ะ", mon_err_month_limit:"ใช้ครบโควตาของเดือนนี้แล้วค่ะ",
+  mon_err_storyboard:"วางสตอรีบอร์ดไม่สำเร็จค่ะ", mon_err_render:"เรนเดอร์วิดีโอไม่สำเร็จค่ะ", mon_err_upload_refused:"สร้างไฟล์แล้วแต่แนบไม่ได้ค่ะ", mon_err_not_confirmed:"แพลตฟอร์มไม่ได้ยืนยันการส่งภายในเวลาที่กำหนดค่ะ", mon_err_delivery_failed:"ส่งการเปลี่ยนแปลงไม่สำเร็จค่ะ",
+  mon_err_missing_permission:"สลิดยังไม่มีสิทธิ์ที่จำเป็นสำหรับงานนี้ค่ะ", mon_err_not_found:"ไม่พบเป้าหมายค่ะ", mon_err_bad_request:"คำขอไม่ถูกต้อง จึงถูกปฏิเสธค่ะ", mon_err_discord_error:"Discord แจ้งว่ามีข้อผิดพลาดค่ะ", mon_err_expired:"หมดเวลาก่อนที่บอทจะทำได้ค่ะ",
+  mon_do_default:"ลองใหม่อีกครั้ง หรือถามสลิดในแชทได้เลยค่ะ ถ้ายังไม่ได้ แจ้งผู้ดูแลนะคะ", mon_do_restarted:"สั่งงานนี้ใหม่ได้เลยค่ะ", mon_do_missing_permission:"ให้ผู้ดูแลเพิ่มสิทธิ์ที่ขาดให้สลิดในการตั้งค่าเซิร์ฟเวอร์ แล้วลองใหม่ค่ะ",
+  mon_d_steps:"ขั้นตอน", mon_d_events:"เหตุการณ์", mon_d_copy:"คัดลอกเหตุการณ์", mon_d_search:"ค้นหาเหตุการณ์", mon_d_severity:"ระดับ", mon_d_sev_all:"ทั้งหมด", mon_d_sev_info:"ข้อมูล", mon_d_sev_warning:"คำเตือน", mon_d_sev_error:"ข้อผิดพลาด", mon_d_cost:"ค่าใช้จ่าย",
+  mon_d_attempts:"พยายาม {n} ครั้ง", mon_d_started:"เริ่ม {t}", mon_d_finished:"เสร็จ {t}",
+  mon_dismiss:"ซ่อน", mon_licence:"แพ็กเกจของบริษัทยังไม่ใช้งาน จึงยังดูหน้าติดตามงานไม่ได้ค่ะ เจ้าของบริษัทต่ออายุได้ที่หน้าแพ็กเกจ", mon_forbidden:"ตอนนี้คุณดูงานของบริษัทนี้ไม่ได้แล้วค่ะ ถ้าบทบาทของคุณถูกเปลี่ยนโดยไม่ตั้งใจ ติดต่อเจ้าของหรือผู้ดูแลนะคะ",
+  mon_view:"ดู", mon_toast:"มี {n} รายการที่ต้องดูแลค่ะ", mon_announce:"อัปเดตแล้ว {n} รายการ",
 },
 en: {
   login_h:"Your company's command center", login_p:"Manage documents, workspaces and members in one place, and chat with Salid right from the web.",
@@ -934,6 +1043,24 @@ en: {
   salid_here:"What Salid does here", sh_lang:"Language", sh_tone:"Tone", sh_features:"Features on", sh_channels:"{n} channels", sh_none:"No Discord server connected yet", sh_hint:"Admins change these on Server settings, or by telling Salid in chat.",
   tone_cheerful:"Cheerful", tone_friendly:"Friendly", tone_professional:"Professional", tone_concise:"Concise", tone_calm:"Calm", lang_auto:"Auto",
   set_embed_p:"Per-server settings: features, channels, language and tone.", set_open_tab:"Open in new tab",
+  n_monitor:"Monitor", mon_live:"Live", mon_reconnecting:"Reconnecting…", mon_offline:"Offline", mon_paused:"Live updates paused", mon_updated:"Updated {t}", mon_pause:"Pause live updates", mon_resume:"Resume live updates", mon_notify:"Desktop notifications",
+  mon_bot_online:"Bot online", mon_bot_delayed:"Bot slow to respond", mon_bot_offline:"Bot offline", mon_banner_bot:"Salid's bot has not checked in for over 5 minutes. Work it runs may be stuck; it carries on when the bot is back.", mon_banner_delayed:"Live updates are delayed. You are seeing the data from {t}; Salid keeps trying to reconnect.",
+  mon_t_running:"Running", mon_t_queued:"Queued", mon_t_attention:"Needs attention", mon_t_failed24:"Failed (24 h)", mon_t_done_today:"Done today",
+  mon_tab_attention:"Needs attention", mon_tab_active:"Active", mon_tab_history:"History", mon_ops:"Operations", mon_ops_unlinked:"Workspaces not linked to a company",
+  mon_filters:"Filters", mon_f_kind:"Kind", mon_f_status:"Status", mon_f_owner:"Owner", mon_f_workspace:"Workspace", mon_f_from:"From", mon_f_to:"To", mon_f_priority:"Priority", mon_f_q:"Search", mon_chip_remove:"Remove filter: {name}",
+  mon_p_high:"High", mon_p_medium:"Medium", mon_p_low:"Low",
+  mon_new:"{n} new", mon_load_more:"Load more", mon_empty:"Nothing to show here right now.", mon_member_note:"You see the work you asked for, are assigned to, or that waits on you. Owners and admins see the whole company.", mon_steps:"{d}/{n} steps", mon_waiting_on:"Waiting on {who} · {d}", mon_you:"You",
+  mon_k_video_ad:"Video ad", mon_k_deep_task:"Deep task", mon_k_research:"Deep research", mon_k_change:"Change delivery", mon_k_action:"Discord action", mon_k_meeting:"Meeting recording", mon_k_task:"Task", mon_k_approval:"Approval", mon_k_vote:"Vote", mon_k_form:"Form", mon_k_reminder:"Reminder",
+  mon_s_queued:"Queued", mon_s_running:"Running", mon_s_waiting:"Waiting", mon_s_paused:"Paused", mon_s_done:"Done", mon_s_failed:"Failed", mon_s_cancelled:"Cancelled",
+  mon_a_failed:"Did not finish", mon_a_stuck:"May be stuck", mon_a_waiting_too_long:"Waiting too long", mon_a_overdue:"Overdue", mon_a_bot_offline:"Bot offline, may be stuck",
+  mon_err_unknown:"Something went wrong.", mon_err_restarted:"Salid restarted while this was running.", mon_err_failed:"The job did not finish.", mon_err_error:"An unexpected error stopped this job.", mon_err_month_limit:"This month's limit has been reached.",
+  mon_err_storyboard:"The storyboard could not be planned.", mon_err_render:"The video could not be rendered.", mon_err_upload_refused:"The file was made but could not be attached.", mon_err_not_confirmed:"The platform did not confirm delivery in time.", mon_err_delivery_failed:"The change could not be delivered.",
+  mon_err_missing_permission:"Salid lacks a permission needed for this.", mon_err_not_found:"The target could not be found.", mon_err_bad_request:"The request was rejected as invalid.", mon_err_discord_error:"Discord returned an error.", mon_err_expired:"It expired before the bot could do it.",
+  mon_do_default:"Try again, or ask Salid in chat. If it keeps failing, tell an admin.", mon_do_restarted:"Start it again when you are ready.", mon_do_missing_permission:"An admin can give Salid the missing permission in the server settings; then try again.",
+  mon_d_steps:"Steps", mon_d_events:"Events", mon_d_copy:"Copy events", mon_d_search:"Search events", mon_d_severity:"Severity", mon_d_sev_all:"All", mon_d_sev_info:"Info", mon_d_sev_warning:"Warning", mon_d_sev_error:"Error", mon_d_cost:"Cost",
+  mon_d_attempts:"{n} attempts", mon_d_started:"Started {t}", mon_d_finished:"Finished {t}",
+  mon_dismiss:"Dismiss", mon_licence:"This company's licence is not active, so the monitor is unavailable. An owner can renew it on the License page.", mon_forbidden:"You can no longer see this company's work here. If your role changed by mistake, ask an owner or admin.",
+  mon_view:"View", mon_toast:"{n} items need attention", mon_announce:"Items updated: {n}",
 }};
 let lang = "en"; // English by default; a saved choice wins
 const LANG_KEY = "salid-language"; // one key for every Salid page (landing, start, hub, center)
@@ -1160,7 +1287,7 @@ let me = null, orgId = null, cur = null;
 // Company settings and personal settings are two labelled groups. "Talk to Salid" is not a page: it is the
 // floating panel (bottom-right), so the old #/chat route opens the panel over the company profile.
 const NAV_SECTIONS = [
-  ["sec_company", [["overview", "n_overview", "▦"], ["mycal", "n_mycal", "▣"], ["docs", "n_docs", "▤"], ["ws", "n_ws", "◫"], ["apps", "n_apps", "⚙"], ["members", "n_members", "☺"], ["license", "n_license", "★"], ["settings", "n_settings", "⚒"]]],
+  ["sec_company", [["overview", "n_overview", "▦"], ["monitor", "n_monitor", "◉"], ["mycal", "n_mycal", "▣"], ["docs", "n_docs", "▤"], ["ws", "n_ws", "◫"], ["apps", "n_apps", "⚙"], ["members", "n_members", "☺"], ["license", "n_license", "★"], ["settings", "n_settings", "⚒"]]],
   ["sec_personal", [["account", "n_account", "☉"], ["mytasks", "n_mytasks", "☑"]]],
 ];
 const NAV = NAV_SECTIONS.flatMap(([, pages]) => pages);
@@ -1170,7 +1297,7 @@ const role = () => { const o = curOrg(); return (o && o.role) || "member"; };
 const isAdmin = () => ["owner", "admin", "super"].includes(role());
 const isOwner = () => role() === "owner" || role() === "super";
 const canManage = () => isAdmin() || !!(me && me.is_super);
-const pageVisible = (id) => !ADMIN_PAGES.includes(id) || canManage();
+const pageVisible = (id) => (id !== "monitor" || MONITOR) && (!ADMIN_PAGES.includes(id) || canManage());
 const O = (suffix = "") => "/api/center/orgs/" + encodeURIComponent(orgId) + suffix;
 
 function renderNav() {
@@ -1184,6 +1311,7 @@ function renderNav() {
   if (!me.orgs.length) sel.append(el("option", { value: "" }, t("no_org_h")));
   $("who").textContent = [realName(me) || me.name, nickOf(me), me.email].filter(Boolean).join(" · ") + (me.is_super ? " ★" : "");
   $("who").setAttribute("aria-current", cur === "account" ? "page" : "false");
+  monPaintBadge();
 }
 function closeNav() { document.body.classList.remove("nav-open"); $("burger").setAttribute("aria-expanded", "false"); }
 let navSeq = 0;
@@ -1200,7 +1328,9 @@ function route() {
   $("topbar-title").textContent = t(nm[1]);
   const c = $("content"); c.replaceChildren(el("h1", { text: t(nm[1]) }));
   const body = el("div", { "aria-busy": "true" }, loading()); c.append(body);
+  c.focus({ preventScroll: true }); // a route change moves keyboard and screen-reader focus to the new page
   const my = ++navSeq;
+  if (MONITOR) monBadgeStart();
   if (!orgId && id !== "settings" && id !== "account") { body.replaceWith(noOrg()); return; }
   Promise.resolve().then(() => VIEWS[id](body, my)).catch((e) => {
     if (my !== navSeq || handleAuth(e)) return;
@@ -2860,6 +2990,749 @@ VIEWS.mycal = async (body, my) => {
   }).catch(() => gstat.replaceChildren(el("span", { class: "muted small", text: t("mc_gcal_na") })));
 };
 
+/* ---------- Monitor: a calm live view of Salid's background work (the feed's pure functions are in the marked block above) ----------
+   Spec: docs/superpowers/specs/2026-10-18-salid-workflow-monitor-design.md sections 5-7. The page only shows what the API
+   returns: safe English titles (shown after a localized kind label), statuses, account keys, error codes, never content. */
+const MON_ACTIVE = ["queued", "running", "waiting", "paused"], MON_FINAL = ["done", "failed", "cancelled"];
+const MON_STATUSES = MON_ACTIVE.concat(MON_FINAL);
+const MON_TABS = ["attention", "active", "history"];
+const MON_PLATFORMS = ["discord", "slack", "line", "telegram", "whatsapp", "web"];
+const MON_ICON = { queued: "○", pending: "○", running: "◐", waiting: "…", paused: "Ⅱ", done: "✓", failed: "✕", cancelled: "⊘" };
+const MON_PAGE = 50, MON_IDS_MAX = 50; // a page of rows; the API takes at most 50 ids per refetch (422 above)
+const MON_DISMISS_KEY = "salid-monitor-dismissed", MON_NOTIFY_KEY = "salid-monitor-notify";
+const monLabel = (prefix, v) => (v && I.en[prefix + v] ? t(prefix + v) : String(v || ""));
+const monKindLabel = (k) => monLabel("mon_k_", k);
+const monStatusLabel = (s) => monLabel("mon_s_", s === "pending" ? "waiting" : s); // a step that has not started waits
+const monReason = (r) => monLabel("mon_a_", r);
+const monErrText = (e) => (e && I.en["mon_err_" + e.code] ? t("mon_err_" + e.code) : (e && e.message) || t("mon_err_unknown"));
+const monHint = (code) => t(I.en["mon_do_" + code] ? "mon_do_" + code : "mon_do_default");
+// the signed-in person's account keys (email + verified platform accounts), so their own items read "You"
+function monMyKeys() {
+  const ks = new Set();
+  if (me && me.email) ks.add(String(me.email).toLowerCase());
+  for (const i of items(me, "identities")) if (i && i.platform && i.external_id && i.verified !== false) ks.add(i.platform + ":" + i.external_id);
+  return ks;
+}
+// an account key as people read it: "You", an email, or "Discord …5678" (the full key stays in the title)
+function monWho(key) {
+  const k = String(key || ""), mine = monMyKeys();
+  if (!k) return "";
+  if (mine.has(k) || mine.has(k.toLowerCase())) return t("mon_you");
+  const i = k.indexOf(":");
+  if (k.includes("@") || i < 0) return k;
+  const id = k.slice(i + 1);
+  return pname(k.slice(0, i)) + " " + (id.length > 8 ? "…" + id.slice(-4) : id);
+}
+// the exact time in Bangkok (shown in `title` next to every relative time)
+const monExact = (iso) => { const d = new Date(iso || ""); return isNaN(d) ? "" : d.toLocaleString(loc(), { timeZone: "Asia/Bangkok", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" }); };
+function monDur(ms) {
+  if (ms == null || !Number.isFinite(ms)) return "";
+  const u = (n, unit) => new Intl.NumberFormat(loc(), { style: "unit", unit, unitDisplay: "short" }).format(n);
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return u(s, "second");
+  const m = Math.floor(s / 60);
+  if (m < 60) return u(m, "minute");
+  const h = Math.floor(m / 60);
+  if (h < 48) return m % 60 ? u(h, "hour") + " " + u(m % 60, "minute") : u(h, "hour");
+  return u(Math.floor(h / 24), "day");
+}
+// "now", "3 minutes ago"... measured against `nowMs` (the server's clock for item times)
+function monAgo(iso, nowMs) {
+  const at = Date.parse(iso || "");
+  if (Number.isNaN(at)) return "";
+  const s = Math.round((nowMs - at) / 1000), rtf = new Intl.RelativeTimeFormat(loc(), { numeric: "auto" });
+  if (Math.abs(s) < 60) return rtf.format(0, "second");
+  if (Math.abs(s) < 3600) return rtf.format(-Math.trunc(s / 60), "minute"); // whole units, like the durations
+  if (Math.abs(s) < 86400) return rtf.format(-Math.trunc(s / 3600), "hour");
+  return rtf.format(-Math.trunc(s / 86400), "day");
+}
+// Live times: every [data-mon-dur] (a duration from its start), [data-mon-wait] ("waiting on … · 2 d") and [data-mon-ago]
+// (a relative time) is redrawn once a second against the server's clock; [data-mon-ago-local] uses the device clock.
+function monPaintTimes(root, clock) {
+  const now = Date.now(), srv = clock.serverNow ? Date.parse(clock.serverNow) + (now - clock.fetchedAt) : now;
+  for (const n of root.querySelectorAll("[data-mon-dur]")) { const ms = monElapsed(n.dataset.monDur, n.dataset.monEnd || "", clock.serverNow, clock.fetchedAt, now); n.textContent = ms == null ? "" : monDur(ms); }
+  for (const n of root.querySelectorAll("[data-mon-wait]")) { const ms = monElapsed(n.dataset.monWait, "", clock.serverNow, clock.fetchedAt, now);
+    n.textContent = ms == null ? n.dataset.monWho : t("mon_waiting_on", { who: n.dataset.monWho, d: monDur(ms) }); }
+  for (const n of root.querySelectorAll("[data-mon-ago]")) n.textContent = t(n.dataset.monTpl || "mon_updated", { t: monAgo(n.dataset.monAgo, srv) });
+  for (const n of root.querySelectorAll("[data-mon-ago-local]")) n.textContent = t("mon_updated", { t: monAgo(n.dataset.monAgoLocal, now) });
+}
+// Dismissed attention items, for this person on this device: {"kind:id": updated_at}. A new updated_at brings the item back.
+let monDis = null;
+function monDismissMap() {
+  if (!monDis) { try { const v = JSON.parse(localStorage.getItem(MON_DISMISS_KEY) || "{}"); monDis = v && typeof v === "object" && !Array.isArray(v) ? v : {}; } catch { monDis = {}; } }
+  return monDis;
+}
+function monDismiss(x) {
+  const d = monDismissMap(), k = monKey(x);
+  delete d[k]; d[k] = x.updated_at || "";
+  const ks = Object.keys(d);
+  for (const old of ks.slice(0, Math.max(0, ks.length - 200))) delete d[old]; // keep the 200 latest
+  try { localStorage.setItem(MON_DISMISS_KEY, JSON.stringify(d)); } catch { /* storage blocked: kept until reload */ }
+}
+const monIsDismissed = (x) => { const d = monDismissMap(), k = monKey(x); return Object.prototype.hasOwnProperty.call(d, k) && d[k] === (x.updated_at || ""); };
+const monNotifyOptIn = () => { try { return localStorage.getItem(MON_NOTIFY_KEY) === "1"; } catch { return false; } };
+const monSetNotify = (on) => { try { localStorage.setItem(MON_NOTIFY_KEY, on ? "1" : "0"); } catch { /* ignore */ } };
+// One poll of the monitor API with its own fetch: api() drops custom headers and throws on 304, and the feed needs
+// If-None-Match, the ETag, 304 and Retry-After. A network error answers status 0; 401 throws AuthError.
+async function monFetch(path, etag) {
+  if (MOCK) {
+    try {
+      const body = await mockApi("GET", path);
+      const tag = body && body.seq != null && path.includes("/changes") ? '"' + body.seq + '"' : "";
+      if (tag && etag === tag) return { status: 304, body: null, etag: tag, retryAfter: 0 };
+      return { status: 200, body, etag: tag, retryAfter: 0 };
+    } catch (e) { if (e instanceof ApiError) return { status: e.status, body: null, etag: "", retryAfter: 0 }; throw e; }
+  }
+  let res;
+  try { res = await fetch(path, { cache: "no-store", headers: { Authorization: "Bearer " + token, ...(etag ? { "If-None-Match": etag } : {}) } }); }
+  catch { return { status: 0, body: null, etag: "", retryAfter: 0 }; }
+  if (res.status === 401) throw new AuthError("expired");
+  let body = null;
+  if (res.status === 200) { try { body = await res.json(); } catch { return { status: 0, body: null, etag: "", retryAfter: 0 }; } }
+  return { status: res.status, body, etag: res.headers.get("ETag") || "", retryAfter: Number(res.headers.get("Retry-After")) || 0 };
+}
+// Nav badge: the attention count on the Monitor link, refreshed every MON_SUMMARY_MS while the tab is visible (the
+// Monitor page refreshes it itself while it is open).
+const monBadge = { org: null, asked: null, n: 0, timer: 0 };
+function monPaintBadge() {
+  const a = document.querySelector('#nav a[href="#/monitor"]');
+  if (!a) return;
+  const n = monBadge.org === orgId ? monBadge.n : 0;
+  let b = a.querySelector(".mon-nbadge");
+  if (n > 0) {
+    if (!b) { b = el("span", { class: "mon-nbadge", "aria-hidden": "true" }); a.append(b); }
+    b.textContent = n > 99 ? "99+" : String(n);
+    a.setAttribute("aria-label", t("n_monitor") + " (" + t("mon_t_attention") + ": " + n + ")");
+  } else { if (b) b.remove(); a.removeAttribute("aria-label"); }
+}
+function monSetBadge(org, n) { monBadge.org = org; monBadge.n = Math.max(0, Number(n) || 0); monPaintBadge(); }
+async function monBadgeFetch() {
+  const org = orgId;
+  if (!MONITOR || !me || !org) return;
+  let n = 0;
+  try { n = (await api(O("/monitor/summary"))).attention; } catch { /* 402 / 403 / offline: no badge */ }
+  if (org === orgId) monSetBadge(org, n);
+}
+function monBadgeStart() {
+  if (!monBadge.timer) {
+    const loop = () => { monBadge.timer = setTimeout(loop, MON_SUMMARY_MS); if (!document.hidden && cur !== "monitor") monBadgeFetch(); };
+    monBadge.timer = setTimeout(loop, MON_SUMMARY_MS);
+  }
+  if (monBadge.asked !== orgId && cur !== "monitor") { monBadge.asked = orgId; monBadgeFetch(); }
+}
+// The detail drawer: a modal dialog (focus moves in, Tab and Shift+Tab stay inside, Escape closes, focus returns to the
+// opener). Steps, the safe error with what to do, cost, links, and the item's change events (search, severity, Copy).
+// `ctx.detail` = the detail route (events) or "" to show the row only; `ctx.restore()` = where focus goes when the opener
+// is gone. No controls yet (release 2).
+function monDrawer(item, opener, ctx = {}) {
+  if (monDrawer.close) monDrawer.close();
+  const x = item, back = opener || document.activeElement;
+  const xBtn = el("button", { class: "x", type: "button", "aria-label": t("close"), title: t("close") }, "×");
+  const dlg = el("div", { class: "drawer mon-drawer", role: "dialog", "aria-modal": "true", "aria-labelledby": "mon-d-title", tabindex: "-1" },
+    el("div", { class: "dh" }, el("h2", { id: "mon-d-title" }, monKindLabel(x.kind) + " · " + (x.title || x.id)), xBtn));
+  const scrim = el("div", { class: "scrim mon-scrim" });
+  const clock = ctx.clock || { serverNow: "", fetchedAt: 0 };
+  const owner = x.requester_id || x.assignee_id;
+  const ago = (iso, tpl) => el("span", { "data-mon-ago": iso, "data-mon-tpl": tpl, title: monExact(iso) });
+  const facts = el("div", { class: "mon-facts" },
+    el("div", { class: "mon-st" }, el("span", { class: "mon-ic " + x.status, "aria-hidden": "true" }, MON_ICON[x.status] || "•"), el("strong", { style: "color:var(--ink)" }, monStatusLabel(x.status)),
+      x.raw_status && x.raw_status !== x.status ? el("span", { class: "mon-raw" }, x.raw_status) : null,
+      x.attention ? el("span", { class: "mon-att" }, "⚠ " + monReason(x.attention_reason)) : null),
+    owner ? el("div", { title: owner }, t("mon_f_owner") + ": " + monWho(owner)) : null,
+    x.workspace ? el("div", {}, t("mon_f_workspace") + ": " + (ctx.wsName ? ctx.wsName(x.workspace) : x.workspace)) : null,
+    x.waiting_on ? el("div", { "data-mon-wait": x.updated_at || x.started_at, "data-mon-who": monWho(x.waiting_on), title: x.waiting_on }) : null,
+    x.started_at ? el("div", {}, ago(x.started_at, "mon_d_started"), " · ", el("span", { "data-mon-dur": x.started_at, "data-mon-end": x.finished_at || "" })) : null,
+    x.updated_at ? el("div", {}, ago(x.updated_at, "mon_updated")) : null,
+    x.finished_at ? el("div", {}, ago(x.finished_at, "mon_d_finished")) : null);
+  const err = x.error ? el("div", { class: "notice error" }, el("strong", {}, monErrText(x.error)), el("div", {}, monHint(x.error.code))) : null;
+  const steps = x.steps || [];
+  const stepList = steps.length ? [el("h3", { text: t("mon_d_steps") }), el("ol", { class: "mon-steps" }, steps.map((s) => {
+    const st = s.state === "pending" ? "queued" : s.state;
+    return el("li", {}, el("span", { class: "mon-ic " + st, "aria-hidden": "true" }, MON_ICON[s.state] || "•"),
+      el("div", { class: "sx" }, el("span", {}, s.name + " · " + monStatusLabel(s.state)),
+        el("span", { class: "sd" }, s.ms != null ? monDur(s.ms) : s.state === "running" && s.started_at ? el("span", { "data-mon-dur": s.started_at }) : null,
+          s.attempts > 1 ? (s.ms != null || s.state === "running" ? " · " : "") + t("mon_d_attempts", { n: s.attempts }) : null,
+          s.error_code ? " · " + monErrText({ code: s.error_code }) : null)));
+  }))] : null;
+  const cost = x.cost_usd != null ? el("div", {}, t("mon_d_cost") + ": " + new Intl.NumberFormat(loc(), { style: "currency", currency: "USD" }).format(x.cost_usd)) : null;
+  const links = Object.entries(x.links || {}).filter(([, u]) => safeUrl(u));
+  const linkBox = links.length ? el("div", { class: "mon-links" }, links.map(([k, u]) => el("a", { href: u, target: "_blank", rel: "noopener noreferrer" }, (k === "discord" ? t("open_source") : pname(k)) + " ↗"))) : null;
+  // events: structured change-log entries, never raw logs
+  const evQ = el("input", { type: "search", id: "mon-d-q", autocomplete: "off", maxlength: "100" });
+  const evSev = el("select", { id: "mon-d-sev" }, ["all", "info", "warning", "error"].map((v) => el("option", { value: v }, t("mon_d_sev_" + v))));
+  const copyBtn = el("button", { class: "btn ghost sm", type: "button", disabled: true }, t("mon_d_copy"));
+  const evList = el("ol", { class: "mon-evs" }), evMsg = el("p", { class: "muted small", text: t("loading") });
+  let evs = ctx.detail ? null : [];
+  const sev = (e) => (["info", "warning", "error"].includes(e.severity) ? e.severity : e.status === "failed" ? "error" : e.attention ? "warning" : "info");
+  const shown = () => { const n = evQ.value.trim().toLowerCase(), v = evSev.value;
+    return (evs || []).filter((e) => (v === "all" || sev(e) === v) && (!n || [e.seq, e.at, e.status, monStatusLabel(e.status), t("mon_d_sev_" + sev(e))].join(" ").toLowerCase().includes(n))); };
+  const drawEv = () => {
+    const list = shown();
+    evList.replaceChildren(...list.map((e) => el("li", {}, el("span", { class: "badge " + { error: "err", warning: "warn", info: "soon" }[sev(e)] }, t("mon_d_sev_" + sev(e))),
+      el("span", {}, monStatusLabel(e.status) + (e.attention ? " · ⚠" : "")), el("span", { class: "when", title: monExact(e.at) }, fmtTime(e.at)), el("span", { class: "when" }, "#" + e.seq))));
+    evMsg.hidden = evs != null && list.length > 0; evMsg.textContent = evs == null ? t("loading") : t("mon_empty");
+    copyBtn.disabled = !list.length;
+  };
+  evQ.addEventListener("input", drawEv); evSev.addEventListener("change", drawEv);
+  copyBtn.addEventListener("click", () => {
+    const text = shown().map((e) => [e.seq, e.at, e.kind + ":" + e.id, e.status + (e.attention ? " (attention)" : ""), sev(e)].join("\t")).join("\n");
+    navigator.clipboard.writeText(text).then(() => toast(t("copied"))).catch(() => toast(t("err_generic", { status: "clipboard" }), "error"));
+  });
+  dlg.append(...[facts, err, stepList, cost, linkBox, el("h3", { text: t("mon_d_events") }),
+    el("div", { class: "mon-evtools" }, field(t("mon_d_search"), evQ), field(t("mon_d_severity"), evSev)), el("div", {}, copyBtn), evMsg, evList].flat().filter(Boolean));
+  const focusables = () => [...dlg.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])")].filter((n) => !n.disabled && n.offsetParent !== null);
+  const close = () => {
+    if (!dlg.isConnected) return;
+    dlg.remove(); scrim.remove(); monDrawer.close = null;
+    window.removeEventListener("hashchange", close);
+    const to = back && back.isConnected ? back : ctx.restore ? ctx.restore() : null;
+    if (to && to.focus) to.focus();
+  };
+  dlg.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); close(); return; }
+    if (ev.key !== "Tab") return;
+    const f = focusables(), a = document.activeElement;
+    if (!f.length) { ev.preventDefault(); dlg.focus(); return; }
+    if (ev.shiftKey && (a === f[0] || a === dlg || !dlg.contains(a))) { ev.preventDefault(); f[f.length - 1].focus(); }
+    else if (!ev.shiftKey && (a === f[f.length - 1] || !dlg.contains(a))) { ev.preventDefault(); f[0].focus(); }
+  });
+  xBtn.addEventListener("click", close); scrim.addEventListener("click", close);
+  window.addEventListener("hashchange", close);
+  document.body.prepend(scrim, dlg); // ahead of the page shell: the first dialog in document order (the chat panel is one too)
+  monDrawer.close = close;
+  drawEv(); monPaintTimes(dlg, clock); dlg.focus();
+  if (ctx.detail) api(ctx.detail).then((d) => { if (!dlg.isConnected) return; evs = items(d, "events"); drawEv(); })
+    .catch((e) => { if (!dlg.isConnected) return; if (handleAuth(e)) { close(); return; } evs = []; drawEv(); evMsg.hidden = false; evMsg.textContent = errText(e); });
+  return dlg;
+}
+
+VIEWS.monitor = async (body, my) => {
+  const org = orgId, ops = !!(me && me.is_super), h = monParseHash(location.hash);
+  const S = {
+    tab: MON_TABS.includes(h.tab) || (ops && h.tab === "ops") ? h.tab : "",
+    f: { kind: h.kind.filter((k) => MON_KINDS.includes(k)), status: h.status.filter((s) => MON_STATUSES.includes(s)), owner: h.owner, workspace: h.workspace, from: h.from, to: h.to, priority: h.priority, q: h.q },
+    rows: [], next: null, seq: 0, etag: "", failures: 0, paused: false, stopped: false, busy: false,
+    serverNow: "", fetchedAt: 0, lastOk: 0, req: 0, listReq: 0, rid: 0, sum: null, opsSum: null, orgNames: {},
+    hover: false, focusIn: false, frozen: false, pending: new Map(), gone: new Set(), healDue: false,
+    known: new Map(), lastToast: -Infinity, timer: 0, slow: 0, sumTimer: 0, tick: 0,
+  };
+  const mq = window.matchMedia("(max-width: 640px)");
+  const alive = () => !S.stopped && !stale(my) && body.isConnected;
+  function stop() {
+    if (S.stopped) return;
+    S.stopped = true;
+    clearTimeout(S.timer); clearTimeout(S.slow); clearTimeout(S.sumTimer); clearInterval(S.tick);
+    document.removeEventListener("visibilitychange", onVis);
+    window.removeEventListener("online", onOnline); window.removeEventListener("offline", onOffline); window.removeEventListener("hashchange", onHash);
+    mq.removeEventListener("change", onMq);
+    if (monDrawer.close) monDrawer.close();
+  }
+  // 402 / 403: the licence notice or the member explanation instead of the data, and the feed stops
+  function halt(kind) {
+    stop(); done(body);
+    body.replaceChildren(el("div", { class: "card" }, el("div", { class: "notice" + (kind === "forbidden" ? " error" : ""), role: "alert", text: t(kind === "licence" ? "mon_licence" : "mon_forbidden") }),
+      kind === "licence" && pageVisible("license") ? el("p", {}, el("a", { class: "btn ghost sm", href: "#/license", style: "text-decoration:none" }, t("n_license"))) : null));
+    monSetBadge(org, 0);
+  }
+  const stopFor = (e) => { if (e instanceof ApiError && (e.status === 402 || e.status === 403)) { halt(e.status === 402 ? "licence" : "forbidden"); return true; } return false; };
+  // the list request for a tab: its filters plus the tab's own condition; null = nothing can match (no request)
+  const query = (tab, extra = {}) => {
+    const p = new URLSearchParams();
+    if (S.f.kind.length) p.set("kind", S.f.kind.join(","));
+    let sts = S.f.status;
+    if (tab === "active" || tab === "history") {
+      const base = tab === "active" ? MON_ACTIVE : MON_FINAL;
+      sts = sts.length ? sts.filter((x) => base.includes(x)) : base;
+      if (!sts.length) return null;
+    }
+    if (sts.length) p.set("status", sts.join(","));
+    if (tab === "attention") p.set("attention", "true");
+    for (const k of ["owner", "workspace", "from", "to", "priority", "q"]) if (S.f[k]) p.set(k, S.f[k]);
+    for (const [k, v] of Object.entries(extra)) if (v != null && v !== "") p.set(k, v);
+    return "?" + p.toString();
+  };
+  // the same rules in the browser, for refetched rows (the API's filter_items; from / to are Bangkok days)
+  const bkk = (d, end) => { const ms = Date.parse(d + "T00:00:00+07:00"); return Number.isNaN(ms) ? null : end ? ms + 864e5 - 1 : ms; };
+  const matches = (x) => {
+    const f = S.f, low = (v) => String(v || "").toLowerCase();
+    if (S.tab === "ops" || (S.tab === "attention" && !x.attention)) return false;
+    if ((S.tab === "active" && !MON_ACTIVE.includes(x.status)) || (S.tab === "history" && !MON_FINAL.includes(x.status))) return false;
+    if ((f.kind.length && !f.kind.includes(x.kind)) || (f.status.length && !f.status.includes(x.status))) return false;
+    const who = f.owner.trim().toLowerCase();
+    if (who && who !== low(x.requester_id) && who !== low(x.assignee_id)) return false;
+    if (f.workspace && x.workspace !== f.workspace && !String(x.workspace || "").startsWith(f.workspace + "-")) return false;
+    if (f.from || f.to) {
+      const at = Math.max(monTime(x.started_at), monTime(x.updated_at), monTime(x.finished_at)), lo = f.from ? bkk(f.from) : null, hi = f.to ? bkk(f.to, true) : null;
+      if (at === -Infinity || (lo != null && at < lo) || (hi != null && at > hi)) return false;
+    }
+    const n = f.q.trim().toLowerCase();
+    return !n || low([x.title, x.kind, x.id, x.status, x.raw_status].join(" ")).includes(n);
+  };
+  const nowMs = () => (S.serverNow ? Date.parse(S.serverNow) + (Date.now() - S.fetchedAt) : Date.now());
+  const bkkDate = (days) => new Date(nowMs() + days * 864e5).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+
+  // ---- first data: the summary (tiles, heartbeat, cursor) and, without a tab in the URL, the attention list
+  let sum, wsx = [];
+  try { [sum, wsx] = await Promise.all([api(O("/monitor/summary")), workspaces().catch(() => [])]); }
+  catch (e) { if (stopFor(e)) return; throw e; }
+  if (stale(my)) return;
+  let first = null;
+  if (!S.tab) { // Needs attention when it has items, then Active, then History
+    try { first = await api(O("/monitor/items") + query("attention", { limit: MON_PAGE })); }
+    catch (e) { if (stopFor(e)) return; throw e; }
+    if (stale(my)) return;
+    const any = (ss) => ss.some((s) => ((sum.counts || {})[s] || 0) > 0);
+    S.tab = items(first).some((x) => !monIsDismissed(x)) ? "attention" : any(MON_ACTIVE) || !any(MON_FINAL) ? "active" : "history";
+    if (S.tab !== "attention") first = null;
+  }
+  done(body);
+  wsx = Array.isArray(wsx) ? wsx : items(wsx);
+  const wsName = (id) => { const w = wsx.find((x) => x.id === id); return w ? w.name || id : MON_PLATFORMS.includes(id) ? pname(id) : id; };
+
+  // ---- health strip and banners
+  const stateEl = el("span", { class: "mon-state" }), botEl = el("span", { class: "mon-bot", hidden: true });
+  const pauseBtn = el("button", { class: "btn ghost sm", type: "button", onclick: () => setPaused(!S.paused) });
+  const canNotify = "Notification" in window;
+  const notifyBtn = el("button", { class: "btn ghost sm", type: "button", hidden: !canNotify, onclick: toggleNotify }, t("mon_notify"));
+  const health = el("div", { class: "mon-health" }, stateEl, botEl, el("div", { class: "mon-acts" }, pauseBtn, notifyBtn));
+  const botBanner = el("div", { class: "notice error mon-banner", hidden: true }), feedBanner = el("div", { class: "notice mon-banner", hidden: true });
+  // ---- tiles: a click applies the tile's filter
+  const TILES = [
+    ["running", "mon_t_running", "", () => ({ tab: "active", status: ["running"] })],
+    ["queued", "mon_t_queued", "", () => ({ tab: "active", status: ["queued"] })],
+    ["attention", "mon_t_attention", "warn", () => ({ tab: "attention" })],
+    ["failed24", "mon_t_failed24", "err", () => ({ tab: "history", status: ["failed"], from: bkkDate(-1) })],
+    ["done_today", "mon_t_done_today", "ok", () => ({ tab: "history", status: ["done"], from: bkkDate(0), to: bkkDate(0) })],
+  ];
+  const tilesEl = el("div", { class: "mon-tiles" }, TILES.map(([id, key, , over]) => el("button", { class: "mon-tile", type: "button", "data-tile": id, onclick: () => applyTile(over()) },
+    el("span", { class: "stat" }, "0"), el("span", { class: "lbl" }, t(key)))));
+  // ---- tabs
+  const tabId = (k) => "mon-tab-" + k;
+  const tabsEl = el("div", { class: "ktabs mon-tabs", role: "tablist", "aria-label": t("n_monitor") }, (ops ? MON_TABS.concat("ops") : MON_TABS).map((k) =>
+    el("button", { type: "button", role: "tab", id: tabId(k), "aria-controls": "mon-panel", "aria-selected": "false", onclick: () => setTab(k) }, t(k === "ops" ? "mon_ops" : "mon_tab_" + k))));
+  // ---- filters: visible labels, mirrored to the URL hash, shown as removable chips; a sheet under 640 px
+  const opt = (v, label) => el("option", { value: v }, label);
+  const selKind = el("select", { id: "mon-f-kind" }, opt("", t("cat_all")), MON_KINDS.map((k) => opt(k, monKindLabel(k))));
+  const selStatus = el("select", { id: "mon-f-status" }, opt("", t("cat_all")), MON_STATUSES.map((s) => opt(s, monStatusLabel(s))));
+  const inOwner = el("input", { type: "text", id: "mon-f-owner", maxlength: "200", autocomplete: "off" });
+  const selWs = el("select", { id: "mon-f-workspace" }, opt("", t("cat_all")), MON_PLATFORMS.map((p) => opt(p, pname(p))),
+    wsx.filter((w) => w && w.id && !MON_PLATFORMS.includes(w.id)).map((w) => opt(w.id, w.name || w.id)));
+  const inFrom = el("input", { type: "date", id: "mon-f-from" }), inTo = el("input", { type: "date", id: "mon-f-to" });
+  const selPri = el("select", { id: "mon-f-priority" }, opt("", t("cat_all")), ["high", "medium", "low"].map((v) => opt(v, t("mon_p_" + v))));
+  const inQ = el("input", { type: "search", id: "mon-f-q", maxlength: "200", autocomplete: "off" });
+  const sheetSum = el("summary", {}, t("mon_filters"));
+  const fsheet = el("details", { class: "mon-fsheet" }, sheetSum, el("div", { class: "mon-filters" },
+    field(t("mon_f_kind"), selKind), field(t("mon_f_status"), selStatus), field(t("mon_f_owner"), inOwner), field(t("mon_f_workspace"), selWs),
+    field(t("mon_f_from"), inFrom), field(t("mon_f_to"), inTo), field(t("mon_f_priority"), selPri), field(t("mon_f_q"), inQ)));
+  fsheet.open = !mq.matches;
+  const chips = el("div", { class: "mon-chips" });
+  const CHIPS = [
+    ["kind", "mon_f_kind", (v) => v.map(monKindLabel).join(", "), selKind], ["status", "mon_f_status", (v) => v.map(monStatusLabel).join(", "), selStatus],
+    ["owner", "mon_f_owner", (v) => v, inOwner], ["workspace", "mon_f_workspace", wsName, selWs], ["from", "mon_f_from", fmtDate, inFrom], ["to", "mon_f_to", fmtDate, inTo],
+    ["priority", "mon_f_priority", (v) => monLabel("mon_p_", v), selPri], ["q", "mon_f_q", (v) => "“" + v + "”", inQ],
+  ];
+  // ---- the list
+  const newPill = el("button", { class: "mon-newpill", type: "button", hidden: true, onclick: () => { const k = [...S.pending.keys()][0]; flushPending(true); const e = k && rowEls.get(k); if (e) e.btn.focus(); } });
+  const list = el("ul", { class: "mon-list" });
+  const moreBtn = el("button", { class: "btn ghost sm", type: "button", onclick: () => loadMore() }, t("mon_load_more"));
+  const more = el("div", { class: "mon-more", hidden: true }, moreBtn);
+  const emptyEl = el("div", { class: "empty", hidden: true }, el("p", { text: t("mon_empty") }));
+  const listErr = el("div"), opsBox = el("div", { class: "mon-ops", hidden: true });
+  const panel = el("div", { id: "mon-panel", role: "tabpanel" }, opsBox, el("div", { style: "display:flex;justify-content:center" }, newPill), listErr, list, emptyEl, more);
+  const live = el("div", { id: "mon-live", class: "sr", "aria-live": "polite" });
+  const memberNote = role() === "member" && !ops ? el("p", { class: "muted small mon-note", text: t("mon_member_note") }) : null;
+  body.replaceChildren(memberNote, botBanner, feedBanner, health, tilesEl, el("div", { class: "card" }, tabsEl, fsheet, chips, panel), live);
+
+  // ---- rows: updated in place (the focused row keeps focus), never reordered while frozen
+  const rowEls = new Map(); // "kind:id" -> {li, btn, id, sig, item, dis}
+  const sig = (x) => [x.updated_at, x.status, x.attention, x.attention_reason, x.title, x.waiting_on, (x.steps || []).map((s) => s.state).join(","), x.org_id].join("|");
+  const rowContent = (x, titleId) => {
+    const steps = x.steps || [], owner = x.requester_id || x.assignee_id, active = MON_ACTIVE.includes(x.status);
+    return [el("span", { class: "mon-ic " + x.status, "aria-hidden": "true" }, MON_ICON[x.status] || "•"),
+      el("span", { class: "mon-tx" },
+        el("span", { class: "mon-title", id: titleId }, el("span", { class: "mon-kind" }, monKindLabel(x.kind) + " · "), x.title || x.id),
+        el("span", { class: "mon-meta" },
+          el("span", {}, monStatusLabel(x.status)),
+          x.attention ? el("span", { class: "mon-att" }, "⚠ " + monReason(x.attention_reason)) : null,
+          S.tab === "ops" && x.org_id ? el("span", {}, S.orgNames[x.org_id] || x.org_id) : null,
+          owner ? el("span", { title: owner }, monWho(owner)) : null,
+          steps.length ? el("span", {}, t("mon_steps", { d: steps.filter((s) => s.state === "done").length, n: steps.length })) : null,
+          x.status === "waiting" && x.waiting_on ? el("span", { "data-mon-wait": x.updated_at || x.started_at, "data-mon-who": monWho(x.waiting_on) }) : null,
+          x.started_at && (active || x.finished_at) ? el("span", { "data-mon-dur": x.started_at, "data-mon-end": active ? "" : x.finished_at }) : null,
+          x.updated_at ? el("span", { "data-mon-ago": x.updated_at, title: monExact(x.updated_at) }) : null))];
+  };
+  function rowEl(x) {
+    const k = monKey(x);
+    let e = rowEls.get(k);
+    if (!e) {
+      const btn = el("button", { class: "mon-open", type: "button", onclick: () => openItem(e.item, btn) });
+      const li = el("li", { class: "mon-row" }, btn);
+      li.addEventListener("animationend", () => li.classList.remove("mon-flash"));
+      e = { li, btn, id: "mon-r" + ++S.rid, sig: "", item: x, dis: null };
+      rowEls.set(k, e);
+    }
+    e.item = x;
+    const s = sig(x) + "|" + S.tab;
+    if (s !== e.sig) { e.btn.replaceChildren(...rowContent(x, e.id)); e.sig = s; }
+    const wantDismiss = S.tab === "attention" && !!x.attention;
+    if (wantDismiss && !e.dis) { e.dis = el("button", { class: "btn ghost sm mon-dismiss", type: "button", "aria-describedby": e.id, onclick: () => dismiss(k) }, t("mon_dismiss")); e.li.append(e.dis); }
+    else if (!wantDismiss && e.dis) { e.dis.remove(); e.dis = null; }
+    return e;
+  }
+  function renderRows(flash) {
+    const shown = S.tab === "attention" ? S.rows.filter((x) => !monIsDismissed(x)) : S.rows;
+    const keep = new Set(shown.map(monKey));
+    for (const [k, e] of rowEls) if (!keep.has(k)) { e.li.remove(); rowEls.delete(k); }
+    let prev = null;
+    for (const x of shown) {
+      const e = rowEl(x), want = prev ? prev.nextSibling : list.firstChild;
+      if (e.li !== want) list.insertBefore(e.li, want); // only rows out of place move
+      prev = e.li;
+      if (flash && flash.has(monKey(x))) { e.li.classList.remove("mon-flash"); void e.li.offsetWidth; e.li.classList.add("mon-flash"); }
+    }
+    emptyEl.hidden = shown.length > 0;
+    more.hidden = !S.next;
+    newPill.hidden = !S.pending.size; newPill.textContent = t("mon_new", { n: S.pending.size });
+    monPaintTimes(list, S);
+  }
+  const remember = (xs) => { for (const x of xs) S.known.set(monKey(x), { status: x.status, attention: !!x.attention }); };
+  const stamp = (xs) => { const req = ++S.req; return xs.map((x) => ({ ...x, _req: req })); };
+  const restoreFocus = () => tabsEl.querySelector("[aria-selected=true]");
+  function openItem(x, opener) {
+    const e = rowEls.get(monKey(x));
+    const detail = S.tab === "ops" && x.org_id && x.org_id !== org ? "" : O("/monitor/items/" + encodeURIComponent(x.kind) + "/" + encodeURIComponent(x.id));
+    monDrawer(x, opener || (e ? e.btn : null), { detail, wsName, clock: S, restore: () => { const r = rowEls.get(monKey(x)); return r && r.li.isConnected ? r.btn : restoreFocus(); } });
+  }
+  function dismiss(k) {
+    const e = rowEls.get(k);
+    if (!e) return;
+    const sib = e.li.nextElementSibling || e.li.previousElementSibling;
+    monDismiss(e.item); renderRows();
+    const to = sib && sib.isConnected ? sib.querySelector(".mon-open") : null;
+    (to || restoreFocus()).focus();
+  }
+
+  // ---- frozen: pointer or keyboard focus in the list. Rows then update in place only; new rows wait in `pending`
+  // (the "N new" pill) and rows that left the view wait in `gone`, until the interaction ends.
+  function flushPending(force) {
+    if (S.frozen && !force) return;
+    const add = [...S.pending.values()], gone = S.gone;
+    S.rows = monMerge(S.rows.filter((x) => !gone.has(monKey(x))), add, false).rows;
+    S.pending = new Map(); S.gone = new Set();
+    renderRows(new Set(add.map(monKey)));
+    if (S.healDue && !S.frozen) { S.healDue = false; heal(); }
+  }
+  const setFrozen = () => { const f = S.hover || S.focusIn; if (f === S.frozen) return; S.frozen = f; if (!f && alive()) flushPending(); };
+  list.addEventListener("pointerenter", () => { S.hover = true; setFrozen(); });
+  list.addEventListener("pointerleave", () => { S.hover = false; setFrozen(); });
+  list.addEventListener("focusin", () => { S.focusIn = true; setFrozen(); });
+  list.addEventListener("focusout", () => setTimeout(() => { if (!list.contains(document.activeElement)) { S.focusIn = false; setFrozen(); } }, 0));
+
+  // ---- loading
+  function applyList(r, opts = {}) {
+    listErr.replaceChildren();
+    const fresh = stamp(items(r));
+    remember(fresh);
+    const before = opts.heal ? new Map(S.rows.map((x) => [monKey(x), sig(x)])) : null;
+    S.rows = fresh; S.next = r.next_cursor || null; S.pending = new Map(); S.gone = new Set();
+    renderRows(before ? new Set(fresh.filter((x) => before.has(monKey(x)) && before.get(monKey(x)) !== sig(x)).map(monKey)) : null);
+  }
+  // the first page of the current tab (a heal asks for as many rows as are shown, at most 100); false = failed
+  async function loadList(opts = {}) {
+    const mine = ++S.listReq;
+    if (S.tab === "ops") return loadOps(mine, opts);
+    const qs = query(S.tab, { limit: opts.limit || MON_PAGE });
+    let r = { items: [], next_cursor: null };
+    if (qs) {
+      try { r = await api(O("/monitor/items") + qs); }
+      catch (e) {
+        if (mine !== S.listReq || !alive()) return false;
+        if (handleAuth(e)) { stop(); return false; }
+        if (stopFor(e)) return false;
+        if (!opts.quiet) listErr.replaceChildren(errBox(e, () => loadList()));
+        return false;
+      }
+    }
+    if (mine !== S.listReq || !alive()) return false;
+    applyList(r, opts);
+    return true;
+  }
+  const OPS = "/api/center/admin/monitor";
+  async function loadOps(mine, opts) {
+    let s, r;
+    try { [s, r] = await Promise.all([api(OPS + "/summary"), api(OPS + "/items" + query("ops", { limit: opts.limit || MON_PAGE }))]); }
+    catch (e) {
+      if (mine !== S.listReq || !alive()) return false;
+      if (handleAuth(e)) { stop(); return false; }
+      if (!opts.quiet) listErr.replaceChildren(errBox(e, () => loadList()));
+      return false;
+    }
+    if (mine !== S.listReq || !alive()) return false;
+    S.opsSum = s; drawOps(); applyList(r, opts);
+    return true;
+  }
+  function drawOps() {
+    const s = S.opsSum || {}, orgs = items(s, "orgs"), beats = Object.entries(s.heartbeats || {}), loose = items(s, "unlinked");
+    S.orgNames = Object.fromEntries(orgs.map((o) => [o.id, o.name || o.id]));
+    const n = (o, k) => String(((o.counts || {})[k]) || 0);
+    opsBox.replaceChildren(
+      el("div", { class: "tblwrap" }, el("table", { class: "tbl stack" },
+        el("thead", {}, el("tr", {}, [t("org"), t("mon_t_attention"), t("mon_t_running"), t("mon_t_queued"), t("mon_s_failed")].map((x) => el("th", { scope: "col", text: x })))),
+        el("tbody", {}, orgs.map((o) => el("tr", {}, el("td", { text: o.name || o.id }), el("td", { text: String(o.attention || 0) }), el("td", { text: n(o, "running") }), el("td", { text: n(o, "queued") }), el("td", { text: n(o, "failed") })))))),
+      beats.map(([p, b]) => el("div", { class: "kv" }, el("span", {}, el("span", { class: "mono" }, p + " "), t("mon_bot_" + (["online", "delayed", "offline"].includes(b.state) ? b.state : "offline"))),
+        el("span", { class: "mono", title: monExact(b.tick_at) }, Object.entries(b.queues || {}).map(([k, v]) => k + " " + v).join(" · ")))),
+      el("h3", { text: t("mon_ops_unlinked") }),
+      loose.length ? el("ul", {}, loose.map((u) => el("li", { class: "mono", title: monExact(u.last_at) }, u.key + " · seq " + u.seq))) : el("p", { class: "muted small", text: t("mon_empty") }));
+  }
+  async function loadMore() {
+    if (!S.next) return;
+    const mine = S.listReq;
+    moreBtn.disabled = true;
+    const qs = S.tab === "ops" ? query("ops", { cursor: S.next, limit: MON_PAGE }) : query(S.tab, { cursor: S.next, limit: MON_PAGE });
+    try {
+      const r = await api((S.tab === "ops" ? OPS : O("/monitor")) + "/items" + qs);
+      if (mine !== S.listReq || !alive()) return;
+      const have = new Set(S.rows.map(monKey)), add = stamp(items(r)).filter((x) => !have.has(monKey(x)));
+      remember(add); S.rows = S.rows.concat(add); S.next = r.next_cursor || null; renderRows();
+      if (!S.next && add.length) { const e = rowEls.get(monKey(add[0])); if (e) e.btn.focus(); } // the button is gone: focus the first new row
+    } catch (e) { if (!handleAuth(e) && !stopFor(e)) toast(errText(e), "error"); }
+    moreBtn.disabled = false;
+  }
+  // summary + first page again; the cursor moves to the summary's seq (everything before it is in the fresh data)
+  async function reload() {
+    let s;
+    try { s = await api(O("/monitor/summary")); } catch (e) { if (stopFor(e)) return; throw e; }
+    if (!alive()) return;
+    setSummary(s);
+    S.seq = Number(s.seq) || 0; S.etag = '"' + S.seq + '"';
+    if (S.frozen) { S.healDue = true; return; }
+    if (!(await loadList({ heal: true, quiet: true, limit: Math.min(100, Math.max(MON_PAGE, S.rows.length)) })) && alive()) throw new Error("reload");
+  }
+  function heal() {
+    if (S.frozen) { S.healDue = true; return; }
+    loadList({ heal: true, quiet: true, limit: Math.min(100, Math.max(MON_PAGE, S.rows.length)) });
+  }
+  async function refreshSummary() {
+    try { const s = await api(O("/monitor/summary")); if (alive()) setSummary(s); }
+    catch (e) { if (!alive()) return; if (handleAuth(e)) stop(); else stopFor(e); }
+  }
+  function setSummary(s) {
+    S.sum = s;
+    if (s.now) { S.serverNow = s.now; S.fetchedAt = Date.now(); }
+    drawTiles(); paintHealth(); monSetBadge(org, s.attention);
+  }
+  function drawTiles() {
+    const s = S.sum || {}, c = s.counts || {};
+    const val = { running: c.running || 0, queued: c.queued || 0, attention: s.attention || 0, failed24: s.failed_24h || 0, done_today: s.done_today || 0 };
+    for (const b of tilesEl.children) {
+      const id = b.dataset.tile, cls = TILES.find((x) => x[0] === id)[2];
+      b.className = "mon-tile" + (cls && val[id] > 0 ? " " + cls : "");
+      b.firstChild.textContent = String(val[id]);
+    }
+  }
+
+  // ---- the live feed: poll /changes every 5 s ± 10 % while visible (backoff on failures), refetch changed rows
+  function paintHealth() {
+    const state = monFeedState({ failures: S.failures, online: navigator.onLine !== false, paused: S.paused, hidden: document.hidden });
+    const key = { live: "mon_live", delayed: "mon_reconnecting", offline: "mon_offline", paused: "mon_paused", hidden: "mon_live" }[state];
+    const last = S.lastOk ? new Date(S.lastOk).toISOString() : "";
+    stateEl.className = "mon-state " + state;
+    stateEl.title = last ? monExact(last) : "";
+    stateEl.replaceChildren(el("span", { class: "mon-dot", "aria-hidden": "true" }), t(key), last ? [" · ", el("span", { class: "muted", style: "font-weight:400", "data-mon-ago-local": last })] : null);
+    const hb = S.sum && S.sum.heartbeat ? S.sum.heartbeat.bot : null, hs = hb && ["online", "delayed", "offline"].includes(hb.state) ? hb.state : "offline";
+    botEl.hidden = !hb;
+    if (hb) { botEl.className = "mon-bot " + hs; botEl.title = hb.tick_at ? monExact(hb.tick_at) : ""; botEl.textContent = { online: "● ", delayed: "◐ ", offline: "○ " }[hs] + t("mon_bot_" + hs); }
+    botBanner.hidden = !(hb && hs === "offline"); botBanner.textContent = t("mon_banner_bot");
+    feedBanner.hidden = !(state === "delayed" || state === "offline");
+    feedBanner.textContent = t("mon_banner_delayed", { t: S.lastOk ? new Date(S.lastOk).toLocaleTimeString(loc(), { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" }) : "–" });
+    pauseBtn.textContent = t(S.paused ? "mon_resume" : "mon_pause");
+    const on = canNotify && Notification.permission === "granted" && monNotifyOptIn();
+    notifyBtn.setAttribute("aria-pressed", String(on));
+    notifyBtn.disabled = canNotify && Notification.permission === "denied";
+    monPaintTimes(stateEl, S);
+  }
+  const sched = (ms) => { clearTimeout(S.timer); S.timer = 0; if (alive() && !S.paused && !document.hidden) S.timer = setTimeout(poll, ms); };
+  async function poll() {
+    S.timer = 0;
+    if (!alive()) { stop(); return; }
+    if (S.paused || document.hidden || S.busy) return;
+    S.busy = true;
+    let wait = null;
+    try {
+      const r = await monFetch(O("/monitor/changes") + "?since=" + S.seq, S.etag);
+      if (!alive()) { stop(); return; }
+      if (r.status === 200 && r.body) {
+        S.failures = 0; S.lastOk = Date.now(); S.etag = r.etag || "";
+        if (r.body.now) { S.serverNow = r.body.now; S.fetchedAt = Date.now(); }
+        const red = monReduce({ seq: S.seq }, r.body);
+        S.seq = red.st.seq;
+        if (red.reload) await reload();
+        else if (red.refetch.length) await apply(red.refetch);
+      } else {
+        const e = monOnError(r.status, r.retryAfter);
+        if (e.action === "unchanged") { S.failures = 0; S.lastOk = Date.now(); }
+        else if (e.action === "auth") { handleAuth(new AuthError("expired")); stop(); return; }
+        else if (e.action === "licence" || e.action === "forbidden") { halt(e.action); return; }
+        else if (e.action === "wait") wait = e.delayMs; // a 429 is not a failure
+        else S.failures++;
+      }
+    } catch (e) {
+      if (handleAuth(e)) { stop(); return; }
+      S.failures++;
+    } finally { S.busy = false; }
+    if (!alive()) return;
+    paintHealth();
+    sched(wait != null ? wait : monBackoff(S.failures, Math.random()));
+  }
+  // refetch the changed rows in batches of <= 50 ids; a failed batch reloads the view instead of losing the changes
+  async function apply(keys) {
+    let fresh = [];
+    try {
+      for (let i = 0; i < keys.length; i += MON_IDS_MAX) {
+        const r = await api(O("/monitor/items") + "?" + new URLSearchParams({ ids: keys.slice(i, i + MON_IDS_MAX).join(","), limit: String(MON_IDS_MAX) }));
+        if (!alive()) return;
+        fresh = fresh.concat(items(r));
+      }
+    } catch (e) {
+      if (e instanceof AuthError) throw e;
+      if (stopFor(e)) return;
+      await reload(); // the cursor already moved: reload rather than lose these changes
+      return;
+    }
+    fresh = stamp(fresh);
+    const alerts = fresh.filter((x) => {
+      const was = S.known.get(monKey(x)) || { status: "", attention: false };
+      const failedNow = x.status === "failed" && was.status !== "failed", attentionNow = !!x.attention && !was.attention;
+      return (x.mine && (failedNow || attentionNow)) || (isAdmin() && failedNow); // their own items; any failure for admins
+    });
+    remember(fresh);
+    if (S.tab !== "ops") { // the operations list is refreshed by the 60 s heal
+      const inView = fresh.filter(matches), inKeys = new Set(inView.map(monKey)), goneKeys = keys.filter((k) => !inKeys.has(k));
+      if (S.frozen) {
+        S.rows = monMerge(S.rows, inView, true).rows;
+        const have = new Set(S.rows.map(monKey));
+        for (const x of inView) { const k = monKey(x), p = S.pending.get(k); S.gone.delete(k); if (!have.has(k) && (!p || monNewer(x, p))) S.pending.set(k, x); }
+        for (const k of goneKeys) { S.pending.delete(k); if (have.has(k)) S.gone.add(k); }
+      } else {
+        const gone = new Set(goneKeys);
+        S.rows = monMerge(S.rows.filter((x) => !gone.has(monKey(x))), inView, false).rows;
+      }
+      renderRows(inKeys);
+    }
+    if (fresh.length) announce(fresh.length);
+    notifyFor(alerts);
+  }
+  const announce = (n) => { live.textContent = ""; setTimeout(() => { if (alive()) live.textContent = t("mon_announce", { n }); }, 60); }; // one summary per batch
+  // toasts (grouped, at most one per 10 s, with View) and one OS notification per batch (opt-in, tab not in front)
+  function notifyFor(list) {
+    if (!list.length) return;
+    const one = list.length === 1 ? list[0] : null;
+    const label = (x) => monKindLabel(x.kind) + " · " + (x.title || x.id) + ": " + (x.status === "failed" ? monStatusLabel("failed") : monReason(x.attention_reason));
+    const view = (x) => { if (!alive()) return; if (x) openItem(x); else setTab("attention"); };
+    if (monToastGate(S.lastToast, Date.now())) {
+      S.lastToast = Date.now();
+      const n = $("toast");
+      clearTimeout(toast.t);
+      n.replaceChildren(el("div", { class: "notice error mon-toast" }, el("span", {}, one ? label(one) : t("mon_toast", { n: list.length })),
+        el("button", { class: "btn ghost sm", type: "button", onclick: () => { n.replaceChildren(); view(one); } }, t("mon_view"))));
+      toast.t = setTimeout(() => n.replaceChildren(), 8000);
+    }
+    const away = document.hidden || !document.hasFocus();
+    const ping = list.filter((x) => monNotifyGate({ optedIn: monNotifyOptIn(), permission: canNotify ? Notification.permission : "denied", hidden: away, mine: !!x.mine, isAdmin: isAdmin(), status: x.status, attention: !!x.attention }));
+    if (!ping.length) return;
+    try {
+      const p1 = ping.length === 1 ? ping[0] : null;
+      const note = new Notification(p1 ? monKindLabel(p1.kind) + " · " + (p1.title || p1.id) : t("mon_toast", { n: ping.length }), { tag: "salid-monitor" });
+      note.onclick = () => { window.focus(); note.close(); view(p1); };
+    } catch { /* the browser refused the notification */ }
+  }
+  async function toggleNotify() {
+    if (!canNotify) return;
+    if (Notification.permission === "granted" && monNotifyOptIn()) monSetNotify(false);
+    else {
+      let perm = Notification.permission;
+      if (perm === "default") { try { perm = await Notification.requestPermission(); } catch { perm = "denied"; } } // only ever asked here, on the click
+      monSetNotify(perm === "granted");
+    }
+    if (alive()) paintHealth();
+  }
+  function setPaused(p) {
+    S.paused = p;
+    paintHealth();
+    if (!p) { refresh(); } else { clearTimeout(S.timer); S.timer = 0; }
+  }
+  // fetch at once (visible again, resumed, back online): summary + list, then the feed resumes
+  async function refresh() {
+    try { await reload(); }
+    catch (e) { if (handleAuth(e)) { stop(); return; } S.failures++; }
+    if (alive()) { paintHealth(); sched(0); }
+  }
+  // ---- tabs, filters, tiles
+  function paintTabs() {
+    for (const b of tabsEl.children) b.setAttribute("aria-selected", String(b.id === tabId(S.tab)));
+    panel.setAttribute("aria-labelledby", tabId(S.tab)); list.setAttribute("aria-labelledby", tabId(S.tab));
+    opsBox.hidden = S.tab !== "ops";
+  }
+  const sync = () => history.replaceState(null, "", location.pathname + location.search + monHash({ tab: S.tab, ...S.f }));
+  const setSel = (sel, v) => { if (v && ![...sel.options].some((o) => o.value === v)) sel.append(opt(v, v)); sel.value = v || ""; };
+  function fillControls() {
+    setSel(selKind, S.f.kind[0] || ""); setSel(selStatus, S.f.status[0] || ""); setSel(selWs, S.f.workspace); setSel(selPri, S.f.priority);
+    inOwner.value = S.f.owner; inFrom.value = S.f.from; inTo.value = S.f.to; inQ.value = S.f.q;
+  }
+  function drawChips() {
+    const on = CHIPS.filter(([k]) => S.f[k] && S.f[k].length);
+    chips.replaceChildren(...on.map(([k, lab, show, ctl]) => el("span", { class: "mon-chip" }, el("span", {}, t(lab) + ": " + show(S.f[k])),
+      el("button", { class: "mon-x", type: "button", "aria-label": t("mon_chip_remove", { name: t(lab) }), title: t("mon_chip_remove", { name: t(lab) }), onclick: () => {
+        S.f[k] = Array.isArray(S.f[k]) ? [] : ""; fillControls(); changed(); ctl.focus(); } }, "×"))));
+    sheetSum.textContent = t("mon_filters") + (on.length ? " (" + on.length + ")" : "");
+  }
+  function changed() { sync(); drawChips(); paintTabs(); loadList(); }
+  function setTab(k) { S.tab = k; changed(); }
+  function applyTile(over) {
+    S.f = { kind: [], status: over.status || [], owner: "", workspace: "", from: over.from || "", to: over.to || "", priority: "", q: "" };
+    S.tab = over.tab; fillControls(); changed();
+  }
+  selKind.addEventListener("change", () => { S.f.kind = selKind.value ? [selKind.value] : []; changed(); });
+  selStatus.addEventListener("change", () => {
+    const v = selStatus.value;
+    S.f.status = v ? [v] : [];
+    if (v && S.tab === "active" && !MON_ACTIVE.includes(v)) S.tab = "history"; // a finished status lives in History
+    else if (v && S.tab === "history" && !MON_FINAL.includes(v)) S.tab = "active";
+    changed();
+  });
+  inOwner.addEventListener("change", () => { S.f.owner = inOwner.value.trim(); changed(); });
+  selWs.addEventListener("change", () => { S.f.workspace = selWs.value; changed(); });
+  inFrom.addEventListener("change", () => { S.f.from = inFrom.value; changed(); });
+  inTo.addEventListener("change", () => { S.f.to = inTo.value; changed(); });
+  selPri.addEventListener("change", () => { S.f.priority = selPri.value; changed(); });
+  let qTimer = 0;
+  inQ.addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(() => { if (alive()) { S.f.q = inQ.value.trim(); changed(); } }, 350); });
+  // ---- page events (removed by stop())
+  function onVis() {
+    if (!alive()) { stop(); return; }
+    if (document.hidden) { clearTimeout(S.timer); S.timer = 0; paintHealth(); return; } // hidden tabs cost nothing
+    if (!S.paused) refresh();
+  }
+  function onOnline() { if (!alive()) { stop(); return; } paintHealth(); if (!S.paused) sched(0); }
+  function onOffline() { if (alive()) paintHealth(); }
+  function onHash() { if (stale(my)) stop(); }
+  function onMq(ev) { if (alive()) fsheet.open = !ev.matches; }
+  document.addEventListener("visibilitychange", onVis);
+  window.addEventListener("online", onOnline); window.addEventListener("offline", onOffline); window.addEventListener("hashchange", onHash);
+  mq.addEventListener("change", onMq);
+
+  // ---- start
+  S.seq = Number(sum.seq) || 0; S.lastOk = Date.now();
+  setSummary(sum); fillControls(); drawChips(); paintTabs();
+  if (first) applyList(first); else await loadList();
+  if (!alive()) return;
+  const slow = () => { S.slow = setTimeout(slow, MON_HEAL_MS); if (!alive()) { stop(); return; } if (!S.paused && !document.hidden) heal(); };
+  const sumLoop = () => { S.sumTimer = setTimeout(sumLoop, MON_SUMMARY_MS); if (!alive()) { stop(); return; } if (!S.paused && !document.hidden) refreshSummary(); };
+  S.slow = setTimeout(slow, MON_HEAL_MS); S.sumTimer = setTimeout(sumLoop, MON_SUMMARY_MS);
+  S.tick = setInterval(() => { if (!alive()) { stop(); return; } if (!S.paused && !document.hidden) monPaintTimes(document, S); }, 1000);
+  sched(monBackoff(0, Math.random()));
+};
+
 VIEWS.settings = async (body) => {
   done(body);
   // the hub signs in by itself: it keeps the same Salid session on this origin
@@ -2952,6 +3825,75 @@ class MockLiveSocket {
   }
   close() { if (this.readyState === 3) return; this.readyState = 3; this.t.forEach(clearTimeout); if (this.onclose) this.onclose({ code: 1000 }); }
 }
+// Monitor sample data (?mock=1), shaped like monitor_api.py: one item per state the page draws (a failed change delivery
+// that needs attention, a running video ad stuck on its third step, a queued Discord action not picked up, a finished
+// deep research, a running deep task). The change feed has no news (seq 7), so the page shows a quiet, live feed.
+function mockMonitor(sub, qp, ops) {
+  const ok = (v) => new Promise((r) => setTimeout(() => r(v), 120));
+  const no = (m, c) => Promise.reject(new ApiError(m, c));
+  const M1 = 60000, ago = (ms) => new Date(Date.now() - ms).toISOString();
+  if (!mockMonitor.s) {
+    const base = { org_id: "org_a1", workspace: "discord-1", attention: false, attention_reason: "", raw_status: "", requester_id: "", assignee_id: "", waiting_on: "",
+      steps: [], started_at: "", updated_at: "", finished_at: "", cost_usd: null, error: null, links: {}, mine: false };
+    const step = (name, state, startedMin, ms, attempts = 1, error_code = "") => ({ name, state, started_at: startedMin == null ? "" : ago(startedMin * M1), ms, attempts, error_code });
+    mockMonitor.s = {
+      items: [
+        { ...base, kind: "change", id: "chg-0042", workspace: "web", title: "Change → Slack", status: "failed", attention: true, attention_reason: "failed", raw_status: "failed",
+          requester_id: "owner@example.co.th", steps: [step("discord-1", "done", 41, 1200), step("slack-T01", "failed", 40, null, 3, "not_confirmed")],
+          started_at: ago(41 * M1), updated_at: ago(6 * M1), finished_at: ago(6 * M1), error: { code: "not_confirmed", message: "The platform did not confirm delivery in time." }, mine: true },
+        { ...base, kind: "video_ad", id: "vid-0007", title: "Video ad · 5 scenes", status: "running", attention: true, attention_reason: "stuck", raw_status: "hero",
+          requester_id: "discord:123456789012345678", steps: [step("storyboard", "done", 16, 38000), step("stills", "done", 15, 94000), step("hero", "running", 13, null), step("audio", "pending", null, null, 0), step("render", "pending", null, null, 0)],
+          started_at: ago(16 * M1), updated_at: ago(13 * M1), cost_usd: 0.42, links: { discord: "https://discord.com/channels/1/2/77" }, mine: true },
+        { ...base, kind: "action", id: "A-0003", title: "Discord action · send DM", status: "queued", attention: true, attention_reason: "stuck", raw_status: "pending",
+          requester_id: "owner@example.co.th", started_at: ago(3 * M1), updated_at: ago(3 * M1), mine: true },
+        { ...base, kind: "research", id: "res-0011", title: "Deep research", status: "done", raw_status: "done", requester_id: "discord:223456789012345678",
+          started_at: ago(130 * M1), updated_at: ago(112 * M1), finished_at: ago(112 * M1) },
+        { ...base, kind: "deep_task", id: "deep-0005", workspace: "discord-2", title: "Deep task", status: "running", raw_status: "running", requester_id: "discord:123456789012345678",
+          started_at: ago(4 * M1), updated_at: ago(1 * M1), mine: true },
+      ],
+      events: [[1, 41, "change", "chg-0042", "queued", false], [2, 40, "change", "chg-0042", "waiting", false], [3, 16, "video_ad", "vid-0007", "running", false],
+        [4, 15, "video_ad", "vid-0007", "running", false], [5, 13, "video_ad", "vid-0007", "running", false], [6, 6, "change", "chg-0042", "failed", true],
+        [7, 3, "action", "A-0003", "queued", false]].map(([seq, min, kind, id, status, attention]) => ({ v: 1, seq, at: ago(min * M1), kind, id, status, attention })),
+    };
+  }
+  const all = mockMonitor.s.items, now = new Date().toISOString();
+  const day = (iso) => new Date(iso).toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+  const tally = (rows) => {
+    const counts = {}, by_kind = {};
+    for (const x of rows) { counts[x.status] = (counts[x.status] || 0) + 1; by_kind[x.kind] = (by_kind[x.kind] || 0) + 1; }
+    return { counts, by_kind, attention: rows.filter((x) => x.attention).length,
+      failed_24h: rows.filter((x) => x.status === "failed" && Date.now() - Date.parse(x.finished_at || x.updated_at) <= 864e5).length,
+      done_today: rows.filter((x) => x.status === "done" && day(x.finished_at || x.updated_at) === day(now)).length };
+  };
+  const multi = (k) => qp.getAll(k).flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
+  const pick = (rows) => {
+    const kinds = multi("kind"), sts = multi("status"), att = qp.get("attention"), ids = qp.has("ids") ? new Set(multi("ids")) : null;
+    const owner = (qp.get("owner") || "").toLowerCase(), ws = qp.get("workspace") || "", needle = (qp.get("q") || "").toLowerCase();
+    return rows.filter((x) => (!ids || ids.has(x.kind + ":" + x.id)) && (!kinds.length || kinds.includes(x.kind)) && (!sts.length || sts.includes(x.status))
+      && (att == null || String(x.attention) === att) && (!owner || [x.requester_id, x.assignee_id].some((v) => String(v).toLowerCase() === owner))
+      && (!ws || x.workspace === ws || x.workspace.startsWith(ws + "-")) && (!needle || [x.title, x.kind, x.id, x.status, x.raw_status].join(" ").toLowerCase().includes(needle)))
+      .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at));
+  };
+  if (ops) { // the super-admin operations view: every company, every process heartbeat, logs of unlinked workspaces
+    if (sub === "/monitor/summary") return ok({ orgs: (mockApi.s ? mockApi.s.orgs : []).map((o, i) => ({ id: o.id, name: o.name, ...(i ? { counts: {}, attention: 0 } : tally(all)), seq: i ? 0 : 7 })),
+      heartbeats: { bot: { process: "bot", version: "0.1.0", tick_at: ago(20000), queues: { actions: 1, outbox_pending: 0, memory: 3 }, state: "online" },
+        platforms: { process: "platforms", version: "0.1.0", tick_at: ago(140000), queues: { actions: 0, outbox_pending: 2, memory: 0 }, state: "delayed" } },
+      unlinked: [{ key: "guild:999", seq: 3, last_at: ago(52 * M1) }], now });
+    if (sub === "/monitor/items") return ok({ items: pick(all), next_cursor: null });
+    return no("mock: not found", 404);
+  }
+  if (sub === "/monitor/summary") return ok({ ...tally(all), heartbeat: { bot: { state: "online", tick_at: ago(20000) } }, now, seq: 7 });
+  if (sub === "/monitor/items") return ok({ items: pick(all), next_cursor: null });
+  const m = sub.match(/^\/monitor\/items\/([^/]+)\/([^/]+)$/);
+  if (m) {
+    const x = all.find((y) => y.kind === decodeURIComponent(m[1]) && y.id === decodeURIComponent(m[2]));
+    if (!x) return no("Unknown item", 404);
+    const sev = (e) => (e.status === "failed" ? "error" : e.attention ? "warning" : "info");
+    return ok({ ...x, events: mockMonitor.s.events.filter((e) => e.kind === x.kind && e.id === x.id).map((e) => ({ ...e, severity: sev(e) })), controls: [] });
+  }
+  if (sub === "/monitor/changes") return ok({ seq: 7, floor: 0, now, events: [], reset: false });
+  return no("mock: not found", 404);
+}
 function mockApi(method, path, body) {
   const d = (n) => new Date(Date.now() - n * 86400000).toISOString();
   const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
@@ -3033,6 +3975,7 @@ function mockApi(method, path, body) {
   if (p === "/api/center/admin/license-requests") return ok(s.reqs.filter((r) => r.status === "pending"));
   if ((m = p.match(/^\/api\/center\/admin\/license-requests\/(.+)$/))) { const r = s.reqs.find((x) => x.id === m[1]); r.status = body.approve ? "approved" : "rejected"; return ok(r); }
   if (p === "/api/center/admin/orgs") return ok(s.orgs.map((o) => ({ id: o.id, name: o.name, owner_email: "owner@example.co.th", members: 3, workspaces: 3, license: o.license })));
+  if (p.startsWith("/api/center/admin/monitor/")) return mockMonitor(p.slice("/api/center/admin".length), qp, true);
   if (!(m = p.match(/^\/api\/center\/orgs\/([^/]+)(\/.*)?$/))) return fail("mock: not found", 404);
   const sub = m[2] || "", org = s.orgs.find((o) => o.id === decodeURIComponent(m[1]));
   const orgView = () => ({ id: org.id, name: org.name, role: org.role, handover: org.handover || null, license: org.license, logo_url: org.logo_url || "", created_at: org.created_at, profile: org.profile || {} });
@@ -3045,6 +3988,7 @@ function mockApi(method, path, body) {
       platforms: { available: ["discord", "slack", "clickup"], connected: [...new Set(s.ws.filter((w) => w.platform !== "web").map((w) => w.platform))], coming_soon: ["google_drive", "gmail", "google_calendar"] },
       members: s.members.length, members_linked: s.members.map(memView).filter((x) => x.linked_platforms).length, license: org.license, license_days_left: org.license.days_left,
       recent_activity: [{ id: "a1", category: "minutes", title: "ประชุมทีมขาย 12 ต.ค.", at: d(0.1), workspace: "discord-2", workspace_name: "ทีมเชียงใหม่", who: "สลิด" }, { id: "a2", category: "receipts", title: "ใบเสร็จ ร้านกาแฟ บางรัก", at: d(1), workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", who: "สมชาย" }] }); }
+  if (sub.startsWith("/monitor/")) return mockMonitor(sub, qp, false);
   if (sub === "/actions") {
     if (method === "POST") { if (!ACTION_KINDS[body && body.kind]) return fail("unknown action kind", 400);
       const a = { id: "A-" + String(s.actions.length + 1).padStart(4, "0"), kind: body.kind, args: body.args || {}, by: ME, status: "pending", result: {}, error: "", created_at: new Date().toISOString(), done_at: "" };

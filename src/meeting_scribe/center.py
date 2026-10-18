@@ -471,6 +471,7 @@ def center_page() -> HTMLResponse:
         .replace("__HUB_GOOGLE_CLIENT_ID__", client_id)
         .replace("__INVITE_URL__", invite)
         .replace("__DISCORD_LOGIN__", "1" if discord_login_enabled() else "")
+        .replace("__MONITOR__", "1" if get_settings().monitor_enabled else "")
     )
     return HTMLResponse(
         html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
