@@ -407,6 +407,8 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "cancel",
         "ตั้งค่า",
         "setup",
+        "ลิงก์บัญชี",
+        "linkaccount",
         "เข้าประชุม",
         "join-meeting",
         "ออกประชุม",
@@ -587,3 +589,19 @@ async def test_join_creates_the_chat_channel_and_welcomes_there(bot, world):
 async def test_join_without_manage_channels_still_welcomes(bot, world):
     await bot.on_guild_join(world.b)
     assert "คุยกับน้องสลิด" in world.b.text_channels[0].sent[0]
+
+
+async def test_link_account_command_gives_any_member_a_one_time_identity_code(bot, world):
+    bot.s = bot.s.model_copy(update={"hub_url": "https://hub.example/"})
+    it = Interaction(world.a, member(world.a, STAFF))  # a regular member, no manage-server right
+    await bot.handle_link_account(it)
+    [(text, ephemeral)] = it.sent
+    assert ephemeral is True and "https://hub.example/center?code=" in text
+    code = text.split("code=")[1].split("#")[0]
+    doc = bot.guilds_store.client.collection("salid_link_codes").docs[code]
+    assert doc["guild_id"] == GUILD and doc["discord_user_id"] == STAFF and not doc["used"]
+    assert code in text.split("\n")[2]  # the bare code is also given for pasting
+    dm = Interaction(None, SimpleNamespace(id=1))
+    await bot.handle_link_account(dm)
+    assert dm.sent[0][1] is True
+    assert dm.sent[0][0] in {t("link_account_guild_only", lang) for lang in ("th", "en")}

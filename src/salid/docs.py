@@ -46,8 +46,10 @@ PROMPT = (
     "numbers), amount_value (the main total as a plain number, no currency; null if none), "
     "addressed_to (people - not companies - the document is addressed to or names as the "
     "recipient / responsible person, comma separated, empty if none) and text ({text_rule}). For "
-    "doc_type also use legal (court / lawyer / legal notice) or official (government / "
-    "authority letter) when that fits. Use only what is in the document; never guess unreadable "
+    "doc_type also use legal (court / lawyer / legal notice), official (government / "
+    "authority letter) or company (the company's own records: registration certificate, "
+    "articles of association / memorandum, company regulations, shareholder register or "
+    "agreement, licences) when that fits. Use only what is in the document; never guess unreadable "
     "parts."
 )
 TEXT_RULE_LAYER = "leave empty"

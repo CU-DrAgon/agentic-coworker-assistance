@@ -609,16 +609,20 @@ def test_a_failing_outbox_never_breaks_the_web_request(w, monkeypatch):
 
 
 def test_the_changes_route_is_for_owners_and_admins_of_that_org(w):
-    base = "/api/center/orgs/org_t/members"
-    w.client.post(base, json={"email": "adm@example.com", "role": "owner"}, headers=H["boss"])
+    # ownership is handed over (never granted, owner's rule 18 Oct 2026); the transfer goes
+    # through the change outbox like any role edit
+    xfer = "/api/center/orgs/org_t/owner/transfer"
+    r = w.client.post(xfer, json={"to": "adm@example.com", "me": "admin"}, headers=H["boss"])
+    assert r.status_code == 200, r.text
     url = "/api/center/orgs/org_t/changes"
     assert w.client.get(url, headers=H["mem"]).status_code == 403
     assert w.client.get(url, headers=H["stranger"]).status_code == 403
     assert w.client.get(url, headers={}).status_code in (401, 403)
     rows = w.client.get(url + "?limit=5", headers=H["adm"]).json()
-    assert len(rows) == 1 and rows[0]["kind"] == "role" and rows[0]["after"] == "owner"
-    assert rows[0]["targets"][0]["status"] in ("pending", "sent", "acked", "failed")
-    assert "subject_ids" not in rows[0]
+    to_owner = [x for x in rows if x["kind"] == "role" and x["after"] == "owner"]
+    assert len(to_owner) == 1
+    assert to_owner[0]["targets"][0]["status"] in ("pending", "sent", "acked", "failed")
+    assert all("subject_ids" not in x for x in rows)
     assert w.client.get(url, headers=H["root"]).status_code == 200  # a super admin
     # another org's changes are never shown through this org
     assert w.client.get("/api/center/orgs/org_o/changes", headers=H["adm"]).status_code == 403

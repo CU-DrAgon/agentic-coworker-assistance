@@ -21,6 +21,7 @@ from . import audience as aud
 from . import data_studio, gate
 from . import dm as dm_module
 from .ack import Ack, ack_flavor, ack_text
+from .actions_bot import ActionsMixin
 from .approvals_bot import ApprovalButton, ApprovalMixin
 from .archive import make_archive
 from .audience_bot import AudienceMixin
@@ -240,6 +241,7 @@ HISTORY_CHARS = 8000  # oldest lines are dropped first
 HISTORY_LINE_CHARS = 500
 CHANNELS_COMMANDS = ("ห้อง", "channels")
 SETUP_COMMANDS = ("ตั้งค่า", "setup")  # Thai name plus an English alias
+LINK_ACCOUNT_COMMANDS = ("ลิงก์บัญชี", "linkaccount")  # any member: prove "I am this Discord user"
 JOIN_COMMANDS = ("เข้าประชุม", "join-meeting")
 LEAVE_COMMANDS = ("ออกประชุม", "leave-meeting")
 CANCEL_COMMANDS = ("ยกเลิก", "cancel")
@@ -335,7 +337,7 @@ class _LicensedTree(app_commands.CommandTree):
         bot, guild = interaction.client, interaction.guild
         licensing = getattr(bot, "licensing", None)
         name = getattr(interaction.command, "name", "")
-        if guild is None or licensing is None or name in SETUP_COMMANDS:
+        if guild is None or licensing is None or name in SETUP_COMMANDS + LINK_ACCOUNT_COMMANDS:
             return True
         if await asyncio.to_thread(licensing.is_licensed, guild.id):
             return True
@@ -348,6 +350,33 @@ class _LicensedTree(app_commands.CommandTree):
                 t("unlicensed", lang, url=licensing.url), ephemeral=True
             )
         return False
+
+
+MAX_SYNCED_EVENTS = 50
+
+
+def guild_events(guild) -> list[dict]:
+    """Upcoming Discord scheduled events as plain dicts (name, start/end ISO, where), newest
+    first by start; the web shows them as the company calendar."""
+    out = []
+    for ev in list(getattr(guild, "scheduled_events", ()) or ())[:MAX_SYNCED_EVENTS]:
+        start = getattr(ev, "start_time", None)
+        if start is None:
+            continue
+        end = getattr(ev, "end_time", None)
+        ch = getattr(ev, "channel", None)
+        out.append(
+            {
+                "id": str(getattr(ev, "id", "")),
+                "name": str(getattr(ev, "name", "") or "")[:120],
+                "start": start.isoformat(timespec="seconds"),
+                "end": end.isoformat(timespec="seconds") if end else "",
+                "where": str(getattr(ch, "name", "") or getattr(ev, "location", "") or "")[:80],
+                "description": str(getattr(ev, "description", "") or "")[:200],
+                "url": str(getattr(ev, "url", "") or ""),
+            }
+        )
+    return sorted(out, key=lambda e: e["start"])
 
 
 class SecretaryBot(
@@ -382,6 +411,7 @@ class SecretaryBot(
     ContestsMixin,
     BizfinMixin,
     CooMixin,
+    ActionsMixin,
     BriefingMixin,
     HintsMixin,
     AudienceMixin,
@@ -529,6 +559,7 @@ class SecretaryBot(
         self._recent_swept = float("-inf")
         self._viewers: dict[tuple[int, int], tuple[float, frozenset[int]]] = {}  # (guild, channel)
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
+        self._init_actions()  # web -> Discord actions (salid.actions); needs self.docs
         self._polls_init()  # polls and DM forms (salid.polls_bot)
         self._votes_init()  # meeting votes with button ballots (salid.votes_bot)
         self._briefing_init()  # briefs, pending asks, document alerts (salid.briefing_bot)
@@ -628,6 +659,7 @@ class SecretaryBot(
                 for flags in [access_flags(c, getattr(guild, "me", None))]
             ][:MAX_SYNCED_CHANNELS],
             "public_channel_ids": public_channel_ids(guild),
+            "events": guild_events(guild),
         }
 
     async def _sync_guild(self, guild: discord.Guild, *, installed: bool = False) -> None:
@@ -1279,14 +1311,18 @@ class SecretaryBot(
         return True
 
     async def on_scheduled_event_create(self, event) -> None:
-        """Somebody made a Discord event: track it (reminders, no-show logic for voice events)."""
+        """Somebody made a Discord event: track it (reminders, no-show logic for voice events)
+        and refresh the guild document (the company calendar on the web)."""
         await self._sched_event(self.scheduler.track_discord_event, event)
+        self._request_sync(event.guild)
 
     async def on_scheduled_event_update(self, before, after) -> None:
         await self._sched_event(self.scheduler.update_discord_event, after)
+        self._request_sync(after.guild)
 
     async def on_scheduled_event_delete(self, event) -> None:
         await self._sched_event(self.scheduler.delete_discord_event, event)
+        self._request_sync(event.guild)
 
     @staticmethod
     async def _sched_event(fn, event) -> None:
@@ -2858,6 +2894,17 @@ class SecretaryBot(
                 )
             )
 
+        async def link_account(interaction: discord.Interaction):
+            await self.handle_link_account(interaction)
+
+        link_account = app_commands.guild_only()(link_account)
+        for name in LINK_ACCOUNT_COMMANDS:
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name, description=t("cmd_link_account"), callback=link_account
+                )
+            )
+
         async def mode_cb(interaction: discord.Interaction, mode: str | None = None):
             await self.handle_mode(interaction, mode)
 
@@ -3365,6 +3412,29 @@ class SecretaryBot(
         )
         await self._send_hidden_channels(interaction, lang, first=False)
 
+    async def handle_link_account(self, interaction: discord.Interaction) -> None:
+        """/ลิงก์บัญชี: ephemeral one-time code that proves, on the web, that the Google account
+        pasting it is THIS Discord user. Any member may use it; it grants no admin rights."""
+        guild, user = interaction.guild, interaction.user
+        lang = self._interaction_lang(interaction)
+        if guild is None:
+            await interaction.response.send_message(
+                t("link_account_guild_only", lang), ephemeral=True
+            )
+            return
+        try:
+            code = await asyncio.to_thread(
+                self.guilds_store.create_link_code, guild.id, user.id, str(user)
+            )
+        except Exception:
+            logger.exception("could not create an identity code")
+            await interaction.response.send_message(t("setup_failed", lang), ephemeral=True)
+            return
+        url = f"{self.s.hub_url.rstrip('/')}/center?code={code}#/account"
+        await interaction.response.send_message(
+            t("link_account_message", lang, url=url, code=code), ephemeral=True
+        )
+
     async def _send_hidden_channels(
         self, interaction: discord.Interaction, lang: str, *, first: bool
     ) -> None:
@@ -3416,6 +3486,7 @@ class SecretaryBot(
         await self._votes_due()
         await self._reminders_due()
         await self._nodue_due()
+        await self._actions_due()
         await self._pc_sweep()
         await self._people_due()
         await self._positions_due()

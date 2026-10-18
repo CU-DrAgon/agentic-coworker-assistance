@@ -541,8 +541,10 @@ def test_library_has_an_ideas_category_with_owner_and_exec_rules(w):
     assert detail["text"].startswith("# Team idea") and "แจ้งเตือน CCTV" in detail["text"]
     priv = f"/api/center/orgs/org_t/documents/discord-{A}:idea:3_{slugify_('Private idea')}"
     assert w.client.get(priv, headers=H["adm"]).status_code == 404
-    ov = w.client.get("/api/center/orgs/org_t/overview", headers=H["adm"]).json()
-    assert ov["documents"]["by_category"]["ideas"] == 2
+    # the company profile no longer counts documents (it scanned them all); the Documents
+    # listing is where the count lives
+    n = w.client.get(base, headers=H["adm"]).json()["total"]
+    assert n == 2
 
 
 def slugify_(t_):

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -73,6 +74,120 @@ SHARE_MAP = {
 }
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 PREVIEW = 300
+
+# What a FILE is for the company, most important first (the Documents page groups by it):
+# company = the company's own records (registration, articles / regulations, shareholders,
+# licences, official papers); legal = contracts and legal papers; finance = invoices, receipts,
+# quotes, tax, expenses; hr = people papers; other. Decided by keywords on the analyzer's tag,
+# the file name and the summary (Thai + English); an admin's choice (`group` on the record) wins.
+DOC_GROUPS = ("company", "legal", "finance", "hr", "other")
+_GROUP_WORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "company",
+        (
+            "company",
+            "official",
+            "incorporat",
+            "registration",
+            "certificate of",
+            "articles",
+            "memorandum",
+            "bylaw",
+            "by-law",
+            "regulation",
+            "shareholder",
+            "share register",
+            "licence",
+            "license",
+            "หนังสือรับรอง",
+            "จดทะเบียน",
+            "บริคณห์สนธิ",
+            "ข้อบังคับ",
+            "ระเบียบ",
+            "ผู้ถือหุ้น",
+            "บอจ",
+            "ภ.พ.20",
+            "ภพ.20",
+            "ภพ20",
+            "ทะเบียนพาณิชย์",
+            "ใบอนุญาต",
+            "หุ้น",
+        ),
+    ),
+    (
+        "hr",
+        (
+            "payroll",
+            "salary",
+            "employment",
+            "employee",
+            "resume",
+            "cv",
+            "leave",
+            "hr",
+            "เงินเดือน",
+            "พนักงาน",
+            "จ้างงาน",
+            "ลางาน",
+            "สมัครงาน",
+            "ประวัติ",
+        ),
+    ),
+    (
+        "finance",
+        (
+            "invoice",
+            "receipt",
+            "quote",
+            "quotation",
+            "tax",
+            "expense",
+            "bill",
+            "payment",
+            "bank",
+            "statement",
+            "budget",
+            "purchase order",
+            "ใบแจ้งหนี้",
+            "ใบเสร็จ",
+            "ใบกำกับภาษี",
+            "ใบเสนอราคา",
+            "ค่าใช้จ่าย",
+            "บิล",
+            "งบ",
+            "ภาษี",
+            "โอนเงิน",
+            "ใบสั่งซื้อ",
+        ),
+    ),
+    (
+        "legal",
+        (
+            "contract",
+            "agreement",
+            "nda",
+            "mou",
+            "legal",
+            "lawyer",
+            "court",
+            "สัญญา",
+            "ทนาย",
+            "ศาล",
+            "กฎหมาย",
+        ),
+    ),
+)
+
+
+def classify_group(*texts: str) -> str:
+    """The DOC_GROUPS bucket of a file from its tag / name / summary (first match wins)."""
+    hay = " ".join(t for t in texts if t).casefold()
+    for group, words in _GROUP_WORDS:
+        if any(w in hay for w in words):
+            return group
+    return "other"
+
+
 STORED_TEXT = 20000
 LOOKBACK_DAYS = 365
 NOTE_RE = re.compile(r"^\[(PDF|DOCX|XLSX|PPTX|DOC|XLS|ข้อความ|รูป)\s*:?\s*([^\]]*)\]\s*(.*)$")
@@ -84,6 +199,9 @@ class DocItem(BaseModel):
     id: str
     title: str
     category: str
+    # "file" = a real file you can open or download (web uploads, originals archived from
+    # Discord); "knowledge" = text Salid keeps (wiki, minutes, ideas, reports, chat notes).
+    kind: str = "knowledge"
     workspace: str  # workspace id inside the org
     workspace_name: str = ""
     platform: str = ""
@@ -94,6 +212,7 @@ class DocItem(BaseModel):
     preview: str = ""
     tags: list[str] = []
     shared_from: str | None = None  # workspace name when it came in through a ShareLink
+    group: str = ""  # DOC_GROUPS for files ("" for knowledge)
 
 
 class DocDetail(DocItem):
@@ -267,6 +386,7 @@ class Library:
         if ws.platform != "discord":
             return
         gid = ws.memory_id
+        self._gather_uploads(ws, base, out, readable=None if viewer.exec else public)
         if viewer.exec:
             self._gather_receipts(gid, base, out)
         self._gather_notes(gid, base, viewer, public, known, out)
@@ -276,17 +396,34 @@ class Library:
         self._gather_ideas(gid, base, viewer, out)
         self._gather_contests(gid, base, viewer, out)
 
-    def _gather_uploads(self, ws: Workspace, base: dict, out: Gathered) -> None:
+    def _gather_uploads(
+        self, ws: Workspace, base: dict, out: Gathered, readable: set[int] | None = None
+    ) -> None:
+        """Real files: web uploads, and originals the bot archived from Discord channels (listed
+        only when the viewer may read that channel: `readable`, None = everything)."""
         for d in self.docs.find(ORG_DOCS, ws.memory_id):
+            cid = d.get("channel_id")
+            if readable is not None and cid and int(cid) not in readable:
+                continue
             item = DocItem(
                 id=f"{ws.id}:upload:{d['id']}",
                 title=d.get("title") or d.get("filename", ""),
                 category="uploads",
+                kind="file",
                 date=d.get("created_at", ""),
                 who=d.get("by", ""),
                 size=d.get("size"),
+                source_url=d.get("source_url", ""),
                 preview=(d.get("summary") or "")[:PREVIEW],
                 tags=[d["tag"]] if d.get("tag") else [],
+                group=d.get("group")
+                if d.get("group") in DOC_GROUPS
+                else classify_group(
+                    d.get("tag", ""),
+                    d.get("filename", ""),
+                    d.get("title", ""),
+                    d.get("summary", ""),
+                ),
                 **base,
             )
             out.items[item.id] = item
@@ -304,6 +441,7 @@ class Library:
                 id=f"discord-{gid}:receipt:{r.id}",
                 title=r.vendor or f"#{r.id}",
                 category="receipts",
+                group="finance",
                 date=r.effective_date,
                 source_url=link,
                 who=r.submitter_name,
@@ -445,7 +583,60 @@ class Library:
             out.items[item.id] = item
 
     # ---- org-wide listing
+    # A gather scans every store of every workspace (seconds on Firestore) and the pages call it
+    # several times per screen, so the result is kept per (org, viewer, workspace) for a short
+    # while. Writes through this Library (upload, reindex, sharing) clear the org's entries.
+    GATHER_TTL_S = 25.0
+    GATHER_CACHE_MAX = 200
+
     def gather(self, org: Org, viewer: Viewer, workspace: str | None = None) -> Gathered:
+        key = (org.id, viewer.email.lower(), bool(viewer.exec), workspace or "")
+        cache = self.__dict__.setdefault("_gather_cache", {})
+        now = time.monotonic()
+        hit = cache.get(key)
+        if hit is not None and now - hit[0] < self.GATHER_TTL_S:
+            return hit[1]
+        out = self._gather_fresh(org, viewer, workspace)
+        if len(cache) >= self.GATHER_CACHE_MAX:
+            cache.clear()
+        cache[key] = (now, out)
+        return out
+
+    def group_counts(
+        self, org: Org, viewer: Viewer, workspace: str | None = None
+    ) -> dict[str, int]:
+        """How many FILES each DOC_GROUPS bucket holds (for the Documents page pills)."""
+        got = self.gather(org, viewer, workspace)
+        out = dict.fromkeys(DOC_GROUPS, 0)
+        for i in got.items.values():
+            if i.kind == "file" and i.group in out:
+                out[i.group] += 1
+        return out
+
+    def set_group(self, org: Org, doc_id: str, group: str) -> bool:
+        """An admin files a document under another group. Only real files (uploads and
+        archived originals) have a record to keep it on. False when there is no such file."""
+        if group not in DOC_GROUPS:
+            raise ValueError("unknown group")
+        ws_id, _, key = doc_id.partition(":upload:")
+        ws = org.workspace(ws_id)
+        if ws is None or not key:
+            return False
+        rec = self.docs.get(ORG_DOCS, ws.memory_id, key)
+        if not rec:
+            return False
+        rec["group"] = group
+        self.docs.put(ORG_DOCS, ws.memory_id, key, rec)
+        self.invalidate(org.id)
+        return True
+
+    def invalidate(self, org_id: str | None = None) -> None:
+        """Forget cached gathers (of one org, or all) after something changed."""
+        cache = self.__dict__.setdefault("_gather_cache", {})
+        for k in [k for k in cache if org_id is None or k[0] == org_id]:
+            cache.pop(k, None)
+
+    def _gather_fresh(self, org: Org, viewer: Viewer, workspace: str | None = None) -> Gathered:
         out = Gathered()
         wanted = [w for w in org.workspaces if w.status == "connected"]
         if workspace:
@@ -485,14 +676,20 @@ class Library:
         *,
         category: str | None = None,
         workspace: str | None = None,
+        kind: str | None = None,
         q: str | None = None,
         cursor: str | None = None,
         limit: int = 30,
+        group: str | None = None,
     ) -> Page:
         got = self.gather(org, viewer, workspace)
         items = sorted(got.items.values(), key=lambda i: (i.date, i.id), reverse=True)
         if category:
             items = [i for i in items if i.category == category]
+        if kind:
+            items = [i for i in items if i.kind == kind]
+        if group:
+            items = [i for i in items if i.group == group]
         needle = (q or "").casefold().strip()
         if needle:
             items = [
@@ -560,10 +757,12 @@ class Library:
         }
         self.docs.put(ORG_DOCS, web.memory_id, doc_id, rec)
         self._index(org, web, rec)
+        self.invalidate(org.id)
         return DocItem(
             id=f"{web.id}:upload:{doc_id}",
             title=filename,
             category="uploads",
+            kind="file",
             workspace=web.id,
             workspace_name=web.name,
             platform="web",
@@ -572,12 +771,17 @@ class Library:
             size=len(data),
             preview=rec["summary"][:PREVIEW],
             tags=[rec["tag"]] if rec["tag"] else [],
+            group=classify_group(rec["tag"], filename, rec["summary"]),
         )
 
     def read_upload(self, org: Org, doc_id: str) -> tuple[dict, bytes] | None:
-        web = org.web_workspace()
+        """Bytes of a real file of the org: `<workspace id>:upload:<key>` (web or Discord)."""
         key = doc_id.rsplit(":", 1)[-1]
-        d = self.docs.get(ORG_DOCS, web.memory_id, key) if web else None
+        ws_id = doc_id.split(":", 1)[0] if ":" in doc_id else ""
+        ws = org.workspace(ws_id) or org.web_workspace()
+        if ws is None:
+            return None
+        d = self.docs.get(ORG_DOCS, ws.memory_id, key)
         if not d:
             return None
         return d, self.blobs.read(d["uri"])
@@ -627,6 +831,7 @@ class Library:
     def reconcile_shared_docs(self, org: Org) -> int:
         """Make each Discord workspace's copies match the ShareLinks (add where shared, remove
         where not). Also rebuilds the web workspace's own search notes. Returns notes written."""
+        self.invalidate(org.id)
         web = org.web_workspace()
         if web is None:
             return 0

@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salid · A little magic. A lot more done.</title>
+<meta name="description" content="Salid is the AI assistant for everyday work in Discord: meeting notes, receipts, task follow-up and documents.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;display=swap">
+<link rel="icon" type="image/png" href="/static/salid/favicon.png">
+<link rel="stylesheet" href="/static/salid/theme.css">
+<style>
+  /* 70% milky white, 20% soft cosmic colour, 10% luminous accents (see the creative brief). */
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6;
+    font-family: "IBM Plex Sans Thai", "Noto Sans Thai", "Segoe UI", Tahoma, sans-serif;
+    -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  a { color: var(--indigo-2); }
+  [hidden] { display: none !important; }
+  h1, h2, h3, p { margin: 0; }
+  button { font: inherit; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--indigo-2); outline-offset: 3px; border-radius: 8px; }
+  .wrap { width: min(1120px, 100% - 32px); margin: 0 auto; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
+  /* ---------- navigation ---------- */
+  .nav { position: sticky; top: 0; z-index: 20; background: rgba(250,249,246,.82);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid transparent; }
+  .nav.scrolled { border-bottom-color: var(--line); }
+  .nav .wrap { display: flex; align-items: center; gap: 24px; min-height: 64px; }
+  .logo { display: flex; align-items: center; gap: 10px; color: var(--indigo); text-decoration: none; font-weight: 700; font-size: 18px; }
+  .logo .mark { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--indigo-2), #7A6CF0); color: #fff; font-size: 15px; box-shadow: 0 4px 12px rgba(74,79,191,.3); }
+  .links { display: flex; gap: 4px; margin-left: auto; }
+  .links a { color: var(--indigo); text-decoration: none; padding: 8px 12px; border-radius: 8px; font-weight: 500; font-size: 15px; }
+  .links a:hover { background: rgba(74,79,191,.08); }
+  .langsw { display: flex; border: 1px solid var(--line); border-radius: 99px; padding: 2px; background: #fff; }
+  .langsw button { border: 0; background: none; padding: 4px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .langsw button[aria-pressed="true"] { background: var(--indigo); color: #fff; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 20px; border-radius: 12px;
+    font-weight: 600; font-size: 15px; text-decoration: none; border: 1px solid transparent;
+    transition: transform .15s var(--ease), box-shadow .15s var(--ease), background .15s; }
+  .btn.primary { background: var(--indigo); color: #fff; box-shadow: 0 6px 18px rgba(43,47,122,.25); }
+  .btn.primary:hover { background: #22265F; transform: translateY(-1px); box-shadow: 0 10px 24px rgba(43,47,122,.3); }
+  .btn.primary:active { transform: translateY(0); box-shadow: 0 3px 10px rgba(43,47,122,.25); }
+  .btn.primary[aria-disabled="true"] { background: #C9CBE0; box-shadow: none; cursor: not-allowed; pointer-events: none; }
+  .btn.ghost { color: var(--indigo); border-color: var(--line); background: #fff; }
+  .btn.ghost:hover { border-color: var(--lavender); background: #FBFAFF; }
+  .btn.small { padding: 8px 14px; font-size: 14px; border-radius: 10px; }
+  .menu-btn { display: none; margin-left: auto; border: 1px solid var(--line); background: #fff; border-radius: 10px; width: 40px; height: 40px; }
+  .menu-btn span { display: block; width: 18px; height: 2px; background: var(--indigo); margin: 3px auto; border-radius: 2px; }
+  @media (max-width: 760px) {
+    .links { display: none; position: absolute; top: 64px; left: 0; right: 0; flex-direction: column; padding: 12px 16px 16px;
+      background: var(--bg); border-bottom: 1px solid var(--line); box-shadow: var(--shadow); }
+    .links.open { display: flex; }
+    .nav .cta-top { display: none; }
+    .menu-btn { display: block; }
+    .langsw { margin-left: auto; }
+    .menu-btn { margin-left: 0; }
+  }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; padding: 48px 0 24px; overflow: hidden; }
+  .hero .wrap { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 32px; align-items: center; min-height: 520px; }
+  .copy { display: flex; flex-direction: column; gap: 20px; max-width: 520px; opacity: 0; transform: translateY(12px);
+    animation: rise .8s var(--ease) .2s forwards; }
+  .eyebrow { font-size: 13px; letter-spacing: .18em; font-weight: 600; color: var(--indigo-2); }
+  .copy h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.12; font-weight: 700; letter-spacing: -.01em; }
+  .copy p { font-size: 18px; color: var(--muted); max-width: 460px; }
+  .ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+  .or { margin: 6px 0 2px; max-width: 420px; }
+  .trust { font-size: 13px; color: var(--faint); }
+
+  /* The scene: the official rendered film (portal opens, the cat hops out, portal closes) with the
+     final still underneath, so a slow network, a failed file or reduced motion all show the cat. */
+  .stage { position: relative; width: 100%; max-width: 620px; margin: 0 auto; padding: 36px 0 44px; }
+  .scene { position: relative; aspect-ratio: 1812 / 840; border-radius: 22px; overflow: hidden; background: #EFEBE4;
+    box-shadow: 0 24px 60px rgba(43,47,122,.16), 0 2px 6px rgba(43,47,122,.08); transform: translateY(14px); opacity: 0;
+    animation: rise .9s var(--ease) .1s forwards; }
+  .scene img, .scene video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .scene video { opacity: 0; transition: opacity .4s; }
+  .scene.rolling video { opacity: 1; }
+  .scene::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgba(255,255,255,.6); pointer-events: none; }
+  .halo { position: absolute; left: 50%; top: 50%; width: 80%; height: 80%; transform: translate(-50%,-50%); border-radius: 50%;
+    background: radial-gradient(ellipse, rgba(185,180,242,.35), rgba(191,214,246,.18) 45%, transparent 70%); filter: blur(28px); z-index: -1; }
+
+  /* callouts: small, light labels placed around the cat */
+  .callout { position: absolute; z-index: 2; display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 14px; background: var(--surface);
+    border: 1px solid rgba(255,255,255,.9); box-shadow: var(--shadow); backdrop-filter: blur(6px); max-width: 220px;
+    opacity: 0; transform: translateY(10px); transition: opacity .6s var(--ease), transform .6s var(--ease); }
+  .callout svg { width: 22px; height: 22px; flex: none; color: var(--indigo-2); }
+  .callout strong { display: block; font-size: 14px; line-height: 1.3; }
+  .callout span { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+  /* corners of the scene, slightly outside it so nothing covers the cat */
+  .c1 { left: -16px; top: -18px; } .c2 { right: -16px; top: -10px; } .c3 { left: -8px; bottom: -14px; } .c4 { right: -8px; bottom: -18px; }
+
+  /* ----- the sequence: "a" while the film plays, "e" reveals the callouts, "idle" is the default
+     (no JS, reduced motion, a film that cannot play) ----- */
+  [data-stage="a"] .callout { opacity: 0; transform: translateY(10px); }
+  [data-stage="e"] .callout, [data-stage="idle"] .callout { opacity: 1; transform: none; }
+  [data-stage="e"] .c2 { transition-delay: .18s; } [data-stage="e"] .c3 { transition-delay: .36s; } [data-stage="e"] .c4 { transition-delay: .54s; }
+
+  @keyframes rise { to { opacity: 1; transform: none; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    .copy, .scene, .callout { opacity: 1; transform: none; }
+  }
+  @media (max-width: 860px) {
+    .hero .wrap { grid-template-columns: 1fr; min-height: 0; }
+    .copy { max-width: none; }
+    .stage { max-width: 560px; padding: 28px 0 36px; }
+    .callout { max-width: 180px; padding: 8px 10px; }
+    .callout span { display: none; }
+  }
+  @media (max-width: 480px) {
+    .c1 { left: 0; top: 0; } .c2 { right: 0; top: 0; } .c3 { left: 0; bottom: 0; } .c4 { right: 0; bottom: 0; }
+    .callout { max-width: 150px; } .callout strong { font-size: 12.5px; }
+  }
+
+  /* ---------- sections ---------- */
+  section { padding: 72px 0; }
+  .section-h { max-width: 620px; margin-bottom: 36px; display: flex; flex-direction: column; gap: 10px; }
+  .section-h h2 { font-size: clamp(26px, 3.4vw, 36px); line-height: 1.2; letter-spacing: -.01em; }
+  .section-h p { color: var(--muted); font-size: 17px; }
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; }
+  .step { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 24px; display: flex; flex-direction: column; gap: 10px; }
+  .step .n { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; color: var(--indigo);
+    background: linear-gradient(135deg, #EEF0FF, #E6F0FF); }
+  .step h3 { font-size: 17px; } .step p { color: var(--muted); font-size: 15px; }
+  .step code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; background: #EEF0FF; color: var(--indigo); padding: 2px 7px; border-radius: 6px; }
+  .features { background: linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 22px; display: flex; flex-direction: column; gap: 8px;
+    transition: transform .2s var(--ease), box-shadow .2s var(--ease); }
+  .card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+  .card .ic { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: var(--indigo-2);
+    background: linear-gradient(135deg, #EEF0FF, #F3F0FF); margin-bottom: 6px; }
+  .card .ic svg { width: 22px; height: 22px; }
+  .card h3 { font-size: 17px; } .card p { color: var(--muted); font-size: 14.5px; }
+  .teams .wrap { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 40px; align-items: center; }
+  .teams ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 14px; }
+  .teams li { display: flex; gap: 12px; align-items: flex-start; font-size: 15.5px; }
+  .teams li svg { width: 20px; height: 20px; flex: none; color: var(--indigo-2); margin-top: 3px; }
+  .teams li span { color: var(--muted); }
+  .teams li b { color: var(--ink); font-weight: 600; }
+  .panel { background: #fff; border: 1px solid var(--line); border-radius: 22px; padding: 28px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 14px; }
+  .panel h3 { font-size: 20px; } .panel p { color: var(--muted); font-size: 15px; }
+  .panel .row { display: flex; flex-wrap: wrap; gap: 10px; }
+  .pill { font-size: 12.5px; padding: 4px 10px; border-radius: 99px; background: #EEF0FF; color: var(--indigo); font-weight: 500; }
+  @media (max-width: 860px) { .teams .wrap { grid-template-columns: 1fr; } }
+  .pill.ok { background: #DDF3E8; color: #0B6B45; }
+  .card .pill { align-self: flex-start; margin-bottom: 2px; }
+  .plans-s { background: var(--bg-2); }
+  .plan-c .price { font-weight: 600; color: var(--indigo); }
+  .plan-c.soon { border-style: dashed; background: transparent; box-shadow: none; }
+  .plan-c .btn { margin-top: auto; align-self: flex-start; }
+  .fine { margin-top: 18px; font-size: 13.5px; color: var(--faint); max-width: 720px; }
+  .entry { background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 100%); }
+  .card.go { text-decoration: none; color: inherit; }
+  .card.go .more { margin-top: auto; padding-top: 10px; color: var(--indigo-2); font-size: 14.5px; }
+  .card.go:hover .more { text-decoration: underline; }
+  .final { text-align: center; padding: 80px 0 90px; }
+  .final .wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+  .final h2 { font-size: clamp(28px, 4vw, 42px); line-height: 1.15; }
+  .final p { color: var(--muted); font-size: 17px; max-width: 520px; }
+  footer { border-top: 1px solid var(--line); padding: 24px 0 40px; color: var(--faint); font-size: 13.5px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; }
+  footer a { color: var(--muted); text-decoration: none; } footer a:hover { color: var(--indigo); }
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="logo" href="#top" aria-label="Salid"><span class="mark" aria-hidden="true">S</span><span data-i18n="brand"></span></a>
+    <nav class="links" id="links" data-i18n-attr="aria-label:nav_aria">
+      <a href="#platforms" data-i18n="nav_explore"></a>
+      <a href="#features" data-i18n="nav_features"></a>
+      <a href="#plans" data-i18n="nav_plans"></a>
+      <a href="#teams" data-i18n="nav_teams"></a>
+      <a href="/hub" data-i18n="nav_hub"></a>
+    </nav>
+    <div class="langsw" role="group" data-i18n-attr="aria-label:lang_switch_aria">
+      <button type="button" data-lang="th" data-i18n="lang_th"></button>
+      <button type="button" data-lang="en" data-i18n="lang_en"></button>
+    </div>
+    <a class="btn primary small cta-top" href="/start" data-i18n="cta_signup"></a>
+    <button type="button" class="menu-btn" id="menu" aria-expanded="false" aria-controls="links" data-i18n-attr="aria-label:menu_aria"><span></span><span></span><span></span></button>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero" id="hero" data-stage="idle">
+    <div class="wrap">
+      <div class="copy">
+        <div class="eyebrow" data-i18n="eyebrow"></div>
+        <h1 data-i18n="headline"></h1>
+        <p data-i18n="sub"></p>
+        <div class="ctas">
+          <a class="btn primary" href="/start" data-i18n="cta_signup"></a>
+          <a class="btn secondary" href="/center" data-i18n="cta_login"></a>
+        </div>
+        <div class="or" role="separator"></div>
+        <div class="ctas">
+          <a class="btn ghost" href="#platforms" data-i18n="cta_explore"></a>
+        </div>
+        <div class="trust" data-i18n="trust"></div>
+      </div>
+
+      <div class="stage">
+        <div class="halo" aria-hidden="true"></div>
+        <!-- Official Salid assets live in static/salid/. The film (cat-portal.mp4 / .webm) plays once,
+             muted; the still underneath is the final frame, so the cat is there before, during and
+             after it, and whenever the film cannot play. -->
+        <div class="scene" id="scene">
+          <img class="still" src="/static/salid/cat-hero.webp" width="1400" height="649" data-i18n-attr="alt:cat_alt" fetchpriority="high">
+          <video id="film" muted playsinline preload="auto" poster="/static/salid/cat-portal.webp" aria-hidden="true" tabindex="-1">
+            <source src="/static/salid/cat-portal.webm" type="video/webm">
+            <source src="/static/salid/cat-portal.mp4" type="video/mp4">
+          </video>
+        </div>
+
+        <!-- Feature callouts: only capabilities present in the codebase (see salid/guild_settings.FEATURES). -->
+        <div class="callout c1"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg><div><strong data-i18n="co1_t"></strong><span data-i18n="co1_d"></span></div></div>
+        <div class="callout c2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6Z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg><div><strong data-i18n="co2_t"></strong><span data-i18n="co2_d"></span></div></div>
+        <div class="callout c3"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m3 6 1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17"/></svg><div><strong data-i18n="co3_t"></strong><span data-i18n="co3_d"></span></div></div>
+        <div class="callout c4"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4Z"/><path d="M8 9h8M8 13h5"/></svg><div><strong data-i18n="co4_t"></strong><span data-i18n="co4_d"></span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="platforms">
+    <div class="wrap">
+      <div class="section-h"><h2 data-i18n="pf_h"></h2><p data-i18n="pf_p"></p></div>
+      <div class="grid">
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3h-4l-4 3v-3H7a3 3 0 0 1-3-3Z"/><path d="M9 11h.01M15 11h.01"/></svg></div><span class="pill ok" data-i18n="pf_now"></span><h3 data-i18n="pf1_t"></h3><p data-i18n="pf1_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3M3 9h18"/></svg></div><span class="pill ok" data-i18n="pf_now"></span><h3 data-i18n="pf2_t"></h3><p data-i18n="pf2_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg></div><span class="pill ok" data-i18n="pf_now"></span><h3 data-i18n="pf3_t"></h3><p data-i18n="pf3_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/><path d="M9 12h6M12 9v6"/></svg></div><span class="pill" data-i18n="pf_org"></span><h3 data-i18n="pf4_t"></h3><p data-i18n="pf4_d"></p></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="explore">
+    <div class="wrap">
+      <div class="section-h"><h2 data-i18n="ex_h"></h2><p data-i18n="ex_p"></p></div>
+      <div class="steps">
+        <div class="step"><div class="n">1</div><h3 data-i18n="ex1_t"></h3><p data-i18n="ex1_d"></p></div>
+        <div class="step"><div class="n">2</div><h3 data-i18n="ex2_t"></h3><p data-i18n-html="ex2_d"></p></div>
+        <div class="step"><div class="n">3</div><h3 data-i18n="ex3_t"></h3><p data-i18n="ex3_d"></p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="features" id="features">
+    <div class="wrap">
+      <div class="section-h"><h2 data-i18n="ft_h"></h2><p data-i18n="ft_p"></p></div>
+      <div class="grid">
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M19 11a7 7 0 0 1-14 0M12 18v3"/></svg></div><h3 data-i18n="f1_t"></h3><p data-i18n="f1_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h9l4 4v14H6Z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></svg></div><h3 data-i18n="f2_t"></h3><p data-i18n="f2_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11"/><path d="m3 6 1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17"/></svg></div><h3 data-i18n="f3_t"></h3><p data-i18n="f3_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h16v16H4Z"/><path d="M8 9h8M8 13h5"/></svg></div><h3 data-i18n="f4_t"></h3><p data-i18n="f4_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><h3 data-i18n="f5_t"></h3><p data-i18n="f5_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h7"/><path d="m16 15 2 2 4-4"/></svg></div><h3 data-i18n="f6_t"></h3><p data-i18n="f6_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></div><h3 data-i18n="f7_t"></h3><p data-i18n="f7_d"></p></div>
+        <div class="card"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v11H8l-4 4Z"/><path d="M8 9h8M8 12h5"/></svg></div><h3 data-i18n="f8_t"></h3><p data-i18n="f8_d"></p></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="teams" id="teams">
+    <div class="wrap">
+      <div>
+        <div class="section-h"><h2 data-i18n="tm_h"></h2><p data-i18n="tm_p"></p></div>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><div><b data-i18n="tm1_t"></b> <span data-i18n="tm1_d"></span></div></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><div><b data-i18n="tm2_t"></b> <span data-i18n="tm2_d"></span></div></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><div><b data-i18n="tm3_t"></b> <span data-i18n="tm3_d"></span></div></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><div><b data-i18n="tm4_t"></b> <span data-i18n="tm4_d"></span></div></li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3 data-i18n="pn_h"></h3>
+        <p data-i18n="pn_p"></p>
+        <div class="row"><span class="pill" data-i18n="pn_pill1"></span><span class="pill" data-i18n="pn_pill2"></span><span class="pill" data-i18n="pn_pill3"></span></div>
+        <div class="row"><a class="btn primary small" href="/start" data-i18n="cta_signup"></a></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="plans-s" id="plans">
+    <div class="wrap">
+      <div class="section-h"><h2 data-i18n="pr_h"></h2><p data-i18n="pr_p"></p></div>
+      <div class="grid">
+        <div class="card plan-c"><span class="pill ok" data-i18n="p_rec"></span><h3 data-i18n="pl_trial"></h3><div class="price" data-i18n="pl_trial_price"></div><p data-i18n="pl_trial_d"></p><a class="btn primary small" href="/start" data-i18n="pl_start"></a></div>
+        <div class="card plan-c soon"><h3 data-i18n="pl_more"></h3><div class="price" data-i18n="pl_more_price"></div><p data-i18n="pl_more_d"></p></div>
+      </div>
+      <p class="fine" data-i18n="pr_note"></p>
+    </div>
+  </section>
+
+  <section class="entry" id="start">
+    <div class="wrap">
+      <div class="section-h"><h2 data-i18n="en_h"></h2><p data-i18n="en_p"></p></div>
+      <div class="grid">
+        <a class="card go" href="/start"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M3 20a6 6 0 0 1 12 0M16 11a3 3 0 1 0 0-6M21 20a6 6 0 0 0-5-5.9"/></svg></span><h3 data-i18n="en1_t"></h3><p data-i18n="en1_d"></p><strong class="more" data-i18n="en1_b"></strong></a>
+        <a class="card go" href="/center"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M5 21V7l7-4 7 4v14"/><path d="M9 21v-5h6v5M9 11h.01M15 11h.01M12 11h.01"/></svg></span><h3 data-i18n="en2_t"></h3><p data-i18n="en2_d"></p><strong class="more" data-i18n="en2_b"></strong></a>
+        <a class="card go" href="/recorder"><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg></span><h3 data-i18n="en3_t"></h3><p data-i18n="en3_d"></p><strong class="more" data-i18n="en3_b"></strong></a>
+      </div>
+    </div>
+  </section>
+
+  <section class="final">
+    <div class="wrap">
+      <h2 data-i18n="fin_h"></h2>
+      <p data-i18n="fin_p"></p>
+      <div class="ctas"><a class="btn primary" href="/start" data-i18n="cta_signup"></a><a class="btn ghost" href="__SALID_INVITE_URL__" data-invite data-i18n="cta_add"></a></div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span data-i18n="foot_copy"></span>
+    <a href="/hub" data-i18n="nav_hub"></a>
+    <a href="/recorder" data-i18n="foot_recorder"></a>
+  </div>
+</footer>
+
+<script type="application/json" id="i18n-data">
+{
+  "title": {"th": "สลิด · เวทมนตร์เล็ก ๆ ที่ทำให้งานเสร็จมากขึ้น", "en": "Salid · A little magic. A lot more done."},
+  "brand": {"th": "สลิด", "en": "Salid"},
+  "nav_aria": {"th": "เมนูหลัก", "en": "Main navigation"},
+  "menu_aria": {"th": "เปิดเมนู", "en": "Open menu"},
+  "lang_switch_aria": {"th": "เลือกภาษา", "en": "Choose language"},
+  "lang_th": {"th": "ไทย", "en": "ไทย"},
+  "lang_en": {"th": "EN", "en": "EN"},
+  "nav_explore": {"th": "เริ่มใช้", "en": "Explore"},
+  "nav_features": {"th": "ความสามารถ", "en": "Features"},
+  "nav_plans": {"th": "แพ็กเกจ", "en": "Plans"},
+  "nav_teams": {"th": "สำหรับทีม", "en": "For Teams"},
+  "nav_hub": {"th": "ศูนย์บัญชาการ", "en": "Command center"},
+  "cta_add": {"th": "เพิ่มสลิดเข้า Discord", "en": "Add Salid to Discord"},
+  "cta_unconfigured": {"th": "ยังไม่ได้ตั้งค่าลิงก์เชิญ (SALID_DISCORD_CLIENT_ID)", "en": "Invite link not configured (SALID_DISCORD_CLIENT_ID)"},
+  "cta_explore": {"th": "ดูว่าสลิดทำอะไรได้บ้าง", "en": "Explore what Salid can do"},
+  "cat_alt": {"th": "สลิด แมวขาวอมม่วงในสูทสีกรมท่า มาสคอตของ Salid", "en": "Salid, a white-and-lavender cat in a navy suit, the Salid mascot"},
+  "eyebrow": {"th": "พบกับสลิด", "en": "MEET SALID"},
+  "headline": {"th": "เวทมนตร์เล็ก ๆ ที่ทำให้งานเสร็จมากขึ้น", "en": "A little magic. A lot more done."},
+  "sub": {"th": "สลิดคือผู้ช่วย AI สำหรับงานประจำวันของทีมใน Discord ตั้งแต่จดประชุม ลงบัญชีใบเสร็จ ตามงาน ไปจนถึงค้นเอกสารของบริษัท", "en": "Salid is your team's AI assistant for everyday work in Discord — from meeting notes and receipts to task follow-up and company documents."},
+  "trust": {"th": "ไทยและอังกฤษ · แยกข้อมูลต่อเซิร์ฟเวอร์ · ไม่ต้องตั้งค่าก็เริ่มใช้ได้", "en": "Thai and English · data isolated per server · works with no setup"},
+  "co1_t": {"th": "จดประชุม", "en": "Meeting notes"},
+  "co1_d": {"th": "เข้าห้องเสียง ถอดเสียง สรุปให้", "en": "Joins the voice room, transcribes, summarizes."},
+  "co2_t": {"th": "ใบเสร็จลงบัญชี", "en": "Receipts to ledger"},
+  "co2_d": {"th": "ส่งรูปแล้วบันทึกค่าใช้จ่ายทันที", "en": "Send a photo, the expense is recorded."},
+  "co3_t": {"th": "ตามงานให้", "en": "Task follow-up"},
+  "co3_d": {"th": "เก็บงานจากที่ประชุมและเตือนทุกวัน", "en": "Tracks action items and checks in daily."},
+  "co4_t": {"th": "เอกสารอัจฉริยะ", "en": "Smart documents"},
+  "co4_d": {"th": "ค้นคำตอบจากไฟล์และ wiki ของบริษัท", "en": "Finds answers in your files and wiki."},
+  "ex_h": {"th": "เริ่มใช้ได้ใน 3 ขั้นตอน", "en": "Up and running in three steps"},
+  "ex_p": {"th": "สลิดทำงานอยู่ใน Discord ของทีมคุณ ไม่ต้องติดตั้งแอปใหม่ ไม่ต้องย้ายข้อมูล", "en": "Salid lives inside your team's Discord. No new app to install, no data to migrate."},
+  "ex1_t": {"th": "เพิ่มสลิดเข้าเซิร์ฟเวอร์", "en": "Add Salid to your server"},
+  "ex1_d": {"th": "กดปุ่มเชิญแล้วเลือกเซิร์ฟเวอร์ สลิดจะสร้างห้องคุยส่วนตัวให้สมาชิกเอง", "en": "Use the invite button and pick a server. Salid creates its own chat channel for members."},
+  "ex2_t": {"th": "พิมพ์ /ตั้งค่า หรือเรียกชื่อ", "en": "Type /setup or just say its name"},
+  "ex2_d": {"th": "พิมพ์ <code>/ตั้งค่า</code> เพื่อเปิดศูนย์บัญชาการ หรือพิมพ์ <code>@Salid</code> แล้วถามได้เลย", "en": "Type <code>/setup</code> to open the command center, or mention <code>@Salid</code> and ask away."},
+  "ex3_t": {"th": "ปล่อยให้สลิดทำงาน", "en": "Let Salid work"},
+  "ex3_d": {"th": "ส่งใบเสร็จ เชิญเข้าประชุม หรือถามเรื่องค่าใช้จ่าย สลิดตอบเป็นภาษาของห้องนั้น", "en": "Send a receipt, invite it to a meeting, or ask about expenses. Salid answers in the channel's language."},
+  "ft_h": {"th": "ความสามารถที่ใช้ได้จริงวันนี้", "en": "What Salid can do today"},
+  "ft_p": {"th": "ทุกข้อด้านล่างมีอยู่ในสลิดเวอร์ชันปัจจุบัน และผู้ดูแลเปิดปิดได้ทีละข้อจากศูนย์บัญชาการ", "en": "Everything below is in the current build, and admins can switch each one on or off from the command center."},
+  "f1_t": {"th": "ประชุมเสียง", "en": "Voice meetings"},
+  "f1_d": {"th": "เข้าห้องเสียงเมื่อถูกเชิญ ถอดเสียงทีละช่วง ตอบเมื่อถูกเรียกชื่อ และสรุปมติพร้อม action item ตอนจบ", "en": "Joins the voice room when invited, transcribes as it goes, answers when called by name, and posts decisions and action items at the end."},
+  "f2_t": {"th": "ใบเสร็จและค่าใช้จ่าย", "en": "Receipts and expenses"},
+  "f2_d": {"th": "อ่านรูปใบเสร็จและ PDF ลงบัญชี ตัดใบซ้ำ และให้ผู้บริหารถามยอดค่าใช้จ่ายเป็นภาษาคน", "en": "Reads receipt photos and PDFs into a ledger, drops duplicates, and lets executives ask about spending in plain language."},
+  "f3_t": {"th": "ติดตามงานและรายงาน", "en": "Task follow-up and reports"},
+  "f3_d": {"th": "เปลี่ยน action item เป็นงาน ตามความคืบหน้าทาง DM และส่งรายงานตอนเย็นให้ผู้บริหาร", "en": "Turns action items into tasks, follows up by DM, and sends executives an evening report."},
+  "f4_t": {"th": "เอกสารและ wiki", "en": "Documents and wiki"},
+  "f4_d": {"th": "จำไฟล์ที่ทีมส่ง สร้างหน้า wiki ของบริษัท และตอบจากเอกสารตามสิทธิ์ที่แต่ละคนเห็นได้", "en": "Remembers files the team shares, keeps a company wiki, and answers from documents each person is allowed to see."},
+  "f5_t": {"th": "สรุปเช้าเย็นและตามทัน", "en": "Briefs and catch-up"},
+  "f5_d": {"th": "สรุปประจำวันส่วนตัวทาง DM และ \"พลาดอะไรไปบ้าง\" หลังหายไปทั้งวัน", "en": "A personal morning and evening brief by DM, and \"what did I miss?\" after a day away."},
+  "f6_t": {"th": "ขออนุมัติ โพลล์ และฟอร์ม", "en": "Approvals, polls and forms"},
+  "f6_d": {"th": "ขอเบิก ขอลา ขอซื้อ โหวต และแบบสอบถามทาง DM โดยไม่ต้องออกจาก Discord", "en": "Expense, leave and purchase requests, votes and DM surveys, all without leaving Discord."},
+  "f7_t": {"th": "ค้นหาและวิจัย", "en": "Search and research"},
+  "f7_d": {"th": "ค้นทุกแหล่งของทีมพร้อมกัน ค้นเว็บพร้อมอ้างอิง และทำรายงานวิจัยเชิงลึกเป็น PDF", "en": "Searches every team source at once, searches the web with citations, and writes deep-research reports as PDF."},
+  "f8_t": {"th": "เรียนรู้บริษัทของคุณ", "en": "Learns your company"},
+  "f8_d": {"th": "สอนศัพท์เฉพาะ SOP และ FAQ ให้สลิด พร้อม domain pack สำเร็จรูป 14 สาขา", "en": "Teach Salid your glossary, SOPs and FAQ, with 14 ready-made industry packs."},
+  "tm_h": {"th": "สร้างมาเพื่อองค์กรตั้งแต่วันแรก", "en": "Built for organizations from day one"},
+  "tm_p": {"th": "เซิร์ฟเวอร์แต่ละแห่งคือผู้เช่าแยกกัน ข้อมูลไม่ปะปน และสิทธิ์การเห็นข้อมูลเดินตามโครงสร้างของทีมบน Discord", "en": "Every server is its own tenant. Data never mixes, and who sees what follows your team's Discord structure."},
+  "tm1_t": {"th": "แยกข้อมูลต่อเซิร์ฟเวอร์", "en": "Isolated per server."},
+  "tm1_d": {"th": "บัญชี ความจำ เอกสาร และการตั้งค่าทั้งหมดผูกกับเซิร์ฟเวอร์ของคุณเท่านั้น", "en": "Ledger, memory, documents and settings belong to your server alone."},
+  "tm2_t": {"th": "สิทธิ์ตามห้องและตำแหน่ง", "en": "Permissions follow channels and roles."},
+  "tm2_d": {"th": "สลิดตอบจากข้อมูลที่ผู้ถามเห็นได้อยู่แล้วเท่านั้น และผู้บริหารกำหนดได้ว่าใครคือผู้บริหาร", "en": "Salid only answers from what the asker can already read, and you decide who counts as an executive."},
+  "tm3_t": {"th": "สองภาษาทุกห้อง", "en": "Bilingual in every channel."},
+  "tm3_d": {"th": "ตั้งภาษาไทยหรืออังกฤษต่อห้องได้ หรือให้สลิดตอบตามภาษาที่คุณพิมพ์", "en": "Set Thai or English per channel, or let Salid follow the language you write in."},
+  "tm4_t": {"th": "ศูนย์บัญชาการบนเว็บ", "en": "A web command center."},
+  "tm4_d": {"th": "ล็อกอินด้วย Google เพื่อเปิดปิดความสามารถ เลือกห้อง และดูกิจกรรมล่าสุดของแต่ละเซิร์ฟเวอร์", "en": "Sign in with Google to switch features, pick channels and review each server's recent activity."},
+  "pn_h": {"th": "เริ่มได้วันนี้ ใช้ฟรีช่วงเปิดตัว", "en": "Start today, free during launch"},
+  "pn_p": {"th": "สร้างบัญชีด้วย Google ตั้งชื่อองค์กร แล้วเชื่อมต่อ Discord ของทีม ทุกความสามารถเปิดให้ใช้ตั้งแต่วันแรก", "en": "Create an account with Google, name your organization and connect your team's Discord. Every feature is on from day one."},
+  "pn_pill1": {"th": "ไม่ต้องใช้บัตรเครดิต", "en": "No credit card"},
+  "pn_pill2": {"th": "สมัครใน 2 นาที", "en": "Two-minute sign-up"},
+  "pn_pill3": {"th": "ไทย / อังกฤษ", "en": "Thai / English"},
+  "cta_signup": {"th": "สร้างบัญชีด้วย Google", "en": "Create account with Google"},
+  "cta_login": {"th": "เข้าสู่ระบบบัญชีของคุณ", "en": "Log in to your account"},
+  "pf_h": {"th": "สลิดอยู่ตรงไหนบ้าง", "en": "Where Salid works"},
+  "pf_p": {"th": "เราให้บริการสองส่วน: บอตสลิดในแพลตฟอร์มที่ทีมคุยกันอยู่แล้ว และแพลตฟอร์มเว็บสำหรับดูแลองค์กร", "en": "Two parts: the Salid bot inside the platforms your team already talks on, and a web platform to run the organization."},
+  "pf_now": {"th": "ใช้ได้แล้ว", "en": "Available now"},
+  "pf_org": {"th": "สำหรับองค์กร", "en": "For organizations"},
+  "pf1_t": {"th": "บอตใน Discord", "en": "Bot in Discord"},
+  "pf1_d": {"th": "เพิ่มเข้าเซิร์ฟเวอร์แล้วใช้ได้ทันที ใบเสร็จ ประชุมเสียง ตามงาน ถามตอบ ทุกอย่างอยู่ในห้องที่ทีมใช้อยู่", "en": "Add it to a server and it works at once: receipts, voice meetings, follow-ups and Q&A, all in the channels your team already uses."},
+  "pf2_t": {"th": "แพลตฟอร์มเว็บ", "en": "Web platform"},
+  "pf2_d": {"th": "ศูนย์ควบคุมองค์กร: สมาชิก คลังเอกสาร งาน แพ็กเกจ และคุยกับสลิดจากเบราว์เซอร์ ล็อกอินด้วย Google", "en": "The organization center: members, document library, tasks, plan, and chat with Salid from the browser. Sign in with Google."},
+  "pf3_t": {"th": "Google Meet", "en": "Google Meet"},
+  "pf3_d": {"th": "เครื่องอัดประชุมเปิดคู่กับ Meet ถอดเสียงไทยสด สรุปมติและงานส่งเข้า Discord", "en": "A recorder that runs beside Meet: live Thai transcript, then decisions and action items posted to Discord."},
+  "pf4_t": {"th": "Slack และ ClickUp", "en": "Slack and ClickUp"},
+  "pf4_d": {"th": "เชื่อมต่อผ่านศูนย์ควบคุมองค์กร เปิดให้ตามคำขอ ติดต่อเราเพื่อเปิดใช้", "en": "Connected through the organization center, switched on by request. Contact us to enable it."},
+  "pr_h": {"th": "แพ็กเกจ", "en": "Plans"},
+  "pr_p": {"th": "ช่วงเปิดตัวมีแพ็กเกจเดียว ใช้ฟรีทุกความสามารถโดยไม่มีลิมิต", "en": "During launch there is one plan: every feature, free, with no limits."},
+  "p_rec": {"th": "แนะนำ", "en": "Recommended"},
+  "pl_trial": {"th": "ทดลองใช้งาน", "en": "Trial"},
+  "pl_trial_price": {"th": "ฟรี ไม่จำกัดเวลา", "en": "Free, no time limit"},
+  "pl_trial_d": {"th": "ทุกความสามารถ ไม่จำกัดจำนวนคน ไม่ต้องใช้บัตรเครดิต ตลอดช่วงเปิดตัว", "en": "Every feature, unlimited seats, no credit card, for the whole launch period."},
+  "pl_more": {"th": "แพ็กเกจอื่น", "en": "More plans"},
+  "pl_more_price": {"th": "เร็ว ๆ นี้", "en": "Coming soon"},
+  "pl_more_d": {"th": "แพ็กเกจสำหรับทีมและองค์กรจะประกาศหลังช่วงเปิดตัว ผู้ใช้ช่วงทดลองจะได้รับแจ้งก่อน", "en": "Team and organization plans will be announced after launch. Trial users hear first."},
+  "pl_start": {"th": "เริ่มทดลองใช้", "en": "Start the trial"},
+  "pr_note": {"th": "ยังไม่มีการเก็บค่าบริการและไม่มีการชำระเงินในระบบ การสมัครไม่มีค่าใช้จ่ายใด ๆ", "en": "Nothing is charged and there is no payment in the system. Signing up is completely free."},
+  "en_h": {"th": "เลือกทางเข้าของคุณ", "en": "Choose your way in"},
+  "en_p": {"th": "สลิดมีสามบริการ แต่ละแบบเหมาะกับการใช้งานต่างกัน เลือกที่ตรงกับคุณได้เลย", "en": "Salid offers three services for different ways of working. Pick the one that fits you."},
+  "en1_t": {"th": "ทีมเล็กและร้านค้า", "en": "Small teams and shops"},
+  "en1_d": {"th": "สร้างบัญชีด้วย Google เลือกทดลองใช้ฟรี แล้วเพิ่มสลิดเข้า Discord ของทีม ใช้ได้ทันทีโดยไม่ต้องตั้งค่า", "en": "Create an account with Google, pick the free trial, then add Salid to your team's Discord. It works at once with no setup."},
+  "en1_b": {"th": "สร้างบัญชีและเริ่มใช้ →", "en": "Create an account and start →"},
+  "en2_t": {"th": "องค์กรหลายทีม", "en": "Organizations with many teams"},
+  "en2_d": {"th": "รวมหลายเซิร์ฟเวอร์และ workspace ไว้ในองค์กรเดียว จัดการสมาชิก คลังเอกสาร แพ็กเกจ และคุยกับสลิดจากเว็บ", "en": "Bring several servers and workspaces under one organization: members, document library, plan, and chat with Salid from the web."},
+  "en2_b": {"th": "เปิดศูนย์ควบคุมองค์กร →", "en": "Open the organization center →"},
+  "en3_t": {"th": "ประชุมบน Google Meet", "en": "Meetings on Google Meet"},
+  "en3_d": {"th": "เปิดเครื่องอัดคู่กับ Google Meet ถอดเสียงภาษาไทยสด แล้วสรุปมติและงานที่ต้องทำส่งเข้า Discord", "en": "Open the recorder beside Google Meet for a live Thai transcript, then decisions and action items posted to Discord."},
+  "en3_b": {"th": "เปิดเครื่องอัดประชุม →", "en": "Open the meeting recorder →"},
+  "fin_h": {"th": "ให้สลิดช่วยทีมของคุณตั้งแต่วันนี้", "en": "Let Salid help your team today"},
+  "fin_p": {"th": "เพิ่มเข้าเซิร์ฟเวอร์ แล้วพิมพ์ @Salid เพื่อเริ่มคุยได้ทันที", "en": "Add it to your server, then mention @Salid to start right away."},
+  "foot_copy": {"th": "© 2026 The Frontier Company Limited", "en": "© 2026 The Frontier Company Limited"},
+  "foot_recorder": {"th": "เครื่องอัดประชุม Meeting Scribe", "en": "Meeting Scribe recorder"}
+}
+</script>
+<script>
+// ---------- language (Thai / English) ----------
+// Priority: saved manual choice ("salid-language") -> browser primary subtag -> English.
+const LANG_KEY = "salid-language";
+const SUPPORTED = ["th", "en"];
+const $ = (id) => document.getElementById(id);
+const I18N = JSON.parse($("i18n-data").textContent);
+function readLang(op, v) {
+  try {
+    if (op === "set") { localStorage.setItem(LANG_KEY, v); return null; }
+    const s = localStorage.getItem(LANG_KEY);
+    return SUPPORTED.includes(s) ? s : null;
+  } catch { return null; } // storage blocked: the choice then lasts until reload
+}
+// Default is English for every visitor (the browser language is not consulted); a saved choice wins.
+let lang = readLang("get") || "en";
+function t(key) { const e = I18N[key]; return e ? (e[lang] ?? e.en) : key; }
+function applyStatic() {
+  document.documentElement.lang = lang;
+  document.title = t("title");
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
+  for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = t(el.dataset.i18nHtml);
+  for (const el of document.querySelectorAll("[data-i18n-attr]")) {
+    for (const pair of el.dataset.i18nAttr.split(";")) { const [attr, key] = pair.split(":"); el.setAttribute(attr, t(key)); }
+  }
+  for (const el of document.querySelectorAll("[data-lang]")) el.setAttribute("aria-pressed", String(el.dataset.lang === lang));
+  markInvite();
+}
+function setLang(l) { if (!SUPPORTED.includes(l)) return; lang = l; readLang("set", l); applyStatic(); }
+for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
+
+// The invite URL is filled in by the server from SALID_DISCORD_CLIENT_ID. Never fabricate one:
+// with no client id the invite buttons are hidden (sign-up still works; /start explains the next step).
+function markInvite() {
+  for (const a of document.querySelectorAll("[data-invite]")) {
+    const ok = a.getAttribute("href").startsWith("https://discord.com/");
+    a.hidden = !ok;
+    a.setAttribute("aria-disabled", String(!ok));
+    if (ok) { a.target = "_blank"; a.rel = "noopener"; a.textContent = t("cta_add"); }
+    else { a.removeAttribute("target"); a.textContent = t("cta_unconfigured"); }
+  }
+}
+applyStatic();
+
+// ---------- navigation ----------
+const nav = $("nav"), links = $("links"), menu = $("menu");
+addEventListener("scroll", () => nav.classList.toggle("scrolled", scrollY > 8), { passive: true });
+menu.addEventListener("click", () => {
+  const open = links.classList.toggle("open");
+  menu.setAttribute("aria-expanded", String(open));
+});
+links.addEventListener("click", (e) => { if (e.target.tagName === "A") { links.classList.remove("open"); menu.setAttribute("aria-expanded", "false"); } });
+
+// ---------- hero sequence: the film plays once ("a"), then the callouts appear ("e" -> "idle") ----------
+// The final state is the markup default, so the page is complete without JS, with reduced motion, or
+// when the film is missing or cannot autoplay. The copy and CTA never wait for the film.
+const hero = $("hero"), scene = $("scene"), film = $("film");
+let stage = "idle", revealed = false;
+function setStage(s) { stage = s; hero.dataset.stage = s; }
+function reveal() {
+  if (revealed) return;
+  revealed = true;
+  setStage("e");
+  setTimeout(() => setStage("idle"), 1200);
+}
+function playFilm() {
+  setStage("a");
+  const guard = setTimeout(reveal, 2500); // nothing playing after 2.5 s: show the still and move on
+  film.addEventListener("playing", () => { clearTimeout(guard); scene.classList.add("rolling"); }, { once: true });
+  film.addEventListener("ended", reveal, { once: true });
+  film.addEventListener("error", reveal, { once: true });
+  film.querySelectorAll("source")[1].addEventListener("error", reveal, { once: true }); // no file at all
+  const p = film.play();
+  if (p && p.catch) p.catch(reveal); // autoplay blocked
+}
+if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  setStage("idle");
+} else {
+  try { playFilm(); } catch (err) { reveal(); }
+}
+</script>
+</body>
+</html>

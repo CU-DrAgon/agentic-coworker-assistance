@@ -462,6 +462,8 @@ class GuildSettings(GuildSettingsUpdate):
     # Channel ids (text, voice, forum) everyone in the server can see; synced by the bot. Only
     # items from these channels are shareable between workspaces / visible to plain members.
     public_channel_ids: list[str] = Field(default_factory=list)
+    # upcoming Discord scheduled events, synced by the bot (the company calendar on the web)
+    events: list[dict] = Field(default_factory=list)
     active: bool = True
     updated_by: str = ""
     updated_at: str = ""
@@ -584,6 +586,7 @@ class GuildStore:
         active: bool = True,
         installed: bool = False,
         public_channel_ids: list[str] | None = None,
+        events: list[dict] | None = None,
     ) -> None:
         """Merge what the bot knows about the guild; never touches hub-managed fields."""
         data: dict[str, Any] = {
@@ -594,6 +597,8 @@ class GuildStore:
         }
         if public_channel_ids is not None:
             data["public_channel_ids"] = public_channel_ids
+        if events is not None:
+            data["events"] = events
         if installed:
             data["installed_at"] = _now().isoformat(timespec="seconds")
         self._ref(guild_id).set(data, merge=True)
@@ -804,15 +809,44 @@ class GuildStore:
         )
         return code
 
-    def peek_link_code(self, code: str) -> int:
-        """The guild a code belongs to, without consuming it. LinkError when unusable."""
+    def link_code_info(self, code: str) -> dict:
+        """The code's record (guild_id, discord_user_id, discord_user_name) without consuming it.
+        LinkError when unknown, used or expired."""
         snap = self.client.collection(self.link_collection).document(code).get()
         info = snap.to_dict() if snap.exists else None
         if not info or info.get("used"):
             raise LinkError("code unknown or already used")
         if datetime.fromisoformat(info["expires_at"]) <= _now():
             raise LinkError("code expired")
-        return int(info["guild_id"])
+        return info
+
+    def peek_link_code(self, code: str) -> int:
+        """The guild a code belongs to, without consuming it. LinkError when unusable."""
+        return int(self.link_code_info(code)["guild_id"])
+
+    def redeem_identity_code(self, code: str, email: str) -> tuple[int, str, str]:
+        """Consume a code the bot handed to ONE Discord user (`/ลิงก์บัญชี`) and return
+        (guild_id, discord_user_id, discord_user_name): proof that `email` is that Discord user.
+        Unlike `redeem_link_code` it grants no admin rights."""
+        code_ref = self.client.collection(self.link_collection).document(code)
+
+        def run(txn) -> tuple[int, str, str]:
+            snap = code_ref.get(transaction=txn)
+            info = snap.to_dict() if snap.exists else None
+            if not info or info.get("used"):
+                raise LinkError("code unknown or already used")
+            if datetime.fromisoformat(info["expires_at"]) <= _now():
+                raise LinkError("code expired")
+            txn.update(
+                code_ref, {"used": True, "used_by": email.lower(), "used_at": _now().isoformat()}
+            )
+            return (
+                int(info["guild_id"]),
+                str(info["discord_user_id"]),
+                str(info.get("discord_user_name") or ""),
+            )
+
+        return self._in_transaction(run)
 
     def redeem_link_code(self, code: str, email: str) -> tuple[int, GuildSettings]:
         """Atomically consume `code` and make `email` an admin of its guild.

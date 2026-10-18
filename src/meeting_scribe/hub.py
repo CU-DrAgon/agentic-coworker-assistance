@@ -11,11 +11,15 @@ guild. If `HUB_GOOGLE_CLIENT_ID` is empty every call fails closed with 503.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -60,24 +64,154 @@ def google_token_verifier() -> Callable[[str, str], dict[str, Any]]:
     return verify
 
 
+# ------------------------------------------------------------------ Salid sessions
+# A Google ID token lives one hour. After the first sign-in the pages exchange it for a Salid
+# session token ("ss1.<payload>.<mac>", HMAC-SHA256 with SALID_SESSION_SECRET, 30 days) and keep
+# that in the browser, so nobody is signed out every hour or on every reload.
+SESSION_PREFIX = "ss1."
+
+
+def _b64(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def _unb64(s: str) -> bytes:
+    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
+def issue_session(
+    email: str, secret: str, days: int, now: datetime | None = None
+) -> tuple[str, str]:
+    """(token, expires_at ISO) for `email`."""
+    exp = (now or datetime.now(UTC)) + timedelta(days=days)
+    payload = _b64(json.dumps({"e": email.lower(), "x": int(exp.timestamp())}).encode())
+    mac = _b64(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
+    return f"{SESSION_PREFIX}{payload}.{mac}", exp.isoformat(timespec="seconds")
+
+
+def verify_session(token: str, secret: str, now: datetime | None = None) -> str:
+    """The email a session token stands for. ValueError when forged, malformed or expired."""
+    if not secret or not token.startswith(SESSION_PREFIX):
+        raise ValueError("not a session token")
+    try:
+        payload, mac = token[len(SESSION_PREFIX) :].split(".", 1)
+    except ValueError as exc:
+        raise ValueError("malformed session") from exc
+    want = _b64(hmac.new(secret.encode(), payload.encode(), hashlib.sha256).digest())
+    if not hmac.compare_digest(want, mac):
+        raise ValueError("bad session signature")
+    data = json.loads(_unb64(payload))
+    if int(data.get("x", 0)) <= int((now or datetime.now(UTC)).timestamp()):
+        raise ValueError("session expired")
+    return str(data["e"]).lower()
+
+
+@lru_cache
+def _prefs() -> Any:
+    from salid.orgs import make_org_store
+
+    return make_org_store(*get_salid_runtime())
+
+
+def get_prefs() -> Any:
+    """Per-person web preferences (`OrgStore.user_language` / `set_user_language`). Overridden in tests."""
+    return _prefs()
+
+
+@lru_cache
+def _doc_store() -> Any:
+    from salid.coo_store import make_doc_store
+
+    return make_doc_store(*get_salid_runtime())
+
+
+def get_doc_store() -> Any:
+    """The bot's DocStore (the action queue lives there). Overridden in tests."""
+    return _doc_store()
+
+
+def language_change_notice(before: str, after: str, who: str) -> str:
+    """What Salid posts on the server when the company language changes: the line in the new
+    language, then in the old one (so everybody understands the switch)."""
+    from salid.i18n import lang_name, t
+
+    blocks: list[str] = []
+    for lang in (after, before):
+        render = lang if lang in ("th", "en") or lang else "en"
+        line = t(
+            "company_language_changed",
+            render,
+            lname=lang_name(after, 2 if render == "th" else 1),
+            who=who,
+        )
+        if line not in blocks:
+            blocks.append(line)
+    return "\n".join(blocks)
+
+
+def announce_language_change(docs: Any, guild_id: int, before: str, after: str, who: str) -> None:
+    """Queue the notice for the bot (`salid.actions`, kind `announce`: the ask channel, else
+    general). Best effort: a queue problem never fails the settings save."""
+    from salid.actions import ActionQueue
+
+    try:
+        ActionQueue(docs).enqueue(
+            guild_id, "announce", {"text": language_change_notice(before, after, who)}, by=who
+        )
+    except Exception:
+        logger.exception("could not queue the language notice for guild %s", guild_id)
+
+
 def require_user(
     authorization: str | None = Header(default=None),
     verify: Callable[[str, str], dict[str, Any]] = Depends(google_token_verifier),
+    prefs: Any = Depends(get_prefs),
 ) -> str:
-    """Return the verified Google email, or raise 503 (not configured) / 401 / 403."""
+    """Return the verified email (Salid session or Google ID token), or raise 503 / 401 / 403."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        if not get_settings().hub_google_client_id:
+            raise HTTPException(503, "Hub is not configured")
+        raise HTTPException(401, "Missing bearer token")
+    return user_from_token(authorization[7:].strip(), verify, prefs)
+
+
+def account_for_google(email: str, prefs: Any) -> str:
+    """A Google sign-in lands in the Salid account that LINKED that Google account (someone who
+    signed up through Discord and added Google later), else in the account of that email.
+    Fail-soft: a broken preference store never blocks sign-in."""
+    if prefs is None:
+        return email
+    try:
+        return str(prefs.account_for_google(email) or email).lower()
+    except Exception:
+        logger.exception("could not resolve the Google account of %s", email)
+        return email
+
+
+def user_from_token(
+    raw: str, verify: Callable[[str, str], dict[str, Any]], prefs: Any = None
+) -> str:
+    """The email behind a raw session / Google token (same rules as `require_user`); for places
+    that cannot use the Authorization header, like WebSockets (pass `get_prefs()` there)."""
     settings = get_settings()
     if not settings.hub_google_client_id:
         raise HTTPException(503, "Hub is not configured")
-    if not authorization or not authorization.lower().startswith("bearer "):
+    if not raw:
         raise HTTPException(401, "Missing bearer token")
+    if raw.startswith(SESSION_PREFIX):
+        try:
+            return verify_session(raw, settings.salid_session_secret)
+        except ValueError as exc:
+            logger.info("Rejected session: %s", exc)
+            raise HTTPException(401, "Invalid or expired session") from exc
     try:
-        claims = verify(authorization[7:].strip(), settings.hub_google_client_id)
+        claims = verify(raw, settings.hub_google_client_id)
     except ValueError as exc:
         logger.info("Rejected hub token: %s", exc)
         raise HTTPException(401, "Invalid or expired token") from exc
     if claims.get("email_verified") is not True or not claims.get("email"):
         raise HTTPException(403, "This account has no verified email")
-    return str(claims["email"]).lower()
+    return account_for_google(str(claims["email"]).lower(), prefs)
 
 
 def is_super_admin(email: str) -> bool:
@@ -163,6 +297,11 @@ class Me(BaseModel):
     email: str
     invite_url: str | None
     is_super: bool
+    language: str | None = None  # saved web UI language (th / en); None = not chosen yet
+
+
+class LanguageBody(BaseModel):
+    language: str
 
 
 class GuildInfo(BaseModel):
@@ -193,9 +332,70 @@ class ActivityItem(BaseModel):
     currency: str | None = None  # ISO code of `amount`; missing counts as THB
 
 
+class SessionView(BaseModel):
+    token: str
+    expires_at: str
+    email: str
+
+
+@router.post("/api/hub/session")
+def hub_session(
+    email: str = Depends(require_user),
+    authorization: str | None = Header(default=None),
+    verify: Callable[[str, str], dict[str, Any]] = Depends(google_token_verifier),
+    prefs: Any = Depends(get_prefs),
+) -> SessionView:
+    """Exchange a fresh Google sign-in (or a still-valid session) for a Salid session token that
+    every page keeps in the browser. 503 when SALID_SESSION_SECRET is not set. A Google token
+    also fills the person's real first / last name (once) from the account."""
+    s = get_settings()
+    if not s.salid_session_secret:
+        raise HTTPException(503, "Sessions are not configured")
+    raw = (authorization or "")[7:].strip()
+    if raw and not raw.startswith(SESSION_PREFIX):
+        try:
+            claims = verify(raw, s.hub_google_client_id)
+            p = prefs.user_profile(email)
+            first = str(claims.get("given_name") or "").strip()
+            last = str(claims.get("family_name") or "").strip()
+            fields = {
+                "first_name": first if first and not p.first_name else None,
+                "last_name": last if last and not p.last_name else None,
+                "name": (first or str(claims.get("name") or "").strip()) if not p.name else None,
+            }
+            if any(v for v in fields.values()):
+                prefs.set_user_profile(email, **fields)
+        except Exception:  # names are a convenience: never block sign-in on them
+            logger.exception("could not record the Google name of %s", email)
+    token, exp = issue_session(email, s.salid_session_secret, s.salid_session_days)
+    return SessionView(token=token, expires_at=exp, email=email)
+
+
 @router.get("/api/hub/me")
-def hub_me(email: str = Depends(require_user)) -> Me:
-    return Me(email=email, invite_url=invite_url() or None, is_super=is_super_admin(email))
+async def hub_me(email: str = Depends(require_user), prefs: Any = Depends(get_prefs)) -> Me:
+    try:  # the saved language is a convenience: never block sign-in on it
+        language = await run_in_threadpool(prefs.user_language, email)
+    except Exception:
+        logger.exception("could not read the language preference of %s", email)
+        language = None
+    return Me(
+        email=email,
+        invite_url=invite_url() or None,
+        is_super=is_super_admin(email),
+        language=language,
+    )
+
+
+@router.put("/api/hub/me/language")
+async def hub_set_language(
+    body: LanguageBody, email: str = Depends(require_user), prefs: Any = Depends(get_prefs)
+) -> dict[str, str]:
+    """Remember the language this person wants every Salid page in (shared with /center)."""
+    try:
+        lang = await run_in_threadpool(prefs.set_user_language, email, body.language)
+    except ValueError as exc:
+        raise HTTPException(400, "Unsupported language (th or en)") from exc
+    return {"language": lang}
 
 
 def _info(guild_id: int, g: GuildSettings) -> GuildInfo:
@@ -252,7 +452,10 @@ async def hub_put_settings(
     body: GuildSettingsUpdate,
     access: GuildAccess = Depends(guild_admin),
     guilds: GuildStore = Depends(get_guild_store),
+    docs: Any = Depends(get_doc_store),
 ) -> GuildSettings:
+    """Save the server settings. A change of the COMPANY language is announced on the server by
+    Salid (queued for the bot), so nobody is surprised by her switching languages."""
     known = {c.id for c in access.settings.channels}
     chosen = {
         *body.receipt_channel_ids,
@@ -266,7 +469,14 @@ async def hub_put_settings(
     } - {""}
     if known and chosen - known:  # the bot syncs the list; an empty list means "not synced yet"
         raise HTTPException(422, "Unknown channel id for this guild")
-    return await run_in_threadpool(guilds.save_settings, access.guild_id, body, access.email)
+    before = access.settings.language_setting
+    saved = await run_in_threadpool(guilds.save_settings, access.guild_id, body, access.email)
+    after = saved.language_setting
+    if after != before:
+        await run_in_threadpool(
+            announce_language_change, docs, access.guild_id, before, after, access.email
+        )
+    return saved
 
 
 def _utc(value: str | datetime) -> datetime:

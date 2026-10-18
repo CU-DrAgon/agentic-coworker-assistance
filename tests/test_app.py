@@ -102,15 +102,18 @@ def pubsub_body(payload) -> dict:
 
 def test_index_and_healthz(client):
     assert client.get("/healthz").json() == {"status": "ok"}
-    r = client.get("/")
+    r = client.get("/recorder")
     assert r.status_code == 200 and "Meeting Scribe" in r.text
     assert 'id="salid-add" href=""' in r.text  # no client id configured: link hidden by the page
+    home = client.get("/")
+    assert home.status_code == 200 and 'id="i18n-data"' in home.text  # Salid landing page
+    assert client.get("/salid", follow_redirects=False).headers["location"] == "/"
 
 
 def test_index_renders_salid_invite_link(env, client):
     env.setenv("SALID_DISCORD_CLIENT_ID", "123456789012345678")
     get_settings.cache_clear()
-    r = client.get("/")
+    r = client.get("/recorder")
     from meeting_scribe.app import CREATE_EVENTS, MANAGE_EVENTS, SALID_PERMISSIONS
 
     assert SALID_PERMISSIONS == 1166416 | (1 << 44) | (1 << 33) | (1 << 49)
@@ -402,3 +405,17 @@ def test_static_index_has_live_recording_safeguards():
     assert "await Promise.allSettled(st.uploads)" in stop_block
     assert "if (st.counts.failed)" in stop_block
     assert stop_block.index("if (st.counts.failed)") < stop_block.index("await finishMeeting()")
+
+
+def test_pages_are_gzipped_for_browsers_that_accept_it(client):
+    r = client.get("/center", headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
+    assert "<html" in r.text  # the client transparently decodes
+
+
+def test_pages_and_static_files_are_revalidated_never_stale(client):
+    """After a deploy every page shows the new version at once (no stale browser copy)."""
+    for path in ("/", "/center", "/start", "/hub", "/static/salid/theme.css"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert r.headers.get("cache-control") in ("no-cache", "no-store"), path

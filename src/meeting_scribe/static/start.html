@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create your Salid account</title>
+<meta name="robots" content="noindex">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;display=swap">
+<link rel="icon" type="image/png" href="/static/salid/favicon.png">
+<link rel="stylesheet" href="/static/salid/theme.css">
+<script src="https://accounts.google.com/gsi/client?hl=en" async defer></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6; -webkit-font-smoothing: antialiased;
+    font-family: "IBM Plex Sans Thai", "Noto Sans Thai", "Segoe UI", Tahoma, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
+  a { color: var(--indigo-2); } [hidden] { display: none !important; }
+  h1, h2, h3, p { margin: 0; } button { font: inherit; cursor: pointer; }
+  :focus-visible { outline: 3px solid var(--indigo-2); outline-offset: 3px; border-radius: 8px; }
+  .nav { border-bottom: 1px solid var(--line); background: rgba(250,249,246,.9); }
+  .nav .wrap { display: flex; align-items: center; gap: 16px; min-height: 64px; }
+  .wrap { width: min(880px, 100% - 32px); margin: 0 auto; }
+  .logo { display: flex; align-items: center; gap: 10px; color: var(--indigo); text-decoration: none; font-weight: 700; font-size: 18px; }
+  .logo .mark { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: #fff; font-size: 15px;
+    background: linear-gradient(135deg, var(--indigo-2), #7A6CF0); box-shadow: 0 4px 12px rgba(74,79,191,.3); }
+  .grow { flex: 1 1 auto; }
+  .langsw { display: flex; border: 1px solid var(--line); border-radius: 99px; padding: 2px; background: #fff; }
+  .langsw button { border: 0; background: none; padding: 4px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .langsw button[aria-pressed="true"] { background: var(--indigo); color: #fff; }
+  .who { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+  main { flex: 1; padding: 40px 0 64px; }
+  .steps { display: flex; gap: 8px; margin-bottom: 28px; flex-wrap: wrap; }
+  .steps span { flex: 1 1 120px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--faint); padding: 8px 0; border-top: 3px solid var(--line); }
+  .steps span i { font-style: normal; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: var(--line); color: var(--muted); }
+  .steps span.on { color: var(--indigo); border-top-color: var(--indigo-2); } .steps span.on i { background: var(--indigo-2); color: #fff; }
+  .steps span.done { color: var(--ok-ink); border-top-color: var(--ok-ink); } .steps span.done i { background: var(--ok-ink); color: #fff; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 22px; padding: 32px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 18px; }
+  .card h1 { font-size: clamp(26px, 4vw, 34px); line-height: 1.2; letter-spacing: -.01em; }
+  .card h2 { font-size: 22px; line-height: 1.25; }
+  .card p { color: var(--muted); font-size: 16px; }
+  .eyebrow { font-size: 13px; letter-spacing: .18em; font-weight: 600; color: var(--indigo-2); }
+  ul.gets { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+  ul.gets li { display: flex; gap: 12px; align-items: flex-start; font-size: 15.5px; }
+  ul.gets svg { width: 20px; height: 20px; flex: none; color: var(--indigo-2); margin-top: 3px; }
+  ul.gets b { font-weight: 600; } ul.gets span { color: var(--muted); }
+  #gsi-button { min-height: 44px; display: flex; }
+  .notice { padding: 10px 14px; border-radius: 10px; font-size: 14px; background: var(--warn-bg); color: var(--warn-ink); }
+  .notice.error { background: var(--err-bg); color: var(--err-ink); } .notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
+  .plans { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+  .plan { border: 2px solid var(--line); border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 6px; cursor: pointer; background: #fff; text-align: left; }
+  .plan[aria-pressed="true"] { border-color: var(--indigo-2); background: #F7F7FF; }
+  .plan b { font-size: 16px; } .plan .price { font-size: 14px; color: var(--indigo); font-weight: 600; } .plan span { font-size: 13px; color: var(--muted); }
+  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: #EEF0FF; color: var(--indigo); font-weight: 500; align-self: flex-start; }
+  label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 15px; }
+  input[type=text] { font: inherit; padding: 11px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 20px; border-radius: 12px; font-weight: 600; font-size: 15px;
+    text-decoration: none; border: 1px solid transparent; transition: transform .15s var(--ease), box-shadow .15s var(--ease); }
+  .btn.primary { background: var(--indigo); color: #fff; box-shadow: 0 6px 18px rgba(43,47,122,.25); }
+  .btn.primary:hover { background: #22265F; transform: translateY(-1px); }
+  .btn.primary:disabled, .btn.primary[aria-disabled="true"] { background: #C9CBE0; box-shadow: none; cursor: not-allowed; pointer-events: none; }
+  .btn.ghost { color: var(--indigo); border-color: var(--line); background: #fff; }
+  .btn.ghost:hover { border-color: var(--lavender); }
+  ol.how { margin: 0; padding-left: 22px; display: grid; gap: 8px; color: var(--muted); font-size: 15px; }
+  ol.how code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; background: #EEF0FF; color: var(--indigo); padding: 2px 7px; border-radius: 6px; }
+  footer { border-top: 1px solid var(--line); padding: 20px 0 32px; color: var(--faint); font-size: 13.5px; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 20px; }
+  footer a { color: var(--muted); text-decoration: none; }
+  @media (max-width: 560px) { .card { padding: 22px 18px; } }
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <a class="logo" href="/" aria-label="Salid"><span class="mark" aria-hidden="true">S</span><span data-i18n="brand"></span></a>
+    <div class="grow"></div>
+    <span class="who" id="who" hidden></span>
+    <div class="langsw" role="group" data-i18n-attr="aria-label:lang_switch_aria">
+      <button type="button" data-lang="th" data-i18n="lang_th"></button>
+      <button type="button" data-lang="en" data-i18n="lang_en"></button>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+    <div class="steps" aria-hidden="true">
+      <span data-step="1" class="on"><i>1</i><em data-i18n="s1"></em></span>
+      <span data-step="2"><i>2</i><em data-i18n="s2"></em></span>
+      <span data-step="3"><i>3</i><em data-i18n="s3"></em></span>
+      <span data-step="4"><i>4</i><em data-i18n="s4"></em></span>
+    </div>
+
+    <!-- step 1: welcome + Google sign-in -->
+    <section class="card" id="step1">
+      <div class="eyebrow" data-i18n="eyebrow"></div>
+      <h1 data-i18n="w_h"></h1>
+      <p data-i18n="w_p"></p>
+      <ul class="gets">
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><div><b data-i18n="g1_t"></b> <span data-i18n="g1_d"></span></div></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><div><b data-i18n="g2_t"></b> <span data-i18n="g2_d"></span></div></li>
+        <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><div><b data-i18n="g3_t"></b> <span data-i18n="g3_d"></span></div></li>
+      </ul>
+      <p data-i18n="w_next"></p>
+      <div id="gsi-button"></div>
+      <div class="row" style="margin-top:10px"><button type="button" class="btn ghost" id="discord-signup" data-i18n="signup_discord" hidden></button></div>
+      <div class="notice" id="not-configured" data-i18n="not_configured" hidden></div>
+      <div class="notice error" id="login-error" hidden></div>
+      <p style="font-size:13px;color:var(--faint)" data-i18n="w_privacy"></p>
+    </section>
+
+    <!-- already a member -->
+    <section class="card" id="existing" hidden>
+      <h2 data-i18n="ex_h"></h2>
+      <p data-i18n="ex_p"></p>
+      <div class="row"><a class="btn primary" href="/center" data-i18n="go_center"></a><button type="button" class="btn ghost" id="another" data-i18n="ex_new"></button></div>
+    </section>
+
+    <!-- step 2: plan -->
+    <section class="card" id="step2" hidden>
+      <h2 data-i18n="p_h"></h2>
+      <p data-i18n="p_p"></p>
+      <div class="plans" role="group" data-i18n-attr="aria-label:p_h">
+        <button type="button" class="plan" data-plan="trial" aria-pressed="true"><span class="pill" data-i18n="p_rec"></span><b data-i18n="pl_trial"></b><span class="price" data-i18n="pl_trial_price"></span><span data-i18n="pl_trial_d"></span></button>
+      </div>
+      <div class="notice" data-i18n="p_note"></div>
+      <div class="row"><button type="button" class="btn primary" id="to3" data-i18n="next"></button></div>
+    </section>
+
+    <!-- step 3: organization -->
+    <section class="card" id="step3" hidden>
+      <h2 data-i18n="o_h"></h2>
+      <p data-i18n="o_p"></p>
+      <label><span data-i18n="o_label"></span><input type="text" id="org-name" maxlength="120" autocomplete="organization" data-i18n-attr="placeholder:o_ph"></label>
+      <div class="notice error" id="org-error" hidden></div>
+      <div class="row"><button type="button" class="btn primary" id="create" data-i18n="o_btn"></button><button type="button" class="btn ghost" id="back2" data-i18n="back"></button></div>
+    </section>
+
+    <!-- step 4: connect Discord -->
+    <section class="card" id="step4" hidden>
+      <div class="notice ok" id="created-note"></div>
+      <h2 data-i18n="c_h"></h2>
+      <p data-i18n="c_p"></p>
+      <ol class="how">
+        <li data-i18n-html="c1"></li>
+        <li data-i18n-html="c2"></li>
+        <li data-i18n-html="c3"></li>
+      </ol>
+      <div class="notice" id="invite-soon" data-i18n="invite_soon" hidden></div>
+      <div class="row">
+        <a class="btn primary" href="__SALID_INVITE_URL__" data-invite></a>
+        <a class="btn ghost" href="/center" data-i18n="go_center"></a>
+      </div>
+      <p style="font-size:13px;color:var(--faint)" data-i18n="c_later"></p>
+    </section>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap"><span data-i18n="foot_copy"></span><a href="/" data-i18n="foot_home"></a><a href="/center" data-i18n="go_center"></a></div>
+</footer>
+
+<script type="application/json" id="i18n-data">
+{
+  "title": {"th": "สร้างบัญชีสลิด", "en": "Create your Salid account"},
+  "brand": {"th": "สลิด", "en": "Salid"},
+  "lang_switch_aria": {"th": "เลือกภาษา", "en": "Choose language"},
+  "lang_th": {"th": "ไทย", "en": "ไทย"},
+  "lang_en": {"th": "EN", "en": "EN"},
+  "s1": {"th": "บัญชี", "en": "Account"},
+  "s2": {"th": "แพ็กเกจ", "en": "Plan"},
+  "s3": {"th": "องค์กร", "en": "Organization"},
+  "s4": {"th": "เชื่อมต่อ", "en": "Connect"},
+  "eyebrow": {"th": "เริ่มต้นกับสลิด", "en": "GET STARTED WITH SALID"},
+  "w_h": {"th": "สร้างบัญชีด้วย Google แล้วเริ่มใช้สลิดใน 4 ขั้น", "en": "Create your account with Google and start in four steps"},
+  "w_p": {"th": "บัญชีหนึ่งดูแลได้หลายทีม สิ่งที่คุณจะได้ทันทีหลังสมัคร:", "en": "One account can run several teams. Here is what you get right after signing up:"},
+  "g1_t": {"th": "ใช้ฟรีช่วงเปิดตัว", "en": "Free during launch"},
+  "g1_d": {"th": "ทุกความสามารถ ไม่จำกัดเวลาและจำนวนคน ไม่ต้องใช้บัตรเครดิต", "en": "every feature, no time or seat limit, no credit card."},
+  "g2_t": {"th": "ศูนย์ควบคุมองค์กรของคุณเอง", "en": "Your own organization center"},
+  "g2_d": {"th": "สมาชิก คลังเอกสาร งาน และแชตกับสลิดจากเว็บ", "en": "members, document library, tasks, and web chat with Salid."},
+  "g3_t": {"th": "สลิดในแพลตฟอร์มที่ทีมใช้อยู่", "en": "Salid where your team already works"},
+  "g3_d": {"th": "Discord ใช้ได้ทันที ส่วน Slack และ ClickUp สำหรับองค์กร", "en": "Discord right away; Slack and ClickUp for organizations."},
+  "w_next": {"th": "ถัดไปคุณจะเลือกแพ็กเกจ ตั้งชื่อองค์กร และเชื่อมต่อ Discord ใช้เวลาประมาณ 2 นาที", "en": "Next you will pick a plan, name your organization and connect Discord. It takes about two minutes."},
+  "not_configured": {"th": "ระบบล็อกอินยังไม่ได้ตั้งค่า (HUB_GOOGLE_CLIENT_ID) กรุณาติดต่อผู้ดูแล", "en": "Sign-in is not configured yet (HUB_GOOGLE_CLIENT_ID). Please contact the administrator."},
+  "login_failed": {"th": "เข้าสู่ระบบไม่สำเร็จ ({status}) ลองอีกครั้ง", "en": "Sign-in failed ({status}). Please try again."},
+  "signup_discord": {"th": "หรือสมัครด้วย Discord", "en": "Or sign up with Discord"},
+  "discord_no_email": {"th": "บัญชี Discord นี้ยังไม่มีอีเมลที่ยืนยันแล้ว กรุณาใช้ Google หรือยืนยันอีเมลใน Discord ก่อน", "en": "This Discord account has no verified email. Please use Google, or verify your email in Discord first."},
+  "w_privacy": {"th": "เราใช้เฉพาะอีเมลจากบัญชี Google ของคุณเพื่อระบุตัวตน ไม่เข้าถึงข้อมูลอื่น", "en": "We use only the email address of your Google account to identify you. Nothing else is accessed."},
+  "ex_h": {"th": "คุณมีองค์กรอยู่แล้ว", "en": "You already have an organization"},
+  "ex_p": {"th": "บัญชีนี้เป็นสมาชิกขององค์กรที่มีอยู่ ไปที่ศูนย์ควบคุมได้เลย หรือสร้างองค์กรใหม่เพิ่ม", "en": "This account already belongs to an organization. Go to the center, or create another organization."},
+  "ex_new": {"th": "สร้างองค์กรใหม่", "en": "Create another organization"},
+  "go_center": {"th": "ไปที่ศูนย์ควบคุมองค์กร", "en": "Go to the organization center"},
+  "p_h": {"th": "แพ็กเกจของคุณ", "en": "Your plan"},
+  "p_p": {"th": "ช่วงเปิดตัวมีแพ็กเกจเดียวคือทดลองใช้งาน ไม่มีค่าใช้จ่ายและไม่มีลิมิต เมื่อมีแพ็กเกจอื่นจะเลือกเปลี่ยนได้จากศูนย์ควบคุม", "en": "During launch there is one plan, the trial: free and unlimited. When other plans arrive you can switch from the center."},
+  "p_rec": {"th": "แนะนำ", "en": "Recommended"},
+  "pl_trial": {"th": "ทดลองใช้งาน", "en": "Trial"},
+  "pl_trial_price": {"th": "ฟรี ไม่จำกัดเวลา", "en": "Free, no time limit"},
+  "pl_trial_d": {"th": "ทุกความสามารถ ไม่จำกัดจำนวนคน", "en": "Every feature, unlimited seats"},
+  "p_note": {"th": "ยังไม่มีการเก็บค่าบริการและไม่มีการชำระเงินในระบบ การสมัครครั้งนี้ไม่มีค่าใช้จ่ายใด ๆ", "en": "Nothing is charged and there is no payment in the system. This sign-up is completely free."},
+  "next": {"th": "ถัดไป", "en": "Next"},
+  "back": {"th": "ย้อนกลับ", "en": "Back"},
+  "o_h": {"th": "ตั้งชื่อองค์กร", "en": "Name your organization"},
+  "o_p": {"th": "ชื่อบริษัท ร้าน หรือทีมของคุณ เปลี่ยนทีหลังได้", "en": "Your company, shop or team. You can change it later."},
+  "o_label": {"th": "ชื่อองค์กร", "en": "Organization name"},
+  "o_ph": {"th": "เช่น ร้านกาแฟบ้านสวน", "en": "e.g. Baan Suan Coffee"},
+  "o_btn": {"th": "สร้างองค์กร", "en": "Create organization"},
+  "o_empty": {"th": "กรุณาใส่ชื่อองค์กร", "en": "Please enter a name."},
+  "o_failed": {"th": "สร้างไม่สำเร็จ ({status}) ลองอีกครั้ง", "en": "Could not create it ({status}). Please try again."},
+  "o_too_many": {"th": "บัญชีนี้สร้างองค์กรครบจำนวนแล้ว", "en": "This account has reached its organization limit."},
+  "created": {"th": "สร้าง \"{name}\" แล้ว แพ็กเกจ: {plan} ใช้ฟรีไม่จำกัด", "en": "\"{name}\" is ready. Plan: {plan}, free and unlimited"},
+  "c_h": {"th": "เชื่อมต่อสลิดกับ Discord ของทีม", "en": "Connect Salid to your team's Discord"},
+  "c_p": {"th": "สลิดทำงานอยู่ในเซิร์ฟเวอร์ Discord ของคุณ เพิ่มครั้งเดียว ทุกคนในทีมใช้ได้", "en": "Salid lives in your Discord server. Add it once and the whole team can use it."},
+  "c1": {"th": "กด <b>เพิ่มสลิดเข้า Discord</b> แล้วเลือกเซิร์ฟเวอร์ (ต้องเป็นเจ้าของหรือมีสิทธิ์ Manage Server)", "en": "Click <b>Add Salid to Discord</b> and pick a server (you need Owner or Manage Server)."},
+  "c2": {"th": "ใน Discord พิมพ์ <code>/ตั้งค่า</code> หรือ <code>/setup</code> สลิดจะส่งลิงก์ลับมาให้", "en": "In Discord type <code>/ตั้งค่า</code> or <code>/setup</code>; Salid replies with a private link."},
+  "c3": {"th": "เปิดลิงก์นั้นแล้วล็อกอินด้วยบัญชี Google เดียวกัน เซิร์ฟเวอร์จะผูกกับองค์กรของคุณ", "en": "Open that link and sign in with the same Google account; the server is linked to your organization."},
+  "cta_add": {"th": "เพิ่มสลิดเข้า Discord", "en": "Add Salid to Discord"},
+  "cta_unconfigured": {"th": "ยังไม่ได้ตั้งค่าลิงก์เชิญ (SALID_DISCORD_CLIENT_ID)", "en": "Invite link not configured (SALID_DISCORD_CLIENT_ID)"},
+  "invite_soon": {"th": "ลิงก์เชิญสลิดเข้า Discord จะเปิดให้ใช้เร็ว ๆ นี้ ระหว่างนี้เข้าศูนย์บัญชาการได้เลย แล้วกลับมาเชื่อม Discord ทีหลัง", "en": "The Discord invite link opens soon. You can go to the command center now and connect Discord later."},
+  "c_later": {"th": "ข้ามขั้นนี้ได้ ทำทีหลังจากหน้า \"พื้นที่ทำงาน\" ในศูนย์ควบคุม", "en": "You can skip this and do it later from \"Workspaces\" in the center."},
+  "foot_copy": {"th": "© 2026 The Frontier Company Limited", "en": "© 2026 The Frontier Company Limited"},
+  "foot_home": {"th": "หน้าแรก", "en": "Home"}
+}
+</script>
+<script>
+// ---------- language: shared key with the landing page ----------
+const LANG_KEY = "salid-language", SUPPORTED = ["th", "en"];
+const $ = (id) => document.getElementById(id);
+const I18N = JSON.parse($("i18n-data").textContent);
+function readLang(op, v) {
+  try {
+    if (op === "set") { localStorage.setItem(LANG_KEY, v); return null; }
+    const s = localStorage.getItem(LANG_KEY); return SUPPORTED.includes(s) ? s : null;
+  } catch { return null; }
+}
+// English by default for everyone; a saved choice (shared with the landing page) wins.
+let lang = readLang("get") || "en";
+function t(key, params) {
+  const e = I18N[key]; let s = e ? (e[lang] ?? e.en) : key;
+  if (params) for (const [k, v] of Object.entries(params)) s = s.split("{" + k + "}").join(String(v));
+  return s;
+}
+function applyStatic() {
+  document.documentElement.lang = lang; document.title = t("title");
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n, el._p);
+  for (const el of document.querySelectorAll("[data-i18n-html]")) el.innerHTML = t(el.dataset.i18nHtml);
+  for (const el of document.querySelectorAll("[data-i18n-attr]")) for (const pair of el.dataset.i18nAttr.split(";")) { const [a, k] = pair.split(":"); el.setAttribute(a, t(k)); }
+  for (const el of document.querySelectorAll("[data-lang]")) el.setAttribute("aria-pressed", String(el.dataset.lang === lang));
+  for (const el of document.querySelectorAll(".notice")) if (el._f) el.textContent = el._f();
+  markInvite();
+  if (!$("step1").hidden) renderGoogleButton();
+}
+function setLang(l, { remember = true } = {}) {
+  if (!SUPPORTED.includes(l)) return; lang = l; readLang("set", l); applyStatic();
+  // signed in: remember the choice with the account (shared with /hub and /center)
+  if (remember && token) api("/me/language", { method: "PUT", body: JSON.stringify({ language: l }) }).catch(() => {});
+}
+function syncLang(saved) {
+  if (SUPPORTED.includes(saved)) { if (saved !== lang) setLang(saved, { remember: false }); }
+  else if (readLang("get")) api("/me/language", { method: "PUT", body: JSON.stringify({ language: lang }) }).catch(() => {});
+}
+for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
+function note(el, fn) { el._f = fn; el.textContent = fn ? fn() : ""; el.hidden = !el.textContent; }
+function markInvite() {
+  for (const a of document.querySelectorAll("[data-invite]")) {
+    const ok = a.getAttribute("href").startsWith("https://discord.com/");
+    a.setAttribute("aria-disabled", String(!ok));
+    a.hidden = !ok;
+    if (ok) { a.target = "_blank"; a.rel = "noopener"; a.textContent = t("cta_add"); } else { a.removeAttribute("target"); a.textContent = t("cta_unconfigured"); }
+    $("invite-soon").hidden = ok; // the public page never shows an internal variable name
+  }
+}
+
+// ---------- flow ----------
+const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
+const DISCORD_LOGIN = "__DISCORD_LOGIN__" === "1";
+const API = "/api/center";
+let token = "", gsiReady = false, me = null;
+// ---------- Salid session: sign in once, stay signed in (30 days, every page, survives reloads) ----------
+const SESSION_KEY = "salid_session";
+function session(op, v) {
+  try {
+    if (op === "set") localStorage.setItem(SESSION_KEY, v);
+    else if (op === "clear") localStorage.removeItem(SESSION_KEY);
+    else { const s = localStorage.getItem(SESSION_KEY); return s && s.startsWith("ss1.") ? s : null; }
+  } catch { /* storage blocked: the sign-in then lasts until reload */ }
+  return null;
+}
+// Exchange a fresh Google sign-in for a Salid session (null when the server has no session secret).
+async function exchangeSession(googleCredential) {
+  try {
+    const r = await fetch("/api/hub/session", { method: "POST", headers: { Authorization: "Bearer " + googleCredential } });
+    if (!r.ok) return null;
+    const j = await r.json(); session("set", j.token); return j.token;
+  } catch { return null; }
+}
+function show(step) {
+  for (const id of ["step1", "existing", "step2", "step3", "step4"]) $(id).hidden = id !== step;
+  const n = { step1: 1, existing: 1, step2: 2, step3: 3, step4: 4 }[step];
+  for (const s of document.querySelectorAll("[data-step]")) {
+    const k = Number(s.dataset.step); s.classList.toggle("on", k === n); s.classList.toggle("done", k < n);
+  }
+  window.scrollTo({ top: 0 });
+}
+async function api(path, opts = {}) {
+  const res = await fetch(API + path, { ...opts, headers: { ...(opts.body ? { "Content-Type": "application/json" } : {}), Authorization: "Bearer " + token } });
+  if (!res.ok) { const err = new Error("api"); err.status = res.status; throw err; }
+  return res.json();
+}
+function renderGoogleButton() {
+  if (!CLIENT_ID) { $("not-configured").hidden = false; return; }
+  if (!window.google || !google.accounts) { setTimeout(renderGoogleButton, 200); return; }
+  if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: async (r) => { token = r.credential; const s = await exchangeSession(token); if (s) token = s; signedIn(); } }); gsiReady = true; }
+  $("gsi-button").replaceChildren();
+  google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signup_with", locale: lang, width: 300 });
+}
+async function signedIn() {
+  try { me = await api("/me"); }
+  catch (e) { note($("login-error"), () => t("login_failed", { status: e.status || "network" })); token = ""; return; }
+  syncLang(me.language);
+  $("who").textContent = me.email; $("who").hidden = false;
+  show(me.orgs.length ? "existing" : "step2");
+}
+$("another").addEventListener("click", () => show("step2"));
+$("to3").addEventListener("click", () => { show("step3"); $("org-name").focus(); });
+$("back2").addEventListener("click", () => show("step2"));
+$("create").addEventListener("click", async () => {
+  const name = $("org-name").value.trim();
+  if (!name) { note($("org-error"), () => t("o_empty")); return; }
+  $("create").disabled = true; note($("org-error"), null);
+  try {
+    // Launch: the only plan is the open-ended trial (POST /orgs grants it); nothing is charged.
+    const org = await api("/orgs", { method: "POST", body: JSON.stringify({ name }) });
+    note($("created-note"), () => t("created", { name, plan: t("pl_" + (org.license && org.license.plan || "trial")) }));
+    show("step4");
+  } catch (e) {
+    note($("org-error"), () => t(e.status === 409 ? "o_too_many" : "o_failed", { status: e.status || "network" }));
+  } finally { $("create").disabled = false; }
+});
+$("org-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("create").click(); });
+// Hand the credential to /center (same tab, sessionStorage, read once there) so the user is not
+// asked to sign in again right after signing up.
+function tokenExp(tok) {
+  try { return Number(JSON.parse(atob(tok.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).exp) || 0; } catch { return 0; }
+}
+for (const a of document.querySelectorAll('a[href="/center"]')) a.addEventListener("click", () => {
+  if (!token) return;
+  try { sessionStorage.setItem("salid_center_handoff", JSON.stringify({ t: token, exp: tokenExp(token) })); } catch { /* then /center asks once */ }
+});
+applyStatic();
+// Back from "Sign up with Discord": the session arrives in the fragment.
+try {
+  const m = /^#session=(ss1\.[A-Za-z0-9_.-]+)$/.exec(location.hash);
+  if (m) { session("set", m[1]); history.replaceState(null, "", location.pathname); }
+  const u = new URLSearchParams(location.search);
+  if (u.get("error") && u.get("platform") === "discord") {
+    const er = u.get("error"); note($("login-error"), () => er === "discord_no_email" ? t("discord_no_email") : t("login_failed", { status: er }));
+    history.replaceState(null, "", location.pathname);
+  }
+} catch { /* ignore */ }
+$("discord-signup").hidden = !DISCORD_LOGIN;
+$("discord-signup").addEventListener("click", () => { location.href = "/api/center/auth/discord/start?next=start"; });
+if (session("get")) { token = session("get"); signedIn(); } // already signed in on another page: skip the Google step
+</script>
+</body>
+</html>

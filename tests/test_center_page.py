@@ -35,7 +35,7 @@ def test_mock_mode_guarded_by_query_param():
     src = html()
     assert 'get("mock") === "1"' in src
     assert "if (MOCK)" in src
-    assert 'localStorage.setItem("center_lang"' in src
+    assert "localStorage.setItem(LANG_KEY" in src  # one key shared by every Salid page
     assert not re.search(r"localStorage[^;\n]*token", src, re.I)
 
 

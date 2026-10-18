@@ -26,6 +26,7 @@ from salid.orgs import (
     Workspace,
     WorkspaceTaken,
     namespaced_id,
+    trial_license,
     workspace_memory_id,
 )
 from salid.places import PlaceRepo, PlacesCtx, PlaceTools, make_source
@@ -68,7 +69,10 @@ def test_create_lookup_and_indexes(orgs):
     org = orgs.create("Acme", "Boss@Example.com")
     assert org.owner_email == "boss@example.com" and org.role_of("BOSS@example.com") == "owner"
     assert [w.platform for w in org.workspaces] == ["web"]
-    assert org.license.plan == "trial" and org.license.valid_until == "2026-10-30"
+    assert org.license.plan == "trial" and org.license.valid_until is None  # launch: open-ended
+    assert (
+        org.license.seats == 10_000 and trial_license(days=14, now=NOW).valid_until == "2026-10-30"
+    )
     assert orgs.get(org.id).name == "Acme" and orgs.get("nope") is None
     assert [o.id for o in orgs.orgs_of_email("boss@example.com")] == [org.id]
     assert orgs.orgs_of_email("x@example.com") == []
@@ -515,3 +519,67 @@ def test_slack_message_id_includes_channel():
     assert a != message_namespaced_id("slack", "T1", "C2", "1700000000.000200")
     assert a != message_namespaced_id("slack", "T2", "C1", "1700000000.000200")
     assert timedelta(0) == timedelta(0)
+
+
+def test_user_language_is_remembered_per_person_and_validated(orgs):
+    assert orgs.user_language("Ann@Example.com") is None
+    assert orgs.set_user_language("Ann@Example.com", "th") == "th"
+    assert orgs.user_language("ann@example.com") == "th"  # case-insensitive email
+    orgs.set_user_language("ann@example.com", "en")
+    assert orgs.user_language("ann@example.com") == "en"
+    assert orgs.user_language("bob@example.com") is None  # nobody else's choice leaks
+    with pytest.raises(ValueError):
+        orgs.set_user_language("ann@example.com", "fr")
+
+
+def test_person_profile_holds_identities_across_orgs_and_syncs_discord_id(orgs):
+    from salid.orgs import Identity, Member, Org
+
+    orgs.save(Org(id="org_a", name="A", members=[Member(email="ann@example.com", role="owner")]))
+    orgs.save(Org(id="org_b", name="B", members=[Member(email="ann@example.com", role="member")]))
+    p = orgs.user_profile("Ann@Example.com")
+    assert p.email == "ann@example.com" and p.identities == [] and p.name == ""
+    orgs.set_user_name("ann@example.com", "  Ann Lee  ")
+    orgs.set_user_language("ann@example.com", "th")
+    p = orgs.set_user_identity(
+        "ann@example.com",
+        Identity(platform="discord", external_id=" 42 ", name="ann#1", verified=True),
+    )
+    assert p.name == "Ann Lee" and p.language == "th"  # the identity did not wipe the rest
+    d = p.identity("discord")
+    assert d and d.external_id == "42" and d.verified and d.linked_at
+    # verified Discord id is mirrored into every org membership
+    assert all(o.members[0].discord_user_id == "42" for o in orgs.orgs_of_email("ann@example.com"))
+    # replacing the same platform keeps one identity; another platform adds one
+    orgs.set_user_identity("ann@example.com", Identity(platform="discord", external_id="43"))
+    orgs.set_user_identity("ann@example.com", Identity(platform="slack", external_id="U1"))
+    p = orgs.user_profile("ann@example.com")
+    assert sorted(i.platform for i in p.identities) == ["discord", "slack"]
+    assert p.identity("discord").external_id == "43" and not p.identity("discord").verified
+    orgs.remove_user_identity("ann@example.com", "discord")
+    assert orgs.user_profile("ann@example.com").identity("discord") is None
+    assert orgs.get("org_a").members[0].discord_user_id is None
+    with pytest.raises(ValueError):
+        orgs.set_user_identity("ann@example.com", Identity(platform="instagram", external_id="x"))
+    with pytest.raises(ValueError):
+        orgs.set_user_identity("ann@example.com", Identity(platform="slack", external_id="  "))
+    profiles = orgs.member_profiles(orgs.get("org_a"))
+    assert list(profiles) == ["ann@example.com"] and profiles["ann@example.com"].name == "Ann Lee"
+
+
+def test_org_records_keep_fields_this_version_does_not_know():
+    """A web and a bot on different builds share the org document: a field one of them does
+    not know (here a future `nickname_ok` on a member, `region` on the org) must survive a
+    read-modify-write by the other (18 Oct 2026: an older bot dropped `reports_to`)."""
+    from salid.coo_store import SQLiteDocStore
+    from salid.orgs import ORGS, OrgStore
+
+    orgs = OrgStore(SQLiteDocStore(":memory:"))
+    org = orgs.create("Co", "a@x.com")
+    d = orgs.docs.get(ORGS, 0, org.id)
+    d["region"] = "TH"
+    d["members"][0]["nickname_ok"] = True
+    orgs.docs.put(ORGS, 0, org.id, d)
+    orgs.set_company_profile(org.id, tagline="hi")  # a full read-modify-write
+    d = orgs.docs.get(ORGS, 0, org.id)
+    assert d["region"] == "TH" and d["members"][0]["nickname_ok"] is True

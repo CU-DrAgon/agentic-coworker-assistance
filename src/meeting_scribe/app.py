@@ -4,11 +4,14 @@ import base64
 import binascii
 import json
 import logging
+import mimetypes
 import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
@@ -23,14 +26,41 @@ logging.getLogger("httpx").setLevel(
 logger = logging.getLogger(__name__)
 
 INDEX_HTML = Path(__file__).parent / "static" / "index.html"
+SALID_HTML = Path(__file__).parent / "static" / "salid.html"
+START_HTML = Path(__file__).parent / "static" / "start.html"
 MAX_CHUNK_BYTES = 32 * 1024 * 1024  # Cloud Run's HTTP/1 request limit
 
 app = FastAPI(title="Meeting Scribe")
+# The pages are single 50-135 KB HTML files: gzip them (and JSON) so phones load them fast.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
+
+
+@app.middleware("http")
+async def no_stale_pages(request, call_next):
+    """Pages and their stylesheet / scripts must never be served from a stale browser copy:
+    without a Cache-Control header phones kept showing a days-old command center after a
+    deploy (18 Oct 2026). `no-cache` = the browser may keep a copy but checks first (the
+    static files answer 304 through their ETag, so it stays fast)."""
+    response = await call_next(request)
+    ctype = response.headers.get("content-type", "")
+    path = request.url.path
+    if "cache-control" not in response.headers and (
+        ctype.startswith("text/html") or path.startswith("/static/")
+    ):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.include_router(hub.router)
 app.include_router(center.router)
 app.include_router(center.events_router)
 app.include_router(pm_api.router)
 app.include_router(legal.router)
+# Only the landing page assets (mascot stills and film), not the page templates in static/.
+# Older system mime tables lack webp/webm, which browsers then refuse to render.
+mimetypes.add_type("image/webp", ".webp")
+mimetypes.add_type("video/webm", ".webm")
+app.mount("/static/salid", StaticFiles(directory=SALID_HTML.parent / "salid"), name="salid-assets")
 
 
 class CreateMeeting(BaseModel):
@@ -91,8 +121,41 @@ def salid_invite_url(client_id: str) -> str:
     )
 
 
+# Site map: "/" is Salid's public landing page (the home of salid.frontier-tech.app), "/recorder"
+# the Meeting Scribe recorder, "/hub" and "/center" the signed-in consoles.
 @app.get("/", include_in_schema=False)
 def index() -> HTMLResponse:
+    """Salid's public landing page (bilingual, no auth, no API calls)."""
+    url = salid_invite_url(get_settings().salid_discord_client_id)
+    return HTMLResponse(SALID_HTML.read_text(encoding="utf-8").replace("__SALID_INVITE_URL__", url))
+
+
+@app.get("/start", include_in_schema=False)
+def start_page() -> HTMLResponse:
+    """Sign-up flow: Google sign-in -> plan -> organization -> connect Discord -> /center.
+    Static page over the existing /api/center routes; same client id handling as /hub."""
+    client_id = get_settings().hub_google_client_id
+    if not hub.CLIENT_ID_RE.match(client_id):
+        client_id = ""
+    url = salid_invite_url(get_settings().salid_discord_client_id)
+    html = (
+        START_HTML.read_text(encoding="utf-8")
+        .replace("__HUB_GOOGLE_CLIENT_ID__", client_id)
+        .replace("__SALID_INVITE_URL__", url)
+        .replace("__DISCORD_LOGIN__", "1" if center.discord_login_enabled() else "")
+    )
+    return HTMLResponse(
+        html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+    )
+
+
+@app.get("/salid", include_in_schema=False)
+def salid_redirect() -> RedirectResponse:
+    return RedirectResponse("/", status_code=301)  # the landing page's first address
+
+
+@app.get("/recorder", include_in_schema=False)
+def recorder() -> HTMLResponse:
     url = salid_invite_url(get_settings().salid_discord_client_id)
     return HTMLResponse(INDEX_HTML.read_text(encoding="utf-8").replace("__SALID_INVITE_URL__", url))
 
