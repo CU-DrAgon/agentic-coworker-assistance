@@ -235,7 +235,9 @@ class PositionsMixin:
                 first = guild.id not in seen
                 seen[guild.id] = fp
                 if first:
+                    await self._change_snapshot(guild)
                     continue  # the daily / startup sync covers the state at start
+                await self._change_detect(guild)  # edits the web did not record (change outbox)
                 rep = await self.positions_sync(guild)
                 seen[guild.id] = await asyncio.to_thread(self._positions_center_print, guild)
                 logger.info("positions: center edit guild=%s %s", guild.id, rep.as_dict())
@@ -284,6 +286,7 @@ class PositionsMixin:
         except Exception:
             logger.warning("positions: stage=mirror failed guild=%s", gid, exc_info=True)
         self._positions_forget(gid)
+        await self._change_snapshot(guild)  # Salid's own mirror writes are not center edits
         return rep
 
     # ---- Discord -> center (blocking)

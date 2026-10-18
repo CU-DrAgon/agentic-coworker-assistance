@@ -114,7 +114,8 @@ KNOWLEDGE_PROMPT = {
         "ตำแหน่งในบริษัท (CEO / CTO / ผู้ก่อตั้ง ฯลฯ) เป็นข้อมูลของบริษัท: “ใครเป็น CEO”, “ผังองค์กร” → org_chart; "
         "ผู้บริหารสั่ง “ให้ X เป็น CTO”, “แท็ก X เป็นผู้ก่อตั้ง” → set_role (สลิดแท็กยศใน Discord ให้เอง); "
         "“ซิงค์ตำแหน่ง” → sync_roles; เพิ่ม/ลบ/ดูรายการตำแหน่ง → positions_catalog. "
-        "ห้ามเดาระดับหรือตำแหน่งของใครจากบทสนทนา มีแต่ที่ผู้บริหารระบุ หรือยศใน Discord เท่านั้น.\n"
+        "ห้ามเดาระดับหรือตำแหน่งของใครจากบทสนทนา มีแต่ที่ผู้บริหารระบุ หรือยศใน Discord เท่านั้น. "
+        "ผู้บริหารถามว่า “ใครยังไม่รับทราบการเปลี่ยนตำแหน่ง” → change_status.\n"
     ),
     "en": (
         "\nSalid is the company's institutional memory: when asked what the company does, who does "
@@ -133,7 +134,8 @@ KNOWLEDGE_PROMPT = {
         "org_chart; an executive saying 'set X as CTO' / 'tag X as founder' -> set_role (Salid "
         "tags the Discord role herself); 'sync the positions' -> sync_roles; show / add / remove "
         "the list of positions -> positions_catalog. Never guess anybody's level or position from "
-        "chat: only what an executive stated, or a Discord role, counts.\n"
+        "chat: only what an executive stated, or a Discord role, counts. An executive asking "
+        "'who hasn't confirmed the position change' -> change_status.\n"
     ),
 }
 

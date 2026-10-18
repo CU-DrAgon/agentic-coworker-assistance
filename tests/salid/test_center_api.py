@@ -325,6 +325,29 @@ def test_member_management_roles(w):
     assert w.client.delete(f"{base}/ghost@example.com", headers=H["boss"]).status_code == 404
 
 
+def test_a_role_edit_keeps_the_members_other_fields(w):
+    base = "/api/center/orgs/org_t/members"
+    w.orgs.update_members(
+        "org_t",
+        lambda ms: (
+            [
+                (
+                    setattr(m, "title", "CTO"),
+                    setattr(m, "level", 2),
+                    setattr(m, "department", "tech"),
+                )
+                for m in ms
+                if m.email == "mem@example.com"
+            ]
+            or True
+        ),
+    )
+    r = w.client.post(base, json={"email": "mem@example.com", "role": "admin"}, headers=H["boss"])
+    assert r.status_code == 200
+    m = next(x for x in w.orgs.get("org_t").members if x.email == "mem@example.com")
+    assert (m.role, m.title, m.level, m.department) == ("admin", "CTO", 2, "tech")
+
+
 def test_seat_limit(w):
     org = w.orgs.get("org_t")
     org.license.seats = 3

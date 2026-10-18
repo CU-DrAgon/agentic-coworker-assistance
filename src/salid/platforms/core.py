@@ -363,6 +363,8 @@ class Assistant:
         # workspaces; None = every message keeps its own tenant's scope
         self.org_sources = org_sources
         self._link_tries: dict[tuple, deque[float]] = {}
+        # change_outbox_platform.PlatformChanges: central changes to confirm ("OK" in a 1:1)
+        self.changes = None
         # (tenant, user) -> (checked at, still a verified member?) and the messages whose sender
         # could not be verified (identity_of answers None for them)
         self._verdicts: OrderedDict[tuple[str, str], tuple[float, bool]] = OrderedDict()
@@ -487,6 +489,13 @@ class Assistant:
             # a link / attach code, even inside a sentence: never buffered, remembered, logged,
             # gated or shown to the model (and never used in a group, where everyone reads it)
             await self._link_command(msg, port, codes)
+            return
+        if (
+            self.changes is not None
+            and msg.is_direct
+            and (ok := await self.changes.on_message(msg))
+        ):
+            await self._say(msg, port, ok)  # "OK" to a central-change notice: confirmed
             return
         gid = ids.tenant_id(msg.platform, msg.tenant)
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
