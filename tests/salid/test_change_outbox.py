@@ -280,7 +280,7 @@ def test_notice_texts_in_both_languages():
     assert co.change_text(c, "Cafe", "en") == (
         "Your company position in Cafe changed: Admin → Founder (by boss@x.com)."
     )
-    assert "ตำแหน่งของคุณใน Cafe" in co.change_text(c, "Cafe", "th")
+    assert "ตำแหน่งในบริษัทของคุณใน Cafe" in co.change_text(c, "Cafe", "th")
     assert co.change_text(c, "Cafe", "en", reminder=2).endswith("(reminder 2)")
     c.by = "detected"
     assert "the central system" in co.change_text(c, "Cafe", "en")
