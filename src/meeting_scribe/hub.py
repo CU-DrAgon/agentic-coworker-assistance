@@ -244,12 +244,19 @@ def get_memory_store() -> Any:
     return _memory_store()
 
 
+WEB_MEMORY_REFRESH_S = 120.0  # the bot writes summaries; the web re-reads them in the background
+
+
 @lru_cache
 def _memory_store() -> Any:
+    """Day summaries are served from an in-process index (one Firestore read per guild, then
+    memory), refreshed in the background every two minutes, so a web or voice question does not
+    re-read every summary of the company (that took ~4.5 s per question)."""
+    from salid.memory_index import IndexedMemoryStore
     from salid.memory_store import make_memory_store
 
     s, store = get_salid_runtime()
-    return make_memory_store(s, store)
+    return IndexedMemoryStore(make_memory_store(s, store), refresh_s=WEB_MEMORY_REFRESH_S)
 
 
 @dataclass

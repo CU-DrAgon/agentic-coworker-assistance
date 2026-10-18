@@ -91,3 +91,28 @@ def test_summary_entries_returns_a_snapshot():
     got = st.summary_entries(GUILD, {10}, "2026-10-01", "2026-10-01")
     got.clear()
     assert len(st.summary_entries(GUILD, {10}, "2026-10-01", "2026-10-01")) == 1
+
+
+def test_a_read_only_copy_refreshes_in_the_background_and_never_waits():
+    """The web reads summaries the bot writes: an old loaded copy keeps answering at once while
+    one background reload fetches the new day."""
+    import time as _t
+
+    base = offline_memory_store()
+    st = IndexedMemoryStore(base, FakeEmbedder(), refresh_s=0.0)
+    base.put_summary(summ("2026-10-01"))
+    assert len(st.summaries(GUILD, {10}, "2026-10-01", "2026-10-31")) == 1  # first load
+    base.put_summary(summ("2026-10-02", text="ค่าเช่า"))  # written by the bot, not through st
+    for _ in range(100):
+        if len(st.summaries(GUILD, {10}, "2026-10-01", "2026-10-31")) == 2:
+            break
+        _t.sleep(0.01)
+    assert len(st.summaries(GUILD, {10}, "2026-10-01", "2026-10-31")) == 2
+
+
+def test_the_bot_copy_never_reloads_by_itself():
+    base, st = wrapped()
+    base.put_summary(summ("2026-10-01"))
+    for _ in range(3):
+        st.summaries(GUILD, {10}, "2026-10-01", "2026-10-31")
+    assert len(loads(base)) == 1
