@@ -58,7 +58,7 @@ from .web_read import make_read_web
 from .wiki import WIKI_PROMPT
 
 logger = logging.getLogger(__name__)
-MAX_ROUNDS = 6
+MAX_ROUNDS = 10  # a typed answer; policy / document look-ups often need several searches
 SPOKEN_MAX_ROUNDS = 5  # a spoken answer: 5 tool rounds at most, then it must answer
 APP_NAME = "salid"
 # Vertex 429s (shared quota) and 5xx are retried with backoff by the genai HTTP client
@@ -1415,8 +1415,10 @@ CONCEPT_PROMPT = (
 
 # Sent on the last allowed call, when the tools are taken away.
 ROUNDS_EXHAUSTED = (
-    "ตอนนี้ใช้เครื่องมือครบจำนวนครั้งแล้ว ห้ามเรียกเครื่องมือเพิ่ม ให้ตอบจากข้อมูลที่ได้มาแล้ว "
-    "และบอกสั้นๆ ว่าส่วนไหนยังทำไม่ได้ ผู้ใช้ถามต่อเพื่อให้ทำส่วนที่เหลือได้"
+    "Stop using tools now and answer from what you already found. Never mention a search limit, "
+    "a tool limit or 'next chat'. If what was asked for did not turn up in the searches, say plainly "
+    "that it is not in the company's records yet (name the document or rule that refers to it) and "
+    "suggest who could decide or add it. If part of a request is not done, say which part in one line."
 )
 
 SECRETARY_PROMPT = (

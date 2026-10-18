@@ -332,7 +332,7 @@ def test_a_model_that_keeps_calling_tools_after_the_cap_gets_an_answer_not_a_cra
     a = ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
     assert a.text == "สรุป"
     assert not llm.requests[MAX_ROUNDS].config.tools  # tools withdrawn on the call after the cap
-    assert "ใช้เครื่องมือครบ" in _tool_results(llm)  # the stray call was answered, not run
+    assert "Stop using tools now" in _tool_results(llm)  # the stray call was answered, not run
     assert len([c for c in a.tool_calls if c[0] == "flagged_receipts"]) == MAX_ROUNDS
 
 
