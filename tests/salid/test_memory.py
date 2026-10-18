@@ -635,6 +635,19 @@ def test_chat_days_reads_each_tail_day_once(settings):
     assert len(msg_reads) == 2 and len(r["newer_than_summary"]) == 6
 
 
+def test_memory_tools_on_the_keep_forever_default_read_the_forever_window(mstore, settings):
+    """Without a per-guild retention (e.g. the web chat) the tools use the settings default:
+    0 = keep forever must be the 10-year window, not clamped to one day."""
+    assert settings.memory_retention_days == 0
+    tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
+    assert tools.retention_days == FOREVER_DAYS
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-09-04",
+                                  message_count=3, final=True, summary={"overview": "ads"}))  # fmt: skip
+    assert tools.chat_days("2026-09-01", "2026-09-30")["count"] == 1  # 40 days ago
+    assert [h["date"] for h in tools.chat_search(["ads"])["hits"]] == ["2026-09-04"]
+    assert MemoryTools(mstore, GUILD, {10: "g"}, settings, retention_days=30).retention_days == 30
+
+
 def test_chat_days_output_is_capped_newest_days_first(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "general"}, settings)
     for d in range(1, 15):

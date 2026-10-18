@@ -35,6 +35,7 @@ from .flights import FLIGHT_PROMPT
 from .freetime import FREETIME_PROMPT
 from .gate import extract_keywords
 from .gmaps import MAPS_PROMPT
+from .guild_settings import effective_retention_days
 from .i18n import EXTRA, base_lang, lang_name, reply_language_line, resolve_lang, t
 from .ideas import IDEAS_PROMPT
 from .markets import MARKETS_PROMPT
@@ -447,7 +448,10 @@ class MemoryTools:
     ):
         self.opener = opener  # (channel id | None, message id, file index) -> {"text": ...}
         self.store, self.guild_id, self.allowed, self.s = store, guild_id, dict(allowed), settings
-        self._retention_days = retention_days or settings.memory_retention_days
+        # 0 (keep forever, the settings default) is the 10-year window, never clamped to 1 day
+        self._retention_days = effective_retention_days(
+            retention_days or settings.memory_retention_days
+        )
         self._retention_of = retention_of  # read at call time: a shortened setting applies at once
         # With `visibility` the role hierarchy and disclosure grants apply (salid.memory_access);
         # `hidden` collects matching records the asker may not see (never shown, only counted, so
