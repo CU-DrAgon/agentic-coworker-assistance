@@ -89,3 +89,23 @@ not offered).
 - `DELETE /orgs/{org}/google/calendar` -> `{connected: false, ...}` (revokes and deletes).
 - 403 for anyone who is not a **member** of that org (a super admin who is not a member too);
   503 when the feature is not configured. Show the card as "not configured" on 503.
+
+## In chat (Slack/LINE/Telegram/WhatsApp)
+
+The platforms process (`python -m salid.platforms`) gives the same two tools (`schedule_google_meeting`,
+`cancel_google_meeting`) to the model, with the same draft -> confirm rule.
+
+- **Who gets them.** Only a sender who is a VERIFIED member of the org that owns the tenant
+  (`Assistant.identity_of`) AND who connected Google Calendar on the web (`is_connected`, cached 60 s).
+  Everyone else (guest, unlinked account, tenant without an org, not connected) gets no calendar tools at
+  all: the model cannot schedule and does not offer to. There is deliberately no "how to connect" tool.
+- **Groups.** Allowed. The tools act for the asker only (org and email come from the verified link, never
+  from the model) and a draft can only be confirmed in the same conversation (platform, tenant, room,
+  thread) and by a LATER message (the message id is the request id). Organisation owners/admins and
+  platform executives may invite outside guests by full email.
+- **Setup.** Set the same four variables as the web service in the platforms process:
+  `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REDIRECT_URI`, `SALID_TOKEN_KEY`
+  (the same key, or stored refresh tokens cannot be decrypted). If any is missing the feature is off.
+  Tokens are read from the DocStore of the org store, so the platforms process must use the SAME store
+  as the web (`SALID_STORE=firestore`, same project); with SQLite it will not see tokens connected on the web.
+- Logs carry no email, title or attendees. Code: `src/salid/platforms/calendar_glue.py`.

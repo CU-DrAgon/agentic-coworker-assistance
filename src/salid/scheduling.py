@@ -18,6 +18,9 @@ side effect behind a confirmation in a *later* message before calling this modul
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import json
 import logging
 import re
 import uuid
@@ -336,6 +339,32 @@ class GoogleCalendarError(CalendarError):
         self.status = status
 
 
+class CalendarOutcomeUnknown(CalendarError):
+    """The call timed out after it may have reached the calendar: whether it took effect is not
+    known, so the caller must not retry blindly."""
+
+    def __init__(self) -> None:
+        super().__init__("outcome_unknown")
+
+
+def google_event_id(account, spec: EventSpec, attendees: Sequence[str]) -> str:
+    """Deterministic Calendar event id (base32hex, a-v0-9) from the org, the member and the
+    confirmed arguments: the same confirmed request always maps to the same event."""
+    raw = json.dumps(
+        [
+            account.org_id,
+            account.email.lower(),
+            spec.title.strip(),
+            spec.start.astimezone(UTC).isoformat(),
+            spec.end.astimezone(UTC).isoformat(),
+            spec.description,
+            sorted(a.lower() for a in attendees),
+        ],
+        ensure_ascii=False,
+    )
+    return base64.b32hexencode(hashlib.sha256(raw.encode()).digest()).decode().rstrip("=").lower()
+
+
 @dataclass
 class GoogleEvent:
     id: str
@@ -440,6 +469,7 @@ class GoogleCalendar:
             "end": self._when(spec.end),
             "attendees": [{"email": e} for e in attendees],
             "extendedProperties": {"private": google_mark(account)},
+            "id": google_event_id(account, spec, attendees),
         }
         if meet:
             body["conferenceData"] = {
@@ -455,9 +485,14 @@ class GoogleCalendar:
             params={"conferenceDataVersion": 1, "sendUpdates": "all"},
             json=body,
         )
-        if r.status_code != 200:
+        if r.status_code == 409:  # same confirmed request already created: return that event
+            ev = await self.get_event(account, body["id"])
+            if ev.get("status") == "cancelled":
+                raise GoogleCalendarError("failed", 409)
+        elif r.status_code != 200:
             raise self._fail(r)
-        ev = r.json()
+        else:
+            ev = r.json()
         return GoogleEvent(str(ev["id"]), str(ev.get("htmlLink", "")), self._meet(ev))
 
     async def create_event(self, guild, spec: EventSpec) -> tuple[str, str]:

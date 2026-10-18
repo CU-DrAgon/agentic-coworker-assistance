@@ -18,6 +18,7 @@ from ..memory_index import IndexedMemoryStore
 from ..memory_store import make_memory_store
 from ..store import make_store
 from . import change_outbox_platform, ids
+from .calendar_glue import CalendarGlue
 from .config import PlatformSettings
 from .core import Assistant, safe_exc
 
@@ -91,7 +92,7 @@ def build_assistant(
     if "org_sources" not in options and identity is not None:
         options["org_sources"] = OrgSources(identity.orgs, discord_token=ps.discord_token)
 
-    return Assistant(
+    assistant = Assistant(
         settings=s,
         ps=ps,
         store=store,
@@ -105,6 +106,9 @@ def build_assistant(
         names=names,
         **options,
     )
+    if identity is not None:  # tokens live in the org store's DocStore, shared with the web
+        assistant.calendar = CalendarGlue.from_settings(ps, identity.orgs.docs, s.tz)
+    return assistant
 
 
 async def memory_loop(a: Assistant) -> None:

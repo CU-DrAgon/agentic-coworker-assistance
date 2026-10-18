@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -56,6 +56,27 @@ class PlatformSettings(BaseSettings):
     # verified member's cross-platform questions can use the Discord channels they may read
     # (org_scope). Absent: Discord is left out of that scope. Never logged.
     discord_token: str = Field(default="", repr=False)
+
+    # Google Calendar + Meet in chat for verified members who connected it on the web. Same env
+    # names as the web service (no SALID_ prefix for the first three); all four must be set.
+    google_oauth_client_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("GOOGLE_OAUTH_CLIENT_ID", "google_oauth_client_id"),
+    )
+    google_oauth_client_secret: str = Field(
+        default="",
+        repr=False,
+        validation_alias=AliasChoices("GOOGLE_OAUTH_CLIENT_SECRET", "google_oauth_client_secret"),
+    )
+    google_oauth_redirect_uri: str = Field(
+        default="",
+        validation_alias=AliasChoices("GOOGLE_OAUTH_REDIRECT_URI", "google_oauth_redirect_uri"),
+    )
+    salid_token_key: str = Field(
+        default="",
+        repr=False,
+        validation_alias=AliasChoices("SALID_TOKEN_KEY", "salid_token_key"),
+    )
 
     # Behaviour shared by all platforms.
     platform_window_seconds: float = 180.0  # follow-ups of the person Salid just answered
