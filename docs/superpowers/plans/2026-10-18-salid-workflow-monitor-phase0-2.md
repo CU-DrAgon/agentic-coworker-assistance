@@ -226,16 +226,32 @@ async def test_heartbeat_every_30_s_with_queues(bot):
     await bot._monitor_due()
     hb = bot.docs.get("salid_monitor_heartbeat", 0, "bot")
     assert hb["process"] == "bot" and set(hb["queues"]) == {"actions", "outbox_pending", "memory"}
-    writes = spy(monitor, "write_heartbeat"); await bot._monitor_due(); assert writes.n == 0
-    bot.clock.advance(30); await bot._monitor_due(); assert writes.n == 1
+    writes = spy(monitor, "write_heartbeat")
+    await bot._monitor_due()
+    assert writes.n == 0
+    bot.clock.advance(30)
+    await bot._monitor_due()
+    assert writes.n == 1
+
+
 async def test_disabled_writes_nothing(bot):
-    await bot._monitor_due(); assert bot.docs.get("salid_monitor_heartbeat", 0, "bot") is None
+    await bot._monitor_due()
+    assert bot.docs.get("salid_monitor_heartbeat", 0, "bot") is None
+
+
 async def test_flush_resolves_guild_to_org_or_unlinked_key(bot):
-    bot.monitor.enabled = True; bot.monitor.add_for_guild(GUILD, ev); await bot._monitor_due()
+    bot.monitor.enabled = True
+    bot.monitor.add_for_guild(GUILD, ev)
+    await bot._monitor_due()
     assert read_log(bot.docs, f"guild:{GUILD}")["seq"] == 1
-    link(bot); bot._monitor_init(); bot.monitor.enabled = True   # fresh resolver cache
-    bot.monitor.add_for_guild(GUILD, ev); await bot._monitor_due()
+    link(bot)
+    bot._monitor_init()
+    bot.monitor.enabled = True  # fresh resolver cache
+    bot.monitor.add_for_guild(GUILD, ev)
+    await bot._monitor_due()
     assert read_log(bot.docs, "o1")["seq"] == 1
+
+
 async def test_platform_monitor_tick_writes_platforms_heartbeat_and_flushes(): ...
 ```
 - [ ] **Step 2: Run** `uvx --from 'uv>=0.10' uv run --no-sync env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib pytest -q tests/salid/test_monitor_bot.py`. Expected: FAIL (`AttributeError: 'SecretaryBot' object has no attribute 'monitor'`).
@@ -331,22 +347,43 @@ def test_audience_and_sentinels_never_returned(w):  # item audience.people=["dis
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_monitor_page.py`. Use the `tests/test_hub.py:654-694` pattern: slice the page between the markers, append a harness that prints JSON, and run `node`, skipped when `shutil.which("node") is None`:
 ```python
-assert out["backoff"] == [5000, 10000, 20000, 40000, 60000, 60000, 60000]   # rnd 0.5, n = 0..6
-assert out["jitter"] == [4500, 5500]                                         # n=0, rnd 0 and 1
-assert out["feed"] == {"f1": "live", "f2": "delayed", "f4": "offline", "net": "offline",
-                       "paused5": "paused", "hidden": "hidden"}
-assert out["reduce_ok"] == {"seq": 12, "refetch": ["change:c", "video_ad:j"], "reload": False}  # events 12, 11, 9(dup), zzz(unknown)
-assert out["reduce_stale"] == {"seq": 10, "refetch": [], "reload": False}   # resp.seq 8
-assert out["reduce_reset"]["reload"] and out["reduce_floor"]["reload"]      # reset; floor 15 > seq 10
+assert out["backoff"] == [5000, 10000, 20000, 40000, 60000, 60000, 60000]  # rnd 0.5, n = 0..6
+assert out["jitter"] == [4500, 5500]  # n=0, rnd 0 and 1
+assert out["feed"] == {
+    "f1": "live",
+    "f2": "delayed",
+    "f4": "offline",
+    "net": "offline",
+    "paused5": "paused",
+    "hidden": "hidden",
+}
+assert out["reduce_ok"] == {
+    "seq": 12,
+    "refetch": ["change:c", "video_ad:j"],
+    "reload": False,
+}  # events 12, 11, 9(dup), zzz(unknown)
+assert out["reduce_stale"] == {"seq": 10, "refetch": [], "reload": False}  # resp.seq 8
+assert out["reduce_reset"]["reload"] and out["reduce_floor"]["reload"]  # reset; floor 15 > seq 10
 assert out["merge_frozen"] == {"order": ["a", "b"], "b_rev": 2, "added": 1}
 assert out["merge_free"]["order"] == ["c", "b", "a"] and out["older_ignored"] is True
-assert out["elapsed"] == 303000                                              # 5 min + 3 s, skewed Date
+assert out["elapsed"] == 303000  # 5 min + 3 s, skewed Date
 assert out["toast"] == [False, True] and out["hash_roundtrip"] is True
-assert out["notify"] == {"mine_failed_hidden": True, "visible_tab": False, "not_opted_in": False,
-                         "permission_default": False, "admin_other_failed": True,
-                         "member_other_failed": False, "mine_done": False}
-assert out["errors"] == {"401": "auth", "402": "licence", "403": "forbidden", "500": "retry",
-                         "429": ["wait", 7000, False]}                       # Retry-After: 7
+assert out["notify"] == {
+    "mine_failed_hidden": True,
+    "visible_tab": False,
+    "not_opted_in": False,
+    "permission_default": False,
+    "admin_other_failed": True,
+    "member_other_failed": False,
+    "mine_done": False,
+}
+assert out["errors"] == {
+    "401": "auth",
+    "402": "licence",
+    "403": "forbidden",
+    "500": "retry",
+    "429": ["wait", 7000, False],
+}  # Retry-After: 7
 ```
 - [ ] **Step 2: Run** `uvx --from 'uv>=0.10' uv run --no-sync env DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib pytest -q tests/test_monitor_page.py`. Expected: FAIL (`ValueError: substring not found`, missing marker).
 - [ ] **Step 3: Implement** the pure block (no DOM access, no `t()` calls).
@@ -451,12 +488,19 @@ def test_center_page_sets_the_monitor_flag(client, monkeypatch):  # MONITOR_ENAB
 - [ ] **Step 1: Write the failing tests** (in `tests/salid/test_change_outbox.py`):
 ```python
 def test_changes_are_stored_per_org_and_due_reads_only_those_orgs():
-    docs = FirestoreDocStore(client=FakeFirestore()); ob = ChangeOutbox(docs, Clock()); c = one_change(ob)
+    docs = FirestoreDocStore(client=FakeFirestore())
+    ob = ChangeOutbox(docs, Clock())
+    c = one_change(ob)
     assert docs.get(co.KIND, co.org_guild("o1"), c.id) and docs.get(co.KIND, 0, c.id) is None
-    docs.client.streams.clear(); ob.due(["o1"])
-    assert {s for s in docs.client.streams if s[0] == co.KIND} == {(co.KIND, (("guild_id", "==", co.org_guild("o1")),))}
-def test_get_without_org_uses_the_change_id_alone(docs): ...   # the button click path
-def test_open_for_resolves_the_org_of_the_workspace(docs): ... # unlinked workspace -> []
+    docs.client.streams.clear()
+    ob.due(["o1"])
+    assert {s for s in docs.client.streams if s[0] == co.KIND} == {
+        (co.KIND, (("guild_id", "==", co.org_guild("o1")),))
+    }
+
+
+def test_get_without_org_uses_the_change_id_alone(docs): ...  # the button click path
+def test_open_for_resolves_the_org_of_the_workspace(docs): ...  # unlinked workspace -> []
 def test_migrate_legacy_moves_once_and_skips_orphans(docs):
     # 2 legacy docs (orgs o1, o2) + 1 without org_id at guild 0
     assert migrate_legacy(docs, apply=False) == {"found": 3, "movable": 2, "moved": 0, "skipped": 1}
@@ -708,22 +752,38 @@ def test_job_stuck_thresholds(w):  # deep task updated 721 s ago -> stuck; resea
 def test_keyboard_path_filters_rows_and_drawer(page):
     page.goto("/center?mock=1#/monitor")
     expect(page.get_by_role("heading", level=1, name="Monitor")).to_be_visible()
-    expect(page.locator("#content")).to_be_focused()                       # route focus
-    page.get_by_role("combobox", name="Kind").focus(); page.keyboard.press("ArrowDown")
-    expect(page.get_by_role("button", name=re.compile("Remove filter"))).to_be_visible()   # chip
-    row = page.get_by_role("button", name=re.compile("Video ad")); row.focus(); page.keyboard.press("Enter")
-    dialog = page.get_by_role("dialog"); expect(dialog).to_be_visible()
-    for _ in range(12): page.keyboard.press("Tab")
+    expect(page.locator("#content")).to_be_focused()  # route focus
+    page.get_by_role("combobox", name="Kind").focus()
+    page.keyboard.press("ArrowDown")
+    expect(page.get_by_role("button", name=re.compile("Remove filter"))).to_be_visible()  # chip
+    row = page.get_by_role("button", name=re.compile("Video ad"))
+    row.focus()
+    page.keyboard.press("Enter")
+    dialog = page.get_by_role("dialog")
+    expect(dialog).to_be_visible()
+    for _ in range(12):
+        page.keyboard.press("Tab")
     assert page.evaluate("document.querySelector('[role=dialog]').contains(document.activeElement)")
-    page.keyboard.press("Escape"); expect(dialog).to_be_hidden(); expect(row).to_be_focused()
+    page.keyboard.press("Escape")
+    expect(dialog).to_be_hidden()
+    expect(row).to_be_focused()
+
+
 def test_tiles_and_live_region_have_names(page):
     page.goto("/center?mock=1#/monitor")
     expect(page.get_by_role("button", name=re.compile("Needs attention"))).to_be_visible()
     expect(page.locator("#mon-live")).to_have_attribute("aria-live", "polite")
-WCAG = {"runOnly": {"type": "tag", "values": ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]},
-        "resultTypes": ["violations"]}
+
+
+WCAG = {
+    "runOnly": {"type": "tag", "values": ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]},
+    "resultTypes": ["violations"],
+}
+
+
 def test_axe_finds_no_wcag_aa_violations_in_the_monitor(page):
-    page.goto("/center?mock=1#/monitor"); page.get_by_role("button", name=re.compile("Video ad")).click()
+    page.goto("/center?mock=1#/monitor")
+    page.get_by_role("button", name=re.compile("Video ad")).click()
     for ctx in ("#content", "[role=dialog]"):
         res = Axe().run(page, context=ctx, options=WCAG)
         assert res.violations_count == 0, res.generate_report()
