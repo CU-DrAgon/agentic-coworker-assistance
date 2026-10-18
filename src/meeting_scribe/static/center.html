@@ -1056,7 +1056,7 @@ const MON_HEAL_MS = 60000; // refetch the visible page this often
 const MON_TOAST_GAP_MS = 10000; // at most one toast per 10 s
 const MON_SUMMARY_MS = 60000; // summary tiles and the nav badge
 const MON_HASH_KEYS = ["tab", "kind", "status", "owner", "workspace", "from", "to", "priority", "q"];
-const MON_LIST_KEYS = ["kind", "status", "owner", "workspace", "priority"]; // comma-separated in the hash
+const MON_LIST_KEYS = ["kind", "status"]; // the API's only multi-value filters: comma-separated in the hash
 const monKey = (x) => x.kind + ":" + x.id;
 const monTime = (iso) => { const ms = Date.parse(iso || ""); return Number.isNaN(ms) ? -Infinity : ms; };
 // The wait before the next poll: no failures = every 5 s, then 10, 20, 40 and at most 60 s; rnd in [0, 1] is the jitter.
@@ -1119,9 +1119,11 @@ function monNotifyGate({ optedIn, permission, hidden, mine, isAdmin, status, att
   const concerns = !!mine || (!!isAdmin && status === "failed");
   return concerns && (status === "failed" || !!attention);
 }
-// What to do after a failed poll (status 0 = network error). Only "retry" counts as a failure; the caller then waits
-// monBackoff(failures). 402 and 403 stop the feed; 429 waits Retry-After (seconds).
+// What to do after a poll that is not a 200 (status 0 = network error). Only "retry" counts as a failure; the caller
+// then waits monBackoff(failures). 304 is /changes' normal "nothing new" (If-None-Match); 402 and 403 stop the feed;
+// 429 waits Retry-After (seconds).
 function monOnError(status, retryAfterS) {
+  if (status === 304) return { action: "unchanged", delayMs: 0, failure: false };
   if (status === 401) return { action: "auth", delayMs: 0, failure: false };
   if (status === 402) return { action: "licence", delayMs: 0, failure: false };
   if (status === 403) return { action: "forbidden", delayMs: 0, failure: false };

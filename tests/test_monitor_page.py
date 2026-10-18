@@ -84,14 +84,16 @@ out.elapsed_unknown = monElapsed("", "", "2026-10-18T10:05:00+00:00", fetchedAt,
 out.toast = [monToastGate(1000, 5000), monToastGate(1000, 11000)];
 
 const state = {
-  tab: "attention", kind: ["video_ad", "change"], status: ["failed"], owner: ["discord:42", "a+b@x.co"],
-  workspace: ["discord-1000"], from: "2026-10-01", to: "2026-10-18", priority: ["high"], q: "งบ, Q4 & co",
+  tab: "attention", kind: ["video_ad", "change"], status: ["failed"], owner: "a+b@x.co",
+  workspace: "discord-1000", from: "2026-10-01", to: "2026-10-18", priority: "high", q: "งบ, Q4 & co",
 };
 out.hash = monHash(state);
 out.hash_roundtrip = isDeepStrictEqual(monParseHash(out.hash), state) && monHash(monParseHash(out.hash)) === out.hash;
 out.hash_empty = monHash(monParseHash("#/monitor"));
 out.hash_defaults = monParseHash("#/monitor");
 out.hash_bad = monParseHash("#/monitor?kind=%E0%A4,task,&zzz=1&q=%&tab=active");
+// only kind and status are lists (the API's multi-value filters): a comma elsewhere stays in the value
+out.hash_scalar = monParseHash("#/monitor?owner=a,b&workspace=discord-1,web&priority=high");
 
 const gate = (o) => monNotifyGate({ optedIn: true, permission: "granted", hidden: true, mine: true, isAdmin: false, status: "failed", attention: false, ...o });
 out.notify = {
@@ -106,10 +108,10 @@ out.notify = {
 out.notify_mine_attention = gate({ status: "running", attention: true });
 out.notify_admin_other_attention = gate({ mine: false, isAdmin: true, status: "running", attention: true });
 
-const w = monOnError(429, 7);
+const w = monOnError(429, 7), u = monOnError(304);
 out.errors = {
   401: monOnError(401).action, 402: monOnError(402).action, 403: monOnError(403).action,
-  500: monOnError(500).action, 429: [w.action, w.delayMs, w.failure],
+  500: monOnError(500).action, 429: [w.action, w.delayMs, w.failure], 304: [u.action, u.delayMs, u.failure],
 };
 const net = monOnError(0), noHeader = monOnError(429);
 out.errors_more = { net: [net.action, net.failure], no_retry_after: noHeader.delayMs, stop: [401, 402, 403].map((s) => monOnError(s).failure) };
@@ -122,7 +124,8 @@ console.log(JSON.stringify(out));
 def test_monitor_pure_functions_in_node(tmp_path):
     probe = tmp_path / "monitor.js"
     probe.write_text(block() + "\n" + HARNESS, encoding="utf-8")
-    run = subprocess.run(["node", str(probe)], check=True, capture_output=True, text=True)
+    run = subprocess.run(["node", str(probe)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
     out = json.loads(run.stdout)
 
     assert out["backoff"] == [5000, 10000, 20000, 40000, 60000, 60000, 60000]  # rnd 0.5, n = 0..6
@@ -161,7 +164,7 @@ def test_monitor_pure_functions_in_node(tmp_path):
     assert out["elapsed_done"] == 90000 and out["elapsed_unknown"] is None
     assert out["toast"] == [False, True] and out["hash_roundtrip"] is True
     assert out["hash"] == (
-        "#/monitor?tab=attention&kind=video_ad,change&status=failed&owner=discord%3A42,a%2Bb%40x.co"
+        "#/monitor?tab=attention&kind=video_ad,change&status=failed&owner=a%2Bb%40x.co"
         "&workspace=discord-1000&from=2026-10-01&to=2026-10-18&priority=high"
         "&q=%E0%B8%87%E0%B8%9A%2C%20Q4%20%26%20co"
     )
@@ -170,14 +173,20 @@ def test_monitor_pure_functions_in_node(tmp_path):
         "tab": "",
         "kind": [],
         "status": [],
-        "owner": [],
-        "workspace": [],
+        "owner": "",
+        "workspace": "",
         "from": "",
         "to": "",
-        "priority": [],
+        "priority": "",
         "q": "",
     }
     assert out["hash_bad"] == {**out["hash_defaults"], "tab": "active", "kind": ["task"]}
+    assert out["hash_scalar"] == {
+        **out["hash_defaults"],
+        "owner": "a,b",
+        "workspace": "discord-1,web",
+        "priority": "high",
+    }
     assert out["notify"] == {
         "mine_failed_hidden": True,
         "visible_tab": False,
@@ -195,6 +204,7 @@ def test_monitor_pure_functions_in_node(tmp_path):
         "403": "forbidden",
         "500": "retry",
         "429": ["wait", 7000, False],
+        "304": ["unchanged", 0, False],
     }  # Retry-After: 7
     assert out["errors_more"] == {
         "net": ["retry", True],
