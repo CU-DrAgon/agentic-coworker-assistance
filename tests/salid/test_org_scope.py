@@ -216,12 +216,22 @@ def make_org(*, role="member", identities=None, extra=None):
     )
 
 
-def run(org, providers, *, direct=True, audience="asker", asker="asker", email="mew@x.com"):
+def run(
+    org, providers, *, direct=True, audience="asker", asker="asker", email="mew@x.com", line=True
+):
     import asyncio
 
     aud = frozenset({audience}) if audience else None
     return asyncio.run(
-        osc.resolve(org, email, is_direct=direct, audience=aud, asker=asker, providers=providers)
+        osc.resolve(
+            org,
+            email,
+            is_direct=direct,
+            audience=aud,
+            asker=asker,
+            providers=providers,
+            line_linking=line,
+        )
     )
 
 
@@ -347,6 +357,7 @@ def run_from(org, providers, platform, tenant, asker):
             asker=asker,
             providers=providers,
             asking=(platform, tenant),
+            line_linking=True,
         )
     )
 
@@ -388,3 +399,39 @@ def test_a_slack_or_discord_identity_is_not_tenant_bound():
     org = make_org()
     view = run(org, Providers(**FULL))
     assert {s.platform for s in view.sources} == {"discord", "slack", "line"}
+
+
+# ------------------------------------------------------------------ LINE is never linked (3.2.5)
+def test_line_is_not_a_source_or_a_ledger_pair_for_someone_asking_elsewhere():
+    providers = Providers(**FULL)
+    view = run(make_org(), providers, line=False)
+    assert {s.platform for s in view.sources} == {"discord", "slack"}
+    assert {w.platform for w in view.workspaces} == {"discord", "slack"}
+    assert not any(call[0] == "line" for call in providers.calls)  # LINE was never even asked
+
+
+def test_a_line_asker_gets_no_widening_at_all():
+    import asyncio
+
+    org, providers = make_org(), Providers(**FULL)
+    got = asyncio.run(
+        osc.resolve(
+            org,
+            "mew@x.com",
+            is_direct=True,
+            audience=frozenset({"Lmew"}),
+            asker="Lmew",
+            providers=providers,
+            asking=("line", "Ubot"),
+        )
+    )
+    assert got is None and providers.calls == []
+
+
+def test_the_flag_restores_linking_both_ways():
+    assert {s.platform for s in run(make_org(), Providers(**FULL), line=True).sources} == {
+        "discord",
+        "slack",
+        "line",
+    }
+    assert run_from(make_org(), Providers(**FULL), "line", "Ubot", "Lmew") is not None

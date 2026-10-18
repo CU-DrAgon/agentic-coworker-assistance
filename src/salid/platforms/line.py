@@ -49,7 +49,7 @@ MAX_MESSAGES = 5  # one reply (free) or one push (counted once per recipient) ho
 MAX_BODY = 1_000_000
 WEBHOOK_PATH = "/line/webhook"
 LOADING_SECONDS = 30
-NAME_TTL_S = 3600.0
+NAME_TTL_S = 3600.0  # display names are Friend / Group information: never kept past 24 h (3.2.3)
 REPLY_TOKEN_SECONDS = 50.0  # the token is valid ~1 minute; never give up on it sooner than this
 PUSH_RETRY_DELAY_S = 1.0  # one retry of an ambiguous push failure, with the same retry key
 SEEN_EVENTS = 5000  # webhookEventIds remembered for de-duplication
@@ -228,7 +228,7 @@ class LinePort:
         except Exception as e:
             logger.warning("LINE profile lookup failed (%s)", safe_exc(e))
             name = ""
-        self._names[key] = (self._clock(), name)
+        self._remember_name(key, name)
         return name
 
     async def group_name(self, kind: str, room: str) -> str:
@@ -241,8 +241,14 @@ class LinePort:
         except Exception as e:
             logger.warning("LINE group summary failed (%s)", safe_exc(e))
             name = ""
-        self._names[key] = (self._clock(), name)
+        self._remember_name(key, name)
         return name
+
+    def _remember_name(self, key: tuple, name: str) -> None:
+        """Process memory only, never persisted; entries older than the TTL are dropped here."""
+        now = self._clock()
+        self._names = {k: v for k, v in self._names.items() if now - v[0] < NAME_TTL_S}
+        self._names[key] = (now, name)
 
     # ------------------------------------------------------------ core.Port
     async def room_view(self, msg: Incoming) -> RoomView:
