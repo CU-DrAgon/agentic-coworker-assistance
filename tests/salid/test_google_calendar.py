@@ -900,3 +900,55 @@ def test_401_then_invalid_grant_deletes_record_and_reports_not_connected(oauth, 
         run(cal.get_event(ACCT, "ev1"))
     assert e.value.code == "not_connected" and len(seen) == 1
     assert not oauth.is_connected(ORG, ME)
+
+
+# ------------------------------------------------------------------ idempotent create
+def _events_id(req):
+    return json.loads(req.content)["id"]
+
+
+def test_create_sends_a_deterministic_valid_event_id(oauth, g):
+    import re
+
+    connect(oauth)
+    g.calendar = lambda r: httpx.Response(200, json=google_event())
+    cal = make_calendar(g, oauth)
+    spec = EventSpec("Sync", START, END, "agenda")
+    run(cal.create_event_full(ACCT, spec, ["a@example.com"]))
+    run(cal.create_event_full(ACCT, spec, ["a@example.com"]))
+    run(cal.create_event_full(ACCT, EventSpec("Other", START, END), ["a@example.com"]))
+    run(cal.create_event_full(ACCT, spec, ["b@example.com"]))
+    ids = [_events_id(r) for r in g.of("/calendars/primary/events")]
+    assert re.fullmatch(r"[a-v0-9]{5,1024}", ids[0])
+    assert ids[0] == ids[1]  # same org + member + confirmed arguments
+    assert len({ids[0], ids[2], ids[3]}) == 3  # title / attendees change the id
+
+
+def test_duplicate_create_returns_the_existing_event(oauth, g):
+    connect(oauth)
+
+    def cal_handler(r):
+        if r.method == "POST":
+            return httpx.Response(409, json={"error": {"message": "identifier already exists"}})
+        return httpx.Response(200, json=google_event(id="existing"))
+
+    g.calendar = cal_handler
+    cal = make_calendar(g, oauth)
+    ev = run(cal.create_event_full(ACCT, EventSpec("Sync", START, END), ["a@example.com"]))
+    assert ev.id == "existing" and ev.meet_url.startswith("https://meet.google.com")
+    posted = g.of("/calendars/primary/events")
+    sent_id = _events_id(posted[0])
+    assert posted[-1].method == "GET" and posted[-1].url.path.endswith("/events/" + sent_id)
+
+
+def test_duplicate_of_a_cancelled_event_is_a_failure(oauth, g):
+    connect(oauth)
+    g.calendar = lambda r: (
+        httpx.Response(409)
+        if r.method == "POST"
+        else httpx.Response(200, json={"status": "cancelled"})
+    )
+    cal = make_calendar(g, oauth)
+    with pytest.raises(GoogleCalendarError) as e:
+        run(cal.create_event_full(ACCT, EventSpec("Sync", START, END)))
+    assert e.value.code == "failed"

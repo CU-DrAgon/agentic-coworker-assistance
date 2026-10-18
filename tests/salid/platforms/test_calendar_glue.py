@@ -220,6 +220,46 @@ async def test_confirm_in_another_thread_fails(w):
     assert w.cal.created == []
 
 
+async def test_platform_exec_does_not_allow_outside_attendees(w):
+    """A plain org member who is a platform exec / Slack workspace admin (is_exec=True from the
+    bot) still cannot invite an outside email: only the verified org role counts."""
+    from salid.platforms import calendar_glue as cg
+
+    msg = inc(platform="slack", tenant=TEAM, user="U1", message="3.1")
+    tools = {f.__name__: f for f in await cg.calendar_tools_for(w.a, msg, 1, 2, "en", True)}
+    r = await schedule(tools, attendees=["outsider@other.com"])
+    assert r["error"] == "unknown_attendees" and r["unresolved"] == ["outsider@other.com"]
+    # the org owner (verified role) can
+    w.oauth.connected.add(("org_a", "boss@example.com"))
+    msg = inc(platform="slack", tenant=TEAM, user="U2", message="3.2")
+    tools = {f.__name__: f for f in await cg.calendar_tools_for(w.a, msg, 1, 2, "en", False)}
+    r = await schedule(tools, attendees=["outsider@other.com"])
+    assert r["status"] == "needs_confirmation"
+
+
+async def test_timeout_cancels_and_reports_outcome_unknown(w, monkeypatch):
+    from salid.platforms import calendar_glue as cg
+
+    cancelled = asyncio.Event()
+
+    async def hang(account, spec, emails):
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    w.cal.create_event_full = hang
+    monkeypatch.setattr(cg, "RUN_TIMEOUT_S", 0.2)
+    kw1 = await ask(w, platform="slack", tenant=TEAM, user="U1", message="4.1")
+    assert (await schedule(tool_map(kw1)))["status"] == "needs_confirmation"
+    kw2 = await ask(w, platform="slack", tenant=TEAM, user="U1", message="4.2", text="yes")
+    r = await schedule(tool_map(kw2), confirm=True)
+    assert r["status"] == "outcome_unknown"
+    assert "NOT" in r["instruction"] and "calendar" in r["instruction"]
+    await asyncio.wait_for(cancelled.wait(), 2)
+
+
 # ------------------------------------------------------------------ settings
 ENV = {
     "GOOGLE_OAUTH_CLIENT_ID": "cid",

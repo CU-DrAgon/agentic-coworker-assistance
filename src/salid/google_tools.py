@@ -25,6 +25,7 @@ from .google_oauth import Account
 from .scheduling import (
     MAX_ATTENDEES,
     CalendarError,
+    CalendarOutcomeUnknown,
     EventSpec,
     GoogleCalendar,
     fmt_when,
@@ -95,6 +96,15 @@ def calendar_tools(ctx: CalendarToolContext) -> list:
             return fn()
         except (TypeError, ValueError) as e:
             return {"error": str(e)}
+        except CalendarOutcomeUnknown:
+            return {
+                "status": "outcome_unknown",
+                "instruction": (
+                    "The calendar did not answer in time, so it is NOT known whether the action "
+                    "happened. Do NOT retry and do NOT claim it succeeded or failed. Tell the "
+                    "user to check their Google Calendar, and ask again only if it is missing."
+                ),
+            }
         except CalendarError as e:
             if e.code == "not_connected":
                 return _not_connected()

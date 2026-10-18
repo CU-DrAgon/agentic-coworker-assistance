@@ -20,13 +20,14 @@ Nothing personal (email, title, attendees) is logged here.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import time
 from typing import TYPE_CHECKING, Any
 
 from ..google_oauth import GoogleConfig, GoogleOAuth
 from ..google_tools import CalendarToolContext, calendar_tools
-from ..scheduling import GoogleCalendar
+from ..scheduling import CalendarOutcomeUnknown, GoogleCalendar
 from ..secretary import SecretaryState
 from ..secretary_store import new_id
 
@@ -113,14 +114,19 @@ async def calendar_tools_for(
     loop = asyncio.get_running_loop()
 
     def run(coro):  # called from the ask worker thread
-        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=RUN_TIMEOUT_S)
+        fut = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            return fut.result(timeout=RUN_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            fut.cancel()  # stop the call; whether it already took effect is unknown
+            raise CalendarOutcomeUnknown from None
 
     request_id = "|".join(msg.key) if msg.message else new_id()
     return calendar_tools(
         CalendarToolContext(
             org=org,
             email=email,
-            is_exec=is_exec or org_admin,
+            is_exec=org_admin,  # verified org role only, never the platform exec / workspace admin
             calendar=glue.calendar,
             oauth=glue.oauth,
             state=glue.state,
