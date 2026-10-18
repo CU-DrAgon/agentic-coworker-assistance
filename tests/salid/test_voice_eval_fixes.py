@@ -65,13 +65,18 @@ async def test_live_cue_waits_while_a_tool_answer_is_pending(lv):
     await lv.mgr.end((1000, 77))
 
 
-def test_force_cue_default_is_longer_than_the_models_own_first_audio():
-    assert Settings().live_force_reply_seconds >= 4.0
+def test_force_cue_defaults_follow_the_voice_design():
+    # docs/voice_behaviour.md: force a turn 2 s after an ASR name, 1 s after a name in the Live
+    # transcript; the mouth gate holds the model's own early audio up to 4 s meanwhile
+    s = Settings()
+    assert s.live_force_reply_seconds == 2.0 and s.live_name_reply_seconds == 1.0
+    assert s.live_call_grace_seconds == 4.0
 
 
 def test_live_prompt_keeps_quiet_for_chatter_and_lookalike_words():
     th = build_instruction(Settings(), "th")
-    assert "เมื่อวานกินข้าวที่ไหน" in th and "“สนิท” ใน “เขาสนิทกันมาก”" in th
+    assert "คำพูดส่วนใหญ่เป็นการคุยกันระหว่างคน ไม่ใช่คุยกับคุณ" in th  # chatter: the model judges
+    assert "“สนิท” ใน “เขาสนิทกันมาก”" in th
 
 
 async def test_live_cue_carries_the_transcript_of_what_was_said(lv):
