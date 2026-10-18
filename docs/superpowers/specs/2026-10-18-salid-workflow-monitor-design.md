@@ -138,7 +138,7 @@ pattern `{items, next_cursor}`, limit 50, max 100.
 - **Errors:** the existing FastAPI conventions; `402` licence, `403` not allowed, `404` unknown item, `429` rate
   limit with `Retry-After`.
 - **Rate limit:** one `changes` call per 2 s per person. An in-process limiter is enough with `max-instances=1`.
-- **Feature gate:** `MONITOR_ENABLED` (default false) until phase 1 ships.
+- **Feature gate:** `MONITOR_ENABLED` (web, default false) until phase 1 ships; the bot and bridges use `SALID_MONITOR_ENABLED` (Salid variables all start with `SALID_`).
 
 ### 4.1 Permissions (pure `monitor.visible(item, viewer)` and `monitor.controls(item, viewer)`)
 
@@ -212,7 +212,7 @@ It reuses center's existing patterns: `.drawer`, `.tabs`, `.tbl.stack`, `.stat`,
   server state wins (`updated_at` plus the request counter, as in center's `navSeq`).
   - `seq` ≤ last → ignore (duplicate).
   - Out-of-order events in a batch → sort by `seq`.
-  - `reset` or a gap → reload the view.
+  - `reset`, or `floor` > last applied `seq` → reload the view. Gaps in `seq` are normal, because events are filtered per viewer.
   - A 60 s heal refreshes the visible page.
 - **Clock:** durations are computed against the server's `now`.
 - **Tabs:** several open tabs poll independently (no coordination in v1).

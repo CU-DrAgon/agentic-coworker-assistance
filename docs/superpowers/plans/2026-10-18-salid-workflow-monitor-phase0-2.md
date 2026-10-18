@@ -320,6 +320,7 @@ def test_audience_and_sentinels_never_returned(w):  # item audience.people=["dis
 - Helpers:
   - `monElapsed(startIso, endIso, serverNowIso, fetchedAtMs, nowMs) -> ms`: end, else server now + (nowMs − fetchedAtMs), minus start.
   - `monToastGate(lastAt, nowMs) -> bool`: `nowMs - lastAt >= MON_TOAST_GAP_MS`.
+  - `monNotifyGate({optedIn, permission, hidden, mine, isAdmin, status, attention}) -> bool`: true only when `optedIn && permission === "granted" && hidden` and the item concerns the viewer (`mine`, or `isAdmin && status === "failed"`) and is `failed` or `attention`.
   - `monOnError(status, retryAfterS) -> {action, delayMs, failure}`:
     - 401 → `"auth"`;
     - 402 → `"licence"` (stop);
@@ -341,6 +342,9 @@ assert out["merge_frozen"] == {"order": ["a", "b"], "b_rev": 2, "added": 1}
 assert out["merge_free"]["order"] == ["c", "b", "a"] and out["older_ignored"] is True
 assert out["elapsed"] == 303000                                              # 5 min + 3 s, skewed Date
 assert out["toast"] == [False, True] and out["hash_roundtrip"] is True
+assert out["notify"] == {"mine_failed_hidden": True, "visible_tab": False, "not_opted_in": False,
+                         "permission_default": False, "admin_other_failed": True,
+                         "member_other_failed": False, "mine_done": False}
 assert out["errors"] == {"401": "auth", "402": "licence", "403": "forbidden", "500": "retry",
                          "429": ["wait", 7000, False]}                       # Retry-After: 7
 ```
@@ -382,7 +386,7 @@ assert out["errors"] == {"401": "auth", "402": "licence", "403": "forbidden", "5
     - `monDrawer(item, opener)` is `role="dialog"` with `aria-modal`; a Tab/Shift+Tab trap; Escape closes and focus returns to `opener`. It shows the step timeline (duration, attempts), the safe error + `mon_do_*` hint, cost, links (`safeUrl`), and the event list with search, severity filter and Copy. `controls` are not rendered (release 2).
     - Poller: a `setTimeout` loop using `monBackoff`/`monFeedState`/`monReduce`/`monMerge`. It pauses when `document.hidden` (fetches at once on `visibilitychange`), stops when `stale(my)` or the body is detached, resumes on `online`, and heals every 60 s. Errors go through `monOnError`: 403 → member explanation and stop; 402 → licence notice and stop; 429 → wait `Retry-After`; 401 → `handleAuth`. It keeps the last data with a delayed/offline banner and shows a bot-offline banner.
     - Dismiss: `localStorage["salid-monitor-dismissed"] = {key: updated_at}`; the item returns when `updated_at` changes.
-    - Toasts only for `mine` items (failures for admins), grouped, gated by `monToastGate`. OS notifications only after an opt-in permission and only while `document.hidden`.
+    - Toasts only for `mine` items (failures for admins), grouped, gated by `monToastGate`. OS notifications go through `monNotifyGate`. `Notification.requestPermission()` is called only from the notifications-toggle click (never on load), the opt-in is stored in `localStorage["salid-monitor-notify"]`, and there is one `new Notification(...)` per batch with a safe title only; clicking it focuses the tab and opens the item's drawer.
   - i18n keys (EN shown; Thai written for each key in the page's tone, `ค่ะ`):
     - `n_monitor` ("Monitor" / "ติดตามงาน");
     - feed: `mon_live mon_reconnecting mon_offline mon_paused mon_updated mon_pause mon_resume mon_notify`;
