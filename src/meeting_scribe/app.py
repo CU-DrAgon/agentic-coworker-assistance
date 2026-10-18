@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from meeting_scribe import center, hub, legal, pipeline, pm_api
+from meeting_scribe import center, hub, legal, monitor_api, pipeline, pm_api
 from meeting_scribe.config import get_settings
 from meeting_scribe.models import ChunkTranscript, Meeting, MeetingStatus
 
@@ -55,6 +55,8 @@ app.include_router(hub.router)
 app.include_router(center.router)
 app.include_router(center.events_router)
 app.include_router(pm_api.router)
+app.include_router(monitor_api.router)
+app.include_router(monitor_api.ops_router)
 app.include_router(legal.router)
 # Only the landing page assets (mascot stills and film), not the page templates in static/.
 # Older system mime tables lack webp/webm, which browsers then refuse to render.
