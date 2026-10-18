@@ -2681,6 +2681,39 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
         return r.model_dump(exclude={"position"})
 
     tools.append(find_expert)
+
+    def read_document(name: str) -> dict:
+        """Read a document the company keeps on the website (uploaded files and originals
+        archived from Discord): `name` = its file name or words from its title. Returns its
+        text (as Salid read it, page images included), summary and Documents group. Use this,
+        not open_file, for files uploaded on the website."""
+        lib = get_library()
+        viewer = _viewer(ctx)
+        want = (name or "").strip().casefold()
+        if not want:
+            return {"error": "say which document"}
+        page = lib.list(ctx.org, viewer, kind="file", limit=100)
+        exact = [i for i in page.items if (i.title or "").casefold() == want]
+        part = [i for i in page.items if want in (i.title or "").casefold()]
+        found = exact or part or lib.list(ctx.org, viewer, kind="file", q=name, limit=5).items
+        if not found:
+            return {
+                "error": f"no document matches {name!r}",
+                "documents": [i.title for i in page.items[:30]],
+            }
+        d = lib.get(ctx.org, viewer, found[0].id)
+        if d is None:
+            return {"error": "not readable"}
+        return {
+            "id": d.id,
+            "title": d.title,
+            "group": d.group,
+            "summary": d.preview,
+            "text": (d.text or "")[:DOC_BLOCK_TEXT],
+            "other_matches": [i.title for i in found[1:6]],
+        }
+
+    tools.append(read_document)
     if ws.platform != "discord" or ctx.role not in ("owner", "admin", "super"):
         return tools
     gid = ws.memory_id
@@ -3523,16 +3556,69 @@ DOC_BLOCK_TEXT = 20_000  # characters of ONE uploaded file's text Salid reads in
 DOC_BLOCK_TOTAL = 45_000  # all files of one chat message together
 
 
-def uploaded_docs_block(lib: Library, ctx: Ctx, doc_ids: list[str]) -> str:
+def uploaded_docs_block(lib: Library, ctx: Ctx, doc_ids: list[str], mentioned: bool = False) -> str:
     """The secretary request for SEVERAL files uploaded together: each file's block, the text
-    budget shared (DOC_BLOCK_TOTAL), one set of instructions at the end."""
+    budget shared (DOC_BLOCK_TOTAL), one set of instructions at the end. `mentioned`: files the
+    person NAMED in a message (already on file): the text is there to answer or act on."""
     per = max(4_000, min(DOC_BLOCK_TEXT, DOC_BLOCK_TOTAL // max(1, len(doc_ids))))
     blocks = [
         b for d in doc_ids if (b := uploaded_doc_block(lib, ctx, d, text_limit=per, tail=False))
     ]
     if not blocks:
         return ""
+    if mentioned:
+        blocks = [
+            b.replace(
+                "[Document just uploaded in this chat by the person:",
+                "[Document on file that the person named:",
+                1,
+            )
+            for b in blocks
+        ]
+        return (
+            "\n\n".join(blocks)
+            + "\n"
+            + (
+                "The text of the file(s) the person named is above: use it directly to answer or to "
+                "do what they ask (no need to search for or open the file). For company records, "
+                "update_company_profile may be used (owners / admins) with facts copied exactly; "
+                "write fuller descriptions (e.g. the about text) from what the documents say, in the "
+                "company language. Never invent facts that are not in the text."
+            )
+        )
     return "\n\n".join(blocks) + "\n" + secretary_instructions(ctx, len(blocks))
+
+
+MENTION_MAX = 3
+
+
+def mentioned_documents(lib: Library, ctx: Ctx, text: str) -> list[str]:
+    """Files the viewer may read whose name appears in `text` ("see certified-copy.pdf",
+    "certified copy"), newest first, at most MENTION_MAX; one per name (the same file uploaded
+    twice counts once)."""
+    import re as _re
+
+    msg = " " + _re.sub(r"[\s_\-]+", " ", (text or "").casefold()) + " "
+    if len(msg) < 6:
+        return []
+    try:
+        page = lib.list(ctx.org, _viewer(ctx), kind="file", limit=100)
+    except Exception:
+        logger.warning("could not list documents for mentions", exc_info=True)
+        return []
+    out, seen = [], set()
+    for it in page.items:  # newest first
+        title = (it.title or "").casefold()
+        stem = _re.sub(r"\.[a-z0-9]{1,5}$", "", title)
+        norm_title = _re.sub(r"[\s_\-]+", " ", title)
+        norm_stem = _re.sub(r"[\s_\-]+", " ", stem).strip()
+        hit = (norm_title and norm_title in msg) or (len(norm_stem) >= 5 and f" {norm_stem}" in msg)
+        if hit and norm_stem not in seen:
+            seen.add(norm_stem)
+            out.append(it.id)
+        if len(out) >= MENTION_MAX:
+            break
+    return out
 
 
 def secretary_instructions(ctx: Ctx, n: int) -> str:
@@ -3912,6 +3998,12 @@ async def chat(
         block = await run_in_threadpool(uploaded_docs_block, lib, ctx, ids)
         if block:
             asked = question + "\n\n" + block
+    else:  # a file named in the message ("see certified-copy.pdf"): its text comes along
+        named = await run_in_threadpool(mentioned_documents, lib, ctx, question)
+        if named:
+            block = await run_in_threadpool(uploaded_docs_block, lib, ctx, named, True)
+            if block:
+                asked = question + "\n\n" + block
 
     try:
         text = await run_in_threadpool(

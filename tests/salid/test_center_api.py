@@ -3050,3 +3050,50 @@ def test_web_chat_settings_say_keep_forever_like_the_bot(w):
     assert tools["show_settings"]()["memory_days"] == "forever"
     w.guilds.set_memory_retention_days(A, 45)
     assert tools["show_settings"]()["memory_days"] == 45
+
+
+def test_a_file_named_in_chat_reaches_salid_without_any_tool_step(w, monkeypatch):
+    """'see certified-copy.pdf' after the upload: the server attaches that file's text, so Salid
+    does not spend her tool steps searching (she ran out and could not open web uploads)."""
+    copy = "สำเนาบัญชีรายชื่อผู้ถือหุ้น บริษัท เดอะ ฟรอนเทียร์ จำกัด ทุนจดทะเบียน 1,200,000 บาท".encode()
+    upload(w, "boss", name="certified-copy.pdf", data=copy, mime="application/pdf")
+    upload(w, "boss", name="plan.txt", data=b"unrelated plan")
+    url = "/api/center/orgs/org_t/chat"
+    w.client.post(
+        url, json={"message": "see certified-copy.pdf for information"}, headers=H["boss"]
+    )
+    q = w.asks[-1][0]
+    assert q.startswith("see certified-copy.pdf") and "ทุนจดทะเบียน 1,200,000" in q
+    assert "Document on file that the person named" in q and "no need to search" in q
+    assert "unrelated plan" not in q
+    w.client.post(url, json={"message": "read the certified copy please"}, headers=H["boss"])
+    assert "ทุนจดทะเบียน 1,200,000" in w.asks[-1][0]  # the name without dashes / extension
+    w.client.post(url, json={"message": "hello"}, headers=H["boss"])
+    assert w.asks[-1][0] == "hello"
+    # the tool, for when the name is only implied
+    monkeypatch.setattr(center, "get_library", lambda: w.lib)
+    tools = {getattr(t, "__name__", ""): t for t in w.asks[-1][1]["extra_tools"]}
+    got = tools["read_document"]("certified-copy.pdf")
+    assert got["title"] == "certified-copy.pdf" and "ทุนจดทะเบียน" in got["text"]
+    assert "error" in tools["read_document"]("nothing-like-this.pdf")
+
+
+def test_two_uploads_of_the_same_file_at_once_store_one_copy(w):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from salid.library import ORG_DOCS
+
+    with ThreadPoolExecutor(4) as ex:
+        res = list(
+            ex.map(
+                lambda _: upload(
+                    w, "boss", name="certificate.pdf", data=b"same bytes", mime="application/pdf"
+                ).json(),
+                range(4),
+            )
+        )
+    assert len({r["id"] for r in res}) == 1 and sum(not r["duplicate"] for r in res) == 1
+    web = w.orgs.get("org_t").web_workspace().memory_id
+    assert (
+        len([d for d in w.docs.find(ORG_DOCS, web) if d.get("filename") == "certificate.pdf"]) == 1
+    )
