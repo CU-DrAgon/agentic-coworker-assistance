@@ -1808,9 +1808,9 @@ function liveCall(wrap, addMsg) {
       case "ready": S.ready = true; S.t0 = Date.now(); setState(S.muted ? "idle" : "listening"); break;
       case "heard": if (S.heardSealed) { S.heard = ""; S.heardSealed = false; } S.heard += text; v.heard.textContent = S.heard.trim(); break;
       case "said": S.heardSealed = true; if (S.saidNew) { S.said = ""; S.saidNew = false; } S.said += text; v.bubble.textContent = S.said.trim(); if (!S.emo && SORRY_RE.test(S.said.trim())) emote("sorry"); break;
-      case "thinking": S.thinking = true; S.thinkQ = text.slice(0, 80); status(); break;
+      case "thinking": S.thinking = true; S.usedTool = true; S.thinkQ = text.slice(0, 80); status(); break;
       case "interrupted": stopPlayback(); S.thinking = false; S.thinkQ = ""; if (S.said.trim()) addMsg("bot", S.said.trim() + " …"); S.said = ""; S.lastSaid = ""; S.saidNew = true; break;
-      case "turn": S.thinking = false; S.thinkQ = ""; if (S.heard.trim() && !S.typedTurn) addMsg("user", S.heard.trim()); if (S.said.trim()) addMsg("bot", S.said.trim());
+      case "turn": S.thinking = false; S.thinkQ = ""; if (S.usedTool) { S.usedTool = false; refreshView(); } if (S.heard.trim() && !S.typedTurn) addMsg("user", S.heard.trim()); if (S.said.trim()) addMsg("bot", S.said.trim());
         S.lastSaid = S.said; S.said = ""; S.saidNew = true; S.heard = ""; S.heardSealed = true; S.typedTurn = false; status(); break;
       case "error": onError(text); break;
       default: break;
@@ -1939,7 +1939,7 @@ function chatWidget(hist, prefix) {
     const ty = el("div", { class: "msg typing", role: "status", "aria-label": t("typing") }, el("span"), el("span"), el("span"), el("em", { text: t("typing_dots") })); msgs.append(ty); msgs.scrollTop = msgs.scrollHeight;
     try {
       const r = await api(O("/chat"), J("POST", { message: text, page: pageName(), document_ids: Array.isArray(docId) ? docId : docId ? [docId] : [] }));
-      ty.remove(); add("bot", r.answer || "");
+      ty.remove(); add("bot", r.answer || ""); refreshView();
     } catch (e) { ty.remove(); if (handleAuth(e)) return; msgs.append(el("div", { class: "notice error", role: "alert", text: errText(e) })); }
     btn.disabled = false; ta.focus();
   };
@@ -2828,6 +2828,19 @@ function confirmDlg({ title, body, ok, danger }) {
     if (d.showModal) d.showModal(); else d.setAttribute("open", "");
     okB.focus();
   });
+}
+// After Salid answered (chat) or finished a turn that used her tools (Live voice), the page the
+// person is looking at reloads its data, so a change she made shows without a manual refresh.
+// Never while a dialog is open or the person is typing in the page (their input would be lost).
+let refreshTimer = null;
+function refreshView() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    const editing = document.querySelector("dialog[open]") || (document.activeElement && $("content") && $("content").contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName));
+    if (editing) { refreshView(); return; }
+    try { const m = await api("/api/center/me"); m.orgs = items(m, "orgs"); me = m; renderNav(); } catch { /* keep the view */ }
+    route();
+  }, 600);
 }
 function openOrgDlg() { $("org-name").value = ""; note($("org-err"), ""); const d = $("org-dlg"); if (d.showModal) d.showModal(); else d.setAttribute("open", ""); $("org-name").focus(); }
 $("org-cancel").addEventListener("click", () => $("org-dlg").close());

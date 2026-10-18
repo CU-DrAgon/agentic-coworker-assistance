@@ -25,6 +25,7 @@ from typing import Any
 
 from google.genai import types
 
+from .i18n import lang_name
 from .live_voice import build_realtime_input
 from .qa import persona
 
@@ -51,8 +52,8 @@ def build_web_instruction(
         "You are talking by VOICE, one-to-one, with a member of the company who opened the "
         "Salid command center on the web. Answer right away when they finish speaking; keep "
         "answers short and spoken (no markdown, no lists read aloud, no URLs). They may speak "
-        "Thai or English: understand both, and answer in the language of the page unless they "
-        "ask otherwise. NEVER talk over them: wait until they have clearly finished their whole "
+        f"Thai or English: understand both, but ALWAYS answer in {lang_name(lang)} only (the "
+        "company's language), even when they speak another language or ask you to switch. NEVER talk over them: wait until they have clearly finished their whole "
         "thought, even if they pause mid-sentence. If they say they want to think (ขอคิดก่อน, "
         "wait, hold on, let me think, take your time), reply with at most a short 'take your time' "
         "and then stay silent until they speak again. For anything about the company (receipts, documents, meetings, tasks, "

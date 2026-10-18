@@ -2361,6 +2361,306 @@ async def overview(
 
 
 # ------------------------------------------------------------------ tools Salid has on the web
+def _route(coro) -> dict | list:
+    """Run a command-center route from a chat / voice tool (a worker thread): the SAME code the
+    buttons call, so the rules (roles, one owner, seats...) are identical. HTTP errors come back
+    as {"error": ...} for the model to say."""
+    import asyncio
+
+    async def run():
+        return await coro
+
+    try:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:  # no loop here: run one
+            out = asyncio.run(run())
+        else:  # inside the agent's event loop: run the route on its own thread and loop
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(1) as ex:
+                out = ex.submit(asyncio.run, run()).result()
+    except HTTPException as exc:
+        return {"error": exc.detail if isinstance(exc.detail, str) else str(exc.detail)}
+    if isinstance(out, list):
+        return [x.model_dump() if hasattr(x, "model_dump") else x for x in out]
+    return out.model_dump() if hasattr(out, "model_dump") else out
+
+
+def command_center_tools(ctx: Ctx, orgs: OrgStore, guilds: Any) -> list:
+    """Everything the command center's buttons do, as tools, so a person can do it by asking
+    Salid (chat or Live voice). Each tool calls the same route as the button; owner / admin only
+    actions are left out for members."""
+    from types import SimpleNamespace
+
+    base = connector_config().base_url.rstrip("/") or "https://salid.frontier-tech.app"
+    req = SimpleNamespace(base_url=base + "/")
+
+    def connect_link(app: str) -> dict:
+        """The link (and steps) to connect something that needs a browser sign-in: google
+        calendar, discord (verify my Discord account / add the bot to a server), slack, google
+        sign-in. Say: tap the link, sign in, and come back."""
+        a = (app or "").strip().casefold()
+        pages = {
+            "calendar": ("/center#/mycal", "Calendar page, button Connect Google Calendar"),
+            "server": ("/center#/apps", "Integrations page, Add a Discord server"),
+            "discord": ("/center#/account", "My profile, button Verify with Discord"),
+            "slack": ("/center#/apps", "Integrations page, Slack, Connect"),
+            "google": ("/center#/account", "My profile, Sign-in methods, Link a Google account"),
+        }
+        hit = next((v for k, v in pages.items() if k in a), ("/center#/apps", "Integrations page"))
+        return {
+            "link": base + hit[0],
+            "where": hit[1],
+            "why": "this needs a sign-in in the browser",
+        }
+
+    if not ctx.is_exec:
+        return [connect_link]
+
+    def org_now() -> Org:
+        return orgs.get(ctx.org.id) or ctx.org
+
+    def who(person: str) -> str | None:
+        p = (person or "").strip()
+        return p.lower() if "@" in p else find_member(org_now(), orgs, p)
+
+    def add_or_change_member(email: str, role: str = "member") -> dict:
+        """Add a member by the email they sign in with, or change a member's role (member /
+        admin). Ownership is never granted this way: use transfer_ownership."""
+        r = _route(add_member(MemberBody(email=email.strip(), role=role), _fresh(ctx, orgs), orgs))
+        return (
+            r
+            if isinstance(r, dict)
+            else {"status": "ok", "members": [m["email"] + " (" + m["role"] + ")" for m in r]}
+        )
+
+    def remove_member(person: str) -> dict:
+        """Remove a member from the organization (name or email). Confirm with the person first."""
+        email = who(person)
+        if not email:
+            return {
+                "error": f"no unique member matches {person!r}",
+                "members": member_choices(org_now(), orgs),
+            }
+        r = _route(delete_member(email, _fresh(ctx, orgs), orgs))
+        return r if isinstance(r, dict) else {"status": "ok", "removed": email}
+
+    def transfer_ownership_tool(to: str, i_become: str = "admin", confirm: bool = False) -> dict:
+        """(Owner only.) Hand the organization to another EXISTING member; the owner becomes
+        admin or member. Two steps: first call without confirm to get the summary, read it
+        back, and call again with confirm=true only after the owner clearly says yes. The
+        former owner can take it back within 24 hours (undo_ownership_transfer)."""
+        email = who(to)
+        if not email:
+            return {
+                "error": f"no unique member matches {to!r}",
+                "members": member_choices(org_now(), orgs),
+            }
+        if not confirm:
+            return {
+                "needs_confirmation": f"Transfer ownership of {org_now().name} to {email}; you become {i_become}. Undo possible for 24 hours."
+            }
+        r = _route(transfer_ownership(TransferBody(to=email, me=i_become), _fresh(ctx, orgs), orgs))
+        return r if isinstance(r, dict) else {"status": "ok", "new_owner": email}
+
+    def undo_ownership_transfer() -> dict:
+        """The former owner takes the organization back (within 24 hours of handing it over)."""
+        r = _route(undo_transfer(_fresh(ctx, orgs), orgs))
+        return r if isinstance(r, dict) else {"status": "ok"}
+
+    def create_invite_link(
+        days: int = 7, max_uses: int = 0, role: str = "member", label: str = ""
+    ) -> dict:
+        """Make an invite link to send to people (days valid: 1-365, 0 = never expires;
+        max_uses 0 = unlimited; role member or admin; an optional label). Returns the URL."""
+        r = _route(
+            create_invite(
+                InviteBody(days=days, max_uses=max_uses, role=role, label=label[:60]),
+                req,
+                _fresh(ctx, orgs),
+                orgs,
+            )
+        )
+        return (
+            r
+            if "error" in r
+            else {
+                "url": r["url"],
+                "expires_at": r["expires_at"] or "never",
+                "max_uses": r["max_uses"] or "unlimited",
+                "role": r["role"],
+            }
+        )
+
+    def list_invite_links(include_past: bool = False) -> dict:
+        """The organization's invite links (live ones; include_past for all), with uses."""
+        r = _route(list_invites(req, include_past, _fresh(ctx, orgs), orgs))
+        return (
+            r
+            if isinstance(r, dict)
+            else {
+                "links": [
+                    {
+                        k: x[k]
+                        for k in (
+                            "label",
+                            "url",
+                            "status",
+                            "uses",
+                            "max_uses",
+                            "expires_at",
+                            "role",
+                        )
+                    }
+                    for x in r
+                ]
+            }
+        )
+
+    def cancel_invite_link(link: str) -> dict:
+        """Cancel an invite link (its URL, code or label)."""
+        rows = _route(list_invites(req, False, _fresh(ctx, orgs), orgs))
+        if isinstance(rows, dict):
+            return rows
+        want = (link or "").strip().casefold()
+        hit = [
+            x
+            for x in rows
+            if want
+            and (
+                want in x["url"].casefold()
+                or want == x["label"].casefold()
+                or want == x["code"].casefold()
+            )
+        ]
+        if len(hit) != 1:
+            return {"error": "say which link", "links": [x["label"] or x["url"] for x in rows]}
+        r = _route(revoke_invite(hit[0]["code"], req, _fresh(ctx, orgs), orgs))
+        return r if "error" in r else {"status": "cancelled", "url": r["url"]}
+
+    def move_document(name: str, group: str) -> dict:
+        """File a document under another Documents group: company (company records), legal,
+        finance, hr or other. `name` = file name or words from it."""
+        lib = get_library()
+        page = lib.list(ctx.org, _viewer(ctx), kind="file", limit=100)
+        want = (name or "").strip().casefold()
+        hit = [i for i in page.items if want and want in (i.title or "").casefold()]
+        if not hit:
+            return {
+                "error": f"no document matches {name!r}",
+                "documents": [i.title for i in page.items[:30]],
+            }
+        g = {"company records": "company", "contracts": "legal"}.get(
+            group.strip().casefold(), group.strip().casefold()
+        )
+        if g not in ("company", "legal", "finance", "hr", "other"):
+            return {"error": "group must be company, legal, finance, hr or other"}
+        r = _route(set_document_group(hit[0].id, GroupBody(group=g), _fresh(ctx, orgs), lib))
+        return r if "error" in r else {"status": "ok", "document": hit[0].title, "group": g}
+
+    def delete_position_tool(title: str) -> dict:
+        """Delete a job position (its title). Confirm with the person first."""
+        pos = next(
+            (p for p in org_now().positions if p.title.casefold() == title.strip().casefold()), None
+        )
+        if pos is None:
+            return {
+                "error": f"no position titled {title!r}",
+                "positions": [p.title for p in org_now().positions],
+            }
+        r = _route(delete_position(pos.id, _fresh(ctx, orgs), orgs))
+        return r if "error" in r else {"status": "deleted", "title": pos.title}
+
+    def rename_company(name: str = "", logo_url: str = "") -> dict:
+        """Change the organization's display name and / or its logo (an https image URL)."""
+        r = _route(
+            update_org(
+                UpdateOrg(name=name or None, logo_url=logo_url or None), _fresh(ctx, orgs), orgs
+            )
+        )
+        return r if "error" in r else {"status": "ok", "name": r["name"], "logo_url": r["logo_url"]}
+
+    def scan_platform_people() -> dict:
+        """Refresh the directory of everyone seen on the company's Discord (account or not)."""
+        r = _route(discover_people(None, _fresh(ctx, orgs), orgs, get_library(), get_people()))
+        return (
+            r if "error" in r else {"people": len(r["people"]), "with_account": r["with_account"]}
+        )
+
+    def note_about_person(
+        person: str,
+        title: str = "",
+        department: str = "",
+        about: str = "",
+        nickname: str = "",
+        hidden: bool | None = None,
+    ) -> dict:
+        """Write who somebody on the platforms is (also people without an account): title,
+        department, what they do, nickname, or hide them (a bot or guest)."""
+        book = get_people()
+        w = company_workspace(org_now())
+        if w is None or w.platform != "discord":
+            return {"error": "no connected Discord workspace"}
+        want = person.strip().casefold()
+        hits = [
+            p
+            for p in book.list(w.memory_id)
+            if want in (p.display_name().casefold(), p.name.casefold(), p.nickname.casefold())
+        ]
+        if len(hits) != 1:
+            return {"error": f"no unique person matches {person!r}"}
+        body = PersonBody(
+            title=title or None,
+            department=department or None,
+            about=about or None,
+            nickname=nickname or None,
+            hidden=hidden,
+        )
+        r = _route(edit_person(hits[0].id, body, None, _fresh(ctx, orgs), book))
+        return r if "error" in r else {"status": "ok", "person": r["display_name"]}
+
+    def request_plan(plan: str = "monthly", seats: int = 10, note: str = "") -> dict:
+        """Ask for a plan / more seats (trial, monthly, yearly, enterprise); the team approves it."""
+        r = _route(
+            request_license(
+                LicenseRequestBody(plan=plan, seats=seats, note=note[:1000]),
+                _fresh(ctx, orgs),
+                orgs,
+            )
+        )
+        return (
+            r
+            if "error" in r
+            else {"status": "requested", "plan": r.get("plan"), "seats": r.get("seats")}
+        )
+
+    transfer_ownership_tool.__name__ = "transfer_ownership"
+    delete_position_tool.__name__ = "delete_position"
+    return [
+        add_or_change_member,
+        remove_member,
+        transfer_ownership_tool,
+        undo_ownership_transfer,
+        create_invite_link,
+        list_invite_links,
+        cancel_invite_link,
+        move_document,
+        delete_position_tool,
+        rename_company,
+        scan_platform_people,
+        note_about_person,
+        request_plan,
+        connect_link,
+    ]
+
+
+def _fresh(ctx: Ctx, orgs: OrgStore) -> Ctx:
+    """The caller's context with the org as stored now (a tool may run after an earlier one)."""
+    org = orgs.get(ctx.org.id) or ctx.org
+    return Ctx(ctx.email, ctx.is_super, org, org.role_of(ctx.email) or ctx.role)
+
+
 def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
     """Agent tools for the command-center chat: personal ones for everyone (remember who I am,
     my language) and, for owners / admins talking about a Discord workspace, the server
@@ -2579,8 +2879,10 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
             holder: str = "",
             reports_to: str = "",
             position_id: str = "",
+            people_without_account: str = "",
         ) -> dict:
-            """(Owners / admins.) Create a job position ahead of time, or update one
+            """(Owners / admins.) `people_without_account`: names (comma separated) of people in
+            this job who have no Salid account (planned hires, demo staff). Create a job position ahead of time, or update one
             (`position_id`, or the same `title`): job description, responsibilities, skills
             (comma separated), the company policies that apply to it, `holder` = a member who
             holds it (name or email; "none" = vacant), `reports_to` = another position's title.
@@ -2591,6 +2893,9 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
                 None,
             )
             fields: dict = {
+                "placeholders": [x.strip() for x in people_without_account.split(",") if x.strip()]
+                if people_without_account
+                else None,
                 "title": title or None,
                 "department": department or None,
                 "summary": description or None,
@@ -2715,6 +3020,7 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
         }
 
     tools.append(read_document)
+    tools.extend(command_center_tools(ctx, orgs, guilds))
     if ws.platform != "discord" or ctx.role not in ("owner", "admin", "super"):
         return tools
     gid = ws.memory_id
@@ -3541,6 +3847,12 @@ def who_block(ctx: Ctx, p: UserProfile, page: str | None = None) -> str:
         )
     if page:
         lines.append(f"They are looking at the {page} page of the command center right now.")
+    lines.append(
+        "Everything the command center's buttons do can be done by asking you (typed or by "
+        "voice): use your tools. Never answer that you have no tool or cannot do something the "
+        "website can do; when an action needs a browser sign-in (connecting Google Calendar, "
+        "Discord, Slack or a sign-in account), call connect_link and give the link to tap."
+    )
     return "\n".join(lines)
 
 
