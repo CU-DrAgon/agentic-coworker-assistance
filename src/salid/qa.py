@@ -37,6 +37,7 @@ from .gate import extract_keywords
 from .gmaps import MAPS_PROMPT
 from .i18n import EXTRA, base_lang, lang_name, reply_language_line, resolve_lang, t
 from .ideas import IDEAS_PROMPT
+from .llm import REQUEST_TIMEOUT_MS
 from .markets import MARKETS_PROMPT
 from .media import parse_message_ref
 from .memory_access import Visibility, hidden_but_askable, is_dm_scope, message_visible
@@ -2254,8 +2255,13 @@ def build_agent(
         # A callable skips ADK's {placeholder} templating of the instruction string.
         instruction=lambda _ctx: prompt,
         tools=tools,
+        # http_options here are per-request options: genai merges the timeout into the model's
+        # own client (retry_options above stay), so a stuck Vertex call ends after
+        # REQUEST_TIMEOUT_MS instead of hanging the answer and its worker thread.
         generate_content_config=types.GenerateContentConfig(
-            temperature=0.6, thinking_config=types.ThinkingConfig(thinking_level=thinking_level)
+            temperature=0.6,
+            thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
+            http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
         ),
         before_model_callback=before_model,
         before_tool_callback=before_tool,
