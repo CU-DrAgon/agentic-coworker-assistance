@@ -307,6 +307,22 @@ class PositionsMixin:
             ):
                 admins.append(m.id)
         self._pos_admins(guild, admins, rep)
+        self._pos_from_dossiers(guild, cat, rep, only)
+
+    def _pos_from_dossiers(self, guild, cat, rep: _Report, only=None) -> None:
+        """A title Salid already knows for a person (said by them or an executive, or heard at work)
+        that matches the catalog becomes their position when nothing stronger is known."""
+        gid = guild.id
+        book = self.positions
+        held = book.assignments(gid)
+        for d in self.people.list(gid):
+            if only is not None and d.user_id != getattr(only, "id", None):
+                continue
+            if d.user_id in held or not d.role_title or d.role_source not in ("heard", "stated"):
+                continue
+            p = book.find(gid, d.role_title, cat)
+            if p is not None and book.assign(gid, d.user_id, p.key, d.role_source):
+                rep.from_discord += 1
 
     def _pos_admins(self, guild, admin_ids: list[int], rep: _Report) -> None:
         """Administrator / Manage Server / owner -> `admin` for the linked org member (never lowered,
@@ -446,14 +462,24 @@ class PositionsMixin:
         lang = self._guild_lang(gid)
         held = await asyncio.to_thread(book.assignments, gid)
         cat = {p.key: p for p in await asyncio.to_thread(book.catalog, gid)}
-        # people whose tag Salid owns: stated in Salid or edited in the center
-        todo = {
-            uid: cat[a.position_key]
-            for uid, a in held.items()
-            if a.source in ("stated", "org")
-            and a.position_key in cat
-            and (only_uid is None or uid == only_uid)
-        }
+        # everybody with a known position wears its tag, without waiting for a command; a position
+        # that came FROM a Discord role is already worn (that role is the tag), so it is skipped
+        todo = {}
+        for uid, a in held.items():
+            pos = cat.get(a.position_key)
+            if pos is None or (only_uid is not None and uid != only_uid):
+                continue
+            if a.source not in ("stated", "org"):
+                m = guild.get_member(uid)
+                worn = m is not None and any(
+                    getattr(r, "id", 0) == pos.discord_role_id
+                    or book.find(gid, getattr(r, "name", ""), list(cat.values())) is pos
+                    for r in getattr(m, "roles", ()) or ()
+                    if getattr(r, "name", "") != "@everyone"
+                )
+                if worn:
+                    continue
+            todo[uid] = pos
         dept_on = bool(getattr(self.team.current(gid), "department_roles", False))
         depts = await self._pos_dept_wants(guild, held, only_uid) if dept_on else {}
         if not todo and not depts:

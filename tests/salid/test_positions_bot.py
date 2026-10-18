@@ -16,6 +16,7 @@ from salid import positions as pos
 from salid.guild_settings import GuildSettingsUpdate
 from salid.i18n import t
 from salid.orgs import Member, OrgStore, Workspace
+from salid.people import set_role as _set_role
 from salid.positions_bot import RANK_UNIT
 
 ME_ID = 999
@@ -119,6 +120,7 @@ def org_member(bot, email):
 @pytest.fixture
 def rig(bot, world):
     wire(world)
+    give(world, OWNER_ID, "Founder")  # the owner already wears the Founder tag (see the owner test)
     return SimpleNamespace(bot=bot, w=world, g=world.g)
 
 
@@ -147,12 +149,32 @@ async def test_a_discord_role_never_overrides_a_stated_position(rig):
 
 
 async def test_the_guild_owner_is_a_founder_when_nothing_else_is_known(rig):
+    owner = rig.g.members[OWNER_ID]
+    owner.roles = [r for r in owner.roles if r.name != "Founder"]
     await rig.bot.positions_sync(rig.g)
     a, p = rig.bot.positions.of(GUILD, OWNER_ID)
     assert (p.key, a.source) == ("founder", "discord")
     await rig.bot.positions_sync(rig.g)  # and it stays on the next day
     assert rig.bot.positions.of(GUILD, OWNER_ID)[1].key == "founder"
-    assert rig.g.created == [], "an implicit founder is never tagged in Discord"
+    worn = [r.name for r in rig.g.members[OWNER_ID].roles]
+    tags = [n for n in worn if n in ("Founder", "ผู้ก่อตั้ง")]
+    assert len(tags) == 1, "the owner wears the Founder tag without anybody asking"
+    await rig.bot.positions_sync(rig.g)
+    assert len(rig.g.created) <= 1, "and it is made once, never again"
+
+
+async def test_a_title_salid_already_knows_from_the_dossier_is_tagged_without_a_command(rig):
+    rig.bot.people.update(GUILD, PEER, "Peer", lambda d: _set_role(d, "CTO", "heard"))
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, PEER)[1].key == "cto"
+    cto = [r for r in rig.g.created if r.name == "CTO"]
+    assert cto and cto[0] in rig.g.members[PEER].roles
+
+
+async def test_a_position_from_a_worn_discord_role_is_not_tagged_twice(rig):
+    give(rig.w, BOSS, "CEO")
+    await rig.bot.positions_sync(rig.g)
+    assert not [r for r in rig.g.created if r.name == "CEO"]
 
 
 async def test_a_position_that_came_from_a_role_goes_when_the_role_goes(rig):
