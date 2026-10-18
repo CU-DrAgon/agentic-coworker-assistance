@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = Field(default="", repr=False)
     google_oauth_redirect_uri: str = ""
     salid_token_key: str = Field(default="", repr=False)  # Fernet key for stored refresh tokens
+    legal_contact_email: str = "support@frontier-tech.app"  # shown on /privacy and /terms
 
 
 @lru_cache

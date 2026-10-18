@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Salid Privacy Policy</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #2d3142; background: #f5f5f5; }
+  h1 { font-size: 1.8rem; } h2 { font-size: 1.15rem; margin-top: 2rem; }
+  a { color: #2e5aa8; } .muted { color: #4f5d75; font-size: .9rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>Salid Privacy Policy</h1>
+<p class="muted">Last updated: 18 October 2026. Operated by The Frontier Company Limited ("we").</p>
+
+<p>Salid (สลิด) is an AI coworker that works inside the chat tools your organization uses (Discord, Slack, LINE, Telegram, WhatsApp) and in the Salid web command center. This policy explains what data Salid processes, why, and the choices you have.</p>
+
+<h2>1. Data we process</h2>
+<ul>
+  <li><strong>Account data</strong>: your name and email address from Google sign-in, and the chat accounts you link to your Salid profile.</li>
+  <li><strong>Workspace content</strong>: messages, files, receipts and meeting notes in rooms where your organization has enabled Salid, so it can answer questions and keep team memory. Your organization chooses which rooms Salid reads and how long memory is kept.</li>
+  <li><strong>Google Calendar data</strong> (only if you press "Connect Google Calendar"): Salid creates, moves and cancels events that it makes in your primary calendar, adds the attendees you ask for, requests a Google Meet link, and reads free/busy information to suggest times. It requests only the scopes <code>calendar.events.owned</code> and <code>calendar.events.freebusy</code>, plus your email address to confirm the account is yours.</li>
+</ul>
+
+<h2>2. How we use it</h2>
+<ul>
+  <li>To provide the features you and your organization ask for: answers, summaries, reminders, meeting scheduling, receipts and reports.</li>
+  <li>Access follows your permissions: Salid shows information only to people who are allowed to read its source.</li>
+  <li>We do not sell personal data, we do not use it for advertising, and we do not use Google user data or workspace content to train AI models.</li>
+</ul>
+
+<h2>3. Google user data</h2>
+<p>Salid's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Google Calendar data is used only to schedule and manage the meetings you request. We store only an encrypted refresh token for your connection; we do not keep copies of your calendar events beyond what is needed to manage the meetings Salid created.</p>
+
+<h2>4. Processors and storage</h2>
+<p>Data is stored in Google Cloud (Firestore, Cloud Storage, Secret Manager) and processed by Google's Gemini models on Vertex AI to generate answers. Chat platforms (Discord, Slack, LINE, Telegram, WhatsApp/Meta) process messages under their own policies.</p>
+
+<h2>5. Retention and deletion</h2>
+<ul>
+  <li>Team memory is kept for the period your organization sets, then deleted automatically.</li>
+  <li>You can disconnect Google Calendar at any time from the command center, or from your Google Account permissions page; this revokes access and deletes the stored token.</li>
+  <li>You can unlink chat accounts from the command center. To delete your data, ask your organization's admin or contact us.</li>
+</ul>
+
+<h2>6. Security</h2>
+<p>Tokens are encrypted at rest, connections use HTTPS, and secrets are never written to logs.</p>
+
+<h2>7. Contact</h2>
+<p>Questions or deletion requests: <a href="mailto:__CONTACT_EMAIL__">__CONTACT_EMAIL__</a>.</p>
+
+<p class="muted"><a href="/terms">Terms of Service</a></p>
+</main>
+</body>
+</html>
