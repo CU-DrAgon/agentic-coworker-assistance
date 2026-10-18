@@ -15,7 +15,7 @@ from test_modes import STAFF, TMsg, bot, set_mode, world
 
 from salid import bot as botmod
 from salid.extract import IngestResult
-from salid.guild_settings import GuildSettingsUpdate
+from salid.guild_settings import FOREVER_DAYS, GuildSettingsUpdate
 from salid.image_memory import ImageNote, format_note, image_mime
 from salid.memory_import import import_progress
 from salid.models import Receipt
@@ -98,6 +98,7 @@ def ago(days, hours=0):
 
 # ------------------------------------------------------------------ import
 async def test_import_covers_the_retention_window_including_pre_memory_history(bot, iw, world):
+    bot.team.set_memory_retention_days(GUILD, 90)  # a chosen window (the default keeps forever)
     hmsg(world, iw.a, 1, ago(100), "too old")
     hmsg(world, iw.a, 2, ago(40), "forty days")
     hmsg(world, iw.a, 3, ago(5), "five days")
@@ -107,6 +108,14 @@ async def test_import_covers_the_retention_window_including_pre_memory_history(b
     assert st.complete and st.messages == 2 and st.imported_from.startswith("2026-07-16")
     after = iw.a.fetches[0]["after"]
     assert after == NOW - timedelta(days=90)  # bounded by the guild's retention
+
+
+async def test_import_on_the_forever_default_reads_ten_years_of_history(bot, iw, world):
+    hmsg(world, iw.a, 1, ago(400), "last year")
+    hmsg(world, iw.a, 2, ago(5), "five days")
+    await run_import(bot)
+    assert [m.text for m in logged(bot, start="2025-01-01")] == ["last year", "five days"]
+    assert iw.a.fetches[0]["after"] == NOW - timedelta(days=FOREVER_DAYS)
 
 
 async def test_import_is_idempotent_and_resumes_as_a_catch_up(bot, iw, world):
@@ -208,7 +217,10 @@ async def test_import_disabled_by_the_memory_flag(bot, iw, world):
 async def test_triggers_start_an_import(bot, iw, world, monkeypatch):
     started = []
     monkeypatch.setattr(bot, "_start_import", lambda: started.append(1))
-    bot._memory_triggers()  # first look: just remembers the config
+    bot._memory_triggers()  # first look: just remembers the config (keep forever)
+    assert started == []
+    bot.team.set_memory_retention_days(GUILD, 60)  # shortened from forever: no import
+    bot._memory_triggers()
     assert started == []
     bot.team.set_memory_retention_days(GUILD, 120)
     bot._memory_triggers()

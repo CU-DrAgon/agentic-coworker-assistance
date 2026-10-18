@@ -185,8 +185,8 @@ def _filler_cache_in_tmp(tmp_path, monkeypatch):
 
 class ThaiGuildStore(MemoryGuildStore):
     """Guild settings of servers that chose Thai as their main language. Salid defaults to
-    English, so tests of Thai wording build their bot with this store (an unchosen server runs on
-    `auto`); a guild that has a document of its own keeps it."""
+    English, so tests of Thai wording build their bot with this store (an unchosen server runs in
+    English, 24eea93); a guild that has a document of its own keeps it."""
 
     def get(self, guild_id):
         g = super().get(guild_id)

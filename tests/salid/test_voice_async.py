@@ -492,7 +492,7 @@ def test_async_settings_defaults():
     from salid.config import Settings
 
     f = Settings.model_fields
-    assert f["live_foreground_seconds"].default == 12.0
+    assert f["live_foreground_seconds"].default == 25.0  # 4c7905f: 25 s before the background
     assert f["live_max_jobs"].default == 3
     assert f["live_result_pause_seconds"].default == 1.5
     assert f["live_result_wait_seconds"].default == 90.0

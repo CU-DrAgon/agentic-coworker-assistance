@@ -121,7 +121,7 @@ def test_document_layout(gstore):
         "channel_languages", "memory_retention_days",
         "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
         "channel_tones", "default_tone", "tone_note", "task_confirm_mode", "personal_settings", "language_mode", "exec_max_level", "department_roles",
-        "captions_default", "voice_talk",
+        "captions_default", "voice_talk", "wake_policy", "room_voice_talk", "room_captions",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
     # the form only echoed "auto" for a server that never chose a language: nothing was chosen
@@ -322,19 +322,21 @@ def test_save_settings_replaces_the_channel_language_map(gstore):
     assert g.channel_languages == {"6": "th"} and g.default_language == "en"
 
 
-def test_bot_cache_sees_a_language_change_at_once_and_resolves_override_then_default(gstore):
+def test_bot_cache_sees_a_language_change_at_once_and_uses_the_server_language(gstore):
     team = gs.BotGuildSettings(gstore, ttl=3600)
-    assert team.channel_language(GUILD, 5) == "auto"  # never chosen: follow the words written
+    assert team.channel_language(GUILD, 5) == "en"  # never chosen: English (24eea93)
     gstore.save_settings(GUILD, GuildSettingsUpdate(default_language="en"), "a@x.com")
     team._cache.clear()
     assert team.channel_language(GUILD, 5) == "en"
     team.set_channel_language(GUILD, 5, "th")
-    assert team.channel_language(GUILD, 5) == "th"  # override, no waiting for the TTL
-    assert team.channel_language(GUILD, 6) == "en"  # other channels follow the default
+    assert gstore.get(GUILD).channel_languages == {"5": "th"}  # stored ...
+    assert team.channel_language(GUILD, 5) == "en"  # ... but not used (b2378eb: per server)
+    team.set_server_language(GUILD, "th")
+    assert team.channel_language(GUILD, 5) == team.channel_language(GUILD, 6) == "th"  # no TTL wait
     team.set_channel_language(GUILD, 5, "auto")
-    assert team.channel_language(GUILD, 5) == "en"  # an `auto` override is ignored once chosen
+    assert team.channel_language(GUILD, 5) == "th"
     team.set_channel_language(GUILD, 5, None)
-    assert team.channel_language(GUILD, 5) == "en"
+    assert team.channel_language(GUILD, 5) == "th"
 
 
 def test_identity_code_proves_one_discord_user_without_granting_admin():

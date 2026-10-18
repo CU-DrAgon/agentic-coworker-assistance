@@ -622,16 +622,19 @@ def test_hub_page_has_the_tone_controls_in_both_languages():
 
 def test_hub_saves_and_validates_memory_retention(client):
     url = f"/api/hub/guilds/{A}/settings"
-    assert client.get(url, headers=AUTH).json()["memory_retention_days"] == 90
+    assert client.get(url, headers=AUTH).json()["memory_retention_days"] == 0  # keep forever
     put = client.put(
         url, json={"memory_retention_days": 30, "features": {"memory": False}}, headers=AUTH
     )
     assert put.json()["memory_retention_days"] == 30 and put.json()["features"]["memory"] is False
     assert client.guilds.get(A).memory_retention_days == 30
-    assert client.guilds.get(B).memory_retention_days == 90  # per guild
-    for bad in (0, 3651, -3, "abc", None):  # invalid values fall back to the default
+    assert client.guilds.get(B).memory_retention_days == 0  # per guild
+    for bad in (3651, -3, "abc", None):  # invalid values fall back to the default (forever)
         got = client.put(url, json={"memory_retention_days": bad}, headers=AUTH).json()
-        assert got["memory_retention_days"] == 90
+        assert got["memory_retention_days"] == 0
+    client.put(url, json={"memory_retention_days": 30}, headers=AUTH)
+    got = client.put(url, json={"memory_retention_days": 0}, headers=AUTH).json()
+    assert got["memory_retention_days"] == 0  # the hub's "keep forever" option
     assert (
         client.put(url, json={"memory_retention_days": "365"}, headers=AUTH).json()[
             "memory_retention_days"

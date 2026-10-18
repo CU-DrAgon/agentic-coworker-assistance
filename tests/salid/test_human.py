@@ -345,7 +345,9 @@ async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     ] == "unknown language"
     assert (await asyncio.to_thread(a.set_memory_days, 30)) == {"status": "ok", "days": 30}
     assert bot.team.memory_retention_days(GUILD) == 30
-    assert (await asyncio.to_thread(a.set_memory_days, 0))["error"] == "bad_days"
+    # 0 is "keep forever" since b0d78be; out-of-range values are refused
+    assert (await asyncio.to_thread(a.set_memory_days, -1))["error"] == "bad_days"
+    assert (await asyncio.to_thread(a.set_memory_days, 3651))["error"] == "bad_days"
     shown = await asyncio.to_thread(a.show_settings)
     assert (
         shown["mode"] == "call" and shown["reply_language"] == "en" and shown["memory_days"] == 30
@@ -425,7 +427,7 @@ async def test_ack_is_sent_at_once_then_edited_into_the_answer(
 
 async def test_english_channel_gets_an_english_ack(bot, world, monkeypatch):
     wire(bot, monkeypatch)
-    bot.guilds_store.set_channel_language(GUILD, world.chat.id, "en")
+    bot.guilds_store.set_server_language(GUILD, "en")  # one language per server (b2378eb)
     bot.team._cache.clear()
     m = TMsg(
         world.g,

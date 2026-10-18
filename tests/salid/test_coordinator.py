@@ -172,6 +172,7 @@ async def test_a_dm_reason_after_a_meeting_reminder_goes_to_the_absence_path_onl
         "text_channel_id": PUBLIC, "attendee_ids": [STAFF], "attendee_names": ["Somchai"],
         "dm_sent": {str(STAFF): now.isoformat(timespec="seconds")}, "attendance_notes": {},
         "start_utc": (now + timedelta(minutes=5)).isoformat(timespec="seconds"),
+        "end_utc": (now + timedelta(minutes=35)).isoformat(timespec="seconds"),
     })  # fmt: skip
     monkeypatch.setattr(bot.scheduler, "get_guild", lambda gid: world.g)
     monkeypatch.setattr(bot.scheduler, "clock", lambda: now)

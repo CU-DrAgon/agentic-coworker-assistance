@@ -65,13 +65,20 @@ async def test_live_cue_waits_while_a_tool_answer_is_pending(lv):
     await lv.mgr.end((1000, 77))
 
 
-def test_force_cue_default_is_longer_than_the_models_own_first_audio():
-    assert Settings().live_force_reply_seconds >= 4.0
+def test_force_cue_default_is_the_faster_wake_and_never_before_the_name_cue():
+    # 3e9f7b8 "faster wake": force a reply after 2 s (was 5). A cue never replaces a running
+    # answer (see test_live_cue_waits_while_a_tool_answer_is_pending).
+    s = Settings()
+    assert s.live_force_reply_seconds == 2.0
+    assert s.live_name_reply_seconds <= s.live_force_reply_seconds
 
 
 def test_live_prompt_keeps_quiet_for_chatter_and_lookalike_words():
     th = build_instruction(Settings(), "th")
-    assert "เมื่อวานกินข้าวที่ไหน" in th and "“สนิท” ใน “เขาสนิทกันมาก”" in th
+    # 10fe0cb: the Live model judges who is addressed; chatter about the team or the past is
+    # never a reason to cut in
+    assert "ห้ามแทรกเพราะรู้คำตอบ แม้เรื่องที่คุยจะเกี่ยวกับทีมหรืออดีต" in th
+    assert "“สนิท” ใน “เขาสนิทกันมาก”" in th
 
 
 async def test_live_cue_carries_the_transcript_of_what_was_said(lv):

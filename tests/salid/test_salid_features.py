@@ -24,7 +24,7 @@ from test_memory_import import (
     set_llm,
     settle,
 )
-from test_modes import EXEC, STAFF, Sent, TMsg, bot, manager, say, send, set_mode, world
+from test_modes import EXEC, MANAGER, STAFF, Sent, TMsg, bot, manager, say, send, set_mode, world
 
 from salid import bot as botmod
 from salid import gate, qa
@@ -542,7 +542,9 @@ async def test_name_prefixed_snooze_and_language(bot, world):
     m = await send(bot, world, world.gen, "สลิด คุยได้แล้วนะ")
     assert m.replies == [t("unsnooze", "th")]
     m = await send(bot, world, world.gen, "สลิด พูดภาษาอังกฤษหน่อย", who=manager(world))
-    assert bot.team.channel_language(GUILD, 10) == "en" and len(m.replies) == 1
+    # b2378eb: an unscoped "speak English" is the speaker's own language, not the channel's
+    assert bot.profiles.get(GUILD, MANAGER).language == "en" and len(m.replies) == 1
+    assert bot.team.channel_language(GUILD, 10) == "th"
     assert bot.calls == []
 
 

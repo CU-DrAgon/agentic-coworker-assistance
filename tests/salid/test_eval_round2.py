@@ -328,7 +328,10 @@ def test_live_instruction_starts_with_the_thai_date_without_buddhist_era():
     now = datetime(2026, 10, 16, 9, 0, tzinfo=ZoneInfo("Asia/Bangkok"))
     assert thai_date_line(now) == "วันนี้คือ วันศุกร์ที่ 16 ตุลาคม 2026"
     s = SimpleNamespace(now=lambda: now, tz="Asia/Bangkok")
-    assert build_instruction(s, "th").startswith("วันนี้คือ วันศุกร์ที่ 16 ตุลาคม 2026\n")
+    # 2b44868: the team's time zone follows the date on the first line
+    assert build_instruction(s, "th").startswith(
+        "วันนี้คือ วันศุกร์ที่ 16 ตุลาคม 2026 เขตเวลาของทีมคือ Asia/Bangkok"
+    )
     later = datetime(2026, 10, 17, 0, 5, tzinfo=ZoneInfo("Asia/Bangkok"))
     assert build_instruction(s, "th", later).startswith("วันนี้คือ วันเสาร์ที่ 17 ตุลาคม 2026")
 

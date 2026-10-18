@@ -433,6 +433,17 @@ def test_slash_commands_are_registered_with_thai_name_and_english_alias(bot):
         "report",
         "โทน",
         "tone",
+        "ภาษาบริษัท",
+        "company-language",
+        "เสียง",
+        "voice",
+        "แสดงคำบรรยาย",
+        "show-captions",
+        "ซ่อนคำบรรยาย",
+        "hide-captions",
+        "captions-default",
+        "เงียบ",
+        "quiet",
     }
     assert all(c.guild_only for n, c in cmds.items() if n not in ("บริษัท", "company"))
 

@@ -4,6 +4,7 @@ price checks (parsing, range, sourcing), the bot glue (flags, voice) and the i18
 
 import io
 import logging
+import os
 from datetime import UTC, date, datetime
 
 import httpx
@@ -419,7 +420,7 @@ def ideas_ctx(repo, **kw):
     return IdeasCtx(
         guild_id=1, guild_name="บริษัท A", asker_id=STAFF, asker_name="Somchai", is_exec=False,
         repo=repo, client=None, model="m", lang="th", now=lambda: NOW,
-        fonts=lambda: find_fonts(""), **kw,
+        fonts=lambda: find_fonts(os.environ.get("SALID_PDF_FONT", "")), **kw,
     )  # fmt: skip
 
 
