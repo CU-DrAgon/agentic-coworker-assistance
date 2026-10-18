@@ -38,6 +38,39 @@ class MediaMixin:
         self._doc_infos: dict[tuple[int, int], DocInfo] = {}  # (message id, attachment) -> analysis
         self._agent_receipts: dict[int, list[str]] = {}  # message id -> receipt notes (agent path)
         self.media_stats = {"transcribed": 0, "failed": 0, "skipped": 0, "docs": 0}
+        # originals of documents Salid read -> real files in the command center (bucket only)
+        self.file_archive = None
+        if getattr(self.s, "receipt_bucket", ""):
+            try:
+                from .coo_store import make_doc_store
+                from .files import FileArchive
+                from .library import make_blobs
+
+                self.file_archive = FileArchive(
+                    make_doc_store(self.s, self.store), make_blobs(self.s)
+                )
+            except Exception as e:
+                logger.warning("file archive unavailable (%s)", type(e).__name__)
+
+    def _archive_original(self, message, att, data: bytes, kind: str, note=None, dt=None) -> None:
+        """Keep the original file as a document of the company (best effort, off the event loop)."""
+        if self.file_archive is None or message is None or getattr(message, "guild", None) is None:
+            return
+        ch = getattr(message, "channel", None)
+        mime = str(getattr(att, "content_type", "") or "") or "application/octet-stream"
+        self.file_archive.save(
+            message.guild.id,
+            filename=getattr(att, "filename", "") or "document",
+            data=data,
+            mime=mime.split(";")[0],
+            by=str(getattr(getattr(message, "author", None), "display_name", "") or ""),
+            channel_id=getattr(ch, "id", None),
+            channel_name=str(getattr(ch, "name", "") or ""),
+            source_url=str(getattr(message, "jump_url", "") or ""),
+            summary=str(getattr(note, "summary", "") or ""),
+            tag=str(getattr(note, "doc_type", "") or kind),
+            text=str(getattr(dt, "text", "") or ""),
+        )
 
     # ------------------------------------------------------------- switches
     def _media_enabled(self, gid: int) -> bool:
@@ -256,6 +289,10 @@ class MediaMixin:
                         return None
             self.doc_budget.add(gid, self._day(), dt.pages)
             self.media_stats["docs"] += 1
+            try:
+                await asyncio.to_thread(self._archive_original, message, att, data, kind, note, dt)
+            except Exception as e:
+                logger.warning("file archive failed (%s)", type(e).__name__)
             if note is not None and message is not None:  # kept for the live path's alert
                 self._doc_infos[(message.id, idx)] = DocInfo(
                     name, kind, note.doc_type, note.summary, note.amount_value,

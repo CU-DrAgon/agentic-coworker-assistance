@@ -519,3 +519,49 @@ def test_slack_message_id_includes_channel():
     assert a != message_namespaced_id("slack", "T1", "C2", "1700000000.000200")
     assert a != message_namespaced_id("slack", "T2", "C1", "1700000000.000200")
     assert timedelta(0) == timedelta(0)
+
+
+def test_user_language_is_remembered_per_person_and_validated(orgs):
+    assert orgs.user_language("Ann@Example.com") is None
+    assert orgs.set_user_language("Ann@Example.com", "th") == "th"
+    assert orgs.user_language("ann@example.com") == "th"  # case-insensitive email
+    orgs.set_user_language("ann@example.com", "en")
+    assert orgs.user_language("ann@example.com") == "en"
+    assert orgs.user_language("bob@example.com") is None  # nobody else's choice leaks
+    with pytest.raises(ValueError):
+        orgs.set_user_language("ann@example.com", "fr")
+
+
+def test_person_profile_holds_identities_across_orgs_and_syncs_discord_id(orgs):
+    from salid.orgs import Identity, Member, Org
+
+    orgs.save(Org(id="org_a", name="A", members=[Member(email="ann@example.com", role="owner")]))
+    orgs.save(Org(id="org_b", name="B", members=[Member(email="ann@example.com", role="member")]))
+    p = orgs.user_profile("Ann@Example.com")
+    assert p.email == "ann@example.com" and p.identities == [] and p.name == ""
+    orgs.set_user_name("ann@example.com", "  Ann Lee  ")
+    orgs.set_user_language("ann@example.com", "th")
+    p = orgs.set_user_identity(
+        "ann@example.com",
+        Identity(platform="discord", external_id=" 42 ", name="ann#1", verified=True),
+    )
+    assert p.name == "Ann Lee" and p.language == "th"  # the identity did not wipe the rest
+    d = p.identity("discord")
+    assert d and d.external_id == "42" and d.verified and d.linked_at
+    # verified Discord id is mirrored into every org membership
+    assert all(o.members[0].discord_user_id == "42" for o in orgs.orgs_of_email("ann@example.com"))
+    # replacing the same platform keeps one identity; another platform adds one
+    orgs.set_user_identity("ann@example.com", Identity(platform="discord", external_id="43"))
+    orgs.set_user_identity("ann@example.com", Identity(platform="slack", external_id="U1"))
+    p = orgs.user_profile("ann@example.com")
+    assert sorted(i.platform for i in p.identities) == ["discord", "slack"]
+    assert p.identity("discord").external_id == "43" and not p.identity("discord").verified
+    orgs.remove_user_identity("ann@example.com", "discord")
+    assert orgs.user_profile("ann@example.com").identity("discord") is None
+    assert orgs.get("org_a").members[0].discord_user_id is None
+    with pytest.raises(ValueError):
+        orgs.set_user_identity("ann@example.com", Identity(platform="instagram", external_id="x"))
+    with pytest.raises(ValueError):
+        orgs.set_user_identity("ann@example.com", Identity(platform="slack", external_id="  "))
+    profiles = orgs.member_profiles(orgs.get("org_a"))
+    assert list(profiles) == ["ann@example.com"] and profiles["ann@example.com"].name == "Ann Lee"

@@ -405,3 +405,9 @@ def test_static_index_has_live_recording_safeguards():
     assert "await Promise.allSettled(st.uploads)" in stop_block
     assert "if (st.counts.failed)" in stop_block
     assert stop_block.index("if (st.counts.failed)") < stop_block.index("await finishMeeting()")
+
+
+def test_pages_are_gzipped_for_browsers_that_accept_it(client):
+    r = client.get("/center", headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
+    assert "<html" in r.text  # the client transparently decodes

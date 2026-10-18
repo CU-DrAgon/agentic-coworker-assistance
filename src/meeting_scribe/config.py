@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     slack_signing_secret: str = ""
     clickup_client_id: str = ""
     clickup_client_secret: str = ""
+    # "Verify my Discord account" on /center (OAuth2 `identify`); empty = only bot codes verify
+    salid_discord_client_secret: str = ""
+    # Salid web sessions (30 days) issued in exchange for a Google sign-in; empty = Google ID
+    # tokens only (they expire after one hour, so people are signed out all the time).
+    salid_session_secret: str = ""
+    salid_session_days: int = 30
 
     # Google Calendar + Meet per member (`salid.google_oauth`). All four must be set or the feature is
     # off (routes answer 503). Secrets: never logged or returned by the API.

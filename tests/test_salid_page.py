@@ -72,11 +72,16 @@ def test_every_used_key_exists_and_markup_has_no_hardcoded_thai():
     assert not re.search(r"[฀-๿]", markup)
 
 
-def test_language_priority_saved_then_browser_then_english():
+def test_language_is_english_by_default_and_a_saved_choice_wins():
+    """Judges read English: every page opens in English; the browser language is ignored."""
     _, html = _dict_and_html()
     assert 'const LANG_KEY = "salid-language"' in html
-    assert "navigator.languages" in html and 'split("-")[0]' in html  # primary subtag match
-    assert 'return "en";' in html  # unsupported browser language -> English
+    assert 'let lang = readLang("get") || "en";' in html
+    assert "navigator.language" not in html
+    start = START.read_text("utf-8")
+    assert 'let lang = readLang("get") || "en";' in start and "navigator.language" not in start
+    center = (PAGE.parent / "center.html").read_text("utf-8")
+    assert 'let lang = "en";' in center and '<html lang="en">' in center
     assert "localStorage.setItem(LANG_KEY" in html and "catch" in html
     assert html.count('data-lang="th"') == 1 and html.count('data-lang="en"') == 1
 
@@ -122,6 +127,17 @@ def test_landing_page_routes_visitors_to_every_service():
     assert 'href="/start"' in entry and 'href="/center"' in entry and 'href="/recorder"' in entry
     for section in ("platforms", "plans"):
         assert f'id="{section}"' in html, section
+
+
+def test_hero_offers_sign_up_then_login_then_a_divider_before_explore():
+    """Hero order: create account (/start), log in (/center), a separator, then explore."""
+    d, html = _dict_and_html()
+    hero = html.split('class="copy"', 1)[1].split('class="stage"', 1)[0]
+    signup, login = hero.index('href="/start"'), hero.index('href="/center"')
+    sep, explore = hero.index('role="separator"'), hero.index('data-i18n="cta_explore"')
+    assert signup < login < sep < explore
+    assert 'data-i18n="cta_login"' in hero
+    assert d["cta_login"]["en"].startswith("Log in") and "เข้าสู่ระบบ" in d["cta_login"]["th"]
 
 
 START = PAGE.parent / "start.html"
@@ -174,3 +190,64 @@ def test_start_page_uses_only_existing_center_routes():
     assert "license/request" not in html  # launch: the trial is the only plan, nothing is charged
     assert 'data-plan="trial"' in html and 'data-plan="monthly"' not in html
     assert 'href="/center"' in html
+
+
+def test_start_hands_the_credential_to_center_once_per_tab():
+    """Same tab, sessionStorage, read once, only while the ID token is still valid."""
+    _, start = _start_dict_and_html()
+    center = (PAGE.parent / "center.html").read_text("utf-8")
+    assert 'sessionStorage.setItem("salid_center_handoff"' in start
+    assert 'sessionStorage.getItem("salid_center_handoff")' in center
+    assert 'sessionStorage.removeItem("salid_center_handoff")' in center
+    assert "Number(h.exp) * 1000 > Date.now()" in center
+    assert "localStorage" not in start.split("salid_center_handoff", 1)[1]  # never persisted
+
+
+def test_every_page_shares_the_salid_theme(client):
+    """One design system: every page links the shared stylesheet, which is served as CSS."""
+    for name in ("salid.html", "start.html", "hub.html", "center.html", "index.html"):
+        html = (PAGE.parent / name).read_text("utf-8")
+        assert '<link rel="stylesheet" href="/static/salid/theme.css">' in html, name
+        assert "prefers-color-scheme" not in html, (
+            name
+        )  # light theme only, same on every judge's machine
+    r = client.get("/static/salid/theme.css")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/css")
+    assert "--indigo:" in r.text and ".btn.primary" in r.text
+
+
+def test_unconfigured_invite_is_hidden_not_labelled_with_an_env_var():
+    """Visitors never see an internal variable name: the invite button hides and /start explains."""
+    _, html = _dict_and_html()
+    assert "a.hidden = !ok;" in html
+    d, start = _start_dict_and_html()
+    assert "a.hidden = !ok;" in start and '$("invite-soon").hidden = ok;' in start
+    assert 'id="invite-soon" data-i18n="invite_soon"' in start
+    assert "SALID_DISCORD_CLIENT_ID" not in d["invite_soon"]["en"] + d["invite_soon"]["th"]
+
+
+def test_every_page_shares_one_language_key_and_syncs_it_with_the_account():
+    """One choice follows the person: same localStorage key on every page, and after sign-in the
+    language saved with the account wins (or the local choice is saved to the account)."""
+    for name in ("salid.html", "start.html", "hub.html", "center.html"):
+        html = (PAGE.parent / name).read_text("utf-8")
+        assert 'LANG_KEY = "salid-language"' in html, name
+    for name, put in (
+        ("start.html", 'api("/me/language", { method: "PUT"'),
+        ("hub.html", 'api("/api/hub/me/language", { method: "PUT"'),
+        ("center.html", 'api("/api/center/me/language", { method: "PUT"'),
+    ):
+        html = (PAGE.parent / name).read_text("utf-8")
+        assert put in html and "syncLang(me.language)" in html, name
+
+
+def test_every_signed_in_page_keeps_one_salid_session():
+    """Sign in once, stay signed in: start, hub and center exchange the Google sign-in for a
+    Salid session (localStorage `salid_session`), reuse it on load and clear it on sign-out."""
+    for name in ("start.html", "hub.html", "center.html"):
+        html = (PAGE.parent / name).read_text("utf-8")
+        assert 'const SESSION_KEY = "salid_session"' in html, name
+        assert 'fetch("/api/hub/session", { method: "POST"' in html, name
+        assert "exchangeSession(" in html and 'session("get")' in html, name
+    assert 'session("clear")' in (PAGE.parent / "hub.html").read_text("utf-8")
+    assert 'session("clear")' in (PAGE.parent / "center.html").read_text("utf-8")

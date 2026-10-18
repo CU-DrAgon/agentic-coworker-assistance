@@ -7,15 +7,10 @@
 <meta name="description" content="Salid is the AI assistant for everyday work in Discord: meeting notes, receipts, task follow-up and documents.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;display=swap">
+<link rel="icon" type="image/png" href="/static/salid/favicon.png">
+<link rel="stylesheet" href="/static/salid/theme.css">
 <style>
   /* 70% milky white, 20% soft cosmic colour, 10% luminous accents (see the creative brief). */
-  :root {
-    --bg: #FAF9F6; --bg-2: #F3F1EC; --ink: #1B1F3B; --muted: #5B6078; --faint: #8A8FA6;
-    --line: #E6E3DC; --indigo: #2B2F7A; --indigo-2: #4A4FBF; --lavender: #B9B4F2; --sky: #BFD6F6;
-    --gold: #D9C28A; --surface: rgba(255,255,255,.72);
-    --shadow: 0 10px 30px rgba(43,47,122,.08), 0 1px 2px rgba(43,47,122,.06);
-    --ease: cubic-bezier(.22,.8,.3,1);
-  }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
   body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6;
@@ -74,6 +69,7 @@
   .copy h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.12; font-weight: 700; letter-spacing: -.01em; }
   .copy p { font-size: 18px; color: var(--muted); max-width: 460px; }
   .ctas { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; }
+  .or { margin: 6px 0 2px; max-width: 420px; }
   .trust { font-size: 13px; color: var(--faint); }
 
   /* The scene: the official rendered film (portal opens, the cat hops out, portal closes) with the
@@ -97,7 +93,7 @@
   .callout strong { display: block; font-size: 14px; line-height: 1.3; }
   .callout span { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.35; }
   /* corners of the scene, slightly outside it so nothing covers the cat */
-  .c1 { left: -8px; top: 0; } .c2 { right: -8px; top: 8px; } .c3 { left: 4px; bottom: 6px; } .c4 { right: 4px; bottom: -2px; }
+  .c1 { left: -16px; top: -18px; } .c2 { right: -16px; top: -10px; } .c3 { left: -8px; bottom: -14px; } .c4 { right: -8px; bottom: -18px; }
 
   /* ----- the sequence: "a" while the film plays, "e" reveals the callouts, "idle" is the default
      (no JS, reduced motion, a film that cannot play) ----- */
@@ -204,6 +200,10 @@
         <p data-i18n="sub"></p>
         <div class="ctas">
           <a class="btn primary" href="/start" data-i18n="cta_signup"></a>
+          <a class="btn secondary" href="/center" data-i18n="cta_login"></a>
+        </div>
+        <div class="or" role="separator"></div>
+        <div class="ctas">
           <a class="btn ghost" href="#platforms" data-i18n="cta_explore"></a>
         </div>
         <div class="trust" data-i18n="trust"></div>
@@ -401,6 +401,7 @@
   "pn_pill2": {"th": "สมัครใน 2 นาที", "en": "Two-minute sign-up"},
   "pn_pill3": {"th": "ไทย / อังกฤษ", "en": "Thai / English"},
   "cta_signup": {"th": "สร้างบัญชีด้วย Google", "en": "Create account with Google"},
+  "cta_login": {"th": "เข้าสู่ระบบบัญชีของคุณ", "en": "Log in to your account"},
   "pf_h": {"th": "สลิดอยู่ตรงไหนบ้าง", "en": "Where Salid works"},
   "pf_p": {"th": "เราให้บริการสองส่วน: บอตสลิดในแพลตฟอร์มที่ทีมคุยกันอยู่แล้ว และแพลตฟอร์มเว็บสำหรับดูแลองค์กร", "en": "Two parts: the Salid bot inside the platforms your team already talks on, and a web platform to run the organization."},
   "pf_now": {"th": "ใช้ได้แล้ว", "en": "Available now"},
@@ -455,15 +456,8 @@ function readLang(op, v) {
     return SUPPORTED.includes(s) ? s : null;
   } catch { return null; } // storage blocked: the choice then lasts until reload
 }
-function browserLang() {
-  const list = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || ""];
-  for (const l of list) {
-    const primary = String(l).toLowerCase().split("-")[0];
-    if (SUPPORTED.includes(primary)) return primary;
-  }
-  return "en";
-}
-let lang = readLang("get") || browserLang();
+// Default is English for every visitor (the browser language is not consulted); a saved choice wins.
+let lang = readLang("get") || "en";
 function t(key) { const e = I18N[key]; return e ? (e[lang] ?? e.en) : key; }
 function applyStatic() {
   document.documentElement.lang = lang;
@@ -480,10 +474,11 @@ function setLang(l) { if (!SUPPORTED.includes(l)) return; lang = l; readLang("se
 for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
 
 // The invite URL is filled in by the server from SALID_DISCORD_CLIENT_ID. Never fabricate one:
-// with no client id the buttons say so and are inert.
+// with no client id the invite buttons are hidden (sign-up still works; /start explains the next step).
 function markInvite() {
   for (const a of document.querySelectorAll("[data-invite]")) {
     const ok = a.getAttribute("href").startsWith("https://discord.com/");
+    a.hidden = !ok;
     a.setAttribute("aria-disabled", String(!ok));
     if (ok) { a.target = "_blank"; a.rel = "noopener"; a.textContent = t("cta_add"); }
     else { a.removeAttribute("target"); a.textContent = t("cta_unconfigured"); }

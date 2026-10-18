@@ -281,6 +281,11 @@ def t(key: str, lang: str = DEFAULT_LANGUAGE, **fmt) -> str:
 
 
 CATALOG: dict[str, dict[str, str]] = {
+    # ---------------------------------------------------------------- company language notice
+    "company_language_changed": {
+        "th": "📢 ตั้งแต่นี้ไป ภาษาของบริษัทในเซิร์ฟเวอร์นี้คือภาษา{lname} สลิดจะพูด พิมพ์ และทำเอกสารเป็นภาษา{lname}ค่ะ (เปลี่ยนโดย {who} ที่ Command Center)",
+        "en": "📢 The company language of this server is now {lname}. Salid will speak, write and produce documents in {lname} from now on. (Changed by {who} in the command center.)",
+    },
     # ---------------------------------------------------------------- quotations
     "co_kind_profile": {"th": "ข้อมูลหัวบริษัท", "en": "company details"},
     "docs_font_missing": {
@@ -734,6 +739,21 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Link to connect {name} to Salid's command center 🔗\n{url}\n"
         "Open the link and sign in with your Google account. It works once and expires in 15 "
         "minutes. Please do not share it.",
+    },
+    "cmd_link_account": _bi(
+        "ยืนยันบัญชี Discord ของคุณบนเว็บสลิด", "Verify your Discord account on the Salid web"
+    ),
+    "link_account_guild_only": {
+        "th": "พิมพ์คำสั่งนี้ในเซิร์ฟเวอร์ที่มีสลิดอยู่นะคะ",
+        "en": "Please use this command inside a server where Salid is.",
+    },
+    "link_account_message": {
+        "th": "รหัสยืนยันบัญชี Discord ของคุณ 🔗\n{url}\n"
+        'เปิดลิงก์แล้วเข้าสู่ระบบด้วย Google ของคุณ หรือวางรหัสนี้ในหน้า "บัญชีของฉัน": {code}\n'
+        "ใช้ได้ครั้งเดียว หมดอายุใน 15 นาที อย่าส่งต่อให้ใครค่ะ",
+        "en": "Your Discord verification code 🔗\n{url}\n"
+        "Open the link and sign in with your Google account, or paste this code on the "
+        '"My account" page: {code}\nIt works once, expires in 15 minutes, and must not be shared.',
     },
     "setup_failed": {
         "th": "สร้างลิงก์ไม่สำเร็จ ลองพิมพ์ /ตั้งค่า อีกครั้งภายหลังค่ะ",

@@ -1037,6 +1037,7 @@ def test_every_slash_command_is_bilingual(bot):
     pairs = [
         ("สรุป", "summary"),
         ("ตั้งค่า", "setup"),
+        ("ลิงก์บัญชี", "linkaccount"),
         ("โหมด", "mode"),
         ("ภาษา", "language"),
         ("ความจำ", "memory"),

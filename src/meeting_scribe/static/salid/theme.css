@@ -1,0 +1,130 @@
+/* Salid design system: one theme for every page (/, /start, /hub, /center, /recorder).
+   70% milky white, 20% soft cosmic colour (indigo / lavender / sky), 10% luminous accents.
+   Pages link this file first and keep only page-specific rules inline. Light theme only on purpose:
+   the public demo must look the same on every judge's machine. */
+
+:root {
+  /* surfaces */
+  --bg: #FAF9F6; --bg-2: #F3F1EC; --card: #FFFFFF; --surface: rgba(255, 255, 255, .72);
+  /* text */
+  --ink: #1B1F3B; --muted: #5B6078; --faint: #8A8FA6;
+  /* lines */
+  --line: #E6E3DC; --line-soft: #F0EDE6;
+  /* brand */
+  --indigo: #2B2F7A; --indigo-2: #4A4FBF; --lavender: #B9B4F2; --sky: #BFD6F6; --gold: #D9C28A;
+  --navy: #1B1F3B;
+  /* aliases used by the app pages */
+  --accent: var(--indigo-2); --link: var(--indigo-2); --on-accent: #FFFFFF; --accent-ink: #FFFFFF;
+  --nav-active: #EEEDFB; --chip: #EEEDFB;
+  --bubble-me: var(--indigo-2); --bubble-bot: #F1F0FA;
+  /* status */
+  --ok-bg: #E3F4EA; --ok-ink: #0B6B45; --ok: #0B6B45;
+  --warn-bg: #FFF3DA; --warn-ink: #8A5A00;
+  --err-bg: #FDE7E4; --err-ink: #A12315; --danger: #A12315;
+  --soon-bg: #F0EDE6;
+  /* shape */
+  --radius: 12px; --radius-lg: 16px;
+  --shadow: 0 10px 30px rgba(43, 47, 122, .08), 0 1px 2px rgba(43, 47, 122, .06);
+  --shadow-lg: 0 24px 60px rgba(43, 47, 122, .14), 0 2px 6px rgba(43, 47, 122, .08);
+  --ease: cubic-bezier(.22, .8, .3, 1);
+  --font: "IBM Plex Sans Thai", "Noto Sans Thai", "Segoe UI", Tahoma, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* ---------- base ---------- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6; font-family: var(--font);
+  -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+a { color: var(--link); }
+a:hover { color: var(--indigo); }
+[hidden] { display: none !important; }
+h1, h2, h3, h4, p { margin: 0; }
+h1 { font-size: clamp(28px, 4vw, 40px); line-height: 1.2; letter-spacing: -.01em; }
+h2 { font-size: clamp(22px, 3vw, 28px); line-height: 1.3; letter-spacing: -.01em; }
+h3 { font-size: 17px; line-height: 1.4; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 3px solid var(--indigo-2); outline-offset: 3px; border-radius: 8px; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+
+/* ---------- header / brand ---------- */
+.wrap { width: min(1120px, 100% - 32px); margin: 0 auto; }
+.nav { position: sticky; top: 0; z-index: 20; background: rgba(250, 249, 246, .86);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.nav .wrap { display: flex; align-items: center; gap: 16px; min-height: 64px; }
+.logo { display: flex; align-items: center; gap: 10px; color: var(--indigo); text-decoration: none; font-weight: 700; font-size: 18px; }
+/* The brand mark is Salid herself (static/salid/cat-avatar.webp); the letter inside stays for
+   screen readers and for the rare case the image does not load. */
+.mark, .logo .mark { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center; color: transparent; font-weight: 700;
+  font-size: 15px; flex: none; overflow: hidden; background: #F6E7C9 url("/static/salid/cat-avatar.webp") center / cover no-repeat;
+  box-shadow: 0 4px 12px rgba(74, 79, 191, .25); }
+.grow { flex: 1 1 auto; }
+.langsw { display: flex; border: 1px solid var(--line); border-radius: 99px; padding: 2px; background: #fff; }
+.langsw button { border: 0; background: none; padding: 4px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.langsw button[aria-pressed="true"] { background: var(--indigo); color: #fff; }
+
+/* ---------- buttons ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 11px 20px; border-radius: var(--radius);
+  font-weight: 600; font-size: 15px; line-height: 1.2; text-decoration: none; border: 1px solid transparent; background: #fff; color: var(--indigo);
+  transition: transform .15s var(--ease), box-shadow .15s var(--ease), background .15s, border-color .15s; }
+.btn.primary { background: var(--indigo); color: #fff; box-shadow: 0 6px 18px rgba(43, 47, 122, .25); }
+.btn.primary:hover { background: #22265F; color: #fff; transform: translateY(-1px); box-shadow: 0 10px 24px rgba(43, 47, 122, .3); }
+.btn.primary:active { transform: translateY(0); box-shadow: 0 3px 10px rgba(43, 47, 122, .25); }
+.btn.secondary { background: #fff; color: var(--ink); border-color: var(--ink); }
+.btn.secondary:hover { background: var(--ink); color: #fff; }
+.btn.ghost { color: var(--indigo); border-color: var(--line); background: #fff; }
+.btn.ghost:hover { border-color: var(--lavender); background: #FBFAFF; color: var(--indigo); }
+.btn.danger { background: #fff; color: var(--err-ink); border-color: #F1C4BE; }
+.btn.danger:hover { background: var(--err-bg); }
+.btn.small { padding: 8px 14px; font-size: 14px; border-radius: 10px; }
+.btn[disabled], .btn[aria-disabled="true"] { background: #E3E2EE; color: #8A8FA6; border-color: transparent; box-shadow: none; cursor: not-allowed; transform: none; }
+
+/* ---------- surfaces ---------- */
+.card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 24px; box-shadow: var(--shadow); }
+.card.flat { box-shadow: none; }
+.panel-soft { background: linear-gradient(180deg, #FFFFFF, #F6F4FF); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+hr, .or { border: 0; height: 1px; background: var(--line); margin: 8px 0; }
+
+/* ---------- forms ---------- */
+label { font-weight: 600; font-size: 14px; }
+.hint { font-weight: 400; color: var(--muted); font-size: 13px; }
+input[type="text"], input[type="email"], input[type="url"], input[type="search"], input[type="number"], input[type="time"],
+input[type="date"], input[type="password"], select, textarea {
+  width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--ink);
+  transition: border-color .15s, box-shadow .15s; }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--indigo-2); box-shadow: 0 0 0 3px rgba(74, 79, 191, .18); }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+
+/* ---------- status ---------- */
+.notice { padding: 12px 14px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-ink); font-size: 14px; }
+.notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
+.notice.error, .notice.err { background: var(--err-bg); color: var(--err-ink); }
+.badge, .chip, .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 600;
+  background: var(--chip); color: var(--indigo); }
+.badge.ok { background: var(--ok-bg); color: var(--ok-ink); }
+.badge.warn { background: var(--warn-bg); color: var(--warn-ink); }
+.badge.err { background: var(--err-bg); color: var(--err-ink); }
+.badge.soon { background: var(--soon-bg); color: var(--muted); }
+
+/* ---------- tables ---------- */
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+td { padding: 10px 12px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+
+/* ---------- footer ---------- */
+.site-footer { border-top: 1px solid var(--line); padding: 24px 0; color: var(--faint); font-size: 13px; }
+.site-footer .wrap { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; }
+.site-footer a { color: var(--muted); text-decoration: none; }
+.site-footer a:hover { color: var(--indigo); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+/* The floating "talk to Salid" button on /center is Salid's face too (overrides the page's #fab). */
+body #fab { background: #F6E7C9 url("/static/salid/cat-avatar.webp") center / cover no-repeat; color: transparent;
+  box-shadow: 0 10px 24px rgba(43, 47, 122, .28); border: 3px solid #fff; }

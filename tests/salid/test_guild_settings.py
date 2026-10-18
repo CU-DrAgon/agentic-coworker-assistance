@@ -335,3 +335,18 @@ def test_bot_cache_sees_a_language_change_at_once_and_resolves_override_then_def
     assert team.channel_language(GUILD, 5) == "en"  # an `auto` override is ignored once chosen
     team.set_channel_language(GUILD, 5, None)
     assert team.channel_language(GUILD, 5) == "en"
+
+
+def test_identity_code_proves_one_discord_user_without_granting_admin():
+    from salid.guild_settings import LinkError, MemoryGuildStore
+
+    g = MemoryGuildStore()
+    g.upsert_guild(7, name="G", icon_url="", channels=[])
+    code = g.create_link_code(7, 4242, "ann#1")
+    assert g.link_code_info(code)["discord_user_id"] == 4242
+    assert g.redeem_identity_code(code, "Ann@Example.com") == (7, "4242", "ann#1")
+    assert g.get(7).admin_emails == []  # no admin rights from an identity code
+    with pytest.raises(LinkError):
+        g.redeem_identity_code(code, "ann@example.com")  # one use only
+    with pytest.raises(LinkError):
+        g.link_code_info("nope")

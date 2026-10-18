@@ -6,127 +6,159 @@
 <title>สลิด ศูนย์บัญชาการ · Salid Command Center</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@500&amp;display=swap">
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="icon" type="image/png" href="/static/salid/favicon.png">
+<link rel="stylesheet" href="/static/salid/theme.css">
+<script src="https://accounts.google.com/gsi/client?hl=en" async defer></script>
 <style>
-  :root {
-    --bg: #F3F4F7; --card: #fff; --ink: #171A21; --muted: #545B6E; --faint: #6A7183;
-    --line: #DCDFE8; --line-soft: #ECEEF3; --navy: #1D2140; --accent: #4752C4; --link: #3F49B8;
-    --ok-bg: #DDF3E8; --ok-ink: #0B6B45; --warn-bg: #FFF1D6; --warn-ink: #8A5A00;
-    --soon-bg: #ECEEF3; --err-bg: #FDE7E4; --err-ink: #A12315; --chip: #EEF0FB;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.5;
-    font-family: "IBM Plex Sans Thai", "Noto Sans Thai", Tahoma, sans-serif; }
-  a { color: var(--link); } a:hover { color: #2C3590; }
-  [hidden] { display: none !important; }
-  h1, h2 { margin: 0; }
-  button { font: inherit; cursor: pointer; }
-  .mark { width: 36px; height: 36px; border-radius: 10px; background: #5865F2; color: #fff;
-    display: grid; place-items: center; font-weight: 700; font-size: 18px; flex: none; }
+  /* Page-specific rules only; tokens, base resets, buttons, cards, forms, badges and tables come
+     from /static/salid/theme.css. Light theme only on purpose. */
 
-  /* login */
-  #login { min-height: 100vh; display: flex; flex-wrap: wrap; }
-  #login .pitch { flex: 1 1 420px; background: var(--navy); color: #EEF0FA; padding: 48px 28px;
-    display: flex; flex-direction: column; gap: 24px; }
-  #login .pitch h1 { font-size: 34px; line-height: 1.3; max-width: 520px; }
-  #login .pitch p { margin: 0; font-size: 17px; line-height: 1.7; color: #C5CAE8; max-width: 500px; }
-  #login .pitch li { list-style: none; display: flex; gap: 12px; align-items: baseline; font-size: 16px; }
+  /* ---------- login ---------- */
+  #login { min-height: 100vh; display: flex; flex-wrap: wrap;
+    background: radial-gradient(60% 50% at 20% 20%, #EDEBFF 0%, transparent 60%),
+      radial-gradient(50% 40% at 90% 80%, #E3EEFF 0%, transparent 60%), var(--bg); }
+  #login .pitch { flex: 1 1 420px; padding: 48px 32px; display: flex; flex-direction: column; gap: 24px; }
+  #login .pitch .top { display: flex; align-items: center; gap: 12px; }
+  #login .pitch .top strong { font-size: 20px; color: var(--indigo); }
+  #login .pitch h1 { font-size: clamp(30px, 3.4vw, 40px); line-height: 1.2; max-width: 560px; color: var(--ink); }
+  #login .pitch p { font-size: 17px; line-height: 1.7; color: var(--muted); max-width: 500px; }
   #login .pitch ul { margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-  #login .pitch li span { font: 500 13px "IBM Plex Mono", monospace; color: #8E97E8; }
+  #login .pitch li { list-style: none; display: flex; gap: 14px; align-items: baseline; font-size: 16px; color: var(--ink); }
+  #login .pitch li span:first-child { font: 500 13px var(--mono); color: var(--indigo-2); letter-spacing: .04em; flex: none; }
+  #login .pitch .grow { flex: 1 1 auto; }
   #login .panel { flex: 1 1 360px; display: grid; place-items: center; padding: 40px 16px; }
-  #login .box { width: 100%; max-width: 400px; background: var(--card); border: 1px solid var(--line);
-    border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
+  #login .box { width: 100%; max-width: 400px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg); padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
   #login .box h2 { font-size: 24px; }
-  #login .box p { margin: 0; font-size: 15px; color: var(--muted); }
+  #login .box p { font-size: 15px; color: var(--muted); }
+  #login .box .fine { font-size: 13px; color: var(--faint); }
+  #login .box a.back { font-size: 14px; }
   #gsi-button { min-height: 44px; display: flex; justify-content: center; }
-  .notice { padding: 10px 14px; border-radius: 10px; font-size: 14px; background: var(--warn-bg); color: var(--warn-ink); }
   .notice.error { background: var(--err-bg); color: var(--err-ink); }
 
-  /* hub */
-  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 18px; padding: 12px 16px;
-    background: var(--navy); color: #EEF0FA; }
-  header .brand { display: flex; align-items: center; gap: 10px; }
-  header .brand strong { font-size: 18px; } header .brand span { font-size: 14px; color: #A9B0DA; }
+  /* ---------- app header ---------- */
+  header { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 24px;
+    background: rgba(250, 249, 246, .86); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  header .brand { display: flex; align-items: center; gap: 10px; color: var(--indigo); }
+  header .brand strong { font-size: 18px; } header .brand span { font-size: 14px; color: var(--muted); }
   header .grow { flex: 1 1 auto; }
-  header .who { font-size: 14px; color: #C5CAE8; overflow-wrap: anywhere; }
-  header button { background: none; border: 0; color: #C5CAE8; font-size: 14px; text-decoration: underline; }
-  .layout { display: flex; flex-wrap: wrap; gap: 20px; padding: 20px 16px; max-width: 1360px; margin: 0 auto; }
-  nav { flex: 1 1 180px; max-width: 240px; display: flex; flex-direction: column; gap: 4px; }
-  nav a { padding: 9px 14px; border-radius: 8px; color: #3B4152; text-decoration: none; }
-  nav a:first-child { background: #E3E5F6; color: var(--navy); font-weight: 600; }
-  main { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+  header .who { font-size: 14px; color: var(--muted); overflow-wrap: anywhere; }
+  header #signout { background: #fff; border: 1px solid var(--line); border-radius: 10px; color: var(--indigo); font-size: 14px;
+    font-weight: 600; padding: 7px 14px; min-height: 36px; }
+  header #signout:hover { border-color: var(--lavender); background: #FBFAFF; }
+  header select { min-height: 36px; width: auto; max-width: 260px; padding: 0 32px 0 12px; border-radius: 10px; font-size: 14px; font-weight: 600;
+    color: var(--indigo); appearance: none; -webkit-appearance: none;
+    background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%234A4FBF' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 12px center; }
+  header .gicon { width: 28px; height: 28px; border-radius: 50%; flex: none; background: var(--chip); border: 1px solid var(--line); }
+
+  /* ---------- layout ---------- */
+  .layout { display: flex; flex-wrap: wrap; gap: 24px; padding: 24px 24px 48px; max-width: 1360px; margin: 0 auto; }
+  nav { flex: 1 1 180px; max-width: 220px; display: flex; flex-direction: column; gap: 2px; align-self: flex-start; position: sticky; top: 84px; }
+  nav a { padding: 9px 14px; border-radius: 10px; color: var(--muted); text-decoration: none; font-weight: 500; font-size: 15px; transition: background .15s, color .15s; }
+  nav a:hover { background: rgba(74, 79, 191, .08); color: var(--indigo); }
+  nav a:first-child { background: var(--nav-active); color: var(--indigo); font-weight: 600; }
+  main { flex: 999 1 520px; min-width: 0; display: flex; flex-direction: column; gap: 24px; }
   main h1 { font-size: 26px; line-height: 1.3; }
-  section.card { background: var(--card); border: 1px solid var(--line); border-radius: 14px;
-    padding: 20px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  section.card h2 { font-size: 19px; }
-  .cols { display: flex; flex-wrap: wrap; gap: 20px; }
+  section.card { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  section.card h2 { font-size: 19px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  section.card h3 { font-size: 16px; margin-top: 10px; }
+  .cols { display: flex; flex-wrap: wrap; gap: 24px; }
   .cols > section { flex: 1 1 340px; }
-  .channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
-  .ch { border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-  .ch.soon { border-style: dashed; border-color: #C3C8D6; }
+
+  /* ---------- channels ---------- */
+  .channels { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 16px; }
+  .ch { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 8px;
+    background: linear-gradient(180deg, #FFFFFF, #FBFAFF); }
+  .ch.soon { border-style: dashed; background: #FCFBF9; }
   .ch .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .ch p { margin: 0; font-size: 14px; color: var(--muted); }
-  .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--soon-bg); color: var(--muted); white-space: nowrap; }
+  .ch p { font-size: 14px; color: var(--muted); }
+  .ch a { font-weight: 600; text-decoration: none; }
+  .ch a:hover { text-decoration: underline; }
+  .ch .btn { align-self: flex-start; margin-top: 4px; }
+  .pill { background: var(--soon-bg); color: var(--muted); white-space: nowrap; }
   .pill.ok { background: var(--ok-bg); color: var(--ok-ink); }
   .pill.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .pill.err { background: var(--err-bg); color: var(--err-ink); }
+  #hc-list ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 15px; }
+
+  /* ---------- skills ---------- */
   .feat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 12px 0; border-top: 1px solid var(--line-soft); }
+  .feat:first-child { border-top: 0; padding-top: 0; }
   .feat .txt { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; }
   .feat .txt span { font-size: 14px; color: var(--muted); }
-  .where { font: 500 13px "IBM Plex Mono", monospace; color: var(--link); background: var(--chip); padding: 4px 10px; border-radius: 8px; }
-  .switch { width: 52px; height: 30px; border-radius: 99px; border: 0; padding: 3px; background: #B9BECC;
-    display: flex; justify-content: flex-start; flex: none; }
-  .switch[aria-pressed="true"] { background: var(--accent); justify-content: flex-end; }
-  .switch:disabled { background: #D5D8E1; cursor: not-allowed; }
-  .switch i { width: 24px; height: 24px; border-radius: 50%; background: #fff; }
-  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-  label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; font-size: 14px; }
-  label small { font-weight: 400; color: var(--faint); }
-  input[type=text], input[type=time] { min-height: 44px; padding: 0 12px; border: 1px solid #C9CDD9;
-    border-radius: 10px; font: inherit; font-size: 15px; width: 100%; }
-  .btn { min-height: 44px; padding: 0 22px; border-radius: 10px; border: 0; background: var(--accent);
-    color: #fff; font-weight: 600; font-size: 15px; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
-  .btn:disabled { opacity: .6; cursor: wait; }
-  .btn.discord { background: #5865F2; } .btn.discord:hover { color: #fff; }
+  .where { font: 500 12.5px var(--mono); line-height: 1.5; color: var(--indigo-2); background: var(--chip); padding: 4px 10px; border-radius: 8px;
+    max-width: 100%; overflow-wrap: anywhere; }
+  .switch { width: 48px; height: 28px; border-radius: 99px; border: 0; padding: 3px; background: #C9CBE0; display: flex; justify-content: flex-start;
+    flex: none; transition: background .15s; }
+  .switch[aria-pressed="true"] { background: var(--indigo-2); justify-content: flex-end; }
+  .switch:disabled { background: #E3E2EE; cursor: not-allowed; }
+  .switch i { width: 22px; height: 22px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(27, 31, 59, .25); }
+
+  /* ---------- forms ---------- */
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+  label { display: flex; flex-direction: column; gap: 4px; }
+  label small { font-weight: 400; color: var(--faint); font-size: 13px; }
+  .fields input[type=text], .fields input[type=time], .fields input[type=number], .fields select { min-height: 44px; padding-top: 0; padding-bottom: 0; }
+  .checks { display: flex; flex-direction: column; gap: 2px; max-height: 190px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px;
+    padding: 6px 8px; background: #fff; }
+  .checks label { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; font-size: 15px; min-height: 32px; }
+  .checks input { width: 18px; height: 18px; flex: none; accent-color: var(--indigo-2); margin: 0; }
+  #receipt-forward { accent-color: var(--indigo-2); }
+  #channel-modes label { gap: 6px; }
+  .btn, .btn.discord { min-height: 44px; }
+  .btn:disabled { cursor: wait; }
+  .btn.big { min-height: 56px; padding: 0 32px; font-size: 18px; border-radius: 14px; }
   .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .hint { font-size: 13px; color: var(--faint); }
-  .chat { display: flex; flex-direction: column; gap: 10px; background: #F6F7FA; border-radius: 12px; padding: 14px; min-height: 80px; max-height: 420px; overflow-y: auto; }
+  .steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; }
+  .empty-state { align-items: flex-start; gap: 18px; background: linear-gradient(180deg, #FFFFFF, #F6F4FF); }
+
+  /* ---------- command (chat) ---------- */
+  .chat { display: flex; flex-direction: column; gap: 10px; background: #F7F6FD; border: 1px solid var(--line-soft); border-radius: var(--radius);
+    padding: 14px; min-height: 80px; max-height: 420px; overflow-y: auto; }
   .bubble { max-width: 88%; padding: 10px 14px; font-size: 15px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .bubble.me { align-self: flex-end; background: var(--accent); color: #fff; border-radius: 12px 12px 4px 12px; }
-  .bubble.bot { align-self: flex-start; background: #fff; border: 1px solid var(--line); border-radius: 12px 12px 12px 4px; }
+  .bubble.me { align-self: flex-end; background: var(--bubble-me); color: #fff; border-radius: 14px 14px 4px 14px; }
+  .bubble.bot { align-self: flex-start; background: #fff; border: 1px solid var(--line); border-radius: 14px 14px 14px 4px; }
   .bubble.err { background: var(--err-bg); color: var(--err-ink); border-color: transparent; }
+  #ask-form input[type=text] { min-height: 44px; padding-top: 0; padding-bottom: 0; }
+
+  /* ---------- activity / people ---------- */
   .act { display: grid; grid-template-columns: 64px minmax(0, 1fr) auto; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); align-items: start; }
-  .act time { font: 500 13px "IBM Plex Mono", monospace; color: var(--faint); padding-top: 2px; }
+  .act time { font: 500 13px var(--mono); color: var(--faint); padding-top: 3px; }
   .act span.t { overflow-wrap: anywhere; font-size: 15px; }
   .who-row { display: flex; flex-direction: column; gap: 2px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
   .who-row span { font-size: 14px; color: var(--muted); }
   .empty { color: var(--faint); font-size: 14px; padding: 6px 0; }
+
+  /* ---------- small screens ---------- */
+  @media (max-width: 760px) {
+    header { padding: 10px 16px; }
+    header .brand span:not(.mark) { display: none; }
+    .layout { padding: 16px 16px 40px; gap: 16px; }
+    nav { position: static; max-width: none; flex: 1 1 100%; flex-direction: row; flex-wrap: nowrap; overflow-x: auto; gap: 4px;
+      padding-bottom: 4px; scrollbar-width: none; }
+    nav::-webkit-scrollbar { display: none; }
+    nav a { white-space: nowrap; padding: 8px 12px; font-size: 14px; flex: none; }
+    main { gap: 16px; }
+    section.card { padding: 18px 16px; }
+    .cols { gap: 16px; }
+    #login .pitch { padding: 32px 20px 8px; }
+    #login .panel { padding: 16px 16px 40px; }
+    #login .box { padding: 24px 20px; }
+  }
   @media (max-width: 600px) { .act { grid-template-columns: 56px minmax(0, 1fr); } .act .pill { grid-column: 2; justify-self: start; } }
-  header select { min-height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid #4A5190;
-    background: #2A2F57; color: #fff; font: inherit; font-size: 15px; max-width: 260px; }
-  header .gicon { width: 28px; height: 28px; border-radius: 50%; flex: none; background: #4A5190; }
-  .checks { display: flex; flex-direction: column; gap: 2px; max-height: 190px; overflow-y: auto;
-    border: 1px solid #C9CDD9; border-radius: 10px; padding: 6px 8px; background: #fff; }
-  .checks label { flex-direction: row; align-items: center; gap: 8px; font-weight: 400; font-size: 15px;
-    min-height: 32px; }
-  .checks input { width: 18px; height: 18px; flex: none; }
-  select.field { min-height: 44px; padding: 0 12px; border: 1px solid #C9CDD9; border-radius: 10px;
-    font: inherit; font-size: 15px; width: 100%; background: #fff; }
-  .notice.ok { background: var(--ok-bg); color: var(--ok-ink); }
-  .empty-state { align-items: flex-start; gap: 18px; }
-  .btn.big { min-height: 56px; padding: 0 32px; font-size: 18px; border-radius: 14px; }
-  .steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; font-size: 16px; }
-  .langsw { display: inline-flex; border: 1px solid #4A5190; border-radius: 8px; overflow: hidden; }
-  header .langsw button, .langsw button { background: none; border: 0; color: #C5CAE8; font-size: 13px; font-weight: 600;
-    padding: 5px 10px; text-decoration: none; min-height: 32px; }
-  .langsw button[aria-pressed="true"] { background: #5865F2; color: #fff; }
-  #login .pitch .grow { flex: 1 1 auto; }
+dialog { border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--card); color: var(--ink); padding: 24px; width: min(440px, calc(100% - 32px)); box-shadow: var(--shadow-lg); }
+dialog::backdrop { background: rgba(27, 31, 59, .45); }
+dialog form { display: flex; flex-direction: column; gap: 14px; }
+dialog h2 { font-size: 20px; }
+dialog .row { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; }
 </style>
 </head>
 <body>
 
 <div id="login" hidden>
   <section class="pitch">
-    <div style="display:flex;align-items:center;gap:12px"><span class="mark" aria-hidden="true" data-i18n="mark"></span><strong style="font-size:22px" data-i18n="brand_name"></strong><div class="grow"></div><div class="langsw" role="group" data-i18n-attr="aria-label:lang_switch_aria"><button type="button" data-lang="th">TH</button><button type="button" data-lang="en">EN</button></div></div>
+    <div class="top"><span class="mark" aria-hidden="true" data-i18n="mark"></span><strong data-i18n="brand_name"></strong><div class="grow"></div><div class="langsw" role="group" data-i18n-attr="aria-label:lang_switch_aria"><button type="button" data-lang="th">TH</button><button type="button" data-lang="en">EN</button></div></div>
     <h1 data-i18n="login_h1"></h1>
     <p data-i18n="login_p"></p>
     <ul>
@@ -142,8 +174,8 @@
       <div id="gsi-button"></div>
       <div class="notice error" id="login-msg" role="alert" hidden></div>
       <div class="notice" id="not-configured" data-i18n="not_configured" hidden></div>
-      <p style="font-size:13px;color:var(--faint)" data-i18n-html="login_p3"></p>
-      <a href="/recorder" style="font-size:14px" data-i18n="back_recorder"></a>
+      <p class="fine" data-i18n-html="login_p3"></p>
+      <a href="/recorder" class="back" data-i18n="back_recorder"></a>
     </div>
   </section>
 </div>
@@ -175,7 +207,7 @@
 
       <section class="card empty-state" id="no-guild" aria-labelledby="ng-h" hidden>
         <h2 id="ng-h" data-i18n="ng_h"></h2>
-        <a class="btn big discord" id="invite-big" href="#" target="_blank" rel="noopener" data-i18n="invite_big" hidden></a>
+        <a class="btn primary big discord" id="invite-big" href="#" target="_blank" rel="noopener" data-i18n="invite_big" hidden></a>
         <p id="invite-big-soon" class="hint" data-i18n="discord_not_set" hidden></p>
         <ol class="steps">
           <li data-i18n="ng_step1"></li>
@@ -192,13 +224,13 @@
           <div class="ch">
             <div class="top"><strong>Discord</strong><span class="pill ok" id="guild-pill" data-i18n="ready"></span></div>
             <p id="guild-name" data-i18n="guild_name_default"></p>
-            <a class="btn discord" id="invite" href="#" target="_blank" rel="noopener" data-i18n="invite_other" hidden></a>
+            <a class="btn primary discord" id="invite" href="#" target="_blank" rel="noopener" data-i18n="invite_other" hidden></a>
             <p id="invite-soon" data-i18n="discord_not_set" hidden></p>
           </div>
           <div class="ch">
             <div class="top"><strong>Google Meet</strong><span class="pill ok" data-i18n="ready"></span></div>
             <p data-i18n="meet_p"></p>
-            <a href="/recorder" style="font-weight:600" data-i18n="meet_start"></a>
+            <a href="/recorder" data-i18n="meet_start"></a>
           </div>
           <div class="ch soon">
             <div class="top"><strong>LINE</strong><span class="pill" data-i18n="soon"></span></div>
@@ -247,7 +279,7 @@
           <label><span data-i18n="exec_level_l"></span> <select class="field" id="exec-max-level"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select><small data-i18n="exec_level_s"></small></label>
           <label><input type="checkbox" id="department-roles"> <span data-i18n="dept_roles_l"></span><small data-i18n="dept_roles_s"></small></label>
         </div>
-        <h3 id="modes-h" style="margin:18px 0 6px;font-size:1rem" data-i18n="modes_h"></h3>
+        <h3 id="modes-h" data-i18n="modes_h"></h3>
         <div class="fields" id="modes">
           <label><span data-i18n="default_mode_l"></span> <select class="field" id="default-mode"></select><small data-i18n="default_mode_s"></small></label>
           <label><span data-i18n="default_lang_l"></span> <select class="field" id="default-language"></select><small data-i18n="default_lang_s"></small></label>
@@ -269,7 +301,7 @@
         <small class="hint" data-i18n="modes_hint"></small>
         <span class="hint" id="no-channels" data-i18n="no_channels" hidden></span>
         <div class="row">
-          <button type="button" class="btn" id="save" data-i18n="save"></button>
+          <button type="button" class="btn primary" id="save" data-i18n="save"></button>
           <span class="hint" id="save-msg" role="status" aria-live="polite"></span>
         </div>
         <span class="hint" data-i18n="save_hint"></span>
@@ -281,7 +313,7 @@
         <form class="row" id="ask-form">
           <label for="ask" style="position:absolute;width:1px;height:1px;overflow:hidden" data-i18n="ask_label"></label>
           <input type="text" id="ask" maxlength="1000" data-i18n-attr="placeholder:ask_ph" style="flex:1 1 280px;width:auto" autocomplete="off">
-          <button type="submit" class="btn" id="ask-btn" data-i18n="send"></button>
+          <button type="submit" class="btn primary" id="ask-btn" data-i18n="send"></button>
         </form>
         <span class="hint" data-i18n="ask_hint"></span>
       </section>
@@ -652,6 +684,22 @@
  "default_lang_s": {
   "th": "ใช้กับห้องที่ไม่ได้เลือกภาษาเฉพาะ · อัตโนมัติ = ตอบตามภาษาที่คนพิมพ์มา",
   "en": "Used for channels without their own language · Auto = reply in the language people type in"
+ },
+ "cancel": {
+  "th": "ยกเลิก",
+  "en": "Cancel"
+ },
+ "lang_confirm_h": {
+  "th": "เปลี่ยนภาษาของบริษัท?",
+  "en": "Change the company language?"
+ },
+ "lang_confirm_p": {
+  "th": "ตั้งแต่นี้ไปสลิดจะพูด พิมพ์ และทำเอกสารเป็น{lname}สำหรับทุกคนในเซิร์ฟเวอร์นี้ และจะประกาศการเปลี่ยนแปลงนี้ในเซิร์ฟเวอร์ให้ทุกคนทราบ",
+  "en": "From now on Salid will speak, write and produce documents in {lname} for everyone on this server, and she will announce the change on the server so nobody is surprised."
+ },
+ "lang_confirm_ok": {
+  "th": "ใช่ เปลี่ยนภาษาของบริษัท",
+  "en": "Yes, change the company language"
  },
  "modes_hint": {
   "th": "🔇 ปิด = สลิดไม่ยุ่งกับห้องนี้ · 👂 ฟังเงียบ = อ่านใบเสร็จแล้วแปะอีโมจิเท่านั้น · 🙋 เรียกแล้วคุย = ตอบเมื่อถูกแท็กหรือเรียกชื่อ · 🎧 ร่วมวง = เหมือนเรียกแล้วคุย และเข้าร่วมเองเมื่อมีคำถามที่ช่วยได้ · 💬 ตอบทุกข้อความ",
@@ -1690,13 +1738,20 @@
   "en": "This link cannot be used (expired or already used). Type /setup in Discord to get a new one."
  }
 }</script>
+<dialog id="confirm-dlg" aria-labelledby="confirm-t">
+  <form method="dialog" id="confirm-form">
+    <h2 id="confirm-t"></h2>
+    <p id="confirm-body" class="small"></p>
+    <div class="row"><button class="btn ghost" type="button" id="confirm-cancel"></button><button class="btn primary" type="submit" id="confirm-ok"></button></div>
+  </form>
+</dialog>
 <script>
 "use strict";
 const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
 const TOKEN_KEY = "salid_hub_token";
 const LINK_KEY = "salid_hub_link";
 const GUILD_KEY = "salid_hub_guild";
-const LANG_KEY = "salid_hub_lang";
+const LANG_KEY = "salid-language"; // one key for every Salid page (landing, start, hub, center)
 const $ = (id) => document.getElementById(id);
 
 // ---------- language (Thai / English) ----------
@@ -1711,11 +1766,8 @@ function readLang(op, v) {
     return s === "th" || s === "en" ? s : null;
   } catch { return null; } // storage blocked: the choice then lasts until reload
 }
-function browserLang() {
-  const l = (navigator.language || (navigator.languages || [])[0] || "").toLowerCase();
-  return l.startsWith("th") ? "th" : "en";
-}
-let lang = readLang("get") || browserLang();
+// English by default (the browser language is not consulted); a saved choice wins.
+let lang = readLang("get") || "en";
 const locale = () => (lang === "th" ? "th-TH" : "en-US");
 function t(key, params) {
   const e = I18N[key];
@@ -1748,10 +1800,17 @@ function applyStatic() {
   for (const el of document.querySelectorAll("[data-lang]")) el.setAttribute("aria-pressed", String(el.dataset.lang === lang));
   for (const el of document.querySelectorAll(".notice, .hint")) if (el._f) el.textContent = el._f();
 }
-function setLang(l) {
+function setLang(l, { remember = true } = {}) {
   lang = l; readLang("set", l);
   applyStatic();
   for (const fn of rerender) fn();
+  // signed in: remember the choice with the account, so every device and every Salid page opens in it
+  if (remember && token) api("/api/hub/me/language", { method: "PUT", body: JSON.stringify({ language: l }) }).catch(() => {});
+}
+// After sign-in: the language saved with the account wins; with none saved yet, the local choice is saved.
+function syncLang(saved) {
+  if (saved === "th" || saved === "en") { if (saved !== lang) setLang(saved, { remember: false }); }
+  else if (readLang("get")) api("/api/hub/me/language", { method: "PUT", body: JSON.stringify({ language: lang }) }).catch(() => {});
 }
 for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
 
@@ -1823,7 +1882,27 @@ function mem(op, key, v) {
   } catch { /* storage blocked: values then live only in memory */ }
   return null;
 }
-let token = mem("get", TOKEN_KEY);
+// ---------- Salid session: sign in once, stay signed in (30 days, every page, survives reloads) ----------
+const SESSION_KEY = "salid_session";
+function session(op, v) {
+  try {
+    if (op === "set") localStorage.setItem(SESSION_KEY, v);
+    else if (op === "clear") localStorage.removeItem(SESSION_KEY);
+    else { const s = localStorage.getItem(SESSION_KEY); return s && s.startsWith("ss1.") ? s : null; }
+  } catch { /* storage blocked: the sign-in then lasts until reload */ }
+  return null;
+}
+// Exchange a fresh Google sign-in for a Salid session (null when the server has no session secret).
+async function exchangeSession(googleCredential) {
+  try {
+    const r = await fetch("/api/hub/session", { method: "POST", headers: { Authorization: "Bearer " + googleCredential } });
+    if (!r.ok) return null;
+    const j = await r.json(); session("set", j.token); return j.token;
+  } catch { return null; }
+}
+// Back from "Sign in with Discord" (next=hub): the session arrives in the fragment.
+try { const m = /^#session=(ss1\.[A-Za-z0-9_.-]+)$/.exec(location.hash); if (m) { session("set", m[1]); history.replaceState(null, "", location.pathname + location.search); } } catch { /* ignore */ }
+let token = session("get") || mem("get", TOKEN_KEY);
 
 // A `/ตั้งค่า` link opens /hub?link=<code>. Take the code out of the address bar at once (it is a
 // one-time credential) and keep it until it has been redeemed after sign-in.
@@ -1862,14 +1941,16 @@ async function api(path, opts = {}) {
 const gapi = (suffix, opts) => api("/api/hub/guilds/" + guildId + suffix, opts);
 
 function toLogin(msg) {
-  token = null; mem("clear", TOKEN_KEY);
+  token = null; mem("clear", TOKEN_KEY); session("clear");
   show("login");
   note($("login-msg"), msg);
   renderGoogleButton();
 }
 
-function onCredential(resp) {
-  token = resp.credential; mem("set", TOKEN_KEY, token);
+async function onCredential(resp) {
+  token = resp.credential;
+  const s = await exchangeSession(token);
+  if (s) token = s; else mem("set", TOKEN_KEY, token); // no session secret: one-hour Google token
   start();
 }
 
@@ -2149,7 +2230,31 @@ function renderSwitcher() {
 }
 
 // ---------- actions ----------
+// A standard modal confirmation (native <dialog>): true on OK, false on cancel / Esc.
+function confirmDlg(title, body, okText) {
+  return new Promise((resolve) => {
+    const d = $("confirm-dlg");
+    $("confirm-t").textContent = title; $("confirm-body").textContent = body;
+    $("confirm-ok").textContent = okText; $("confirm-cancel").textContent = t("cancel");
+    const finish = (v) => { d.removeEventListener("close", onClose); $("confirm-cancel").onclick = null; resolve(v); };
+    const onClose = () => finish(d.returnValue === "ok");
+    d.addEventListener("close", onClose);
+    $("confirm-cancel").onclick = () => d.close("cancel");
+    $("confirm-form").onsubmit = (ev) => { ev.preventDefault(); d.close("ok"); };
+    d.returnValue = "";
+    if (d.showModal) d.showModal(); else d.setAttribute("open", "");
+    $("confirm-ok").focus();
+  });
+}
 async function save() {
+  // the COMPANY language is a decision for the whole server: confirm it first (Salid also
+  // announces the change on the server)
+  const newLang = $("default-language").value || "en", oldLang = lastSettings ? (lastSettings.default_language || "en") : newLang;
+  if (newLang !== oldLang) {
+    const le = I18N["lang_" + newLang], lname = le ? (le[lang] ?? le.en) : newLang;
+    const ok = await confirmDlg(t("lang_confirm_h"), t("lang_confirm_p", { lname }), t("lang_confirm_ok"));
+    if (!ok) { $("default-language").value = oldLang; return; }
+  }
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
     features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, company_knowledge: features.company_knowledge, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, quotations: features.quotations, votes: features.votes, vote_offers: features.vote_offers, reminders: features.reminders, projects: features.projects, project_notes: features.project_notes, data: features.data, task_handshake: features.task_handshake, role_sync: features.role_sync, images: features.images, video_ads: features.video_ads },
@@ -2249,6 +2354,7 @@ async function redeemLink() {
 async function start() {
   try {
     const me = await api("/api/hub/me");
+    syncLang(me.language);
     note($("login-msg"), "");
     $("who").textContent = me.email;
     for (const [btn, soon] of [["invite", "invite-soon"], ["invite-big", "invite-big-soon"]]) {

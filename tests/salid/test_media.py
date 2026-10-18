@@ -765,3 +765,29 @@ def test_open_file_tool_is_exposed_only_with_an_opener_and_parses_links(seeded, 
     names = lambda m: {t.__name__ for t in build_tools(ledger, None, m)}  # noqa: E731
     assert "open_file" in names(mem)
     assert "open_file" not in names(MemoryTools(None, GUILD, {10: "a"}, settings))
+
+
+async def test_document_originals_are_archived_as_real_files(iw, bot, world, tmp_path):
+    """A Word file read in a channel is kept as a downloadable document of that server."""
+    from salid.coo_store import SQLiteDocStore
+    from salid.files import FileArchive
+    from salid.library import ORG_DOCS, LocalBlobs
+
+    docs = SQLiteDocStore(":memory:")
+    bot.file_archive = FileArchive(docs, LocalBlobs(tmp_path / "files"))
+    set_llm(bot, FakeClient([]))
+    data = make_docx()
+    m = TMsg(world.g, iw.a, member(world.g, STAFF), "ไฟล์",
+             attachments=[matt("quote.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data)])  # fmt: skip
+    await bot.on_message(m)
+    await settle(bot)
+    (rec,) = docs.find(ORG_DOCS, world.g.id)
+    assert rec["filename"] == "quote.docx" and rec["size"] == len(data)
+    assert rec["source"] == "discord" and rec["channel_id"] == str(iw.a.id)
+    assert "ใบเสนอราคา" in rec["text"]
+    assert (tmp_path / "files" / f"discord-{world.g.id}" / f"{rec['id']}.docx").read_bytes() == data
+    # same file again: still one document
+    await bot.on_message(TMsg(world.g, iw.a, member(world.g, STAFF), "อีกที",
+                              attachments=[matt("quote.docx", "", data)]))  # fmt: skip
+    await settle(bot)
+    assert len(docs.find(ORG_DOCS, world.g.id)) == 1

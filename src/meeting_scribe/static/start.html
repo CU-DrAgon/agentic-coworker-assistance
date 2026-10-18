@@ -7,14 +7,10 @@
 <meta name="robots" content="noindex">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&amp;display=swap">
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<link rel="icon" type="image/png" href="/static/salid/favicon.png">
+<link rel="stylesheet" href="/static/salid/theme.css">
+<script src="https://accounts.google.com/gsi/client?hl=en" async defer></script>
 <style>
-  :root {
-    --bg: #FAF9F6; --bg-2: #F3F1EC; --ink: #1B1F3B; --muted: #5B6078; --faint: #8A8FA6; --line: #E6E3DC;
-    --indigo: #2B2F7A; --indigo-2: #4A4FBF; --lavender: #B9B4F2; --gold: #D9C28A;
-    --ok-bg: #DDF3E8; --ok-ink: #0B6B45; --warn-bg: #FFF1D6; --warn-ink: #8A5A00; --err-bg: #FDE7E4; --err-ink: #A12315;
-    --shadow: 0 10px 30px rgba(43,47,122,.08), 0 1px 2px rgba(43,47,122,.06); --ease: cubic-bezier(.22,.8,.3,1);
-  }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6; -webkit-font-smoothing: antialiased;
     font-family: "IBM Plex Sans Thai", "Noto Sans Thai", "Segoe UI", Tahoma, sans-serif; min-height: 100vh; display: flex; flex-direction: column; }
@@ -107,6 +103,7 @@
       </ul>
       <p data-i18n="w_next"></p>
       <div id="gsi-button"></div>
+      <div class="row" style="margin-top:10px"><button type="button" class="btn ghost" id="discord-signup" data-i18n="signup_discord" hidden></button></div>
       <div class="notice" id="not-configured" data-i18n="not_configured" hidden></div>
       <div class="notice error" id="login-error" hidden></div>
       <p style="font-size:13px;color:var(--faint)" data-i18n="w_privacy"></p>
@@ -149,6 +146,7 @@
         <li data-i18n-html="c2"></li>
         <li data-i18n-html="c3"></li>
       </ol>
+      <div class="notice" id="invite-soon" data-i18n="invite_soon" hidden></div>
       <div class="row">
         <a class="btn primary" href="__SALID_INVITE_URL__" data-invite></a>
         <a class="btn ghost" href="/center" data-i18n="go_center"></a>
@@ -185,6 +183,8 @@
   "w_next": {"th": "ถัดไปคุณจะเลือกแพ็กเกจ ตั้งชื่อองค์กร และเชื่อมต่อ Discord ใช้เวลาประมาณ 2 นาที", "en": "Next you will pick a plan, name your organization and connect Discord. It takes about two minutes."},
   "not_configured": {"th": "ระบบล็อกอินยังไม่ได้ตั้งค่า (HUB_GOOGLE_CLIENT_ID) กรุณาติดต่อผู้ดูแล", "en": "Sign-in is not configured yet (HUB_GOOGLE_CLIENT_ID). Please contact the administrator."},
   "login_failed": {"th": "เข้าสู่ระบบไม่สำเร็จ ({status}) ลองอีกครั้ง", "en": "Sign-in failed ({status}). Please try again."},
+  "signup_discord": {"th": "หรือสมัครด้วย Discord", "en": "Or sign up with Discord"},
+  "discord_no_email": {"th": "บัญชี Discord นี้ยังไม่มีอีเมลที่ยืนยันแล้ว กรุณาใช้ Google หรือยืนยันอีเมลใน Discord ก่อน", "en": "This Discord account has no verified email. Please use Google, or verify your email in Discord first."},
   "w_privacy": {"th": "เราใช้เฉพาะอีเมลจากบัญชี Google ของคุณเพื่อระบุตัวตน ไม่เข้าถึงข้อมูลอื่น", "en": "We use only the email address of your Google account to identify you. Nothing else is accessed."},
   "ex_h": {"th": "คุณมีองค์กรอยู่แล้ว", "en": "You already have an organization"},
   "ex_p": {"th": "บัญชีนี้เป็นสมาชิกขององค์กรที่มีอยู่ ไปที่ศูนย์ควบคุมได้เลย หรือสร้างองค์กรใหม่เพิ่ม", "en": "This account already belongs to an organization. Go to the center, or create another organization."},
@@ -215,6 +215,7 @@
   "c3": {"th": "เปิดลิงก์นั้นแล้วล็อกอินด้วยบัญชี Google เดียวกัน เซิร์ฟเวอร์จะผูกกับองค์กรของคุณ", "en": "Open that link and sign in with the same Google account; the server is linked to your organization."},
   "cta_add": {"th": "เพิ่มสลิดเข้า Discord", "en": "Add Salid to Discord"},
   "cta_unconfigured": {"th": "ยังไม่ได้ตั้งค่าลิงก์เชิญ (SALID_DISCORD_CLIENT_ID)", "en": "Invite link not configured (SALID_DISCORD_CLIENT_ID)"},
+  "invite_soon": {"th": "ลิงก์เชิญสลิดเข้า Discord จะเปิดให้ใช้เร็ว ๆ นี้ ระหว่างนี้เข้าศูนย์บัญชาการได้เลย แล้วกลับมาเชื่อม Discord ทีหลัง", "en": "The Discord invite link opens soon. You can go to the command center now and connect Discord later."},
   "c_later": {"th": "ข้ามขั้นนี้ได้ ทำทีหลังจากหน้า \"พื้นที่ทำงาน\" ในศูนย์ควบคุม", "en": "You can skip this and do it later from \"Workspaces\" in the center."},
   "foot_copy": {"th": "© 2026 The Frontier Company Limited", "en": "© 2026 The Frontier Company Limited"},
   "foot_home": {"th": "หน้าแรก", "en": "Home"}
@@ -231,12 +232,8 @@ function readLang(op, v) {
     const s = localStorage.getItem(LANG_KEY); return SUPPORTED.includes(s) ? s : null;
   } catch { return null; }
 }
-function browserLang() {
-  const list = (navigator.languages && navigator.languages.length) ? navigator.languages : [navigator.language || ""];
-  for (const l of list) { const p = String(l).toLowerCase().split("-")[0]; if (SUPPORTED.includes(p)) return p; }
-  return "en";
-}
-let lang = readLang("get") || browserLang();
+// English by default for everyone; a saved choice (shared with the landing page) wins.
+let lang = readLang("get") || "en";
 function t(key, params) {
   const e = I18N[key]; let s = e ? (e[lang] ?? e.en) : key;
   if (params) for (const [k, v] of Object.entries(params)) s = s.split("{" + k + "}").join(String(v));
@@ -252,21 +249,50 @@ function applyStatic() {
   markInvite();
   if (!$("step1").hidden) renderGoogleButton();
 }
-function setLang(l) { if (!SUPPORTED.includes(l)) return; lang = l; readLang("set", l); applyStatic(); }
+function setLang(l, { remember = true } = {}) {
+  if (!SUPPORTED.includes(l)) return; lang = l; readLang("set", l); applyStatic();
+  // signed in: remember the choice with the account (shared with /hub and /center)
+  if (remember && token) api("/me/language", { method: "PUT", body: JSON.stringify({ language: l }) }).catch(() => {});
+}
+function syncLang(saved) {
+  if (SUPPORTED.includes(saved)) { if (saved !== lang) setLang(saved, { remember: false }); }
+  else if (readLang("get")) api("/me/language", { method: "PUT", body: JSON.stringify({ language: lang }) }).catch(() => {});
+}
 for (const b of document.querySelectorAll("[data-lang]")) b.addEventListener("click", () => setLang(b.dataset.lang));
 function note(el, fn) { el._f = fn; el.textContent = fn ? fn() : ""; el.hidden = !el.textContent; }
 function markInvite() {
   for (const a of document.querySelectorAll("[data-invite]")) {
     const ok = a.getAttribute("href").startsWith("https://discord.com/");
     a.setAttribute("aria-disabled", String(!ok));
+    a.hidden = !ok;
     if (ok) { a.target = "_blank"; a.rel = "noopener"; a.textContent = t("cta_add"); } else { a.removeAttribute("target"); a.textContent = t("cta_unconfigured"); }
+    $("invite-soon").hidden = ok; // the public page never shows an internal variable name
   }
 }
 
 // ---------- flow ----------
 const CLIENT_ID = "__HUB_GOOGLE_CLIENT_ID__";
+const DISCORD_LOGIN = "__DISCORD_LOGIN__" === "1";
 const API = "/api/center";
 let token = "", gsiReady = false, me = null;
+// ---------- Salid session: sign in once, stay signed in (30 days, every page, survives reloads) ----------
+const SESSION_KEY = "salid_session";
+function session(op, v) {
+  try {
+    if (op === "set") localStorage.setItem(SESSION_KEY, v);
+    else if (op === "clear") localStorage.removeItem(SESSION_KEY);
+    else { const s = localStorage.getItem(SESSION_KEY); return s && s.startsWith("ss1.") ? s : null; }
+  } catch { /* storage blocked: the sign-in then lasts until reload */ }
+  return null;
+}
+// Exchange a fresh Google sign-in for a Salid session (null when the server has no session secret).
+async function exchangeSession(googleCredential) {
+  try {
+    const r = await fetch("/api/hub/session", { method: "POST", headers: { Authorization: "Bearer " + googleCredential } });
+    if (!r.ok) return null;
+    const j = await r.json(); session("set", j.token); return j.token;
+  } catch { return null; }
+}
 function show(step) {
   for (const id of ["step1", "existing", "step2", "step3", "step4"]) $(id).hidden = id !== step;
   const n = { step1: 1, existing: 1, step2: 2, step3: 3, step4: 4 }[step];
@@ -283,13 +309,14 @@ async function api(path, opts = {}) {
 function renderGoogleButton() {
   if (!CLIENT_ID) { $("not-configured").hidden = false; return; }
   if (!window.google || !google.accounts) { setTimeout(renderGoogleButton, 200); return; }
-  if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: (r) => { token = r.credential; signedIn(); } }); gsiReady = true; }
+  if (!gsiReady) { google.accounts.id.initialize({ client_id: CLIENT_ID, callback: async (r) => { token = r.credential; const s = await exchangeSession(token); if (s) token = s; signedIn(); } }); gsiReady = true; }
   $("gsi-button").replaceChildren();
   google.accounts.id.renderButton($("gsi-button"), { theme: "outline", size: "large", text: "signup_with", locale: lang, width: 300 });
 }
 async function signedIn() {
   try { me = await api("/me"); }
   catch (e) { note($("login-error"), () => t("login_failed", { status: e.status || "network" })); token = ""; return; }
+  syncLang(me.language);
   $("who").textContent = me.email; $("who").hidden = false;
   show(me.orgs.length ? "existing" : "step2");
 }
@@ -310,7 +337,29 @@ $("create").addEventListener("click", async () => {
   } finally { $("create").disabled = false; }
 });
 $("org-name").addEventListener("keydown", (e) => { if (e.key === "Enter") $("create").click(); });
+// Hand the credential to /center (same tab, sessionStorage, read once there) so the user is not
+// asked to sign in again right after signing up.
+function tokenExp(tok) {
+  try { return Number(JSON.parse(atob(tok.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))).exp) || 0; } catch { return 0; }
+}
+for (const a of document.querySelectorAll('a[href="/center"]')) a.addEventListener("click", () => {
+  if (!token) return;
+  try { sessionStorage.setItem("salid_center_handoff", JSON.stringify({ t: token, exp: tokenExp(token) })); } catch { /* then /center asks once */ }
+});
 applyStatic();
+// Back from "Sign up with Discord": the session arrives in the fragment.
+try {
+  const m = /^#session=(ss1\.[A-Za-z0-9_.-]+)$/.exec(location.hash);
+  if (m) { session("set", m[1]); history.replaceState(null, "", location.pathname); }
+  const u = new URLSearchParams(location.search);
+  if (u.get("error") && u.get("platform") === "discord") {
+    const er = u.get("error"); note($("login-error"), () => er === "discord_no_email" ? t("discord_no_email") : t("login_failed", { status: er }));
+    history.replaceState(null, "", location.pathname);
+  }
+} catch { /* ignore */ }
+$("discord-signup").hidden = !DISCORD_LOGIN;
+$("discord-signup").addEventListener("click", () => { location.href = "/api/center/auth/discord/start?next=start"; });
+if (session("get")) { token = session("get"); signedIn(); } // already signed in on another page: skip the Google step
 </script>
 </body>
 </html>

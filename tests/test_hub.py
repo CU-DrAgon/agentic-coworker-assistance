@@ -18,7 +18,13 @@ from salid.store import SQLiteStore
 CLIENT_ID = "123-abc.apps.googleusercontent.com"
 A, B = 1000, 2000  # two guilds
 TOKENS = {
-    "boss": {"email": "Boss@Example.com", "email_verified": True},  # admin of A
+    "boss": {
+        "email": "Boss@Example.com",
+        "email_verified": True,
+        "given_name": "Passin",
+        "family_name": "Pornvoraphat",
+        "name": "Passin Pornvoraphat",
+    },  # admin of A
     "other": {"email": "other@example.com", "email_verified": True},  # admin of B
     "super": {"email": "root@example.com", "email_verified": True},  # HUB_ADMIN_EMAILS
     "stranger": {"email": "x@example.com", "email_verified": True},  # admin of nothing
@@ -736,10 +742,11 @@ def test_hub_every_used_key_exists_and_markup_has_no_hardcoded_thai():
     assert not re.search(r"[฀-๿]", markup.split("</head>", 1)[1])
 
 
-def test_hub_has_language_toggle_with_safe_storage_and_browser_default():
+def test_hub_has_language_toggle_with_safe_storage_and_english_default():
     _, html = _page_dict_and_html()
     assert html.count('data-lang="th"') >= 1 and html.count('data-lang="en"') >= 1
-    assert 'startsWith("th") ? "th" : "en"' in html
+    assert 'let lang = readLang("get") || "en";' in html and "navigator.language" not in html
+    assert '<html lang="en">' in html
     assert "localStorage.setItem(LANG_KEY" in html and "catch" in html
     assert "toLocaleString(locale()" in html
 
@@ -782,3 +789,128 @@ def test_saved_feature_flags_win_over_the_page_defaults():
     for text in (page, defaults):  # the page defaults match the server's
         assert set(FEATURES) - off <= set(re.findall(r"(\w+): true", text))
         assert off <= set(re.findall(r"(\w+): false", text))
+
+
+def test_hub_me_shares_the_saved_language_with_the_center(client, env):
+    from salid.coo_store import SQLiteDocStore
+    from salid.orgs import OrgStore
+
+    prefs = OrgStore(SQLiteDocStore(":memory:"))
+    app.dependency_overrides[hub.get_prefs] = lambda: prefs
+    try:
+        assert client.get("/api/hub/me", headers=AUTH).json()["language"] is None
+        r = client.put("/api/hub/me/language", json={"language": "th"}, headers=AUTH)
+        assert r.status_code == 200 and r.json() == {"language": "th"}
+        assert client.get("/api/hub/me", headers=AUTH).json()["language"] == "th"
+        assert prefs.user_language("boss@example.com") == "th"  # same store the center reads
+        assert client.get("/api/hub/me", headers=OTHER).json()["language"] is None
+        assert (
+            client.put("/api/hub/me/language", json={"language": "xx"}, headers=AUTH).status_code
+            == 400
+        )
+    finally:
+        app.dependency_overrides.pop(hub.get_prefs, None)
+
+
+def test_hub_me_never_fails_when_the_preference_store_is_down(client, env):
+    class Broken:
+        def user_language(self, email):
+            raise RuntimeError("firestore down")
+
+    app.dependency_overrides[hub.get_prefs] = lambda: Broken()
+    try:
+        me = client.get("/api/hub/me", headers=AUTH)
+        assert me.status_code == 200 and me.json()["language"] is None
+    finally:
+        app.dependency_overrides.pop(hub.get_prefs, None)
+
+
+def test_session_tokens_keep_people_signed_in_for_thirty_days(client, env):
+    from datetime import UTC, datetime, timedelta
+
+    # not configured: Google tokens only
+    assert client.post("/api/hub/session", headers=AUTH).status_code == 503
+    env.setenv("SALID_SESSION_SECRET", "top-secret")
+    get_settings.cache_clear()
+    try:
+        r = client.post("/api/hub/session", headers=AUTH)
+        assert r.status_code == 200
+        body = r.json()
+        assert body["email"] == "boss@example.com" and body["token"].startswith("ss1.")
+        exp = datetime.fromisoformat(body["expires_at"])
+        assert timedelta(days=29) < exp - datetime.now(UTC) <= timedelta(days=30)
+        session = {"Authorization": "Bearer " + body["token"]}
+        # the session works everywhere a Google token did, on both APIs
+        assert client.get("/api/hub/me", headers=session).json()["email"] == "boss@example.com"
+        assert client.get("/api/center/me", headers=session).status_code in (200, 403)
+        # and can be renewed from itself
+        assert client.post("/api/hub/session", headers=session).status_code == 200
+        # forged / tampered / expired are rejected
+        forged = {"Authorization": "Bearer " + body["token"][:-3] + "abc"}
+        assert client.get("/api/hub/me", headers=forged).status_code == 401
+        old, _ = hub.issue_session(
+            "boss@example.com", "top-secret", 30, now=datetime.now(UTC) - timedelta(days=31)
+        )
+        assert (
+            client.get("/api/hub/me", headers={"Authorization": "Bearer " + old}).status_code == 401
+        )
+        other, _ = hub.issue_session("boss@example.com", "other-secret", 30)
+        assert (
+            client.get("/api/hub/me", headers={"Authorization": "Bearer " + other}).status_code
+            == 401
+        )
+    finally:
+        env.delenv("SALID_SESSION_SECRET", raising=False)
+        get_settings.cache_clear()
+
+
+def test_google_sign_in_records_the_persons_real_name_once(client, env):
+    from salid.coo_store import SQLiteDocStore
+    from salid.orgs import OrgStore
+
+    prefs = OrgStore(SQLiteDocStore(":memory:"))
+    app.dependency_overrides[hub.get_prefs] = lambda: prefs
+    env.setenv("SALID_SESSION_SECRET", "top-secret")
+    get_settings.cache_clear()
+    try:
+        assert client.post("/api/hub/session", headers=AUTH).status_code == 200
+        p = prefs.user_profile("boss@example.com")
+        assert (p.first_name, p.last_name, p.name) == ("Passin", "Pornvoraphat", "Passin")
+        prefs.set_user_profile("boss@example.com", name="Boss", first_name="P.")
+        client.post("/api/hub/session", headers=AUTH)  # a later sign-in never overwrites edits
+        p = prefs.user_profile("boss@example.com")
+        assert (p.first_name, p.name) == ("P.", "Boss")
+    finally:
+        app.dependency_overrides.pop(hub.get_prefs, None)
+        env.delenv("SALID_SESSION_SECRET", raising=False)
+        get_settings.cache_clear()
+
+
+def test_company_language_change_is_announced_on_the_server(client):
+    """Changing the company language in the hub queues a notice for the bot (`announce`
+    action): in the new language first, then the old one. Same value again: nothing."""
+    from salid.actions import ActionQueue
+    from salid.coo_store import SQLiteDocStore
+
+    docs = SQLiteDocStore(":memory:")
+    app.dependency_overrides[hub.get_doc_store] = lambda: docs
+    try:
+        q = ActionQueue(docs)
+        client.put(f"/api/hub/guilds/{A}/settings", json={"default_language": "th"}, headers=AUTH)
+        acts = q.pending(A)
+        assert [a["kind"] for a in acts] == ["announce"] and acts[0]["by"] == "boss@example.com"
+        text = acts[0]["args"]["text"]
+        assert text.startswith("📢 ตั้งแต่นี้ไป ภาษาของบริษัท") and "ภาษาไทย" in text
+        assert "The company language of this server is now Thai" in text
+        client.put(f"/api/hub/guilds/{A}/settings", json={"default_language": "th"}, headers=AUTH)
+        assert len(q.pending(A)) == 1  # unchanged: no second notice
+        client.put(f"/api/hub/guilds/{A}/settings", json={"default_language": "en"}, headers=AUTH)
+        acts = q.pending(A)
+        assert len(acts) == 2
+        back = [a for a in acts if a["args"]["text"].startswith("📢 The company language")]
+        assert len(back) == 1 and "now English" in back[0]["args"]["text"]
+        assert q.pending(B) == []
+    finally:
+        app.dependency_overrides.pop(hub.get_doc_store, None)
+    line = hub.language_change_notice("en", "ja", "boss@example.com")
+    assert line.count("📢") == 2 and line.split("\n")[1].startswith("📢 The company language")

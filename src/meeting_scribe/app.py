@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -30,6 +31,8 @@ START_HTML = Path(__file__).parent / "static" / "start.html"
 MAX_CHUNK_BYTES = 32 * 1024 * 1024  # Cloud Run's HTTP/1 request limit
 
 app = FastAPI(title="Meeting Scribe")
+# The pages are single 50-135 KB HTML files: gzip them (and JSON) so phones load them fast.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.include_router(hub.router)
 app.include_router(center.router)
 app.include_router(center.events_router)
@@ -121,6 +124,7 @@ def start_page() -> HTMLResponse:
         START_HTML.read_text(encoding="utf-8")
         .replace("__HUB_GOOGLE_CLIENT_ID__", client_id)
         .replace("__SALID_INVITE_URL__", url)
+        .replace("__DISCORD_LOGIN__", "1" if center.discord_login_enabled() else "")
     )
     return HTMLResponse(
         html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}

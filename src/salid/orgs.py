@@ -24,6 +24,7 @@ below 2**62 until the 22nd century, so the ranges never meet.
 from __future__ import annotations
 
 import hashlib
+import secrets
 import threading
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -38,12 +39,22 @@ ORG_WS = "salid_org_ws"
 ORG_EMAIL = "salid_org_email"
 LICENSE_REQS = "salid_license_reqs"
 CENTER_CHAT = "salid_center_chat"
+USER_PREFS = (
+    "salid_user_prefs"  # guild = hash(email), key email -> UserProfile (language, identities)
+)
+IDENTITY_INDEX = "salid_identity_index"  # guild 0, key "platform:external_id" -> {email}
+UI_LANGS = ("th", "en")  # languages the web pages are written in
+SIGNIN_PLATFORMS = ("google",)  # extra sign-ins linked to an account (external_id = the email)
 
 ROLES = ("owner", "admin", "member")
 PLATFORMS = ("discord", "slack", "line", "telegram", "whatsapp", "clickup", "web")
 # Platforms where a person has a chat account that can be linked to an org member
 IDENTITY_PLATFORMS = ("discord", "slack", "line", "telegram", "whatsapp")
 MAX_IDENTITY_LEN = 200
+INVITES = "salid_org_invites"  # guild 0, key = the code: an invite link to join an org
+INVITE_DAYS = 7  # default life of an invite link; 0 = never expires (max INVITE_MAX_DAYS)
+INVITE_MAX_DAYS = 365
+INVITE_MAX_USES = 1000  # `max_uses` 0 = unlimited
 PLANS = ("trial", "monthly", "yearly", "enterprise")
 STATUSES = ("active", "past_due", "expired", "suspended")
 CATEGORIES = ("documents", "wiki", "places", "minutes", "ledger", "tasks")
@@ -136,6 +147,40 @@ class Member(BaseModel):
             out["discord"] = self.discord_user_id
         return out
 
+    reports_to: str | None = None  # email of their manager in THIS org (the org chart)
+
+
+class Identity(BaseModel):
+    """One person's account on one platform. `verified` = proven by that platform (OAuth or a
+    one-time code the bot handed to that very user), otherwise typed by hand."""
+
+    platform: str  # see IDENTITY_PLATFORMS
+    external_id: str
+    name: str = ""
+    verified: bool = False
+    linked_at: str = ""
+
+
+class UserProfile(BaseModel):
+    """The person behind an email: what every Salid page and the AI know about them, across orgs."""
+
+    email: str
+    name: str = ""  # display name (what Salid calls them)
+    first_name: str = ""  # legal first name (from the Google account at sign-in, editable)
+    last_name: str = ""
+    title: str = ""  # job title, e.g. "CTO"
+    department: str = ""  # e.g. "Engineering"
+    about: str = ""  # what they do / are responsible for, in their own words
+    language: str | None = None  # web UI language (th / en)
+    identities: list[Identity] = Field(default_factory=list)
+
+    def identity(self, platform: str) -> Identity | None:
+        return next((i for i in self.identities if i.platform == platform), None)
+
+    @property
+    def full_name(self) -> str:
+        return " ".join(x for x in (self.first_name, self.last_name) if x).strip()
+
 
 class License(BaseModel):
     plan: str = "trial"  # trial | monthly | yearly | enterprise
@@ -169,10 +214,98 @@ class ShareLink(BaseModel):
     created_at: str = ""
 
 
+class CompanyProfile(BaseModel):
+    """What the company says about itself: the public-facing profile (shown to members and,
+    later, to outsiders). All optional; admins edit it on the web or by telling Salid."""
+
+    tagline: str = ""  # one line, e.g. "AI assistants for Thai SMEs"
+    about: str = ""  # a paragraph or two
+    industry: str = ""
+    founded: str = ""  # year or date, free text
+    location: str = ""  # city, country
+    website: str = ""
+    email: str = ""
+    phone: str = ""
+    size: str = ""  # e.g. "11-50 people"
+    values: list[str] = Field(default_factory=list)  # a few words each, max 8
+    # the legal entity, as on the registration papers (filled from an uploaded registration
+    # certificate / articles by Salid, or by an admin)
+    registered_name: str = ""  # e.g. บริษัท เดอะ ฟรอนเทียร์ จำกัด
+    registration_no: str = ""  # juristic person registration number
+    tax_id: str = ""
+    registered_capital: str = ""  # free text with currency
+    registered_address: str = ""
+    directors: str = ""  # authorised directors / signing rule
+    objectives: str = ""  # business objectives (วัตถุประสงค์)
+
+
+PROFILE_LIMITS = {
+    "tagline": 160, "about": 2000, "industry": 80, "founded": 40, "location": 120,
+    "website": 300, "email": 200, "phone": 60, "size": 40,
+    "registered_name": 200, "registration_no": 40, "tax_id": 40, "registered_capital": 120,
+    "registered_address": 400, "directors": 600, "objectives": 2000,
+}  # fmt: skip
+
+
+POSITION_LIMITS = {
+    "title": 80,
+    "department": 80,
+    "summary": 1000,  # the job description
+    "responsibilities": 2000,
+    "policies": 2000,  # company rules that apply to this job
+}
+MAX_POSITIONS = 200
+
+
+class Position(BaseModel):
+    """A job in the company, created by an admin, filled or VACANT: its job description,
+    responsibilities, required skills and the company policies that apply to it. Organisational
+    knowledge: Salid reads it to answer "who does X", to match people (expertise locator) and to
+    brief a successor. `holders` = member emails (several people may share a role)."""
+
+    id: str
+    title: str
+    department: str = ""
+    reports_to: str = ""  # another position's id ("" = top)
+    summary: str = ""
+    responsibilities: str = ""
+    skills: list[str] = Field(default_factory=list)
+    policies: str = ""
+    holders: list[str] = Field(default_factory=list)
+    created_at: str = ""
+    updated_at: str = ""
+    updated_by: str = ""
+
+    @property
+    def vacant(self) -> bool:
+        return not self.holders
+
+
+HANDOVER_UNDO_HOURS = 24
+
+
+class Handover(BaseModel):
+    """The last transfer of ownership: security first, so the former owner can take it back
+    within `HANDOVER_UNDO_HOURS` (`undo_until`), and no second transfer happens inside that
+    window. `to_role` is what the receiver was before (restored on undo)."""
+
+    from_email: str
+    to_email: str
+    at: str
+    undo_until: str
+    former_role: str = "admin"  # what the former owner became
+    to_role: str = "member"  # what the receiver was before
+    undone_at: str = ""
+
+    def can_undo(self, now: datetime) -> bool:
+        return not self.undone_at and datetime.fromisoformat(self.undo_until) > now
+
+
 class Org(BaseModel):
     id: str
     name: str
     logo_url: str = ""
+    profile: CompanyProfile = Field(default_factory=CompanyProfile)
     created_at: str = ""
     owner_email: str = ""
     members: list[Member] = Field(default_factory=list)
@@ -180,6 +313,8 @@ class Org(BaseModel):
     workspaces: list[Workspace] = Field(default_factory=list)
     sharing: list[ShareLink] = Field(default_factory=list)
     grandfathered: bool = False
+    handover: Handover | None = None  # the last ownership transfer (undo window)
+    positions: list[Position] = Field(default_factory=list)  # jobs, filled or vacant
 
     def role_of(self, email: str) -> str | None:
         email = email.lower()
@@ -235,6 +370,47 @@ def trial_license(days: int | None = None, now: datetime | None = None) -> Licen
     for a time-boxed trial (`TRIAL_DAYS` is the intended length once plans go live)."""
     until = ((now or _now()) + timedelta(days=days)).date().isoformat() if days else None
     return License(plan="trial", status="active", seats=TRIAL_SEATS, valid_until=until)
+
+
+class SigninTaken(ValueError):
+    """That sign-in (a Google account) already belongs to another Salid account."""
+
+
+class InviteError(ValueError):
+    """Why an invite link cannot be used: unknown, revoked, expired, used_up, seats."""
+
+
+class Invite(BaseModel):
+    """An invite link: whoever opens it and signs in joins the org with `role`. Made by an
+    admin (admin/owner roles only by an owner), lives `expires_at` ("" = forever) or `max_uses`
+    joins (0 = unlimited), can be revoked. `used` keeps who joined through it, so the Members
+    page can say which link is live and what it brought in."""
+
+    code: str
+    org_id: str
+    role: str = "member"
+    label: str = ""
+    created_by: str
+    created_at: str
+    expires_at: str = ""
+    max_uses: int = 0
+    used: list[str] = Field(default_factory=list)
+    revoked_at: str = ""
+    revoked_by: str = ""
+
+    @property
+    def uses(self) -> int:
+        return len(self.used)
+
+    def status(self, now: datetime | None = None) -> str:
+        """active | revoked | expired | used_up."""
+        if self.revoked_at:
+            return "revoked"
+        if self.expires_at and datetime.fromisoformat(self.expires_at) <= (now or _now()):
+            return "expired"
+        if self.max_uses and self.uses >= self.max_uses:
+            return "used_up"
+        return "active"
 
 
 class OrgStore:
@@ -436,6 +612,381 @@ class OrgStore:
             who.discord_user_id = None
         self._tx_save(tx, org, old)
         return True
+
+    # ---- the person (profile shared by every org they belong to)
+    def user_profile(self, email: str) -> UserProfile:
+        e = email.lower()
+        d = self.docs.get(USER_PREFS, _email_bucket(e), e) or {}
+        d.pop("updated_at", None)
+        return UserProfile.model_validate({**d, "email": e})
+
+    def _save_profile(self, p: UserProfile) -> UserProfile:
+        self.docs.put(
+            USER_PREFS,
+            _email_bucket(p.email),
+            p.email,
+            {**p.model_dump(), "updated_at": stamp(self._clock())},
+        )
+        return p
+
+    def user_language(self, email: str) -> str | None:
+        lang = self.user_profile(email).language
+        return lang if lang in UI_LANGS else None
+
+    def set_user_language(self, email: str, language: str) -> str:
+        """Remember which language `email` wants the web pages in. ValueError when unsupported."""
+        if language not in UI_LANGS:
+            raise ValueError(f"unsupported language {language!r}")
+        with self._lock:
+            p = self.user_profile(email)
+            p.language = language
+            self._save_profile(p)
+        return language
+
+    def set_user_name(self, email: str, name: str) -> UserProfile:
+        return self.set_user_profile(email, name=name)
+
+    PROFILE_FIELDS = {
+        "name": 80,
+        "first_name": 80,
+        "last_name": 80,
+        "title": 80,
+        "department": 80,
+        "about": 600,
+    }
+
+    def set_user_profile(self, email: str, **fields: str | None) -> UserProfile:
+        """Update who the person is (name, title, department, about). None = leave unchanged."""
+        with self._lock:
+            p = self.user_profile(email)
+            for k, v in fields.items():
+                if k not in self.PROFILE_FIELDS:
+                    raise ValueError(f"unknown profile field {k!r}")
+                if v is not None:
+                    setattr(p, k, " ".join(str(v).split())[: self.PROFILE_FIELDS[k]])
+            return self._save_profile(p)
+
+    def set_user_identity(self, email: str, identity: Identity) -> UserProfile:
+        """Link (or replace) the person's account on one platform. A verified link also fills
+        `Member.discord_user_id` in every org they belong to. ValueError for unknown platforms."""
+        if identity.platform not in IDENTITY_PLATFORMS + SIGNIN_PLATFORMS:
+            raise ValueError(f"unsupported platform {identity.platform!r}")
+        if not identity.external_id.strip():
+            raise ValueError("empty account id")
+        ext = identity.external_id.strip()
+        if identity.platform in SIGNIN_PLATFORMS:
+            ext = ext.lower()
+        identity = identity.model_copy(
+            update={"external_id": ext, "linked_at": stamp(self._clock())}
+        )
+        with self._lock:
+            p = self.user_profile(email)
+            old = p.identity(identity.platform)
+            p.identities = [i for i in p.identities if i.platform != identity.platform] + [identity]
+            self._save_profile(p)
+            if old is not None and old.external_id != identity.external_id:
+                self.docs.delete(IDENTITY_INDEX, 0, f"{old.platform}:{old.external_id}")
+            key = f"{identity.platform}:{identity.external_id}"
+            if identity.verified:  # only a PROVEN account may sign the person in
+                self.docs.put(
+                    IDENTITY_INDEX, 0, key, {"email": p.email, "platform": identity.platform}
+                )
+            else:
+                self.docs.delete(IDENTITY_INDEX, 0, key)
+            if identity.platform == "discord":
+                self._sync_discord_user_id(p.email, identity.external_id)
+        return p
+
+    def verified_discord_id(self, email: str) -> str | None:
+        """The person's VERIFIED Discord id from their profile, else None."""
+        i = self.user_profile(email).identity("discord")
+        return i.external_id if i and i.verified and i.external_id else None
+
+    def heal_identities(self, email: str) -> bool:
+        """Self-repair on sign-in: every verified identity is in the sign-in index, and the
+        verified Discord id is on the person's Member record in every org (people who verified
+        Discord BEFORE being added to an org, or before the index existed, were missing both;
+        "my tasks" and Discord sign-in depend on them). Returns True when something changed."""
+        changed = False
+        with self._lock:
+            p = self.user_profile(email)
+            for i in p.identities:
+                if not i.verified or not i.external_id:
+                    continue
+                key = f"{i.platform}:{i.external_id}"
+                have = self.docs.get(IDENTITY_INDEX, 0, key) or {}
+                if have.get("email") != p.email:
+                    self.docs.put(
+                        IDENTITY_INDEX, 0, key, {"email": p.email, "platform": i.platform}
+                    )
+                    changed = True
+                if i.platform == "discord":
+                    for org in self.orgs_of_email(p.email):
+                        for m in org.members:
+                            if m.email.lower() == p.email and m.discord_user_id != i.external_id:
+                                changed = True
+                    self._sync_discord_user_id(p.email, i.external_id)
+        return changed
+
+    def email_for_identity(self, platform: str, external_id: str) -> str | None:
+        """The person (email) who VERIFIED this platform account, so signing in with that
+        account lands in the same Salid account whatever email the platform reports."""
+        d = self.docs.get(IDENTITY_INDEX, 0, f"{platform}:{external_id}")
+        return d.get("email") if d else None
+
+    def link_google(self, email: str, google_email: str, name: str = "") -> UserProfile:
+        """Someone who signed up through Discord (account = the email Discord reported) adds a
+        Google account: from then on "Sign in with Google" with that account lands in THIS
+        Salid account. IdentityTaken when that Google account is already a Salid account of
+        its own (a member somewhere, a profile, or linked to someone else)."""
+        e, g = email.lower(), google_email.strip().lower()
+        if not g:
+            raise ValueError("empty Google account")
+        with self._lock:
+            p = self.user_profile(e)
+            if g == e:  # the account's own email: nothing to link
+                return p
+            owner = self.email_for_identity("google", g)
+            if owner and owner != e:
+                raise SigninTaken("that Google account is linked to another Salid account")
+            if (
+                self.orgs_of_email(g)
+                or self.docs.get(USER_PREFS, _email_bucket(g), g)
+                or self.docs.find(IDENTITY_INDEX, 0, lambda d: d.get("email") == g)
+            ):
+                raise SigninTaken("that Google account already has a Salid account of its own")
+            return self.set_user_identity(
+                e, Identity(platform="google", external_id=g, name=name, verified=True)
+            )
+
+    def account_for_google(self, google_email: str) -> str:
+        """The Salid account a Google sign-in lands in: the account that linked this Google
+        account, else the Google email itself."""
+        g = google_email.strip().lower()
+        return self.email_for_identity("google", g) or g
+
+    def remove_user_identity(self, email: str, platform: str) -> UserProfile:
+        with self._lock:
+            p = self.user_profile(email)
+            old = p.identity(platform)
+            if old is not None:
+                self.docs.delete(IDENTITY_INDEX, 0, f"{platform}:{old.external_id}")
+            p.identities = [i for i in p.identities if i.platform != platform]
+            self._save_profile(p)
+            if platform == "discord":
+                self._sync_discord_user_id(p.email, None)
+        return p
+
+    def _sync_discord_user_id(self, email: str, user_id: str | None) -> None:
+        for org in self.orgs_of_email(email):
+            changed = False
+            for m in org.members:
+                if m.email == email and m.discord_user_id != user_id:
+                    m.discord_user_id, changed = user_id, True
+            if changed:
+                self.save(org)
+
+    # ---- positions (jobs, filled or vacant)
+    def save_position(
+        self, org_id: str, *, by: str, pid: str | None = None, **fields: Any
+    ) -> Position:
+        """Create (no `pid`) or update a position. Fields: title, department, reports_to,
+        summary, responsibilities, policies (text), skills (list), holders (member emails).
+        None = unchanged. ValueError on bad input, KeyError for an unknown position."""
+        with self._lock:
+            org = self.get(org_id)
+            if org is None:
+                raise KeyError(org_id)
+            now = stamp(self._clock())
+            if pid:
+                pos = next((x for x in org.positions if x.id == pid), None)
+                if pos is None:
+                    raise KeyError(pid)
+            else:
+                if len(org.positions) >= MAX_POSITIONS:
+                    raise ValueError("too many positions")
+                if not str(fields.get("title") or "").strip():
+                    raise ValueError("a position needs a title")
+                pos = Position(id="P-" + uuid.uuid4().hex[:8], title="?", created_at=now)
+                org.positions.append(pos)
+            for k, v in fields.items():
+                if v is None:
+                    continue
+                if k in POSITION_LIMITS:
+                    v = " ".join(str(v).split()) if k in ("title", "department") else str(v).strip()
+                    if k == "title" and not v:
+                        raise ValueError("a position needs a title")
+                    setattr(pos, k, v[: POSITION_LIMITS[k]])
+                elif k == "skills":
+                    pos.skills = [" ".join(str(x).split())[:60] for x in v if str(x).strip()][:30]
+                elif k == "holders":
+                    members = {m.email.lower() for m in org.members}
+                    hs = [str(x).strip().lower() for x in v if str(x).strip()]
+                    bad = [h for h in hs if h not in members]
+                    if bad:
+                        raise ValueError(f"not a member: {', '.join(bad)}")
+                    pos.holders = list(dict.fromkeys(hs))[:20]
+                elif k == "reports_to":
+                    v = str(v or "")
+                    if v and (v == pos.id or not any(x.id == v for x in org.positions)):
+                        raise ValueError("reports_to must be another position")
+                    cur, seen = v, set()
+                    while cur and cur not in seen:  # no cycles
+                        if cur == pos.id:
+                            raise ValueError("that would make a loop in the chart")
+                        seen.add(cur)
+                        cur = next((x.reports_to for x in org.positions if x.id == cur), "")
+                    pos.reports_to = v
+                else:
+                    raise ValueError(f"unknown field {k!r}")
+            pos.updated_at, pos.updated_by = now, by.lower()
+            self.save(org)
+            return pos
+
+    def delete_position(self, org_id: str, pid: str) -> bool:
+        with self._lock:
+            org = self.get(org_id)
+            if org is None or not any(x.id == pid for x in org.positions):
+                return False
+            org.positions = [x for x in org.positions if x.id != pid]
+            for x in org.positions:
+                if x.reports_to == pid:
+                    x.reports_to = ""
+            self.save(org)
+            return True
+
+    def set_company_profile(self, org_id: str, **fields: Any) -> Org:
+        """Update the company's public profile; None leaves a field unchanged."""
+        with self._lock:
+            org = self.get(org_id)
+            if org is None:
+                raise KeyError(org_id)
+            for k, v in fields.items():
+                if v is None:
+                    continue
+                if k == "values":
+                    org.profile.values = [
+                        " ".join(str(x).split())[:40] for x in list(v)[:8] if str(x).strip()
+                    ]
+                elif k in PROFILE_LIMITS:
+                    setattr(org.profile, k, " ".join(str(v).split())[: PROFILE_LIMITS[k]])
+                else:
+                    raise ValueError(f"unknown profile field {k!r}")
+            return self.save(org)
+
+    def set_reports_to(self, org_id: str, email: str, manager: str | None) -> Org:
+        """Who `email` reports to in this org (None = top of the chart). ValueError when the
+        manager is not a member or the link would make a cycle."""
+        with self._lock:
+            org = self.get(org_id)
+            if org is None:
+                raise KeyError(org_id)
+            e, m = email.lower(), (manager or "").lower() or None
+            members = {x.email.lower(): x for x in org.members}
+            if e not in members:
+                raise KeyError(email)
+            if m is not None:
+                if m not in members:
+                    raise ValueError("manager is not a member of this organization")
+                if m == e:
+                    raise ValueError("a person cannot report to themselves")
+                seen, cur = {e}, m  # walk up from the manager: must not reach `e`
+                while cur:
+                    if cur in seen:
+                        raise ValueError("that would make a loop in the org chart")
+                    seen.add(cur)
+                    cur = (members[cur].reports_to or "").lower() or None
+            members[e].reports_to = m
+            return self.save(org)
+
+    def member_profiles(self, org: Org) -> dict[str, UserProfile]:
+        """Profiles of every member of `org`, by email (one read per member)."""
+        return {m.email: self.user_profile(m.email) for m in org.members}
+
+    # ---- invite links
+    def create_invite(
+        self,
+        org_id: str,
+        *,
+        by: str,
+        role: str = "member",
+        days: int = INVITE_DAYS,
+        max_uses: int = 0,
+        label: str = "",
+    ) -> Invite:
+        if role not in ROLES:
+            raise ValueError("role must be owner, admin or member")
+        days, max_uses = int(days), int(max_uses)
+        if not 0 <= days <= INVITE_MAX_DAYS or not 0 <= max_uses <= INVITE_MAX_USES:
+            raise ValueError("days or max_uses out of range")
+        org = self.get(org_id)
+        if org is None:
+            raise KeyError(org_id)
+        now = self._clock()
+        inv = Invite(
+            code=secrets.token_urlsafe(18),
+            org_id=org.id,
+            role=role,
+            label=label.strip()[:60],
+            created_by=by.lower(),
+            created_at=stamp(now),
+            expires_at=stamp(now + timedelta(days=days)) if days else "",
+            max_uses=max_uses,
+        )
+        self.docs.put(INVITES, 0, inv.code, inv.model_dump())
+        return inv
+
+    def invite(self, code: str) -> Invite | None:
+        d = self.docs.get(INVITES, 0, code) if code else None
+        return Invite.model_validate(d) if d else None
+
+    def invites(self, org_id: str, *, active_only: bool = False) -> list[Invite]:
+        """The org's invite links, newest first (active ones first when all are listed)."""
+        rows = self.docs.find(INVITES, 0, lambda d: d.get("org_id") == org_id)
+        now = self._clock()
+        out = [Invite.model_validate(d) for d in rows]
+        if active_only:
+            out = [i for i in out if i.status(now) == "active"]
+        out.sort(key=lambda i: i.created_at, reverse=True)
+        out.sort(key=lambda i: i.status(now) != "active")
+        return out
+
+    def revoke_invite(self, org_id: str, code: str, *, by: str) -> Invite | None:
+        with self._lock:
+            inv = self.invite(code)
+            if inv is None or inv.org_id != org_id:
+                return None
+            if not inv.revoked_at:
+                inv.revoked_at, inv.revoked_by = stamp(self._clock()), by.lower()
+                self.docs.put(INVITES, 0, inv.code, inv.model_dump())
+            return inv
+
+    def accept_invite(self, code: str, email: str) -> tuple[Org, Invite, bool]:
+        """Join the org behind `code` as `email`. Returns (org, invite, joined): `joined` is
+        False when the person was already a member (their role is kept, the link is not used
+        up). InviteError when the link cannot be used; KeyError when the org is gone."""
+        e = email.lower()
+        with self._lock:
+            inv = self.invite(code)
+            if inv is None:
+                raise InviteError("unknown")
+            st = inv.status(self._clock())
+            if st != "active":
+                raise InviteError(st)
+            org = self.get(inv.org_id)
+            if org is None:
+                raise KeyError(inv.org_id)
+            if org.role_of(e):
+                return org, inv, False
+            if len(org.members) >= max(org.license.seats, 1):
+                raise InviteError("seats")
+            org.members.append(
+                Member(email=e, role=inv.role, discord_user_id=self.verified_discord_id(e))
+            )
+            org = self.save(org)
+            inv.used.append(e)
+            self.docs.put(INVITES, 0, inv.code, inv.model_dump())
+            return org, inv, True
 
     # ---- workspaces
     def attach_workspace(self, org_id: str, ws: Workspace) -> Org:
