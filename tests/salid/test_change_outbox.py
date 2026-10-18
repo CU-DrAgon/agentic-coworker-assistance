@@ -278,7 +278,7 @@ def test_notice_texts_in_both_languages():
     c = co.Change(id="1", org_id="o", at="", by="boss@x.com", kind="title", subject_email="a@x.com",
                   before="Admin", after="Founder")  # fmt: skip
     assert co.change_text(c, "Cafe", "en") == (
-        "Your position in Cafe changed: Admin → Founder (by boss@x.com)."
+        "Your company position in Cafe changed: Admin → Founder (by boss@x.com)."
     )
     assert "ตำแหน่งของคุณใน Cafe" in co.change_text(c, "Cafe", "th")
     assert co.change_text(c, "Cafe", "en", reminder=2).endswith("(reminder 2)")

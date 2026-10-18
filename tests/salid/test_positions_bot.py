@@ -156,22 +156,37 @@ async def test_the_discord_server_owner_is_never_guessed_to_be_the_founder(rig):
     assert rig.g.created == []
 
 
-async def test_the_central_owner_and_admins_wear_their_tags_and_edits_follow(rig):
+async def test_website_access_rights_are_not_company_positions(rig):
     owner = rig.g.members[OWNER_ID]
     owner.roles = [r for r in owner.roles if r.name != "Founder"]
-    store = link(rig.bot, ("peer@x.com", PEER), ("tom@x.com", STAFF))
+    store = link(rig.bot, ("peer@x.com", PEER))
     store.update_members("o1", lambda ms: [setattr(m, "role", "admin") for m in ms if m.email == "peer@x.com"] or True)  # fmt: skip
     await rig.bot.positions_sync(rig.g)
-    assert rig.bot.positions.of(GUILD, OWNER_ID)[1].title == "Founder"  # the center's owner
-    assert rig.bot.positions.of(GUILD, PEER)[1].title == "Admin"
-    assert rig.bot.positions.of(GUILD, STAFF) is None
-    assert "Admin" in names(rig.g.members[PEER])
-    assert [n for n in names(rig.g.members[OWNER_ID]) if n in ("Founder", "ผู้ก่อตั้ง")]
-    # the website lowers the admin to member: the tag goes
-    store.update_members("o1", lambda ms: [setattr(m, "role", "member") for m in ms if m.email == "peer@x.com"] or True)  # fmt: skip
+    assert rig.bot.positions.of(GUILD, OWNER_ID) is None, "web owner is not a job title"
+    assert rig.bot.positions.of(GUILD, PEER) is None, "web admin is not a job title"
+    assert rig.g.created == []
+
+
+async def test_the_company_position_in_the_center_is_the_tag_and_edits_follow(rig):
+    store = link(rig.bot, ("peer@x.com", PEER))
+    store.update_members("o1", lambda ms: [setattr(m, "title", "CTO") for m in ms if m.email == "peer@x.com"] or True)  # fmt: skip
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, PEER)[1].key == "cto"
+    assert "CTO" in names(rig.g.members[PEER])
+    # the title is cleared on the website: the tag goes
+    store.update_members("o1", lambda ms: [setattr(m, "title", "") for m in ms if m.email == "peer@x.com"] or True)  # fmt: skip
     await rig.bot.positions_sync(rig.g)
     assert rig.bot.positions.of(GUILD, PEER) is None
-    assert "Admin" not in names(rig.g.members[PEER])
+    assert "CTO" not in names(rig.g.members[PEER])
+
+
+async def test_a_position_named_in_salid_is_written_to_the_center_and_kept(rig):
+    link(rig.bot, ("peer@x.com", PEER))
+    rig.bot.positions.assign(GUILD, PEER, "founder", "stated")
+    await rig.bot.positions_sync(rig.g)
+    assert org_member(rig.bot, "peer@x.com").title == "Founder"
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, PEER)[1].key == "founder"
 
 
 async def test_a_wrong_salid_tag_is_taken_off(rig):
@@ -646,8 +661,6 @@ async def test_a_founder_salid_guessed_for_the_wrong_person_is_taken_back(rig):
     rig.bot.positions.set_mirrored(GUILD, PEER, "Founder")
     await rig.bot.positions_sync(rig.g)
     assert org_member(rig.bot, "peer@x.com").title == ""
-    assert org_member(rig.bot, "peer@x.com").level in (0, 3)
-    assert rig.bot.positions.of(GUILD, PEER)[1].title == "Admin"
-    assert "Admin" in names(rig.g.members[PEER])
+    assert org_member(rig.bot, "peer@x.com").level == 0
+    assert rig.bot.positions.of(GUILD, PEER) is None
     assert not [n for n in names(rig.g.members[PEER]) if n in ("Founder", "ผู้ก่อตั้ง")]
-    assert rig.bot.positions.of(GUILD, OWNER_ID)[1].title == "Founder"

@@ -50,8 +50,6 @@ OWNER_BONUS_LEVELS = 8  # the guild owner stays above every level when positions
 CACHE_TTL_S = 60.0
 DEPT_CODES = ("tech", "business", "finance", "other")
 TAG_REASON = "Salid: position"
-# the central system's hierarchy when it names no title: owner and admin wear a tag, member none
-ORG_ROLE_POSITION = {"owner": ("Founder", 1), "admin": ("Admin", 3)}
 CENTER_POLL_S = 30.0  # how often the central org document is checked for edits made on the web
 SRC_FROM_ASSIGN = {"stated": "stated", "org": "org", "discord": "discord", "heard": "heard"}
 
@@ -411,22 +409,15 @@ class PositionsMixin:
                 if book.unassign(gid, uid):
                     rep.dropped += 1
             if not title:
-                # no title in the central system: its hierarchy (owner / admin / member) decides
+                # no company position in the central system. Its owner / admin / member is the
+                # website access right, NOT a job: it never becomes a position.
                 cur = book.of(gid, uid)
-                if cur is not None and cur[0].source == "stated":
-                    continue  # an executive named the position in Salid
-                want = ORG_ROLE_POSITION.get(getattr(mem, "role", "") or "")
-                if want is None:
-                    if cur is not None and book.unassign(gid, uid):
-                        rep.dropped += 1
+                if cur is None:
                     continue
-                try:
-                    pos, _ = book.add(gid, want[0], want[1])
-                except CatalogFull:
-                    rep.skipped_other += 1
-                    continue
-                if book.assign(gid, uid, pos.key, "org", force=True):
-                    rep.from_org += 1
+                if cur[0].source == "stated" and not cur[0].mirrored:
+                    continue  # named in Salid a moment ago, written to the center on this sync
+                if book.unassign(gid, uid):  # the center has no title (or it was cleared there)
+                    rep.dropped += 1
                 continue
             cur = book.of(gid, uid)
             if cur is not None:
@@ -497,9 +488,6 @@ class PositionsMixin:
                 w = want.get(uid)
                 if w is None:
                     continue
-                derived = ORG_ROLE_POSITION.get(m.role or "")
-                if not (m.title or "") and derived and derived[0] == w[0]:
-                    continue  # the tag comes from the center's own hierarchy: nothing to write back
                 title, level, dept, u = w
                 if m.title != title or m.level != level:
                     m.title, m.level, changed = title, level, True

@@ -409,9 +409,9 @@ def record_org_edit(
 
 # ------------------------------------------------------------------ texts
 STRINGS = {
-    "chg_kind_role": {"th": "สิทธิ์", "en": "role"},
-    "chg_kind_title": {"th": "ตำแหน่ง", "en": "position"},
-    "chg_kind_level": {"th": "ระดับ", "en": "level"},
+    "chg_kind_role": {"th": "สิทธิ์ในเว็บไซต์", "en": "website access"},
+    "chg_kind_title": {"th": "ตำแหน่งในบริษัท", "en": "company position"},
+    "chg_kind_level": {"th": "ระดับตำแหน่งในบริษัท", "en": "company position level"},
     "chg_kind_department": {"th": "แผนก", "en": "department"},
     "chg_kind_link": {"th": "บัญชีที่เชื่อม", "en": "linked accounts"},
     "chg_kind_member_added": {"th": "การเป็นสมาชิก", "en": "membership"},
