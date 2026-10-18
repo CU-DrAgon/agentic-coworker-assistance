@@ -309,6 +309,7 @@ def test_settings_defaults_round_trip_and_layout(client):
         project_notes=True,
         data=True,
         task_handshake=True,
+        role_sync=True,
     )
     assert s["exec_role_names"] == ["ผู้บริหาร", "Executive"] and s["guild_name"] == "ร้านกาแฟ"
     assert [c["name"] for c in s["channels"]] == ["ใบเสร็จ", "chat"]
@@ -558,6 +559,7 @@ def test_update_model_is_what_the_hub_writes():
         "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
         "channel_tones", "default_tone", "tone_note", "task_confirm_mode", "personal_settings", "language_mode",
         "captions_default", "voice_talk", "wake_policy", "room_voice_talk", "room_captions",
+        "exec_max_level", "department_roles",
     }  # fmt: skip
 
 

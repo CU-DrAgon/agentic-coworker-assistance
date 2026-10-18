@@ -244,6 +244,8 @@
           <label><span data-i18n="report_time_l"></span> <input type="time" id="report-time" value="18:30"><small data-i18n="digest_time_s"></small></label>
           <label><span data-i18n="report_id_l"></span> <select class="field" id="report-id"></select><small data-i18n="report_id_s"></small></label>
           <label><span data-i18n="exec_roles_l"></span> <input type="text" id="exec-roles" data-i18n-attr="placeholder:exec_roles_ph"><small data-i18n="exec_roles_s"></small></label>
+          <label><span data-i18n="exec_level_l"></span> <select class="field" id="exec-max-level"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select><small data-i18n="exec_level_s"></small></label>
+          <label><input type="checkbox" id="department-roles"> <span data-i18n="dept_roles_l"></span><small data-i18n="dept_roles_s"></small></label>
         </div>
         <h3 id="modes-h" style="margin:18px 0 6px;font-size:1rem" data-i18n="modes_h"></h3>
         <div class="fields" id="modes">
@@ -614,6 +616,22 @@
  "exec_roles_s": {
   "th": "คั่นด้วยจุลภาค เจ้าของและแอดมินของเซิร์ฟเวอร์เป็นผู้บริหารอยู่แล้ว",
   "en": "Separate with commas. The server owner and admins are already executives."
+ },
+ "exec_level_l": {
+  "th": "ตำแหน่งที่นับเป็นผู้บริหาร (ระดับสูงสุด)",
+  "en": "Positions that count as executives (up to level)"
+ },
+ "exec_level_s": {
+  "th": "1 ผู้ก่อตั้ง/CEO · 2 ระดับ C · 3 ผู้อำนวยการ/หัวหน้าฝ่าย · 4 ผู้จัดการ ใช้เมื่อเปิดซิงค์ตำแหน่ง ค่าเริ่มต้น 3",
+  "en": "1 founder/CEO · 2 C-level · 3 director/head · 4 manager. Used when position sync is on. Default 3."
+ },
+ "dept_roles_l": {
+  "th": "สร้าง role แผนกใน Discord ด้วย",
+  "en": "Also keep a Discord role per department"
+ },
+ "dept_roles_s": {
+  "th": "ปิดไว้เป็นค่าเริ่มต้น ต้องเปิดซิงค์ตำแหน่งด้วย",
+  "en": "Off by default; needs position sync."
  },
  "modes_h": {
   "th": "โหมดของแต่ละห้อง",
@@ -1543,6 +1561,18 @@
   "th": "พูดถึงงานในแชตตามปกติ หรือบอกสลิดว่า “งาน #รหัส ให้ ...” เพื่อย้ายงาน",
   "en": "Just talk about tasks in chat, or tell Salid “task #id to ...” to reassign"
  },
+ "f_role_sync_n": {
+  "th": "ซิงค์ตำแหน่งกับ role ใน Discord และระบบกลาง",
+  "en": "Position and role sync"
+ },
+ "f_role_sync_d": {
+  "th": "ตำแหน่งในบริษัท (ผู้ก่อตั้ง CEO CTO ผู้จัดการ ฯลฯ) มีรายการเดียว สลิดอ่าน role ใน Discord และแอดมินแล้วอัปเดตระบบกลาง และเมื่อมีคนระบุตำแหน่งในสลิดหรือระบบกลาง สลิดสร้าง role ชื่อเดียวกันให้แท็กได้และมอบให้คนนั้น ลำดับตำแหน่งใช้บอกว่าใครอ่านงานของใครได้",
+  "en": "One list of company positions (founder, CEO, CTO, manager...). Salid reads Discord roles and admins into the central system, and when a position is stated in Salid or the central system she creates a taggable role of that name and gives it to the person. Position levels also set who may read whose work."
+ },
+ "f_role_sync_w": {
+  "th": "สลิดไม่แตะ role ที่สลิดไม่ได้สร้าง และต้องมีสิทธิ์ Manage Roles",
+  "en": "Salid never changes roles she did not create, and needs the Manage Roles permission"
+ },
  "f_data_n": {
   "th": "วิเคราะห์ข้อมูลจากไฟล์ Excel / CSV",
   "en": "Spreadsheet and CSV analysis"
@@ -1774,11 +1804,12 @@ const FEATURES = [
   { id: "concept" },
   { id: "data" },
   { id: "task_handshake" },
+  { id: "role_sync" },
   { id: "images" },
   { id: "video_ads" },
   { id: "link_guard" },
 ];
-let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, company_knowledge: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, promo: true, concept: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, task_handshake: true, images: true, video_ads: false };
+let features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, company_knowledge: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, promo: true, concept: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, task_handshake: true, role_sync: true, images: true, video_ads: false };
 let guilds = [];
 let guildId = null;
 let lastSettings = null, lastActivity = null, lastProgress = null;
@@ -2028,7 +2059,7 @@ function renderGuildPill(active) {
 }
 function fillSettings(s) {
   lastSettings = s;
-  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, concept: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, company_knowledge: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, task_handshake: true, images: true, video_ads: false, ...s.features };
+  features = { receipts: true, qa: true, digest: true, deep_tasks: true, voice_meetings: true, auto_join_meetings: true, memory: true, image_memory: true, web: true, documents: true, scheduling: true, email: true, media_memory: true, doc_memory: true, read_receipts: true, followups: true, reports: true, briefings: true, catchup: true, approvals: true, freetime: true, polls: true, wiki: true, places: true, promo: true, concept: true, private_channels: true, maps: true, search: true, travel: true, markets: true, ideas: true, company_learning: true, company_knowledge: true, contests: true, bizfin: true, link_guard: true, meeting_transcript_doc: true, attendance_log: true, decks: true, quotations: true, votes: true, vote_offers: true, reminders: true, projects: true, project_notes: true, data: true, task_handshake: true, role_sync: true, images: true, video_ads: false, ...s.features };
   const channels = s.channels || [];
   renderHidden(channels);
   renderChecks($("receipt-ids"), channels, s.receipt_channel_ids);
@@ -2053,6 +2084,8 @@ function fillSettings(s) {
   fillRetention(s.memory_retention_days || 90);
   loadMemoryStatus();
   $("exec-roles").value = (s.exec_role_names || []).join(", ");
+  $("exec-max-level").value = String([1, 2, 3, 4].includes(s.exec_max_level) ? s.exec_max_level : 3);
+  $("department-roles").checked = s.department_roles === true;
   $("no-channels").hidden = channels.length > 0;
   const gn = $("guild-name");
   if (s.guild_name) { delete gn.dataset.i18n; gn.textContent = s.guild_name; } else gn.textContent = "";
@@ -2119,7 +2152,7 @@ function renderSwitcher() {
 async function save() {
   const btn = $("save"); btn.disabled = true; note($("save-msg"), () => t("saving"));
   const body = {
-    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, company_knowledge: features.company_knowledge, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, quotations: features.quotations, votes: features.votes, vote_offers: features.vote_offers, reminders: features.reminders, projects: features.projects, project_notes: features.project_notes, data: features.data, task_handshake: features.task_handshake, images: features.images, video_ads: features.video_ads },
+    features: { receipts: features.receipts, qa: features.qa, digest: features.digest, deep_tasks: features.deep_tasks, voice_meetings: features.voice_meetings, auto_join_meetings: features.auto_join_meetings, memory: features.memory, image_memory: features.image_memory, web: features.web, documents: features.documents, scheduling: features.scheduling, email: features.email, media_memory: features.media_memory, doc_memory: features.doc_memory, read_receipts: features.read_receipts, followups: features.followups, reports: features.reports, briefings: features.briefings, catchup: features.catchup, approvals: features.approvals, freetime: features.freetime, polls: features.polls, wiki: features.wiki, places: features.places, private_channels: features.private_channels, maps: features.maps, search: features.search, travel: features.travel, markets: features.markets, ideas: features.ideas, company_learning: features.company_learning, company_knowledge: features.company_knowledge, contests: features.contests, bizfin: features.bizfin, link_guard: features.link_guard, meeting_transcript_doc: features.meeting_transcript_doc, attendance_log: features.attendance_log, promo: features.promo, concept: features.concept, decks: features.decks, quotations: features.quotations, votes: features.votes, vote_offers: features.vote_offers, reminders: features.reminders, projects: features.projects, project_notes: features.project_notes, data: features.data, task_handshake: features.task_handshake, role_sync: features.role_sync, images: features.images, video_ads: features.video_ads },
     receipt_channel_ids: checked($("receipt-ids")),
     ask_channel_ids: checked($("ask-ids")),
     digest_channel_id: $("digest-id").value,
@@ -2146,6 +2179,8 @@ async function save() {
     report_channel_id: $("report-id").value,
     memory_retention_days: collectRetention(),
     exec_role_names: $("exec-roles").value.split(",").map((x) => x.trim()).filter(Boolean),
+    exec_max_level: Number($("exec-max-level").value) || 3,
+    department_roles: $("department-roles").checked,
   };
   try {
     fillSettings(await gapi("/settings", { method: "PUT", body: JSON.stringify(body) }));

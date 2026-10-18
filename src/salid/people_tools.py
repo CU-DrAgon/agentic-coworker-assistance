@@ -34,6 +34,7 @@ from .people import (
     topic_match,
     view_items,
 )
+from .positions import CatalogFull, PositionBook, level_of
 from .wiki import WikiPage, find_pages, slugify
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,24 @@ STRINGS = {
         "en": "A handover exists for {names}: ask Salid for “handover {names}”",
     },
 }
+STRINGS.update(
+    {
+        "pos_chart_title": {"th": "ผังองค์กร", "en": "Org chart"},
+        "pos_level_0": {"th": "ตำแหน่งที่ยังไม่ระบุระดับ", "en": "Level not set"},
+        "pos_level_1": {"th": "ผู้ก่อตั้ง / CEO", "en": "Founder / CEO"},
+        "pos_level_2": {"th": "ผู้บริหารระดับ C", "en": "C-level"},
+        "pos_level_3": {"th": "ผู้อำนวยการ / หัวหน้าฝ่าย", "en": "Director / VP / Head"},
+        "pos_level_4": {"th": "ผู้จัดการ / หัวหน้าทีม", "en": "Manager / Lead"},
+        "pos_level_5": {"th": "อาวุโส", "en": "Senior"},
+        "pos_level_6": {"th": "พนักงาน", "en": "Staff"},
+        "pos_level_7": {"th": "ฝึกงาน", "en": "Intern / Trainee"},
+        "pos_no_position": {"th": "ยังไม่มีตำแหน่ง", "en": "No position yet"},
+        "pos_not_linked": {
+            "th": "ยังไม่ได้เชื่อมกับระบบกลาง",
+            "en": "Not linked to the center yet",
+        },
+    }
+)
 CATALOG.update(STRINGS)
 
 
@@ -91,7 +110,11 @@ KNOWLEDGE_PROMPT = {
         "ข้อมูลส่วนตัว/ความชอบของคนไม่อยู่ในที่นี้ (ใช้ได้แค่ข้อมูลด้านงาน). "
         "ใครทำงานกับใคร ใครเป็นศูนย์กลาง ใครเชื่อมแผนก ใครคุยกับลูกค้า/คู่ค้าเจ้าไหนบ่อย → who_works_with_whom "
         "(ไม่ใส่ชื่อ = ภาพรวม ใส่ชื่อ = เครือข่ายของคนนั้น). ผู้บริหารถามว่า “น้องเรียนรู้ไปถึงไหนแล้ว” → "
-        "knowledge_status.\n"
+        "knowledge_status. "
+        "ตำแหน่งในบริษัท (CEO / CTO / ผู้ก่อตั้ง ฯลฯ) เป็นข้อมูลของบริษัท: “ใครเป็น CEO”, “ผังองค์กร” → org_chart; "
+        "ผู้บริหารสั่ง “ให้ X เป็น CTO”, “แท็ก X เป็นผู้ก่อตั้ง” → set_role (สลิดแท็กยศใน Discord ให้เอง); "
+        "“ซิงค์ตำแหน่ง” → sync_roles; เพิ่ม/ลบ/ดูรายการตำแหน่ง → positions_catalog. "
+        "ห้ามเดาระดับหรือตำแหน่งของใครจากบทสนทนา มีแต่ที่ผู้บริหารระบุ หรือยศใน Discord เท่านั้น.\n"
     ),
     "en": (
         "\nSalid is the company's institutional memory: when asked what the company does, who does "
@@ -105,7 +128,12 @@ KNOWLEDGE_PROMPT = {
         "Personal preferences are not part of this: work knowledge only. Who works with whom, who is "
         "central, who bridges departments, who deals with which client or supplier -> "
         "who_works_with_whom (no name = the overview, a name = that person's network). An "
-        "executive asking how much you have learned about us -> knowledge_status.\n"
+        "executive asking how much you have learned about us -> knowledge_status. "
+        "Positions (CEO / CTO / founder...) are company facts: 'who is the CEO', 'org chart' -> "
+        "org_chart; an executive saying 'set X as CTO' / 'tag X as founder' -> set_role (Salid "
+        "tags the Discord role herself); 'sync the positions' -> sync_roles; show / add / remove "
+        "the list of positions -> positions_catalog. Never guess anybody's level or position from "
+        "chat: only what an executive stated, or a Discord role, counts.\n"
     ),
 }
 
@@ -135,6 +163,11 @@ class PeopleCtx:
     pdf: Callable[[str, str], bytes] | None = None  # (title, markdown) -> PDF bytes
     save_wiki: Callable[[str, str, list[int]], dict] | None = None  # (title, body, channels)
     outbox: list[tuple[str, bytes]] = field(default_factory=list)
+    # positions <-> Discord roles <-> the central org (`positions_bot`); None = role sync is off
+    book: PositionBook | None = None
+    tag: Callable[[int], object] | None = None  # uid -> True | "pending" | "no_permission"
+    sync: Callable[[], dict] | None = None  # run the two-way sync now -> counts
+    unlinked: Callable[[], list[str]] = lambda: []  # members not linked to the center yet
 
 
 # ------------------------------------------------------------------ helpers
@@ -399,7 +432,21 @@ def knowledge_status_data(ctx: PeopleCtx) -> dict:
     no_dossier = [r.name for r in roster if r.user_id not in have]
     titles = {d.user_id: d.role_title for d in people}
     no_role = [r.name for r in roster if not (titles.get(r.user_id) or r.title)]
+    extra: dict = {}
+    if ctx.book is not None:
+        held = ctx.book.assignments(ctx.guild_id)
+        unlinked = ctx.unlinked()
+        extra = {
+            "positions": {
+                "catalog": len(ctx.book.catalog(ctx.guild_id)),
+                "assigned": len(held),
+                "without_position_count": len([r for r in roster if r.user_id not in held]),
+            },
+            "not_linked_to_center": unlinked[:15],
+            "not_linked_to_center_count": len(unlinked),
+        }
     return {
+        **extra,
         "people_with_dossiers": len(people),
         "people_in_server": len(roster),
         "facts": facts,
@@ -815,6 +862,32 @@ def handover_data(ctx: PeopleCtx, name: str, successor: str, regenerate: bool) -
     return out
 
 
+def _assign_position(ctx: PeopleCtx, d: Dossier, title: str, department: str) -> dict:
+    """The catalog side of `set_role`: find (or, for an executive, create) the position and give
+    it to the person; the Discord tag is scheduled by the bot. An executive may set anyone; a
+    person only for themself and only for a level of 5 or below (senior, staff, intern): nobody
+    makes themself CEO."""
+    book = ctx.book
+    pos = book.find(ctx.guild_id, title)
+    level = pos.level if pos is not None else level_of(title)
+    if not ctx.is_exec and level < 5:
+        return {"position": "needs_executive", "note": "an executive must set this position"}
+    if pos is None:
+        try:
+            pos, _ = book.add(ctx.guild_id, title, department=department)
+        except CatalogFull:
+            return {"position": "catalog_full"}
+    book.assign(ctx.guild_id, d.user_id, pos.key, "stated", department)
+    out: dict = {"position": pos.title, "level": pos.level}
+    if ctx.tag is not None:
+        try:
+            out["tagged"] = ctx.tag(d.user_id)
+        except Exception:
+            logger.warning("tagging the position failed", exc_info=True)
+            out["tagged"] = "pending"
+    return out
+
+
 def set_role_data(ctx: PeopleCtx, name: str, title: str, department: str) -> dict:
     d, err = _find(ctx, name)
     if err:
@@ -830,12 +903,113 @@ def set_role_data(ctx: PeopleCtx, name: str, title: str, department: str) -> dic
         d.name,
         lambda x: set_role(x, title, "stated", department or None) or True,
     )
-    return {
+    out = {
         "status": "saved",
         "name": d.name,
         "role": title or d.role_title,
         "department": department or d.department,
     }
+    if ctx.book is not None and title:
+        out.update(_assign_position(ctx, d, title, department))
+    return out
+
+
+def org_chart_data(ctx: PeopleCtx) -> dict:
+    """Who holds which position, most senior level first; who has none; who is not linked to the
+    central system (names for executives, a count for everyone). > 25 people: also a PDF."""
+    if ctx.book is None:
+        return {"error": "not available here"}
+    roster = {r.user_id: r for r in ctx.roster()}
+    levels, held = [], set()
+    for lv, rows in ctx.book.by_level(ctx.guild_id):
+        people = []
+        for a, p in rows:
+            r = roster.get(a.user_id)
+            if roster and r is None:
+                continue  # left or not here
+            held.add(a.user_id)
+            dept = department_label(a.department or (r.department if r else "")) or ""
+            people.append(
+                {"name": (r.name if r else _name_of(ctx, a.user_id)) or str(a.user_id),
+                 "position": p.title, "department": dept}
+            )  # fmt: skip
+        if people:
+            levels.append({"level": lv, "label": t(f"pos_level_{lv}", ctx.lang), "people": people})
+    none = sorted(r.name for r in roster.values() if r.user_id not in held)
+    names = ctx.unlinked()
+    lines = []
+    for lv in levels:
+        lines.append(f"## {lv['label']}")
+        for x in lv["people"]:
+            extra = f" ({x['department']})" if x["department"] else ""
+            lines.append(f"- {x['name']}: {x['position']}{extra}")
+    if none:
+        lines += [f"## {t('pos_no_position', ctx.lang)}", "- " + ", ".join(none[:60])]
+    out: dict = {
+        "levels": levels,
+        "no_position": none[:40],
+        "no_position_count": len(none),
+        "not_linked_count": len(names),
+        "text": "\n".join(lines),
+    }
+    if ctx.is_exec:
+        out["not_linked_to_center"] = names[:30]
+    if len(roster) > 25 and ctx.pdf is not None and lines:
+        try:
+            fname = "org-chart.pdf"
+            ctx.outbox.append((fname, ctx.pdf(t("pos_chart_title", ctx.lang), out["text"])))
+            out["attached_file"] = fname
+        except Exception:
+            logger.warning("org chart PDF failed", exc_info=True)
+    return out
+
+
+def sync_roles_data(ctx: PeopleCtx) -> dict:
+    if not ctx.is_exec:
+        return {"error": "not_allowed", "note": "only executives can sync the positions"}
+    if ctx.book is None or ctx.sync is None:
+        return {"error": "not available here"}
+    return {"status": "synced", **ctx.sync()}
+
+
+def positions_catalog_data(
+    ctx: PeopleCtx, action: str, title: str, level: int, aliases: str
+) -> dict:
+    if not ctx.is_exec:
+        return {"error": "not_allowed", "note": "only executives can change the positions"}
+    if ctx.book is None:
+        return {"error": "not available here"}
+    gid, book = ctx.guild_id, ctx.book
+    action = (action or "show").strip().lower()
+    title = clean(title, 80)
+    if action == "show":
+        cat = book.catalog(gid)
+        return {
+            "positions": [
+                {"title": p.title, "level": p.level, "aliases": p.aliases,
+                 "department": p.department, "tagged_in_discord": bool(p.discord_role_id)}
+                for p in sorted(cat, key=lambda p: (p.level == 0, p.level, p.title))
+            ]
+        }  # fmt: skip
+    if not title:
+        return {"error": "give the position's title"}
+    if action == "add":
+        extra = [x for x in (aliases or "").replace("،", ",").split(",") if x.strip()]
+        lv = int(level) if level and 1 <= int(level) <= 7 else None
+        try:
+            pos, created = book.add(gid, title, lv, extra)
+        except CatalogFull:
+            return {"error": "catalog_full", "note": "too many positions; remove one first"}
+        return {"status": "added" if created else "updated", "title": pos.title,
+                "level": pos.level, "aliases": pos.aliases}  # fmt: skip
+    if action == "remove":
+        pos = book.find(gid, title)
+        if pos is None:
+            return {"error": "not_found"}
+        book.remove(gid, pos.key)
+        return {"status": "removed", "title": pos.title,
+                "note": "its Discord role was left as it is"}  # fmt: skip
+    return {"error": "action must be show, add or remove"}
 
 
 def person_left_data(ctx: PeopleCtx, name: str, successor: str) -> dict:
@@ -940,7 +1114,10 @@ def people_tools(ctx: PeopleCtx) -> list[Callable]:
     def set_role(name: str, title: str = "", department: str = "") -> dict:
         """Record someone's job title and/or department explicitly: "X เป็นหัวหน้าฝ่ายบัญชี",
         "set Mali's role to accountant, finance". Executives for anyone, or a person for
-        themself. What is stated this way wins over what Salid guessed.
+        themself. What is stated this way wins over what Salid guessed. The title also becomes the
+        person's position in the company (the level is guessed from the words; a person may only
+        take a senior / staff / intern level for themself) and Salid tags the matching Discord
+        role: the result says tagged true, "pending" or "no_permission".
 
         Args:
             name: the person.
@@ -948,6 +1125,37 @@ def people_tools(ctx: PeopleCtx) -> list[Callable]:
             department: department or team.
         """
         return safe(lambda: set_role_data(ctx, name, title, department))
+
+    def org_chart() -> dict:
+        """The company's org chart by position level: "ใครเป็น CEO", "ผังองค์กร", "who is the
+        CTO", "who are the managers", "show the org chart". Levels top-down (founder / CEO,
+        C-level, director, manager, senior, staff, intern) with names, positions and departments,
+        who has no position yet, and (executives) who is not linked to the central system. Over 25
+        people it also attaches a PDF. Answer only from the result; never guess a position."""
+        return safe(lambda: org_chart_data(ctx))
+
+    def sync_roles() -> dict:
+        """Executives only: sync positions with Discord roles and the central system now ("ซิงค์
+        ตำแหน่ง", "sync the roles"): reads Discord roles and admins, mirrors titles to the center,
+        creates and assigns the position roles. Reports counts: tagged, untagged, mirrored,
+        skipped for missing permission."""
+        return safe(lambda: sync_roles_data(ctx))
+
+    def positions_catalog(
+        action: str = "show", title: str = "", level: int = 0, aliases: str = ""
+    ) -> dict:
+        """Executives only: the company's list of positions. action show (default) lists them with
+        levels; add a position ("เพิ่มตำแหน่ง CPO ระดับ 2") with its title, optional level 1-7
+        (1 founder/CEO, 2 C-level, 3 director, 4 manager, 5 senior, 6 staff, 7 intern; 0 = guess
+        from the words) and comma-separated aliases; remove a position by its title.
+
+        Args:
+            action: show, add or remove.
+            title: the position's title (add / remove).
+            level: 1-7, or 0 to guess.
+            aliases: other names for it, comma-separated.
+        """
+        return safe(lambda: positions_catalog_data(ctx, action, title, level, aliases))
 
     def person_left(name: str, successor: str = "") -> dict:
         """An executive says someone left or resigned ("X ลาออกแล้ว", "X left the company"). Marks
@@ -992,6 +1200,8 @@ def people_tools(ctx: PeopleCtx) -> list[Callable]:
         who_works_with_whom,
         knowledge_status,
     ]
+    if ctx.book is not None:
+        tools += [org_chart, sync_roles, positions_catalog]
     for fn in tools:
         fn.outbox = ctx.outbox  # type: ignore[attr-defined]
     return tools

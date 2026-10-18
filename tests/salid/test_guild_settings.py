@@ -81,6 +81,7 @@ def test_missing_document_means_defaults(gstore):
         project_notes=True,
         data=True,
         task_handshake=True,
+        role_sync=True,
     )
     assert g.receipt_channel_ids == [] and g.digest_time == "18:00" and g.active
     assert g.exec_role_names == ["ผู้บริหาร", "Executive"] and g.admin_emails == []
@@ -119,7 +120,7 @@ def test_document_layout(gstore):
         "exec_role_names", "updated_by", "updated_at", "channel_modes", "default_mode",
         "channel_languages", "memory_retention_days",
         "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
-        "channel_tones", "default_tone", "tone_note", "task_confirm_mode", "personal_settings", "language_mode",
+        "channel_tones", "default_tone", "tone_note", "task_confirm_mode", "personal_settings", "language_mode", "exec_max_level", "department_roles",
         "captions_default", "voice_talk",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True

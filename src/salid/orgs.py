@@ -113,6 +113,11 @@ class Member(BaseModel):
     identity_tenants: dict[str, str] = Field(default_factory=dict)
     department: str = ""  # PM dashboard: tech | business | finance | other | ""
     finance: bool = False  # PM dashboard: Authorized Approver, may see budgets
+    # Position in the company, mirrored by Salid (salid.positions): title as written and its
+    # level (1 founder/owner ... 7 intern, 0 unknown). Default empty/0 so older documents and the
+    # web keep working; the web may edit `title`, Salid then adopts it.
+    title: str = ""
+    level: int = 0
 
     def identity(self, platform: str) -> str | None:
         """The verified platform account id of this member, or None."""
@@ -476,6 +481,20 @@ class OrgStore:
         if org is None or not platform_user_id:
             return None
         return next((m for m in org.members if m.identity(platform) == str(platform_user_id)), None)
+
+    def update_members(self, org_id: str, fn) -> bool:
+        """Atomically apply `fn(members)` to the org's member list inside one transaction (it
+        edits the Member objects in place and returns True when it changed anything). Members are
+        never added or removed here. Returns True when the document was written."""
+
+        def run(tx) -> bool:
+            org = self._tx_org(tx, org_id)
+            if org is None or not fn(org.members):
+                return False
+            tx.put(ORGS, 0, org.id, org.model_dump())
+            return True
+
+        return self.docs.transact(run)
 
     def link_identity(
         self, org_id: str, email: str, platform: str, platform_user_id: str, tenant: str = ""

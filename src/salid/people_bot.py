@@ -170,7 +170,11 @@ class PeopleMixin:
                     user_id=m.id,
                     name=getattr(m, "display_name", str(m.id)),
                     department=(d.department if d and d.department else depts.get(m.id, "")),
-                    title=(d.role_title if d and d.role_title else self._discord_role(guild, m)),
+                    title=(
+                        d.role_title
+                        if d and d.role_title
+                        else self._position_title(guild.id, m.id)[0] or self._discord_role(guild, m)
+                    ),
                     rank=ranks.get(m.id, 0),
                 )
             )
@@ -243,11 +247,13 @@ class PeopleMixin:
             name = getattr(m, "display_name", str(m.id))
             if self._people_is_bot(m.id, name):
                 continue
-            role = self._discord_role(guild, m)
+            role, source = self._position_title(gid, m.id)  # the position book comes first
+            if not role:
+                role, source = self._discord_role(guild, m), "discord"
             dept = depts.get(m.id)
 
-            def apply(d: Dossier, role=role, dept=dept) -> bool:
-                a = set_role(d, role, "discord") if role else False
+            def apply(d: Dossier, role=role, dept=dept, source=source) -> bool:
+                a = set_role(d, role, source) if role else False
                 b = set_role(d, "", "org", dept) if dept else False
                 return a or b
 
@@ -344,6 +350,11 @@ class PeopleMixin:
                 save_wiki=lambda title, body, chans: self._people_save_page(
                     gid, asker, title, body, chans
                 ),
+                # positions <-> Discord roles <-> the center (salid.positions_bot)
+                book=self.positions if self._positions_on(gid) else None,
+                tag=lambda uid: self._pos_tag_now(guild, loop, uid),
+                sync=lambda: self._pos_sync_now(guild, loop),
+                unlinked=lambda: self._pos_unlinked_names(guild),
             )
             return people_tools(ctx)
         except Exception:

@@ -33,6 +33,7 @@ LABELS = {
     "manage_events": "Manage Events",
     "create_events": "Create Events",
     "send_polls": "Send Polls",
+    "manage_roles": "Manage Roles",
 }
 
 
