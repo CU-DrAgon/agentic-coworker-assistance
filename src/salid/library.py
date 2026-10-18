@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import threading
 import time
 import uuid
 from collections.abc import Callable
@@ -784,6 +785,13 @@ class Library:
         if self.analyzer is None:
             raise RuntimeError("no analyzer configured")
         sha = hashlib.sha256(data).hexdigest()
+        # one upload of a given file at a time: two quick uploads of the same file (a double
+        # click, two tabs) both passed the duplicate check and were stored twice
+        lock = self.__dict__.setdefault("_upload_locks", {}).setdefault(sha, threading.Lock())
+        with lock:
+            return self._upload_locked(org, web, email, filename, data, mime, sha)
+
+    def _upload_locked(self, org, web, email, filename, data, mime, sha) -> DocItem:
         same = self.docs.find(ORG_DOCS, web.memory_id, lambda d: d.get("sha256") == sha)
         if same:  # the very same file again: keep one copy, say which one
             d = same[0]
