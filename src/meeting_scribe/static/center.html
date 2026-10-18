@@ -744,7 +744,7 @@ function el(tag, attrs, ...kids) {
     else if (k === "text") n.textContent = v;
     else n.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(String(c)));
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(String(c)));
   return n;
 }
 // replaceChildren that tolerates arrays / null / false (so conditional children never render as text)
@@ -1407,7 +1407,7 @@ VIEWS.overview = async (body, my) => {
     (prof.values || []).length ? [el("h3", { text: t("cp_values") }), el("div", { class: "vals" }, prof.values.map((v) => el("span", { class: "chip", text: v })))] : null));
   // (3b) the legal entity, as on the registration papers
   if (LG.some((k) => prof[k]) || admin) out.push(el("div", { class: "card" }, el("h2", { text: t("lg_h") }),
-    LG.some((k) => prof[k]) ? el("dl", { class: "pdl lg" }, LG.filter((k) => prof[k]).map((k) => [el("dt", { text: t("lg_" + k) }), el("dd", { text: prof[k] })]))
+    LG.some((k) => prof[k]) ? el("dl", { class: "pdl lg" }, LG.filter((k) => prof[k]).flatMap((k) => [el("dt", { text: t("lg_" + k) }), el("dd", { class: "pre", text: prof[k] })]))
       : el("p", { class: "muted small", text: t("lg_p") })));
   // (4) leadership: owners + admins
   const leaders = items(ov, "leadership"), deptNames = (dir ? items(dir, "departments").map((g) => g.department) : items(ov, "departments")).filter(Boolean);
