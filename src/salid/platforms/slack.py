@@ -51,8 +51,10 @@ HUDDLE_EVENTS = {"user_huddle_changed", "file_shared"}  # huddle presence (log o
 CANVAS_TYPES = {"quip", "canvas"}  # files.info filetype / mode of a canvas (UNVERIFIED, see docs)
 MAX_HUDDLE_FILES = 6
 MAX_HUDDLE_ROOTS = 500
+GROUP_EVENTS = {"subteam_members_changed", "subteam_updated"}  # drop that group's cache at once
 REACTION_EVENTS = {"reaction_added"}  # a person reacted: ids only are logged, ✅ confirms a notice
-GROUP_TTL_S = 600.0  # usergroup handle / member caches expire after this long
+GROUP_TTL_S = 600.0  # usergroup handle / member caches (display labels) expire after this long
+GROUP_AUTH_TTL_S = 60.0  # ... but membership used to authorize (executive) is at most this old
 GROUP_FAIL_TTL_S = 30.0
 UPLOAD_MAX_BYTES = 20 * 1024 * 1024  # one generated file Salid uploads (Slack itself allows more)
 MAX_UPLOADS = 5
@@ -83,7 +85,16 @@ ROOM_EVENTS = {
 # One Bolt listener for every non-message event (keeps the listener count at three).
 LIFECYCLE_EVENTS = re.compile(
     "^("
-    + "|".join(sorted(ROOM_EVENTS | REVOKED_EVENTS | USER_EVENTS | HUDDLE_EVENTS | REACTION_EVENTS))
+    + "|".join(
+        sorted(
+            ROOM_EVENTS
+            | REVOKED_EVENTS
+            | USER_EVENTS
+            | HUDDLE_EVENTS
+            | REACTION_EVENTS
+            | GROUP_EVENTS
+        )
+    )
     + ")$"
 )
 
@@ -255,22 +266,32 @@ class SlackPort:
         self._group_list = (stamp, out)
         return out
 
-    async def usergroup(self, gid: str, hint: str = "") -> tuple[str, frozenset[str] | None]:
+    async def usergroup(
+        self, gid: str, hint: str = "", max_age: float = GROUP_TTL_S
+    ) -> tuple[str, frozenset[str] | None]:
         """(handle, members) of a Slack user group. ``hint`` is the ``@handle`` Slack put in the
-        mention. Members are None when usergroups.users.list failed (scope missing...)."""
+        mention. Members are None when usergroups.users.list failed (scope missing...). A cached
+        answer older than ``max_age`` seconds is read again (a failure is remembered 30 s)."""
         hit = self._groups.get(gid)
-        if hit is not None and self._clock() - hit[0] < GROUP_TTL_S:
-            return hit[1], hit[2]
+        if hit is not None:
+            age = self._clock() - hit[0]
+            if age < (GROUP_FAIL_TTL_S if hit[2] is None else max_age):
+                return hit[1], hit[2]
         handle = hint.lstrip("@") or (await self._group_handles()).get(gid, "")
         try:
             users = (await self.client.usergroups_users_list(usergroup=gid)).get("users") or []
             members: frozenset[str] | None = frozenset(users)
-            stamp = self._clock()
         except Exception as e:
             logger.warning("usergroups.users.list failed (%s)", safe_exc(e))
-            members, stamp = None, self._clock() - GROUP_TTL_S + GROUP_FAIL_TTL_S
-        self._groups[gid] = (stamp, handle, members)
+            members = None
+        self._groups[gid] = (self._clock(), handle, members)
         return handle, members
+
+    def group_changed(self, gid: str, *, renamed: bool = False) -> None:
+        """subteam_members_changed / subteam_updated: forget what we know of that group."""
+        self._groups.pop(gid, None)
+        if renamed:
+            self._group_list = None
 
     async def group_label(self, gid: str, hint: str = "") -> str:
         """``@design-team (3 people)`` for a ``<!subteam^ID|@handle>`` mention."""
@@ -290,7 +311,7 @@ class SlackPort:
                 )
             if gid is None:
                 continue
-            _handle, members = await self.usergroup(gid)
+            _handle, members = await self.usergroup(gid, max_age=GROUP_AUTH_TTL_S)
             if members is not None and uid in members:
                 return True
         return False
@@ -489,8 +510,8 @@ class SlackPort:
         raise AssertionError("unreachable")
 
     async def ack(self, msg: Incoming, text: str) -> object | None:
-        if self.revoked:
-            return None
+        if self.revoked or msg.private:
+            return None  # a private answer has no public "one moment" to edit later
         resp = await self._call(
             self.client.chat_postMessage,
             channel=msg.room,
@@ -540,15 +561,26 @@ class SlackPort:
         failure: Exception | None = None
         for i, text in enumerate(rest):
             try:
-                resp = await self._call(
-                    self.client.chat_postMessage,
-                    channel=msg.room,
-                    thread_ts=self._thread(msg),
-                    text=text,
-                    mrkdwn=True,
-                    unfurl_links=False,
-                    reply_broadcast=False,
-                )
+                if msg.private:  # only the invoker sees it
+                    resp = await self._call(
+                        self.client.chat_postEphemeral,
+                        channel=msg.room,
+                        user=msg.user,
+                        thread_ts=self._thread(msg),
+                        text=text,
+                        mrkdwn=True,
+                    )
+                    resp = {"ts": resp.get("message_ts")}
+                else:
+                    resp = await self._call(
+                        self.client.chat_postMessage,
+                        channel=msg.room,
+                        thread_ts=self._thread(msg),
+                        text=text,
+                        mrkdwn=True,
+                        unfurl_links=False,
+                        reply_broadcast=False,
+                    )
             except Exception as e:
                 logger.error(
                     "reply chunk %d/%d was not delivered (%s)", i + 1, len(rest), safe_exc(e)
@@ -644,6 +676,9 @@ class SlackPort:
         thread the answer went to (files.getUploadURLExternal + completeUploadExternal through
         `files_upload_v2`). Empty and over-size files are skipped. Returns how many were sent."""
         if self.revoked:
+            return 0
+        if msg.private:  # an upload is public to the channel: never for a private answer
+            logger.warning("%d generated file(s) not uploaded (private answer)", len(files))
             return 0
         ok = [(n, d) for n, d in files if d and len(d) <= UPLOAD_MAX_BYTES][:MAX_UPLOADS]
         if len(ok) < len(files):
@@ -1050,6 +1085,7 @@ class SlackAdapter:
             is_direct=direct,
             mentions_bot=True,
             room_name=room_name,
+            private=not direct,  # answered to the invoker alone, never buffered or remembered
         )
         await self.a.handle(msg, self.port)
 
@@ -1080,11 +1116,11 @@ class SlackAdapter:
         if changes is None:
             return
         msg = Incoming(
-            platform=PLATFORM, tenant=team, room=channel, user=user, user_name="", text="OK",
-            message=f"reaction:{ts}", at=datetime.now(UTC), is_direct=True,
+            platform=PLATFORM, tenant=team, room=channel, user=user, user_name="",
+            text="", message=f"reaction:{ts}", at=datetime.now(UTC), is_direct=True,
         )  # fmt: skip
         try:
-            thanks = await changes.on_message(msg)
+            thanks = await changes.ack_message(f"{PLATFORM}-{team}", user, ts)
             if thanks:
                 await self.port.deliver(msg, self.port.format(thanks), None)
         except Exception as e:
@@ -1152,6 +1188,12 @@ class SlackAdapter:
             return
         if kind in USER_EVENTS:
             await self._user_changed(event, team)
+            return
+        if kind in GROUP_EVENTS:
+            sub = event.get("subteam") if isinstance(event.get("subteam"), dict) else {}
+            gid = event.get("subteam_id") or sub.get("id")
+            if gid:
+                self.port.group_changed(str(gid), renamed=kind == "subteam_updated")
             return
         if kind == "file_shared":
             await self.on_file_shared(event, team)

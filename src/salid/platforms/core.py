@@ -136,6 +136,10 @@ class Incoming:
     room_name: str = ""
     reply_token: str = ""  # LINE
     raw_at: float = 0.0  # arrival time on the platform clock (LINE reply token age)
+    # Slack slash command in a channel: the question and its answer are for the invoker alone, so
+    # neither is buffered, remembered or used as a follow-up window, and the memory scope is the
+    # channel's own memory only.
+    private: bool = False
 
     @property
     def key(self) -> tuple[str, str, str, str]:
@@ -507,15 +511,16 @@ class Assistant:
         mode = self._mode(gid, rid, msg.room_name, msg.is_direct)
         if mode == "off":
             return
-        bkey = self._bkey(msg, gid, rid)
-        self.buffer.add(
-            bkey,
-            msg.message,
-            HistLine(msg.at, msg.user_name or msg.user, msg.text or _files_line(msg)),
-        )
-        self._record(msg, gid, rid)
-        if self.on_room_seen is not None:
-            self.on_room_seen(msg)
+        if not msg.private:  # a private (slash) question is never kept or shown to the room
+            bkey = self._bkey(msg, gid, rid)
+            self.buffer.add(
+                bkey,
+                msg.message,
+                HistLine(msg.at, msg.user_name or msg.user, msg.text or _files_line(msg)),
+            )
+            self._record(msg, gid, rid)
+            if self.on_room_seen is not None:
+                self.on_room_seen(msg)
         if not await self._addressed(msg, port, gid, rid, mode):
             return
         await self._verify_account(msg, port)
@@ -845,6 +850,9 @@ class Assistant:
         see. Any failure -> no memory tools at all."""
         if not self.team.enabled(gid, "memory"):
             return None
+        if msg.private:  # fail closed: this room's own memory, never a wider scope
+            allowed = {rid: msg.room_name or msg.room}
+            return self._tools(gid, allowed, self.memory_store, [gid])
         try:
             view = await port.room_view(msg)
             asker = ids.user_id(msg.platform, msg.user)
@@ -879,6 +887,9 @@ class Assistant:
                 store, allowed, guilds = self._widen_memory(wide, gid, allowed)
             except Exception as e:  # fail closed: the asking tenant's scope, unchanged
                 logger.warning("could not widen the memory scope (%s)", safe_exc(e))
+        return self._tools(gid, allowed, store, guilds)
+
+    def _tools(self, gid: int, allowed: dict[int, str], store, guilds: list[int]) -> MemoryTools:
         return MemoryTools(
             store,
             gid,
@@ -1125,7 +1136,7 @@ class Assistant:
         except Exception as e:
             logger.error("deliver failed tenant=%s room=%s (%s)", gid, rid, safe_exc(e))
             return
-        if not remember or getattr(port, "revoked", False):
+        if not remember or msg.private or getattr(port, "revoked", False):
             return
         now = self._clock()
         self._windows[(gid, rid, ids.user_id(msg.platform, msg.user))] = now

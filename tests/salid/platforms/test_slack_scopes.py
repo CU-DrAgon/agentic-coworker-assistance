@@ -2,12 +2,13 @@
 usergroups:read. A fake Web API client, no network."""
 
 import logging
+from datetime import timedelta
 
 from conftest import FixedClockSettings
-from platform_fakes import Clock, inc, make_assistant
+from platform_fakes import NOW, Clock, inc, make_assistant
 from test_slack import BOT, TEAM, FakeSlack
 
-from salid.platforms import slack
+from salid.platforms import ids, slack
 from salid.platforms.config import PlatformSettings
 from salid.platforms.slack import SlackAdapter, SlackPort
 from salid.qa import Answer
@@ -23,6 +24,11 @@ class ScopeSlack(FakeSlack):
         self.group_calls: list[str] = []
         self.fail_reactions = False
         self.fail_upload = False
+        self.ephemerals: list[dict] = []
+
+    async def chat_postEphemeral(self, **kw):
+        self.ephemerals.append(kw)
+        return {"ok": True, "message_ts": f"8{len(self.ephemerals)}.000"}
 
     async def reactions_add(self, **kw):
         if self.fail_reactions:
@@ -196,28 +202,33 @@ async def test_reaction_added_logs_ids_only_and_ignores_the_bot_itself(tmp_path,
     assert not client.posts
 
 
-async def test_a_check_mark_in_a_dm_confirms_an_open_change_notice(tmp_path):
+async def test_a_check_mark_confirms_only_the_notice_message_it_was_put_on(tmp_path):
     client, a, port, adapter = build(tmp_path)
     seen = []
 
     class Changes:
-        async def on_message(self, msg):
-            seen.append((msg.user, msg.text, msg.is_direct))
-            return "thanks"
+        async def ack_message(self, workspace, user, ref):
+            seen.append((workspace, user, ref))
+            return "thanks" if ref == "5.0" else None
 
     a.changes = Changes()
     item = {"type": "message", "channel": "D1", "ts": "5.0"}
     base = {"type": "reaction_added", "reaction": "white_check_mark", "item": item}
     await adapter.on_event({**base, "user": "U1", "item_user": BOT})
-    assert seen == [("U1", "OK", True)] and client.posts[0]["text"] == "thanks"
+    assert seen == [(f"slack-{TEAM}", "U1", "5.0")] and client.posts[0]["text"] == "thanks"
+    # an unrelated Salid DM message: asked, nothing confirmed, nothing said
+    client.posts.clear()
+    await adapter.on_event({**base, "user": "U1", "item_user": BOT, "item": {**item, "ts": "6.0"}})
+    assert seen[-1][2] == "6.0" and not client.posts
     # not in a DM, someone else's message, the bot's own reaction, or another emoji: ignored
+    n = len(seen)
     await adapter.on_event(
         {**base, "user": "U1", "item_user": BOT, "item": {**item, "channel": "C1"}}
     )
     await adapter.on_event({**base, "user": "U1", "item_user": "U2"})
     await adapter.on_event({**base, "user": BOT, "item_user": BOT})
     await adapter.on_event({**base, "user": "U1", "item_user": BOT, "reaction": "x"})
-    assert len(seen) == 1
+    assert len(seen) == n
 
 
 # ------------------------------------------------------------------ commands
@@ -238,17 +249,38 @@ def cmd(**kw):
     return base
 
 
-async def test_slash_question_acks_ephemerally_then_answers_in_the_channel(tmp_path):
+async def test_slash_question_is_answered_ephemerally_to_the_invoker_only(tmp_path):
     client, a, port, adapter = build(tmp_path)
     ack = Ack()
     await adapter.on_command(cmd(), TEAM, ack)
     await a.drain()
     assert ack.calls[0]["response_type"] == "ephemeral" and "moment" in ack.calls[0]["text"]
     assert a.ask_fn.calls[0][0] == "what did we spend?"
-    (post,) = client.posts
-    assert post["channel"] == "C1" and post["thread_ts"] is None  # top level, no ts to thread under
-    assert post["text"].startswith("> what did we spend?") and post["text"].endswith("ok")
+    assert client.posts == []  # nothing public in the channel
+    (eph,) = client.ephemerals
+    assert eph["channel"] == "C1" and eph["user"] == "U1" and eph.get("thread_ts") is None
+    assert eph["text"].startswith("> what did we spend?") and eph["text"].endswith("ok")
     assert client.reactions == []  # a slash command has no message to react to
+
+
+async def test_slash_text_and_answer_are_never_remembered_or_buffered(tmp_path):
+    client, a, port, adapter = build(tmp_path)
+    await adapter.on_command(cmd(text="secret plan for the merger"), TEAM, Ack())
+    await a.drain()
+    assert client.ephemerals and not client.posts
+    gid, rid = ids.tenant_id("slack", TEAM), ids.room_id("slack", TEAM, "C1")
+    assert not a.buffer.lines((gid, rid, None))
+    day = (NOW + timedelta(hours=7)).date().isoformat()
+    assert a.memory_store.messages(gid, [rid], day, day, limit=100, newest_first=False) == []
+    # the model still sees only this channel's own memory, no wider scope
+    (_, kw) = a.ask_fn.calls[0]
+    assert set(kw["memory"].allowed) == {rid}
+
+
+async def test_a_slow_private_slash_answer_never_posts_a_public_ack(tmp_path):
+    client, a, port, adapter = build(tmp_path)
+    msg = inc(platform="slack", tenant=TEAM, room="C1", user="U1", private=True, message="t.1")
+    assert await port.ack(msg, "one moment") is None and not client.posts
 
 
 async def test_slash_help_and_empty_text_show_the_help_without_asking(tmp_path):
@@ -265,13 +297,14 @@ async def test_slash_respects_a_channel_that_is_switched_off(tmp_path):
     a._mode = lambda gid, rid, name, direct: "off"
     ack = Ack()
     await adapter.on_command(cmd(), TEAM, ack)
-    assert ack.calls[0]["text"] == slack.SLASH_OFF and not a.ask_fn.calls and not client.posts
+    assert ack.calls[0] == {"response_type": "ephemeral", "text": slack.SLASH_OFF}
+    assert not a.ask_fn.calls and not client.posts and not client.ephemerals
 
 
 async def test_slash_in_a_dm_answers_there_and_a_revoked_tenant_is_silent(tmp_path):
     client, a, port, adapter = build(tmp_path)
     await adapter.on_command(cmd(channel_id="D1"), TEAM, Ack())
-    assert client.posts[0]["channel"] == "D1"
+    assert client.posts[0]["channel"] == "D1" and not client.ephemerals
     port.revoked = True
     client.posts.clear()
     await adapter.on_command(cmd(trigger_id="trig.2"), TEAM, Ack())
@@ -335,3 +368,59 @@ async def test_exec_group_lookup_failure_fails_closed(tmp_path):
 def test_exec_usergroups_come_from_the_environment(monkeypatch):
     monkeypatch.setenv("SALID_SLACK_EXEC_USERGROUPS", "leadership, S0123ABC")
     assert PlatformSettings(_env_file=None).slack_exec_usergroups == {"leadership", "S0123ABC"}
+
+
+async def test_exec_group_membership_for_authorization_is_at_most_a_minute_old(tmp_path):
+    client, a, port, adapter = build(tmp_path)
+    clock = port._clock
+    port.exec_usergroups = frozenset({"S1"})
+    assert await port.is_admin_user("U1")
+    client.groups["S1"]["users"] = ["U9"]  # U1 was removed from the group
+    clock.advance(30)
+    assert await port.is_admin_user("U1")  # inside the 60 s window
+    clock.advance(31)
+    assert not await port.is_admin_user("U1")  # older than 60 s: read again
+    # display labels keep the 10 minute cache
+    client.group_calls.clear()
+    await port.group_label("S1")
+    await port.group_label("S1")
+    assert client.group_calls == []
+
+
+async def test_subteam_events_drop_that_groups_cache_at_once(tmp_path):
+    client, a, port, adapter = build(tmp_path)
+    port.exec_usergroups = frozenset({"S1"})
+    assert await port.is_admin_user("U1")
+    client.groups["S1"]["users"] = ["U9"]
+    assert await port.is_admin_user("U1")  # still cached
+    await adapter.on_event({"type": "subteam_members_changed", "subteam_id": "S1"}, TEAM)
+    assert not await port.is_admin_user("U1")
+    client.groups["S1"]["users"] = ["U1"]
+    assert not await port.is_admin_user("U1")
+    await adapter.on_event({"type": "subteam_updated", "subteam": {"id": "S1"}}, TEAM)
+    assert await port.is_admin_user("U1")
+    assert await port.group_label("S1") == "@design-team (1 people)"
+
+
+async def test_a_failed_group_lookup_is_not_exec_and_a_late_recovery_is_seen(tmp_path):
+    client, a, port, adapter = build(tmp_path)
+    port.exec_usergroups = frozenset({"S1"})
+    real = client.usergroups_users_list
+
+    async def broken(usergroup):
+        raise RuntimeError("ratelimited")
+
+    client.usergroups_users_list = broken
+    assert not await port.is_admin_user("U1")
+    client.usergroups_users_list = real
+    port._clock.advance(slack.GROUP_FAIL_TTL_S + 1)
+    assert await port.is_admin_user("U1")
+
+
+def test_subteam_events_are_subscribed_and_documented():
+    from pathlib import Path
+
+    text = (Path(__file__).parents[3] / "docs/platforms/slack.md").read_text()
+    for name in ("subteam_members_changed", "subteam_updated"):
+        assert slack.LIFECYCLE_EVENTS.match(name)
+        assert f"- {name}" in text

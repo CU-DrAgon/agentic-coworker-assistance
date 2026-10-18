@@ -143,6 +143,32 @@ class PlatformChanges:
             await asyncio.to_thread(self.outbox.ack, change.id, ws, str(msg.user), "reply")
         return t("chg_thanks", self._lang(msg.platform, msg.tenant))
 
+    async def ack_message(self, workspace: str, user: str, ref: str) -> str | None:
+        """A reaction on message ``ref`` of ``user``'s 1:1: acks only the notice that was sent as
+        that message. Any other message (an answer, an older resend), another person or an empty
+        ref confirms nothing (None). Returns the thanks to send back otherwise."""
+        if not ref:
+            return None
+        hit = [
+            (c, x)
+            for c, x in await asyncio.to_thread(self.outbox.open_for, workspace, str(user))
+            if x.message_ref == ref
+        ]
+        if not hit:
+            return None
+        done = False
+        for change, _target in hit:
+            done = (
+                await asyncio.to_thread(
+                    self.outbox.ack, change.id, workspace, str(user), "reaction"
+                )
+                or done
+            )
+        if not done:
+            return None
+        platform, _, tenant = workspace.partition("-")
+        return t("chg_thanks", self._lang(platform, tenant))
+
 
 async def changes_loop(changes: PlatformChanges) -> None:
     while True:

@@ -107,6 +107,8 @@ settings:
       - file_shared            # huddle AI notes canvas (optional)
       - user_huddle_changed    # huddle presence, logged only (optional)
       - reaction_added         # ✅ on a Salid DM confirms a notice; others are only logged
+      - subteam_members_changed  # user group membership changed: drop its cache at once
+      - subteam_updated          # user group renamed / edited: same
   interactivity:
     is_enabled: true   # slash commands need it; Salid handles no buttons yet
   org_deploy_enabled: false
@@ -154,16 +156,21 @@ A missing scope never breaks an answer: the call is logged (error code only) and
   it with the answer; recorded receipts get ✅ and receipts that need a check ⚠️ (as on Discord).
   Only reactions Salid added are ever removed.
 - **Reactions (`reactions:read`, event `reaction_added`)**: the event is logged with ids only (user,
-  emoji name, channel, ts). A ✅ by a person on a Salid message in their DM counts as "OK" for an open
+  emoji name, channel, ts). A ✅ by a person on a Salid message in their DM counts as "OK" only for the notice message it was put on (others: nothing) for an open
   central-change notice. Other reactions are only recorded; approving or voiding receipts with ❌ is a
   next step.
 - **`/salid <question>` (`commands`)**: acknowledged within 3 seconds with a private "one moment",
-  then answered in the channel as if the person had addressed Salid there (the question is quoted
-  above the answer; the channel mode still applies, `off` replies privately that Salid is off).
+  then answered **ephemerally** (`chat.postEphemeral`: only the person who typed it sees the
+  answer; the question is quoted above it; the channel mode still applies, `off` replies privately
+  that Salid is off). The question and answer are never put in the channel's memory or recent
+  buffer, no files are uploaded, and the model may use only that channel's own memory. In a DM it
+  answers normally in the DM.
   `/salid` and `/salid help` show a private help text. Salid must be a **member of the channel**
   (invite it); in a DM it answers in the DM.
 - **User groups (`usergroups:read`)**: `<!subteam^S123|@design-team>` in a message reaches the model as
-  `@design-team (3 people)` (members cached for 10 minutes; without the scope just the handle). To
+  `@design-team (3 people)` (display cache 10 minutes; without the scope just the handle). Membership used to decide who is
+  an executive is at most 60 seconds old, and `subteam_members_changed` / `subteam_updated` drop
+  the group's cache at once. To
   make the members of some groups executives, set `SALID_SLACK_EXEC_USERGROUPS=leadership,S0123ABC`
   (handles or ids, comma separated). Guests and people of other workspaces never qualify; a failed
   lookup means "not an executive".
