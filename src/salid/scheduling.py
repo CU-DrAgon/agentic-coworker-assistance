@@ -20,14 +20,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Protocol
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import discord
+import httpx
 
 from .dm import send_dm
 from .i18n import resolve_lang, t
@@ -301,6 +303,211 @@ class DiscordCalendar:
             return [u.id async for u in ev.users() if not getattr(u, "bot", False)]
         except (CalendarError, discord.HTTPException):
             return []
+
+
+# ------------------------------------------------------------------ Google Calendar
+GOOGLE_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+GOOGLE_FREEBUSY = "https://www.googleapis.com/calendar/v3/freeBusy"
+GOOGLE_MAX_FREEBUSY = 50
+# Event marker so Salid only ever cancels / moves events it created itself.
+GOOGLE_MARK = {"salid": "1"}
+
+
+class GoogleCalendarError(CalendarError):
+    """Codes: not_connected | unauthorized | not_found | failed. `status` is the HTTP status (0 when
+    there was none). Never carries tokens, request bodies or Google's error text."""
+
+    def __init__(self, code: str, status: int = 0):
+        super().__init__(code, f"HTTP {status}" if status else "")
+        self.status = status
+
+
+@dataclass
+class GoogleEvent:
+    id: str
+    url: str
+    meet_url: str = ""
+
+
+class GoogleCalendar:
+    """Google Calendar API v3 in the ORGANISER'S primary calendar, with their own OAuth token.
+
+    The `guild` argument of the `CalendarBackend` methods is a `google_oauth.Account` (org id +
+    member email) and `oauth` provides `access_token(org_id, email)` (see `google_oauth.GoogleOAuth`;
+    blocking, so it runs in a thread). Attendees are invited by email; Google sends the invitation
+    (`sendUpdates=all`) and the Meet link is requested with `conferenceData.createRequest`.
+    `subscribers` returns the emails of attendees who accepted or tentatively accepted.
+    """
+
+    def __init__(self, oauth: Any, tz: str = "UTC", client: httpx.AsyncClient | None = None):
+        from zoneinfo import ZoneInfo
+
+        self.oauth, self.tz, self.zone = oauth, tz, ZoneInfo(tz)
+        self._client = client
+
+    # -- plumbing
+    async def _call(self, account, method: str, url: str, **kw) -> httpx.Response:
+        from .google_oauth import GoogleOAuthError
+
+        try:
+            token = await asyncio.to_thread(self.oauth.access_token, account.org_id, account.email)
+        except GoogleOAuthError as e:
+            raise GoogleCalendarError(
+                "not_connected" if e.code == "not_connected" else "failed"
+            ) from None
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            if self._client is not None:
+                r = await self._client.request(method, url, headers=headers, **kw)
+            else:
+                async with httpx.AsyncClient(timeout=15) as c:
+                    r = await c.request(method, url, headers=headers, **kw)
+        except httpx.HTTPError:
+            raise GoogleCalendarError("failed") from None
+        return r
+
+    @staticmethod
+    def _fail(r: httpx.Response) -> GoogleCalendarError:
+        code = {401: "unauthorized", 403: "unauthorized", 404: "not_found", 410: "not_found"}.get(
+            r.status_code, "failed"
+        )
+        return GoogleCalendarError(code, r.status_code)
+
+    def _when(self, dt: datetime) -> dict:
+        dt = dt.replace(tzinfo=self.zone) if dt.tzinfo is None else dt.astimezone(self.zone)
+        return {"dateTime": dt.isoformat(timespec="seconds"), "timeZone": self.tz}
+
+    @staticmethod
+    def _meet(ev: dict) -> str:
+        if ev.get("hangoutLink"):
+            return str(ev["hangoutLink"])
+        for ep in (ev.get("conferenceData") or {}).get("entryPoints", []):
+            if ep.get("entryPointType") == "video" and ep.get("uri"):
+                return str(ep["uri"])
+        return ""
+
+    # -- CalendarBackend
+    async def create_event_full(
+        self,
+        account,
+        spec: EventSpec,
+        attendees: Sequence[str] = (),
+        meet: bool = True,
+    ) -> GoogleEvent:
+        body: dict[str, Any] = {
+            "summary": spec.title[:1024],
+            "description": spec.description[:8000],
+            "start": self._when(spec.start),
+            "end": self._when(spec.end),
+            "attendees": [{"email": e} for e in attendees],
+            "extendedProperties": {"private": dict(GOOGLE_MARK)},
+        }
+        if meet:
+            body["conferenceData"] = {
+                "createRequest": {
+                    "requestId": uuid.uuid4().hex,
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
+                }
+            }
+        r = await self._call(
+            account,
+            "POST",
+            GOOGLE_EVENTS,
+            params={"conferenceDataVersion": 1, "sendUpdates": "all"},
+            json=body,
+        )
+        if r.status_code != 200:
+            raise self._fail(r)
+        ev = r.json()
+        return GoogleEvent(str(ev["id"]), str(ev.get("htmlLink", "")), self._meet(ev))
+
+    async def create_event(self, guild, spec: EventSpec) -> tuple[str, str]:
+        ev = await self.create_event_full(guild, spec)
+        return ev.id, ev.url
+
+    async def get_event(self, account, event_id: str) -> dict:
+        r = await self._call(account, "GET", f"{GOOGLE_EVENTS}/{quote(event_id, safe='')}")
+        if r.status_code != 200:
+            raise self._fail(r)
+        return r.json()
+
+    async def update_event(self, guild, event_id: str, start: datetime, end: datetime) -> None:
+        r = await self._call(
+            guild,
+            "PATCH",
+            f"{GOOGLE_EVENTS}/{quote(event_id, safe='')}",
+            params={"sendUpdates": "all"},
+            json={"start": self._when(start), "end": self._when(end)},
+        )
+        if r.status_code != 200:
+            raise self._fail(r)
+
+    async def delete_event(self, guild, event_id: str) -> None:
+        r = await self._call(
+            guild,
+            "DELETE",
+            f"{GOOGLE_EVENTS}/{quote(event_id, safe='')}",
+            params={"sendUpdates": "all"},
+        )
+        if r.status_code in (200, 204, 404, 410):  # already gone is fine
+            return
+        raise self._fail(r)
+
+    async def attendee_status(self, account, event_id: str) -> dict[str, str]:
+        """email -> accepted | declined | tentative | needs_action (Google's responseStatus)."""
+        ev = await self.get_event(account, event_id)
+        out = {}
+        for a in ev.get("attendees", []):
+            if a.get("email") and not a.get("self") and not a.get("resource"):
+                st = str(a.get("responseStatus", "needsAction"))
+                out[a["email"].lower()] = {"needsAction": "needs_action"}.get(st, st)
+        return out
+
+    async def subscribers(self, guild, event_id: str) -> list[str]:
+        try:
+            st = await self.attendee_status(guild, event_id)
+        except CalendarError:
+            return []
+        return [e for e, s in st.items() if s in ("accepted", "tentative")]
+
+    async def free_busy(
+        self, account, member_emails: Sequence[str], start: datetime, end: datetime
+    ) -> dict[str, list[tuple[datetime, datetime]] | None]:
+        """email -> busy intervals, using the organiser's token. Only calendars that token can read
+        answer; any other (not shared, unknown) maps to None, never to 'free'."""
+        emails = list(dict.fromkeys(e.strip().lower() for e in member_emails if e.strip()))
+        if len(emails) > GOOGLE_MAX_FREEBUSY:
+            raise GoogleCalendarError("failed")
+        if not emails:
+            return {}
+        r = await self._call(
+            account,
+            "POST",
+            GOOGLE_FREEBUSY,
+            json={
+                "timeMin": self._when(start)["dateTime"],
+                "timeMax": self._when(end)["dateTime"],
+                "timeZone": self.tz,
+                "items": [{"id": e} for e in emails],
+            },
+        )
+        if r.status_code != 200:
+            raise self._fail(r)
+        cals = r.json().get("calendars", {})
+        out: dict[str, list[tuple[datetime, datetime]] | None] = {}
+        for e in emails:
+            c = cals.get(e)
+            if not c or c.get("errors"):
+                out[e] = None
+                continue
+            out[e] = [
+                (
+                    datetime.fromisoformat(b["start"].replace("Z", "+00:00")),
+                    datetime.fromisoformat(b["end"].replace("Z", "+00:00")),
+                )
+                for b in c.get("busy", [])
+            ]
+        return out
 
 
 # ------------------------------------------------------------------ service
