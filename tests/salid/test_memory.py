@@ -39,6 +39,7 @@ from salid import memory_summary
 from salid import qa as qa_mod
 from salid.embed import unpack
 from salid.guild_settings import (
+    FOREVER_DAYS,
     GuildSettings,
     GuildSettingsUpdate,
     MemoryGuildStore,
@@ -634,6 +635,19 @@ def test_chat_days_reads_each_tail_day_once(settings):
     assert len(msg_reads) == 2 and len(r["newer_than_summary"]) == 6
 
 
+def test_memory_tools_on_the_keep_forever_default_read_the_forever_window(mstore, settings):
+    """Without a per-guild retention (e.g. the web chat) the tools use the settings default:
+    0 = keep forever must be the 10-year window, not clamped to one day."""
+    assert settings.memory_retention_days == 0
+    tools = MemoryTools(mstore, GUILD, {10: "g"}, settings)
+    assert tools.retention_days == FOREVER_DAYS
+    mstore.put_summary(DaySummary(guild_id=GUILD, channel_id=10, local_date="2026-09-04",
+                                  message_count=3, final=True, summary={"overview": "ads"}))  # fmt: skip
+    assert tools.chat_days("2026-09-01", "2026-09-30")["count"] == 1  # 40 days ago
+    assert [h["date"] for h in tools.chat_search(["ads"])["hits"]] == ["2026-09-04"]
+    assert MemoryTools(mstore, GUILD, {10: "g"}, settings, retention_days=30).retention_days == 30
+
+
 def test_chat_days_output_is_capped_newest_days_first(mstore, settings):
     tools = MemoryTools(mstore, GUILD, {10: "general"}, settings)
     for d in range(1, 15):
@@ -997,7 +1011,8 @@ async def test_switching_a_channel_on_posts_a_one_time_notice(bot, world):
     assert world.gen.sent == []
     it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
     await bot.handle_mode(it, "call")
-    assert world.gen.sent == [t("memory_notice", "th", days=90)] and "90" in world.gen.sent[0]
+    notice = t("memory_notice", "th", days=FOREVER_DAYS)  # default: keep forever (10-year window)
+    assert world.gen.sent == [notice] and str(FOREVER_DAYS) in world.gen.sent[0]
     await bot.handle_mode(it, "join")  # on -> on: no second notice
     assert len(world.gen.sent) == 1
     await bot.handle_mode(it, "off")
@@ -1011,7 +1026,7 @@ async def test_a_hub_change_from_off_is_noticed_on_the_next_message(bot, world):
     set_mode(bot, 10, "call")  # changed in the hub: the bot only sees it later
     await send(bot, world, world.gen, "hello")
     await send(bot, world, world.gen, "again")
-    assert world.gen.sent == [t("memory_notice", "th", days=90)]
+    assert world.gen.sent == [t("memory_notice", "th", days=FOREVER_DAYS)]
 
 
 async def test_notice_shows_the_guilds_retention_days(bot, world):
@@ -1022,7 +1037,7 @@ async def test_notice_shows_the_guilds_retention_days(bot, world):
     await bot.handle_mode(
         Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen), "call"
     )
-    assert "30" in world.gen.sent[0] and "90" not in world.gen.sent[0]
+    assert "30" in world.gen.sent[0] and str(FOREVER_DAYS) not in world.gen.sent[0]
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
     await bot.handle_mode(it, None)
     assert "30 วัน" in it.sent[0][0]
@@ -1039,22 +1054,26 @@ async def test_memory_command_status_and_permissions(bot, world):
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
     await bot.handle_memory(it, None)
     ((text, ephemeral),) = it.sent
-    assert ephemeral and "90" in text and t("memory_on", "th") in text
+    assert ephemeral and str(FOREVER_DAYS) in text and t("memory_on", "th") in text  # default
     it2 = Interaction(world.g, member(world.g, STAFF, roles=["พนักงาน"]), world.gen)
     await bot.handle_memory(it2, 30)
     assert it2.sent == [(t("memory_denied", "th"), True)]
-    assert bot.team.memory_retention_days(GUILD) == 90
+    assert bot.team.memory_retention_days(GUILD) == FOREVER_DAYS
     boss = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
     await bot.handle_memory(boss, 30)
     assert boss.sent == [(t("memory_set", "th", days=30), False)]  # public confirmation
     assert bot.team.memory_retention_days(GUILD) == 30
-    for bad in (0, 3651, -5):
+    for bad in (3651, -5):
         bad_it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
         await bot.handle_memory(bad_it, bad)
         assert bad_it.sent[0][1] is True and bad_it.sent[0][0] == t(
-            "memory_bad_days", "th", lo=1, hi=3650
+            "memory_bad_days", "th", lo=0, hi=3650
         )
     assert bot.team.memory_retention_days(GUILD) == 30
+    forever = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
+    await bot.handle_memory(forever, 0)  # 0 = keep forever, a valid choice
+    assert bot.guilds_store.get(GUILD).memory_retention_days == 0
+    assert bot.team.memory_retention_days(GUILD) == FOREVER_DAYS
     exec_it = Interaction(world.g, member(world.g, EXEC), world.gen)
     await bot.handle_memory(exec_it, 365)  # executives (env id) may change it too
     assert bot.team.memory_retention_days(GUILD) == 365
@@ -1072,19 +1091,26 @@ async def test_memory_command_status_and_permissions(bot, world):
 
 
 # ------------------------------------------------------------------ retention setting
+def choose_retention(bot, days: int) -> None:
+    """An explicit company choice (the default is keep forever), seen by the bot's cache."""
+    bot.guilds_store.set_memory_retention_days(GUILD, days)
+    bot.team._cache.clear()
+
+
 @pytest.mark.parametrize("value, expected", [(30, 30), (1, 1), (3650, 3650), ("180", 180), (365.0, 365),
-                                              (0, 90), (3651, 90), (-1, 90), ("abc", 90), (None, 90),
-                                              (True, 90), (12.5, 90), ([7], 90)])  # fmt: skip
+                                              (0, 0), ("0", 0), (3651, 0), (-1, 0), ("abc", 0), (None, 0),
+                                              (True, 0), (12.5, 0), ([7], 0)])  # fmt: skip
 def test_retention_validation_bounds(value, expected):
+    """0 = keep forever is valid (and the default); anything invalid falls back to it."""
     assert GuildSettingsUpdate(memory_retention_days=value).memory_retention_days == expected
-    assert GuildSettings().memory_retention_days == default_retention_days() == 90
+    assert GuildSettings().memory_retention_days == default_retention_days() == 0
 
 
 def test_retention_env_default(monkeypatch):
     monkeypatch.setenv("SALID_MEMORY_RETENTION_DAYS", "45")
     assert GuildSettingsUpdate().memory_retention_days == 45
     monkeypatch.setenv("SALID_MEMORY_RETENTION_DAYS", "99999")
-    assert GuildSettingsUpdate().memory_retention_days == 90
+    assert GuildSettingsUpdate().memory_retention_days == 0  # invalid env: keep forever
 
 
 def test_retention_is_stored_per_guild():
@@ -1093,12 +1119,15 @@ def test_retention_is_stored_per_guild():
     store.save_settings(GUILD + 1, GuildSettingsUpdate(), "x")
     assert (
         store.get(GUILD).memory_retention_days == 30
-        and store.get(GUILD + 1).memory_retention_days == 90
+        and store.get(GUILD + 1).memory_retention_days == 0
     )
     store.set_memory_retention_days(GUILD, 7)
     assert store.get(GUILD).memory_retention_days == 7
-    with pytest.raises(ValueError):
-        store.set_memory_retention_days(GUILD, 0)
+    store.set_memory_retention_days(GUILD, 0)  # back to keep forever
+    assert store.get(GUILD).memory_retention_days == 0
+    for bad in (-1, 3651):
+        with pytest.raises(ValueError):
+            store.set_memory_retention_days(GUILD, bad)
 
 
 async def test_purge_follows_the_setting_changed_after_the_data_was_stored(bot, world, tmp_path):
@@ -1192,6 +1221,7 @@ async def test_hub_shortening_applies_to_live_tools_before_the_settings_cache_ex
     """The hub writes the guild store directly; the bot's cached settings stay at 90 days for
     up to the TTL. A tool must still clamp to the shortened window at once (fail closed)."""
     topic_day(bot.memory_store, "2026-10-08", 10, "ประชุมเก่า")  # 6 days before "today"
+    choose_retention(bot, 90)
     assert bot.team.memory_retention_days(GUILD) == 90  # primes the cache
     tools = await bot._memory_tools_for(world.g, member(world.g, MANAGER, manage_guild=True), 10)
     assert tools.chat_days("2026-10-01", "2026-10-14")["count"] == 1
@@ -1209,6 +1239,7 @@ async def test_hub_shortening_fails_closed_when_the_fresh_settings_read_fails(
     """A transient settings-store failure must not restore a stale, longer retention window.
     Purge callers use the non-destructive last-known fallback; user-facing reads clamp to one day."""
     topic_day(bot.memory_store, "2026-10-08", 10, "expired-secret")
+    choose_retention(bot, 90)
     assert bot.team.memory_retention_days(GUILD) == 90  # primes the stale cache
     tools = await bot._memory_tools_for(world.g, member(world.g, MANAGER, manage_guild=True), 10)
     bot.team.store.set_memory_retention_days(GUILD, 1)  # hub writes behind the bot's cache
@@ -1223,7 +1254,7 @@ async def test_hub_shortening_fails_closed_when_the_fresh_settings_read_fails(
 async def test_a_retention_change_seen_by_the_tick_also_purges(bot, world):
     old = bkk(14, 9).astimezone(UTC) - timedelta(days=60)
     bot.memory_store.add_message(mk(bot.s, 1, old))
-    bot._memory_triggers()  # remembers 90 days
+    bot._memory_triggers()  # remembers the default: keep forever (a 10-year window)
     bot.team.set_memory_retention_days(GUILD, 30)  # e.g. from the hub
     bot._memory_triggers()
     await asyncio.gather(*bot._bg_tasks)
@@ -1499,6 +1530,7 @@ def test_catchup_reads_the_hub_retention_live(bot, world):
 
     old = "expired-catchup-secret"
     bot.memory_store.add_message(mk(bot.s, 8001, bkk(8, 9).astimezone(UTC), old))
+    choose_retention(bot, 90)
     assert bot.team.memory_retention_days(GUILD) == 90
     bot.team.store.set_memory_retention_days(GUILD, 1)
     src = bot._catchup_sources(world.g, member(world.g, MANAGER), {10: "general"})
@@ -1510,6 +1542,7 @@ def test_catchup_reads_the_hub_retention_live(bot, world):
 def test_person_day_hides_memory_outside_current_retention(bot, world):
     old = "expired-person-day-secret"
     bot.memory_store.add_message(mk(bot.s, 8002, bkk(8, 9).astimezone(UTC), old, uid=MANAGER))
+    choose_retention(bot, 90)
     assert bot.team.memory_retention_days(GUILD) == 90
     bot.team.store.set_memory_retention_days(GUILD, 1)
     result = bot._my_day(world.g, member(world.g, MANAGER), date(2026, 10, 8))
@@ -1522,6 +1555,7 @@ def test_company_report_hides_memory_outside_current_retention(bot, world, monke
     old = "expired-company-report-secret"
     bot.memory_store.add_message(mk(bot.s, 8003, bkk(8, 9).astimezone(UTC), old, uid=MANAGER))
     topic_day(bot.memory_store, "2026-10-08", 10, old)
+    choose_retention(bot, 90)
     assert bot.team.memory_retention_days(GUILD) == 90
     bot.team.store.set_memory_retention_days(GUILD, 1)
     monkeypatch.setattr(
