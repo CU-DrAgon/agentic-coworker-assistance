@@ -64,10 +64,10 @@ def rig():
     return r
 
 
-def test_the_ten_tools_exist_and_share_one_outbox(rig):
+def test_the_eleven_tools_exist_and_share_one_outbox(rig):
     assert set(rig.tools) == {"company_overview", "who_to_ask", "person_profile", "how_do_we",
                               "onboarding_brief", "handover", "set_role", "person_left",
-                              "who_works_with_whom", "knowledge_status"}  # fmt: skip
+                              "who_works_with_whom", "knowledge_status", "my_manager"}  # fmt: skip
     assert all(f.outbox is rig.ctx.outbox for f in rig.tools.values())
 
 
@@ -367,3 +367,29 @@ def test_knowledge_status_is_executive_only_and_counts(rig):
     assert out["topics"] == 2 and out["contacts"] == 5 and out["map_built_at"]
     assert out["last_learned"] and out["missing"]["no_dossier_count"] == 1  # Newbie
     assert out["missing"]["no_role"] == ["Newbie"]
+
+
+# ------------------------------------------------------------------ my_manager / chart in profiles
+CHART = {
+    "position": {"title": "Accountant", "department": "finance", "responsibilities": "Books " * 80},
+    "chain": [{"name": "Bee", "title": "CFO"}, {"name": "Tom", "title": "CEO"}],
+}
+
+
+def test_my_manager_answers_the_manager_and_the_managers_manager():
+    r = Rig(asker=26, center=lambda uid: CHART if uid == 26 else {})
+    out = r.tools["my_manager"]()  # no name = the asker
+    assert out["manager"]["name"] == "Bee" and out["managers_manager"]["name"] == "Tom"
+    assert "task" in out["instruction"]
+    assert r.tools["my_manager"]("Tom").get("found") is False  # no chain: say so, no guess
+
+
+def test_person_profile_shows_the_position_and_who_they_report_to():
+    r = Rig(center=lambda uid: CHART if uid == 1 else {})
+    out = r.tools["person_profile"]("Mali")
+    assert out["reports_to"] == "Bee"
+    assert out["position"].startswith("Accountant — Books") and len(out["position"]) < 330
+
+
+def test_the_prompt_routes_manager_questions_to_my_manager():
+    assert "my_manager" in T.KNOWLEDGE_PROMPT["th"] and "my_manager" in T.KNOWLEDGE_PROMPT["en"]

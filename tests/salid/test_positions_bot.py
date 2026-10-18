@@ -38,6 +38,8 @@ class FRole(NS):
     async def edit(self, **kw):
         if "position" in kw:
             self.position = kw["position"]
+        if "name" in kw:
+            self.name = kw["name"]
 
 
 def wire(world, *, manage_roles=True):
@@ -112,6 +114,16 @@ def link(bot, *pairs, owner_role="owner"):
     return store
 
 
+def site_pos(bot, title):
+    org = OrgStore(bot.docs).get("o1")
+    return next((p for p in org.positions if p.title == title), None)
+
+
+def site_holders(bot, title):
+    p = site_pos(bot, title)
+    return sorted(p.holders) if p else []
+
+
 def org_member(bot, email):
     org = OrgStore(bot.docs).get("o1")
     return next(m for m in org.members if m.email == email)
@@ -184,7 +196,8 @@ async def test_a_position_named_in_salid_is_written_to_the_center_and_kept(rig):
     link(rig.bot, ("peer@x.com", PEER))
     rig.bot.positions.assign(GUILD, PEER, "founder", "stated")
     await rig.bot.positions_sync(rig.g)
-    assert org_member(rig.bot, "peer@x.com").title == "Founder"
+    assert site_holders(rig.bot, "Founder") == ["peer@x.com"]  # on the website's positions
+    assert org_member(rig.bot, "peer@x.com").title == ""  # Member.title is no longer written
     await rig.bot.positions_sync(rig.g)
     assert rig.bot.positions.of(GUILD, PEER)[1].key == "founder"
 
@@ -259,9 +272,11 @@ async def test_titles_levels_and_departments_are_mirrored_to_linked_members(rig)
     rig.bot.positions.assign(GUILD, STAFF, "staff", "stated", "Customer Care")
     rep = await rig.bot.positions_sync(rig.g)
     ceo = org_member(rig.bot, "ceo@x.com")
-    assert (ceo.title, ceo.level, ceo.department) == ("CEO", 1, "business")
+    assert (ceo.title, ceo.level, ceo.department) == ("", 1, "business")
     tom = org_member(rig.bot, "tom@x.com")
-    assert (tom.title, tom.level, tom.department) == ("Staff", 6, "")  # free text is not a code
+    assert (tom.title, tom.level, tom.department) == ("", 6, "")  # free text is not a code
+    assert site_holders(rig.bot, "CEO") == ["ceo@x.com"]
+    assert site_holders(rig.bot, "Staff") == ["tom@x.com"]
     assert rep.mirrored >= 2
 
 
@@ -283,11 +298,11 @@ async def test_a_title_edited_in_the_center_becomes_the_position_and_is_not_reve
     store = link(rig.bot, ("tom@x.com", STAFF))
     rig.bot.positions.assign(GUILD, STAFF, "staff", "stated")
     await rig.bot.positions_sync(rig.g)  # mirrored: "Staff"
-    store.update_members("o1", lambda ms: setattr(ms[1], "title", "CFO") or True)
+    cfo = store.save_position("o1", by="x@x.com", title="CFO", holders=["tom@x.com"])
+    store.save_position("o1", by="x@x.com", pid=site_pos(rig.bot, "Staff").id, holders=[])
     await rig.bot.positions_sync(rig.g)
     a, p = rig.bot.positions.of(GUILD, STAFF)
-    assert (p.key, a.source) == ("cfo", "org")
-    assert org_member(rig.bot, "tom@x.com").title == "CFO"
+    assert (p.key, a.source, p.center_id) == ("cfo", "org", cfo.id)
     assert [r.name for r in rig.g.members[STAFF].roles if r.name == "CFO"] == ["CFO"]  # tagged
     await rig.bot.positions_sync(rig.g)
     assert rig.bot.positions.of(GUILD, STAFF)[1].key == "cfo"
@@ -664,3 +679,154 @@ async def test_a_founder_salid_guessed_for_the_wrong_person_is_taken_back(rig):
     assert org_member(rig.bot, "peer@x.com").level == 0
     assert rig.bot.positions.of(GUILD, PEER) is None
     assert not [n for n in names(rig.g.members[PEER]) if n in ("Founder", "ผู้ก่อตั้ง")]
+
+
+# ------------------------------------------------------------------ positions of the website
+def make_pos(store, title, holders=(), reports_to=""):
+    return store.save_position(
+        "o1", by="x@x.com", title=title, holders=list(holders), reports_to=reports_to or None
+    )
+
+
+async def test_a_website_position_with_holders_tags_each_linked_holder(rig):
+    store = link(rig.bot, ("peer@x.com", PEER), ("tom@x.com", STAFF))
+    make_pos(store, "Barista", ["peer@x.com", "tom@x.com"])
+    await rig.bot.positions_sync(rig.g)
+    for uid in (PEER, STAFF):
+        a, p = rig.bot.positions.of(GUILD, uid)
+        assert (p.title, a.source) == ("Barista", "org")
+        assert "Barista" in names(rig.g.members[uid])
+
+
+async def test_removed_from_holders_the_tag_goes_and_deleting_the_position_too(rig):
+    store = link(rig.bot, ("peer@x.com", PEER), ("tom@x.com", STAFF))
+    pos = make_pos(store, "Barista", ["peer@x.com", "tom@x.com"])
+    await rig.bot.positions_sync(rig.g)
+    store.save_position("o1", by="x@x.com", pid=pos.id, holders=["tom@x.com"])
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, PEER) is None
+    assert "Barista" not in names(rig.g.members[PEER]) and "Barista" in names(rig.g.members[STAFF])
+    store.delete_position("o1", pos.id)
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, STAFF) is None
+    assert "Barista" not in names(rig.g.members[STAFF])
+
+
+async def test_a_renamed_website_position_renames_the_managed_role(rig):
+    store = link(rig.bot, ("peer@x.com", PEER))
+    pos = make_pos(store, "Barista", ["peer@x.com"])
+    await rig.bot.positions_sync(rig.g)
+    role_id = rig.bot.positions.of(GUILD, PEER)[1].discord_role_id
+    plain = give(rig.w, STAFF, "Cashier")  # a role Salid did not create: never renamed
+    store.save_position("o1", by="x@x.com", pid=pos.id, title="Head Barista")
+    await rig.bot.positions_sync(rig.g)
+    assert rig.g.get_role(role_id).name == "Head Barista"
+    assert [r.name for r in rig.g.created] == ["Head Barista"], "renamed, not a twin"
+    assert names(rig.g.members[PEER]) == ["Head Barista"]
+    assert "Cashier" in names(plain)
+
+
+async def test_two_held_positions_the_senior_one_is_the_tag(rig):
+    store = link(rig.bot, ("peer@x.com", PEER))
+    top = make_pos(store, "Owner Chef", ["boss@x.com"])
+    mid = make_pos(store, "Kitchen Lead", [], top.id)
+    low = make_pos(store, "Line Cook", [], mid.id)
+    store.save_position("o1", by="x@x.com", pid=low.id, holders=["peer@x.com"])
+    store.save_position("o1", by="x@x.com", pid=mid.id, holders=["peer@x.com"])
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, PEER)[1].title == "Kitchen Lead"
+    assert "Line Cook" not in names(rig.g.members[PEER])
+
+
+async def test_level_from_a_known_word_else_from_the_chart_depth(rig):
+    store = link(rig.bot, ("peer@x.com", PEER), ("tom@x.com", STAFF), ("ceo@x.com", BOSS))
+    top = make_pos(store, "Visionary", ["ceo@x.com"])
+    mid = make_pos(store, "Wizard", ["peer@x.com"], top.id)
+    make_pos(store, "Chief Barista Manager", ["tom@x.com"], mid.id)  # "chief" says C-level
+    make_pos(store, "Loner", ["boss@x.com"])  # not in the chart and no known word
+    await rig.bot.positions_sync(rig.g)
+    cat = {p.title: p.level for p in rig.bot.positions.catalog(GUILD)}
+    assert cat["Wizard"] == 2  # depth: top = 1, one step down = 2
+    assert cat["Chief Barista Manager"] == 2  # the word "chief" (C-level) beats depth 3
+    assert cat["Visionary"] == 1
+    assert cat["Loner"] == 0
+
+
+async def test_set_role_for_a_linked_member_writes_the_website_not_member_title(rig):
+    store = link(rig.bot, ("peer@x.com", PEER))
+    old = make_pos(store, "Barista", ["peer@x.com"])
+    await rig.bot.positions_sync(rig.g)
+    tools = await tools_for(rig.bot, rig.w, BOSS)
+    out = await asyncio.to_thread(tools["set_role"], "Peer", "Roaster", "tech")
+    assert out["status"] == "saved"
+    assert site_holders(rig.bot, "Roaster") == ["peer@x.com"]  # created by Salid
+    assert site_pos(rig.bot, "Roaster").updated_by == "salid"
+    assert site_holders(rig.bot, "Barista") == []  # only the one Salid last assigned
+    assert org_member(rig.bot, "peer@x.com").title == ""
+    assert rig.bot.positions.of(GUILD, PEER)[1].title == "Roaster"
+    # an existing website position is found case-insensitively and gets the holder
+    out = await asyncio.to_thread(tools["set_role"], "Peer", "barista")
+    assert (
+        site_holders(rig.bot, "Barista") == ["peer@x.com"]
+        and old.id == site_pos(rig.bot, "Barista").id
+    )
+    assert (
+        len([p for p in OrgStore(rig.bot.docs).get("o1").positions if p.title.lower() == "barista"])
+        == 1
+    )
+
+
+async def test_set_role_keeps_other_website_positions_the_person_holds(rig):
+    store = link(rig.bot, ("peer@x.com", PEER))
+    make_pos(store, "Trainer", ["peer@x.com"])
+    tools = await tools_for(rig.bot, rig.w, BOSS)
+    await asyncio.to_thread(tools["set_role"], "Peer", "Roaster")
+    assert site_holders(rig.bot, "Trainer") == ["peer@x.com"], "never assigned by Salid"
+    assert site_holders(rig.bot, "Roaster") == ["peer@x.com"]
+
+
+async def test_set_role_for_an_unlinked_member_stays_in_salid(rig):
+    link(rig.bot, ("peer@x.com", PEER))
+    tools = await tools_for(rig.bot, rig.w, BOSS)
+    await asyncio.to_thread(tools["set_role"], "Somchai", "Roaster")  # STAFF: not linked
+    assert site_pos(rig.bot, "Roaster") is None
+    assert rig.bot.positions.of(GUILD, STAFF)[1].title == "Roaster"
+
+
+async def test_the_access_role_never_yields_a_position(rig):
+    store = link(rig.bot, ("peer@x.com", PEER), ("tom@x.com", STAFF))
+    store.update_members("o1", lambda ms: setattr(ms[1], "role", "admin") or True)
+    make_pos(store, "Barista", ["tom@x.com"])  # somebody else holds it
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, OWNER_ID) is None
+    assert rig.bot.positions.of(GUILD, PEER) is None
+
+
+async def test_the_center_print_changes_with_the_holders_and_the_watch_syncs(rig):
+    store = link(rig.bot, ("peer@x.com", PEER))
+    pos = make_pos(store, "Barista", [])
+    before = rig.bot._positions_center_print(rig.g)
+    rig.bot._positions_polled = -1e9
+    await rig.bot._positions_center_watch()  # first look
+    store.save_position("o1", by="x@x.com", pid=pos.id, holders=["peer@x.com"])
+    assert rig.bot._positions_center_print(rig.g) != before
+    rig.bot._positions_polled = -1e9
+    await rig.bot._positions_center_watch()
+    assert "Barista" in names(rig.g.members[PEER])
+
+
+async def test_my_manager_from_member_reports_to_and_from_the_chart(rig):
+    store = link(rig.bot, ("peer@x.com", PEER), ("tom@x.com", STAFF), ("ceo@x.com", BOSS))
+    top = make_pos(store, "Visionary", ["ceo@x.com"])
+    mid = make_pos(store, "Wizard", ["peer@x.com"], top.id)
+    make_pos(store, "Apprentice", ["tom@x.com"], mid.id)
+    store.update_members("o1", lambda ms: setattr(ms[1], "reports_to", "ceo@x.com") or True)
+    tools = await tools_for(rig.bot, rig.w, BOSS)
+    # Peer: Member.reports_to wins
+    out = await asyncio.to_thread(tools["my_manager"], "Peer")
+    assert out["manager"]["name"] and out["manager"]["title"] == "Visionary"
+    # Tom: no Member.reports_to, so the holder of his position's boss, then that one's boss
+    out = await asyncio.to_thread(tools["my_manager"], "Somchai")
+    assert out["manager"]["title"] == "Wizard" and out["managers_manager"]["title"] == "Visionary"
+    prof = await asyncio.to_thread(tools["person_profile"], "Somchai")
+    assert prof["reports_to"] and prof["position"].startswith("Apprentice")

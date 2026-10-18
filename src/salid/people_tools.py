@@ -115,7 +115,10 @@ KNOWLEDGE_PROMPT = {
         "ผู้บริหารสั่ง “ให้ X เป็น CTO”, “แท็ก X เป็นผู้ก่อตั้ง” → set_role (สลิดแท็กยศใน Discord ให้เอง); "
         "“ซิงค์ตำแหน่ง” → sync_roles; เพิ่ม/ลบ/ดูรายการตำแหน่ง → positions_catalog. "
         "ห้ามเดาระดับหรือตำแหน่งของใครจากบทสนทนา มีแต่ที่ผู้บริหารระบุ หรือยศใน Discord เท่านั้น. "
-        "ผู้บริหารถามว่า “ใครยังไม่รับทราบการเปลี่ยนตำแหน่ง” → change_status.\n"
+        "ผู้บริหารถามว่า “ใครยังไม่รับทราบการเปลี่ยนตำแหน่ง” → change_status. "
+        "ตำแหน่งจริงของทุกคนมาจากเว็บไซต์กลางเท่านั้น (สิทธิ์ owner/admin ในเว็บไม่ใช่ตำแหน่ง). "
+        "“ทำงานเสร็จต้องส่ง/นำเสนอใคร”, “หัวหน้าฉันคือใคร” → my_manager "
+        "(ถ้าถามเรื่องงานชิ้นใดชิ้นหนึ่ง ให้บอกทั้งหัวหน้าและคนที่มอบงานนั้น).\n"
     ),
     "en": (
         "\nSalid is the company's institutional memory: when asked what the company does, who does "
@@ -135,7 +138,11 @@ KNOWLEDGE_PROMPT = {
         "tags the Discord role herself); 'sync the positions' -> sync_roles; show / add / remove "
         "the list of positions -> positions_catalog. Never guess anybody's level or position from "
         "chat: only what an executive stated, or a Discord role, counts. An executive asking "
-        "'who hasn't confirmed the position change' -> change_status.\n"
+        "'who hasn't confirmed the position change' -> change_status. Everybody's real position "
+        "comes from the central website only (its owner / admin access is not a position). "
+        "'who do I submit / present the finished work to', 'who do I report to', 'who is my "
+        "manager' -> my_manager (for one specific task, say both the manager and the person who "
+        "gave the task).\n"
     ),
 }
 
@@ -170,6 +177,9 @@ class PeopleCtx:
     tag: Callable[[int], object] | None = None  # uid -> True | "pending" | "no_permission"
     sync: Callable[[], dict] | None = None  # run the two-way sync now -> counts
     unlinked: Callable[[], list[str]] = lambda: []  # members not linked to the center yet
+    # uid -> {"position": {title, department, responsibilities} | None, "chain": [{name, title}]}
+    # from the website's company positions and Member.reports_to; {} = unknown / not linked
+    center: Callable[[int], dict] = lambda uid: {}
 
 
 # ------------------------------------------------------------------ helpers
@@ -508,6 +518,13 @@ def person_profile_data(ctx: PeopleCtx, name: str) -> dict:
             if evidence_visible(c.evidence, readable, see_all)
         ][:MAX_LIST],
     }
+    chart = ctx.center(d.user_id) or {}
+    if chart.get("position"):
+        pos = chart["position"]
+        resp = (pos.get("responsibilities") or "")[:300]
+        out["position"] = f"{pos['title']} — {resp}" if resp else pos["title"]
+    if chart.get("chain"):
+        out["reports_to"] = chart["chain"][0]["name"]
     if hidden:
         out["hidden_items"] = hidden
         out["hidden_note"] = (
@@ -916,6 +933,31 @@ def set_role_data(ctx: PeopleCtx, name: str, title: str, department: str) -> dic
     return out
 
 
+def my_manager_data(ctx: PeopleCtx, name: str) -> dict:
+    """Who a person reports to (empty name = the asker) and that person's manager."""
+    if " ".join((name or "").split()):
+        d, err = _find(ctx, name)
+        if err:
+            return err
+    else:
+        d = Dossier(user_id=ctx.asker_id, name=ctx.asker_name)
+    chain = (ctx.center(d.user_id) or {}).get("chain") or []
+    if not chain:
+        return {
+            "name": d.name,
+            "found": False,
+            "note": "no manager is recorded in the company chart; say so, do not guess",
+        }
+    out: dict = {"name": d.name, "manager": chain[0]}
+    if len(chain) > 1:
+        out["managers_manager"] = chain[1]
+    out["instruction"] = (
+        "For a question about a specific task also say who gave the task (the task giver), "
+        "if known; name both."
+    )
+    return out
+
+
 def org_chart_data(ctx: PeopleCtx) -> dict:
     """Who holds which position, most senior level first; who has none; who is not linked to the
     central system (names for executives, a count for everyone). > 25 people: also a PDF."""
@@ -1128,6 +1170,17 @@ def people_tools(ctx: PeopleCtx) -> list[Callable]:
         """
         return safe(lambda: set_role_data(ctx, name, title, department))
 
+    def my_manager(name: str = "") -> dict:
+        """Who a person reports to, from the company chart on the website: "ทำงานเสร็จต้องส่ง/นำเสนอใคร",
+        "หัวหน้าฉันคือใคร", "who do I report to", "who is my manager", "who is Mali's boss". Returns
+        the manager and the manager's manager. No name = the person asking. Answer only from the
+        result; never guess a manager.
+
+        Args:
+            name: the person (name, @mention or id); empty = the asker.
+        """
+        return safe(lambda: my_manager_data(ctx, name))
+
     def org_chart() -> dict:
         """The company's org chart by position level: "ใครเป็น CEO", "ผังองค์กร", "who is the
         CTO", "who are the managers", "show the org chart". Levels top-down (founder / CEO,
@@ -1198,6 +1251,7 @@ def people_tools(ctx: PeopleCtx) -> list[Callable]:
         onboarding_brief,
         handover,
         set_role,
+        my_manager,
         person_left,
         who_works_with_whom,
         knowledge_status,

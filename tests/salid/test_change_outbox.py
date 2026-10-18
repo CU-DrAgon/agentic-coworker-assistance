@@ -17,11 +17,19 @@ from test_positions_bot import give, link, names, rig, wire
 
 from meeting_scribe import center
 from salid import change_outbox as co
-from salid.change_outbox import ChangeOutbox, diff_members, is_ack_text, record_org_edit
+from salid.change_outbox import (
+    ChangeOutbox,
+    change_text,
+    diff_members,
+    diff_org,
+    diff_positions,
+    is_ack_text,
+    record_org_edit,
+)
 from salid.change_outbox_bot import ChangeButton
 from salid.coo_store import FirestoreDocStore, SQLiteDocStore
 from salid.i18n import t
-from salid.orgs import Member, Org, OrgStore, Workspace
+from salid.orgs import Member, Org, OrgStore, Position, Workspace
 
 T0 = datetime(2026, 10, 18, 9, 0, tzinfo=UTC)
 
@@ -627,3 +635,48 @@ def test_the_changes_route_is_for_owners_and_admins_of_that_org(w):
     # another org's changes are never shown through this org
     assert w.client.get("/api/center/orgs/org_o/changes", headers=H["adm"]).status_code == 403
     assert w.client.get(url + "?limit=0", headers=H["adm"]).status_code == 422
+
+
+# ------------------------------------------------------------------ company positions (holders)
+def test_diff_positions_one_company_position_change_per_holder():
+    a, b, c = Member(email="a@x.com"), Member(email="b@x.com"), Member(email="c@x.com")
+    cook = Position(id="P-1", title="Cook", holders=["a@x.com"])
+    before = org_with(a, b, c)
+    before.positions = [cook, Position(id="P-2", title="Chef", holders=["c@x.com"])]
+    after = org_with(a, b, c)
+    after.positions = [
+        cook.model_copy(update={"holders": ["b@x.com"]}),
+        Position(id="P-2", title="Head Chef", holders=["c@x.com"]),  # renamed: its holder hears it
+    ]
+    out = diff_positions(before, after)
+    assert sorted((x.subject_email, x.kind, x.before, x.after) for x in out) == [
+        ("a@x.com", "title", "Cook", ""),
+        ("b@x.com", "title", "", "Cook"),
+        ("c@x.com", "title", "Chef", "Head Chef"),
+    ]
+    assert diff_positions(after, after) == []
+    text = change_text(out[0], "Cafe", "en")
+    assert "company position" in text and "Cook" in text
+    assert "ตำแหน่งในบริษัท" in change_text(out[0], "Cafe", "th")
+
+
+def test_diff_org_does_not_tell_a_person_twice_about_their_title():
+    a = Member(email="a@x.com", title="Cook")
+    b = a.model_copy(update={"title": "Chef"})
+    before, after = org_with(a), org_with(b)
+    before.positions = [Position(id="P-1", title="Cook", holders=["a@x.com"])]
+    after.positions = [Position(id="P-1", title="Chef", holders=["a@x.com"])]
+    assert [x.kind for x in diff_org(before, after)] == ["title"]
+
+
+def test_record_org_edit_stores_a_holder_change(docs):
+    a = Member(email="a@x.com", discord_user_id="5")
+    before, after = (
+        org_with(a, workspaces=[ws("discord", "9")]),
+        org_with(a, workspaces=[ws("discord", "9")]),
+    )
+    before.positions = [Position(id="P-1", title="Cook")]
+    after.positions = [Position(id="P-1", title="Cook", holders=["a@x.com"])]
+    assert record_org_edit(docs, before, after, "boss@x.com") == 1
+    (c,) = ChangeOutbox(docs).list_changes("o1")
+    assert (c.kind, c.after, c.by) == ("title", "Cook", "boss@x.com")

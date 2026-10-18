@@ -44,6 +44,8 @@ class Position(BaseModel):
     department: str = ""
     discord_role_id: int = 0  # the Discord role that tags it (0 = none yet)
     aliases: list[str] = Field(default_factory=list)
+    center_id: str = ""  # the website position (`orgs.Position.id`) this entry follows ("" = none)
+    role_made: bool = False  # Salid created the Discord role itself: only then may it rename it
 
 
 class Assignment(BaseModel):
@@ -52,7 +54,8 @@ class Assignment(BaseModel):
     department: str = ""
     source: str = "stated"  # stated | org | discord | heard
     at: str = ""
-    mirrored: str = ""  # the title last written into the central org member ("" = never)
+    mirrored: str = ""  # the title last mirrored to the central system ("" = never)
+    mirrored_id: str = ""  # the website position Salid last put the person on ("" = none)
 
 
 def norm_title(text: str) -> str:
@@ -271,12 +274,69 @@ class PositionBook:
                 self._write(gid, {u: a for u, a in held.items() if u not in mine})
             return True
 
-    def set_role_id(self, gid: int, key: str, role_id: int) -> None:
+    def set_role_id(self, gid: int, key: str, role_id: int, made: bool | None = None) -> None:
         with self._lock:
             cat = self.catalog(gid)
             for p in cat:
-                if p.key == key and p.discord_role_id != role_id:
+                if p.key == key and (
+                    p.discord_role_id != role_id or (made is not None and p.role_made != made)
+                ):
                     p.discord_role_id = int(role_id)
+                    if made is not None:
+                        p.role_made = made
+                    elif not role_id:
+                        p.role_made = False
+                    self.put_catalog(gid, cat)
+                    return
+
+    def sync_center(
+        self,
+        gid: int,
+        center_id: str,
+        title: str,
+        level: int = 0,
+        live_ids: set[str] | None = None,
+    ) -> tuple[Position, bool]:
+        """The catalog entry that follows the website position `center_id`: found by that id, else
+        by title (and then bound to the id; an id no longer in `live_ids` is rebound), else created. A renamed website position renames the
+        entry (so its managed Discord role follows); `level` > 0 replaces the entry's level.
+        (entry, changed). Raises CatalogFull."""
+        title = clean(title, MAX_TITLE)
+        with self._lock:
+            cat = self.catalog(gid)
+            pos = next((p for p in cat if center_id and p.center_id == center_id), None)
+            changed = False
+            if pos is None:
+                pos = self.find(gid, title, cat)
+                if pos is not None and (
+                    not pos.center_id or (live_ids is not None and pos.center_id not in live_ids)
+                ):
+                    pos.center_id, changed = center_id, True
+            if pos is None:
+                if len(cat) >= MAX_POSITIONS:
+                    raise CatalogFull
+                key = key_of(title)
+                taken = {p.key for p in cat}
+                base, n = key, 2
+                while key in taken:
+                    key, n = f"{base}-{n}", n + 1
+                pos = Position(key=key, title=title, level=level, center_id=center_id)
+                cat.append(pos)
+                changed = True
+            elif pos.center_id == center_id and pos.title != title:
+                pos.title, changed = title, True
+            if 1 <= level <= 7 and pos.level != level:
+                pos.level, changed = level, True
+            if changed:
+                self.put_catalog(gid, cat)
+            return pos, changed
+
+    def set_center_id(self, gid: int, key: str, center_id: str) -> None:
+        with self._lock:
+            cat = self.catalog(gid)
+            for p in cat:
+                if p.key == key and p.center_id != center_id:
+                    p.center_id = center_id
                     self.put_catalog(gid, cat)
                     return
 
@@ -362,6 +422,7 @@ class PositionBook:
                 user_id=user_id, position_key=position_key, source=source, at=self.now(),
                 department=dept or (cur.department if cur else ""),
                 mirrored=cur.mirrored if cur else "",
+                mirrored_id=cur.mirrored_id if cur else "",
             )  # fmt: skip
             held[user_id] = new
             self._write(gid, held)
@@ -377,12 +438,17 @@ class PositionBook:
             self._write(gid, held)
             return True
 
-    def set_mirrored(self, gid: int, user_id: int, title: str) -> None:
+    def set_mirrored(
+        self, gid: int, user_id: int, title: str, center_id: str | None = None
+    ) -> None:
         with self._lock:
             held = self.assignments(gid)
             cur = held.get(user_id)
-            if cur is not None and cur.mirrored != title:
-                cur.mirrored = title
+            if cur is None:
+                return
+            cid = cur.mirrored_id if center_id is None else center_id
+            if cur.mirrored != title or cur.mirrored_id != cid:
+                cur.mirrored, cur.mirrored_id = title, cid
                 self._write(gid, held)
 
     def of(self, gid: int, user_id: int) -> tuple[Assignment, Position] | None:

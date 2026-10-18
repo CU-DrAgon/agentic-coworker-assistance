@@ -29,7 +29,7 @@ from .change_outbox import (
     alert_text,
     change_status_tools,
     change_text,
-    diff_members,
+    diff_org,
     is_ack_text,
 )
 from .i18n import base_lang, resolve_lang, t
@@ -98,7 +98,7 @@ class ChangeOutboxMixin:
             self._change_snap[guild.id] = org
             if before is None:
                 return
-            changes = diff_members(before, org, by="detected", at=self.s.now())
+            changes = diff_org(before, org, by="detected", at=self.s.now())
             if changes:
                 stored = await asyncio.to_thread(self.change_outbox.record, changes, org)
                 if stored:
