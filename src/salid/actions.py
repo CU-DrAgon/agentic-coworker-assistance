@@ -11,15 +11,23 @@ action can poll it. Actions are small dicts so they survive any process restart.
     a = q.enqueue(guild_id, "post_message", {"channel": "general", "text": "hi"}, by="boss@x")
     # "announce" {text}: no channel given, the bot picks the server's ask channel / general
     ...bot...: for a in q.pending(guild_id): ...; q.finish(guild_id, a["id"], result={...})
+
+`on_change` (optional) is told every new or finished record, so the workflow monitor can log the
+state change (`salid.monitor`); a failing hook is logged and never breaks the queue. Finished
+records are deleted `KEEP_DAYS` after they were queued (`prune`, at most hourly per guild).
 """
 
 from __future__ import annotations
 
+import logging
 import secrets
+import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from .coo_store import DocStore
+
+logger = logging.getLogger(__name__)
 
 KIND = "salid_actions"
 KINDS = (
@@ -33,15 +41,42 @@ KINDS = (
 )
 MAX_PENDING = 50  # per guild: a runaway caller cannot flood the bot
 MAX_AGE_S = 3600  # pending actions older than this are abandoned with an error
+KEEP_DAYS = 30  # finished (done / failed) actions are deleted this long after they were queued
+PRUNE_EVERY_S = 3600.0  # `prune` reads a guild's actions at most this often
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _created(rec: dict) -> datetime | None:
+    """When the action was queued, as an aware datetime (naive = UTC); None when unreadable."""
+    try:
+        at = datetime.fromisoformat(str(rec.get("created_at") or ""))
+    except ValueError:
+        return None
+    return at if at.tzinfo else at.replace(tzinfo=UTC)
+
+
 class ActionQueue:
-    def __init__(self, docs: DocStore, clock: Callable[[], datetime] | None = None):
-        self.docs, self._clock = docs, clock or _now
+    def __init__(
+        self,
+        docs: DocStore,
+        clock: Callable[[], datetime] | None = None,
+        on_change: Callable[[dict], None] | None = None,
+    ):
+        self.docs, self._clock, self.on_change = docs, clock or _now, on_change
+        self._pruned: dict[int, float] = {}  # guild id -> monotonic time of its last prune
+
+    def _changed(self, rec: dict) -> None:
+        """Tell `on_change` about a stored record. Never raises: the error type is logged (its
+        text may quote the record)."""
+        if self.on_change is None:
+            return
+        try:
+            self.on_change(rec)
+        except Exception as e:
+            logger.warning("action queue: change hook failed (%s)", type(e).__name__)
 
     def enqueue(self, guild_id: int, kind: str, args: dict, *, by: str) -> dict:
         if kind not in KINDS:
@@ -62,6 +97,7 @@ class ActionQueue:
             "error": "",
         }
         self.docs.put(KIND, guild_id, aid, rec)
+        self._changed(rec)
         return rec
 
     def get(self, guild_id: int, aid: str) -> dict | None:
@@ -88,6 +124,7 @@ class ActionQueue:
             done_at=self._clock().isoformat(timespec="seconds"),
         )
         self.docs.put(KIND, guild_id, aid, rec)
+        self._changed(rec)
 
     def expire(self, guild_id: int) -> int:
         """Abandon pending actions nobody carried out within MAX_AGE_S (bot was down)."""
@@ -100,5 +137,27 @@ class ActionQueue:
                 age = MAX_AGE_S + 1
             if age > MAX_AGE_S:
                 self.finish(guild_id, a["id"], error="expired before the bot could do it")
+                n += 1
+        return n
+
+    def prune(self, guild_id: int, *, force: bool = False) -> int:
+        """Delete this guild's finished actions (done or failed) queued more than `KEEP_DAYS`
+        ago; pending ones are never deleted (`expire` finishes them first) and neither is a
+        record whose queue time is unreadable. Reads the guild at most once per
+        `PRUNE_EVERY_S` unless `force`. Returns how many were deleted."""
+        mono = time.monotonic()
+        last = self._pruned.get(guild_id)
+        if not force and last is not None and mono - last < PRUNE_EVERY_S:
+            return 0
+        self._pruned[guild_id] = mono
+        now = self._clock()
+        cutoff = (now if now.tzinfo else now.replace(tzinfo=UTC)) - timedelta(days=KEEP_DAYS)
+        n = 0
+        for key, rec in self.docs.find_items(
+            KIND, guild_id, lambda d: d.get("status") != "pending"
+        ):
+            at = _created(rec)
+            if at is not None and at < cutoff:
+                self.docs.delete(KIND, guild_id, key)
                 n += 1
         return n

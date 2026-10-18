@@ -152,6 +152,25 @@ def platform_monitor(s: Settings, a: Assistant) -> PlatformMonitor | None:
     )
 
 
+def change_events(m: PlatformMonitor | None) -> Callable[[list], None] | None:
+    """The change outbox's `on_change` in this process: one event per stored or updated change,
+    buffered in the platform emitter under the change's org (flushed by `monitor_loop`). None
+    while the monitor is off. The hook never raises (the outbox also guards it)."""
+    if m is None:
+        return None
+    from ..monitor_sources import adapt_change
+
+    def on_change(changes: list) -> None:
+        try:
+            now = m.emitter.now()
+            for c in changes:
+                m.emitter.add(c.org_id, monitor.event_for(adapt_change(c, now=now)))
+        except Exception as e:  # the type only: the text may quote the change
+            logger.warning("platform monitor change event failed (%s)", type(e).__name__)
+
+    return on_change
+
+
 async def monitor_tick(m: PlatformMonitor) -> None:
     """Flush the buffered events and, every `HEARTBEAT_EVERY_S`, write the `platforms` heartbeat.
     The store work and `queues()` (the memory backlog takes the scheduler lock, which a seed can
@@ -400,9 +419,10 @@ async def run(s: Settings, ps: PlatformSettings) -> None:
     if a.identity is not None:  # the org store exists: central changes can be delivered
         from ..change_outbox import ChangeOutbox
 
-        a.changes = change_outbox_platform.PlatformChanges(
-            ChangeOutbox.from_settings(a.identity.orgs.docs, s), a.identity.orgs, a.team
-        )
+        outbox = ChangeOutbox.from_settings(
+            a.identity.orgs.docs, s, on_change=change_events(mon)
+        )  # each stored / updated change is a monitor event (when the monitor is on)
+        a.changes = change_outbox_platform.PlatformChanges(outbox, a.identity.orgs, a.team)
         jobs.append(asyncio.create_task(change_outbox_platform.changes_loop(a.changes)))
 
     def launch(name: str, coro_fn, *args) -> None:

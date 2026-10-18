@@ -1,25 +1,34 @@
 # ruff: noqa: F811, F401
 """Workflow monitor on the bot tick and in the platform bridges: the emitter is flushed once per
-tick, the heartbeat (with queue sizes) is written every 30 s, and nothing at all happens while
-`SALID_MONITOR_ENABLED` is off. Offline: SQLite DocStore, fake Discord objects."""
+tick, the heartbeat (with queue sizes) is written every 30 s, the delivery queues (web -> Discord
+actions, the change outbox) emit an event on every state change, finished actions are pruned
+after 30 days, and nothing at all is emitted while `SALID_MONITOR_ENABLED` is off. Offline:
+SQLite DocStore / fake Firestore, fake Discord objects."""
 
 from __future__ import annotations
 
 import asyncio
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 from conftest import GUILD
-from test_modes import bot, world  # noqa: F401  (fixtures)
-from test_positions_bot import link
+from fake_firestore import FakeFirestore
+from test_change_outbox import drig, tick, web_edit  # noqa: F401  (fixture + helpers)
+from test_coordinator import world  # noqa: F401  (fixture: members, as `drig` needs)
+from test_modes import bot  # noqa: F401  (fixture)
+from test_positions_bot import link, rig  # noqa: F401  (fixture)
 
 from salid import monitor
+from salid.actions import KEEP_DAYS, ActionQueue
+from salid.bot import SecretaryBot
+from salid.change_outbox import ChangeOutbox, diff_members, record_org_edit
 from salid.config import Settings
-from salid.coo_store import SQLiteDocStore
+from salid.coo_store import FirestoreDocStore, SQLiteDocStore
 from salid.monitor import HEARTBEAT, HEARTBEAT_EVERY_S, Audience, Emitter, read_log
-from salid.orgs import OrgStore, Workspace, workspace_memory_id
+from salid.orgs import Member, Org, OrgStore, Workspace, workspace_memory_id
 from salid.platforms import runtime
 from salid.platforms.config import PlatformSettings
 from salid.platforms.runtime import PlatformMonitor, monitor_tick, platform_monitor
@@ -274,6 +283,206 @@ async def test_change_outbox_run_notes_pending_targets(bot, monkeypatch):
     assert bot._monitor_queues["outbox_pending"] == 2
 
 
+# ------------------------------------------------------------------ delivery producers
+def action_guild(sent: list) -> SimpleNamespace:
+    """A Discord server with a #general the bot can post in (as in test_center_api)."""
+
+    class Msg:
+        id, jump_url = 42, "https://discord.com/channels/1/2/42"
+
+    async def send(text):
+        sent.append(text)
+        return Msg()
+
+    ch = SimpleNamespace(id=1001, name="general", send=send, guild=None)
+    return SimpleNamespace(
+        id=GUILD,
+        text_channels=[ch],
+        voice_channels=[],
+        get_channel=lambda i: ch if i == 1001 else None,
+    )
+
+
+def seq_order(events: list[dict]) -> list[dict]:
+    return sorted(events, key=lambda e: e["seq"])
+
+
+async def test_action_lifecycle_emits_queued_then_done(bot, monkeypatch):
+    bot.monitor.enabled = True
+    link(bot)
+    sent: list = []
+    monkeypatch.setattr(SecretaryBot, "guilds", property(lambda s: [action_guild(sent)]))
+    a = bot.actions.enqueue(
+        GUILD, "post_message", {"channel": "general", "text": "Hello team"}, by="boss@x.com"
+    )
+    assert await bot._actions_due() == 1 and sent == ["Hello team"]
+    await bot._monitor_due()
+    events = seq_order(read_log(bot.docs, "o1")["events"])
+    assert [(e["kind"], e["id"], e["status"]) for e in events] == [
+        ("action", a["id"], "queued"),
+        ("action", a["id"], "done"),
+    ]
+    assert events[0]["audience"] == {
+        "admin_only": True,
+        "exec_only": False,
+        "dm": False,
+        "people": ["boss@x.com"],
+        "channel_ids": [],
+    }
+    assert "Hello team" not in str(events)  # never the action's args
+
+
+async def test_outbox_updates_emit_change_events(drig):
+    drig.bot.monitor.enabled = True
+    web_edit(drig.bot, "peer@x.com", title="CTO")
+    await tick(drig)  # the apply target is acked, the notice is sent
+    await drig.bot._monitor_due()
+    events = seq_order(read_log(drig.bot.docs, "o1")["events"])
+    (c,) = drig.bot.change_outbox.list_changes("o1")
+    assert len(events) >= 3 and {(e["kind"], e["id"]) for e in events} == {("change", c.id)}
+    assert events[0]["status"] == "queued" and events[-1]["status"] == "waiting"
+    assert all(e["audience"]["admin_only"] and not e["audience"]["people"] for e in events)
+    assert "CTO" not in str(events) and "peer" not in str(events)  # no values, no names
+
+
+async def test_outbox_emits_nothing_while_the_monitor_is_off(drig):
+    web_edit(drig.bot, "peer@x.com", title="CTO")
+    await tick(drig)
+    drig.bot.monitor.enabled = True  # turned on afterwards: nothing was buffered meanwhile
+    await drig.bot._monitor_due()
+    assert read_log(drig.bot.docs, "o1")["seq"] == 0
+
+
+def test_prune_keeps_30_days_and_pending(monkeypatch):
+    docs = SQLiteDocStore(":memory:")
+    bkk = ZoneInfo("Asia/Bangkok")
+
+    def queued(days: float, *, end: str = "done", zone=UTC) -> str:
+        q = ActionQueue(docs, clock=lambda: (NOW - timedelta(days=days)).astimezone(zone))
+        a = q.enqueue(GUILD, "announce", {"text": "x"}, by="boss@x.com")
+        if end == "done":
+            q.finish(GUILD, a["id"], result={})
+        elif end == "failed":
+            q.finish(GUILD, a["id"], error="missing permission")
+        return a["id"]
+
+    old = queued(KEEP_DAYS + 1)
+    old_failed = queued(KEEP_DAYS + 1, end="failed", zone=bkk)  # the bot writes Bangkok time
+    recent = queued(KEEP_DAYS - 1, zone=bkk)
+    edge = queued(KEEP_DAYS - 1 / 24)  # 23 h short of the cut-off
+    waiting = queued(KEEP_DAYS + 1, end="")  # still pending: `expire` finishes it, never prune
+    other = ActionQueue(docs, clock=lambda: NOW - timedelta(days=40))
+    elsewhere = other.enqueue(2000, "announce", {"text": "x"}, by="boss@x.com")["id"]
+    other.finish(2000, elsewhere, result={})
+
+    q = ActionQueue(docs, clock=lambda: NOW)
+    assert q.prune(GUILD) == 2
+    assert q.get(GUILD, old) is None and q.get(GUILD, old_failed) is None
+    assert all(q.get(GUILD, a) for a in (recent, edge, waiting))
+    assert q.get(2000, elsewhere) is not None  # another guild is not touched
+
+    reads = [spy(monkeypatch, docs, "find"), spy(monkeypatch, docs, "find_items")]
+    assert q.prune(GUILD) == 0 and sum(r.n for r in reads) == 0  # within the hour: no read
+    assert q.prune(GUILD, force=True) == 0 and sum(r.n for r in reads) == 1
+    assert q.prune(2000) == 1 and q.get(2000, elsewhere) is None  # the hour is per guild
+
+
+async def test_actions_due_prunes_each_guild_hourly(bot, monkeypatch):
+    sent: list = []
+    monkeypatch.setattr(SecretaryBot, "guilds", property(lambda s: [action_guild(sent)]))
+    pruned: list[int] = []
+    real = bot.actions.prune
+    monkeypatch.setattr(bot.actions, "prune", lambda gid, **k: pruned.append(gid) or real(gid))
+    old = ActionQueue(bot.docs, clock=lambda: bot.s.now() - timedelta(days=KEEP_DAYS + 1))
+    a = old.enqueue(GUILD, "announce", {"text": "x"}, by="boss@x.com")
+    old.finish(GUILD, a["id"], result={})
+    assert await bot._actions_due() == 0
+    assert pruned == [GUILD] and bot.actions.get(GUILD, a["id"]) is None
+
+
+async def test_a_failing_log_never_breaks_enqueue_or_the_tick(bot, monkeypatch, caplog):
+    bot.monitor.enabled = True
+    link(bot)
+    sent: list = []
+    monkeypatch.setattr(SecretaryBot, "guilds", property(lambda s: [action_guild(sent)]))
+
+    def broken(fn):
+        raise RuntimeError("secret text")
+
+    monkeypatch.setattr(bot.docs, "transact", broken)  # every change-log write fails
+    failed = monitor.EMIT_STATS["failed"]
+    a = bot.actions.enqueue(
+        GUILD, "post_message", {"channel": "general", "text": "hi"}, by="boss@x.com"
+    )
+    assert a["status"] == "pending" and bot.actions.get(GUILD, a["id"]) is not None
+    assert await bot._actions_due() == 1
+    assert bot.actions.get(GUILD, a["id"])["status"] == "done" and sent == ["hi"]
+    await bot._monitor_due()  # logged and counted, not raised
+    assert monitor.EMIT_STATS["failed"] > failed
+    assert read_log(bot.docs, "o1")["seq"] == 0
+    assert "RuntimeError" in caplog.text and "secret text" not in caplog.text
+
+
+def test_a_raising_hook_is_logged_and_swallowed(caplog):
+    docs = SQLiteDocStore(":memory:")
+
+    def boom(_):
+        raise RuntimeError("secret text")
+
+    q = ActionQueue(docs, on_change=boom)
+    a = q.enqueue(GUILD, "announce", {"text": "x"}, by="boss@x.com")
+    q.finish(GUILD, a["id"], result={})
+    assert q.get(GUILD, a["id"])["status"] == "done"
+    org, before, after = outbox_org()
+    outbox = ChangeOutbox(docs, on_change=boom)
+    (c,) = outbox.record(diff_members(before, after), org)
+    assert outbox.mark_attempt(c.id, "slack-T1", "", org_id="o1")
+    assert outbox.get(c.id, "o1").targets[0].status == "sent"
+    assert "RuntimeError" in caplog.text and "secret text" not in caplog.text
+
+
+def outbox_org() -> tuple[Org, Org, Org]:
+    """An org with one Slack workspace, and a role edit of one member: (org, before, after)."""
+    ws = [Workspace(id="slack-T1", platform="slack", external_id="T1")]
+    before = Org(id="o1", name="Cafe", members=[Member(email="a@x.com")], workspaces=ws)
+    after = Org(
+        id="o1", name="Cafe", members=[Member(email="a@x.com", role="admin")], workspaces=ws
+    )
+    return after, before, after
+
+
+@pytest.mark.parametrize("kind", ["sqlite", "firestore"])
+def test_outbox_hook_gets_what_was_stored_or_committed(kind):
+    docs = SQLiteDocStore(":memory:") if kind == "sqlite" else FirestoreDocStore(FakeFirestore())
+    seen: list = []
+
+    def hook(changes):  # reads the store: the hook runs after the transaction committed
+        seen.append([(c.id, outbox.get(c.id, "o1").targets[0].status) for c in changes])
+
+    outbox = ChangeOutbox(docs, lambda: NOW, on_change=hook)
+    org, before, after = outbox_org()
+    (c,) = outbox.record(diff_members(before, after), org)
+    assert seen == [[(c.id, "pending")]]
+    assert outbox.record(diff_members(before, after), org) == []  # a duplicate: no call
+    assert outbox.mark_attempt(c.id, "slack-T1", "", org_id="o1")
+    assert seen[-1] == [(c.id, "sent")]
+    assert not outbox.mark_attempt(c.id, "slack-T9", "", org_id="o1")  # no such target
+    assert outbox.ack(c.id, "slack-T1", "", "applied")  # the org is found from the change id
+    assert seen[-1] == [(c.id, "acked")] and len(seen) == 3
+
+
+def test_from_settings_and_record_org_edit_pass_the_hook():
+    docs = SQLiteDocStore(":memory:")
+    seen: list = []
+    org, before, after = outbox_org()
+    s = Settings(_env_file=None)
+    assert ChangeOutbox.from_settings(docs, s, on_change=seen.append).on_change == seen.append
+    assert record_org_edit(docs, before, after, "boss@x.com", on_change=seen.append) == 1
+    owner = after.model_copy(update={"members": [Member(email="a@x.com", role="owner")]})
+    assert record_org_edit(docs, before, owner, "x", settings=s, on_change=seen.append) == 1
+    assert [len(x) for x in seen] == [1, 1]
+
+
 def test_memory_backlog_counts_pending_entries(bot):
     sched = bot.memory.scheduler
     assert sched.backlog() == 0
@@ -359,3 +568,46 @@ async def test_run_starts_the_monitor_loop(monkeypatch):
     monkeypatch.setattr(runtime, "platform_monitor", lambda s, a: None)
     await runtime.run(object(), PlatformSettings(_env_file=None))
     assert started == []
+
+
+def test_platform_change_hook_buffers_events_in_the_platform_emitter():
+    assert runtime.change_events(None) is None  # the monitor is off: no hook at all
+    docs = SQLiteDocStore(":memory:")
+    em = Emitter(docs, enabled=True, now=lambda: NOW)
+    outbox = ChangeOutbox(
+        docs, lambda: NOW, on_change=runtime.change_events(PlatformMonitor(em, docs, dict))
+    )
+    org, before, after = outbox_org()
+    (c,) = outbox.record(diff_members(before, after), org)
+    assert outbox.mark_attempt(c.id, "slack-T1", "", org_id="o1")
+    assert read_log(docs, "o1")["seq"] == 0  # buffered until the monitor tick flushes
+    em.flush()
+    events = seq_order(read_log(docs, "o1")["events"])
+    assert [(e["kind"], e["id"], e["status"]) for e in events] == [
+        ("change", c.id, "queued"),
+        ("change", c.id, "waiting"),
+    ]
+
+
+async def test_run_gives_the_platform_outbox_the_monitor_hook(monkeypatch):
+    monkeypatch.delenv("PORT", raising=False)
+    docs = SQLiteDocStore(":memory:")
+    em = Emitter(docs, enabled=True)
+    a = SimpleNamespace(identity=SimpleNamespace(orgs=OrgStore(docs)), team=None, changes=None)
+
+    async def idle(*_):
+        return None
+
+    monkeypatch.setattr(runtime, "build_assistant", lambda s, ps: a)
+    monkeypatch.setattr(runtime, "memory_loop", idle)
+    monkeypatch.setattr(runtime, "monitor_loop", idle)
+    monkeypatch.setattr(runtime.change_outbox_platform, "changes_loop", idle)
+    monkeypatch.setattr(runtime, "platform_monitor", lambda s, a: PlatformMonitor(em, docs, dict))
+    await runtime.run(Settings(_env_file=None), PlatformSettings(_env_file=None))
+    org, before, after = outbox_org()
+    a.changes.outbox.record(diff_members(before, after), org)
+    em.flush()
+    assert [e["kind"] for e in read_log(docs, "o1")["events"]] == ["change"]
+    monkeypatch.setattr(runtime, "platform_monitor", lambda s, a: None)
+    await runtime.run(Settings(_env_file=None), PlatformSettings(_env_file=None))
+    assert a.changes.outbox.on_change is None  # the monitor is off: no hook

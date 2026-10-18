@@ -701,3 +701,40 @@ def test_pending_action_is_stuck_after_60_s_only_while_the_bot_is_online(w):
     assert reasons() == {fresh: ("queued", ""), slow: ("queued", "")}
     monitor.write_heartbeat(w.docs, "bot", queues={}, now=NOW - timedelta(minutes=6))  # offline
     assert reasons() == {fresh: ("queued", "bot_offline"), slow: ("queued", "bot_offline")}
+
+
+# ------------------------------------------------------------------ web producers
+def test_web_enqueue_and_member_edit_emit_to_the_org_log(w, monkeypatch):
+    app.dependency_overrides[center.get_library] = lambda: SimpleNamespace(docs=w.docs)
+    actions, members = f"/api/center/orgs/{ORG}/actions", f"/api/center/orgs/{ORG}/members"
+    post = {"kind": "post_message", "args": {"channel": "general", "text": SENTINEL}}
+
+    def edit(role):
+        r = w.c.post(members, json={"email": "mem@example.com", "role": role}, headers=H["boss"])
+        assert r.status_code == 200, r.text
+
+    monkeypatch.delenv("MONITOR_ENABLED")
+    get_settings.cache_clear()
+    assert w.c.post(actions, json=post, headers=H["boss"]).status_code == 200
+    edit("admin")
+    assert w.docs.get(monitor.LOG, 0, ORG) is None  # flag off: no log doc at all
+
+    monkeypatch.setenv("MONITOR_ENABLED", "true")
+    get_settings.cache_clear()
+    aid = w.c.post(actions, json=post, headers=H["boss"]).json()["id"]
+    edit("member")
+    ws = w.orgs.get(ORG).workspaces[0]
+    ctx = SimpleNamespace(email="adm@example.com", org=w.orgs.get(ORG))
+    tools = {t.__name__: t for t in center.discord_action_tools(ctx, w.docs, ws)}
+    tid = tools["discord_post_message"]("general", SENTINEL)["action_id"]
+    events = monitor.read_log(w.docs, ORG)["events"]
+    assert [(e["kind"], e["status"]) for e in events] == [
+        ("action", "queued"),
+        ("change", "queued"),
+        ("action", "queued"),
+    ]
+    (change,) = [c for c in center.ChangeOutbox(w.docs).list_changes(ORG) if c.after == "member"]
+    assert [e["id"] for e in events] == [aid, change.id, tid]
+    assert events[0]["audience"]["people"] == ["boss@example.com"]
+    assert events[1]["audience"] == Audience(admin_only=True).model_dump()
+    assert SENTINEL not in str(events) and "mem@example.com" not in str(events)

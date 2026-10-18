@@ -66,11 +66,13 @@ class ChangeButton(
 
 class ChangeOutboxMixin:
     """Needs `self.docs`, `self.s`, `self.team`, `self.guilds`, `_clock`, `deliver_to_person`,
-    `positions_sync`, `_positions_on`, `_deliver_langs`, `_monitor_note_queue`. Call
-    `_change_outbox_init()` after `_positions_init()`."""
+    `positions_sync`, `_positions_on`, `_deliver_langs`, `_monitor_note_queue`,
+    `_monitor_changes`. Call `_change_outbox_init()` after `_positions_init()`."""
 
     def _change_outbox_init(self) -> None:
-        self.change_outbox = ChangeOutbox.from_settings(self.docs, self.s)
+        self.change_outbox = ChangeOutbox.from_settings(
+            self.docs, self.s, on_change=self._monitor_changes
+        )
         self._change_polled = float("-inf")
         self._change_snap: dict[int, object] = {}  # guild id -> Org as last seen
 

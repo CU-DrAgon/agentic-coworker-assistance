@@ -9,6 +9,11 @@ scheduler's backlog. The loop does not wait for the tick, so a slow or failing t
 delays the heartbeat or the flush (spec 3.4: the heartbeat tells a stuck job from a stopped bot).
 The store work runs off the event loop. Flag `SALID_MONITOR_ENABLED` (`Settings.monitor_enabled`):
 off = no loop, nothing buffered, flushed or written.
+
+Producer hooks: `_monitor_action` (the action queue's `on_change`: one event per new or finished
+web -> Discord action, logged under the guild's org) and `_monitor_changes` (the change outbox's
+`on_change`: one event per stored or updated change, under its org). They only buffer (no store
+work on the caller's thread beyond building the content-free event) and never raise.
 """
 
 from __future__ import annotations
@@ -17,7 +22,9 @@ import asyncio
 import logging
 
 from . import monitor
-from .monitor import HEARTBEAT_EVERY_S, Emitter, org_key_resolver
+from .change_outbox import Change
+from .monitor import HEARTBEAT_EVERY_S, Emitter, event_for, org_key_resolver
+from .monitor_sources import adapt_action, adapt_change
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,27 @@ class MonitorMixin:
     def _monitor_note_queue(self, name: str, n: int) -> None:
         """Remember a queue size for the next heartbeat."""
         self._monitor_queues[name] = int(n)
+
+    def _monitor_action(self, rec: dict) -> None:
+        """`ActionQueue.on_change`: buffer the action's event for its guild's log. Never raises."""
+        if not self.monitor.enabled:
+            return
+        try:
+            self.monitor.add_for_guild(int(rec["guild_id"]), event_for(adapt_action(rec)))
+        except Exception as e:  # the type only (the text may quote the record)
+            logger.warning("monitor action event failed: %s", type(e).__name__)
+
+    def _monitor_changes(self, changes: list[Change]) -> None:
+        """`ChangeOutbox.on_change`: buffer one event per change for its org's log. Never
+        raises."""
+        if not self.monitor.enabled:
+            return
+        try:
+            now = self.s.now()
+            for c in changes:
+                self.monitor.add(c.org_id, event_for(adapt_change(c, now=now)))
+        except Exception as e:  # the type only (the text may quote the change)
+            logger.warning("monitor change event failed: %s", type(e).__name__)
 
     def _monitor_start(self, every_s: float) -> None:
         """Start the monitor loop; nothing while the monitor is off or the loop already runs."""

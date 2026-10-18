@@ -37,10 +37,15 @@ def _iso(s: str) -> datetime:
 
 class ActionsMixin:
     def _init_actions(self) -> None:
-        self.actions = ActionQueue(self.docs, clock=lambda: self.s.now())
+        """Needs `self.docs`, `self.s` and `MonitorMixin._monitor_action` (every new or finished
+        action is a workflow monitor event)."""
+        self.actions = ActionQueue(
+            self.docs, clock=lambda: self.s.now(), on_change=self._monitor_action
+        )
 
     async def _actions_due(self) -> int:
-        """Perform every pending action of every guild; returns how many were handled."""
+        """Perform every pending action of every guild; returns how many were handled. Also
+        deletes each guild's finished actions older than `actions.KEEP_DAYS` (hourly)."""
         n = 0
         for guild in list(self.guilds):
             try:
@@ -61,6 +66,7 @@ class ActionsMixin:
                     except Exception as e:  # never let one action stop the tick
                         logger.exception("action %s failed", a.get("id"))
                         self.actions.finish(guild.id, a["id"], error=type(e).__name__)
+                self.actions.prune(guild.id)  # after the work: a store error never delays it
             except Exception:
                 logger.exception("action queue of guild %s failed", guild.id)
         return n

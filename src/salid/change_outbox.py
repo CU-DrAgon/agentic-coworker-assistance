@@ -200,6 +200,11 @@ def diff_org(
 
 
 class ChangeOutbox:
+    """The store and its rules. `on_change` (optional) is told every change it stored (`record`)
+    or changed (`ack`, `mark_attempt`, a target failed by `due`, `mark_alerted`), after the
+    write, so the workflow monitor can log it (`salid.monitor`); a failing hook is logged and
+    never breaks the outbox."""
+
     def __init__(
         self,
         docs: DocStore,
@@ -207,21 +212,39 @@ class ChangeOutbox:
         *,
         resend_minutes: int = RESEND_MINUTES,
         max_attempts: int = MAX_ATTEMPTS,
+        on_change: Callable[[list[Change]], None] | None = None,
     ) -> None:
-        self.docs, self.now = docs, now
+        self.docs, self.now, self.on_change = docs, now, on_change
         self.resend = timedelta(minutes=max(int(resend_minutes), 1))
         self.max_attempts = max(int(max_attempts), 1)
         self._pruned = 0.0
         self._lock = threading.Lock()
 
     @classmethod
-    def from_settings(cls, docs: DocStore, settings: Any, now=None) -> ChangeOutbox:
+    def from_settings(
+        cls,
+        docs: DocStore,
+        settings: Any,
+        now=None,
+        on_change: Callable[[list[Change]], None] | None = None,
+    ) -> ChangeOutbox:
         return cls(
             docs,
             now or getattr(settings, "now", _utcnow),
             resend_minutes=getattr(settings, "change_resend_minutes", RESEND_MINUTES),
             max_attempts=getattr(settings, "change_max_attempts", MAX_ATTEMPTS),
+            on_change=on_change,
         )
+
+    def _changed(self, changes: list[Change]) -> None:
+        """Tell `on_change` about stored changes. Never raises: the error type is logged (its
+        text may quote a change)."""
+        if self.on_change is None or not changes:
+            return
+        try:
+            self.on_change(changes)
+        except Exception as e:
+            logger.warning("change outbox: change hook failed (%s)", type(e).__name__)
 
     # ---- reading
     def get(self, change_id: str, org_id: str = "") -> Change | None:
@@ -289,6 +312,7 @@ class ChangeOutbox:
                 c.targets = self.targets_for(c, org)
                 self.docs.put(KIND, guild, c.id, c.model_dump())
                 stored.append(c)
+        self._changed(stored)
         return stored
 
     # ---- state changes (each one atomic)
@@ -296,15 +320,18 @@ class ChangeOutbox:
         """Read-modify-write one change in ONE transaction. Without `org_id` the org is found
         from the change id first (one extra read). A change not migrated yet (still at
         `LEGACY_GUILD`, see `migrate_legacy`) is updated where it is, in the same transaction, so
-        acks and button clicks on notices sent before the re-key keep working."""
+        acks and button clicks on notices sent before the re-key keep working. `on_change` is
+        told the written change after the transaction, never from inside it."""
         if not org_id:
             d = self.docs.find_any(KIND, change_id)
             org_id = str((d or {}).get("org_id") or "")
             if not org_id:
                 return False
         guild = org_guild(org_id)
+        written: list[Change] = []  # the last attempt's change (a transaction may be retried)
 
         def run(tx) -> bool:
+            written.clear()
             where, d = guild, tx.get(KIND, guild, change_id)
             if d is None:
                 where, d = LEGACY_GUILD, tx.get(KIND, LEGACY_GUILD, change_id)
@@ -316,9 +343,13 @@ class ChangeOutbox:
             if not fn(c):
                 return False
             tx.put(KIND, where, c.id, c.model_dump())
+            written.append(c)
             return True
 
-        return self.docs.transact(run)
+        done = self.docs.transact(run)
+        if done:
+            self._changed(written)
+        return done
 
     @staticmethod
     def _find(c: Change, workspace_id: str, person: str) -> Target | None:
@@ -473,15 +504,24 @@ class ChangeOutbox:
 
 # ------------------------------------------------------------------ the web / watcher entry
 def record_org_edit(
-    docs: DocStore, before: Org, after: Org, by: str = "salid", settings=None
+    docs: DocStore,
+    before: Org,
+    after: Org,
+    by: str = "salid",
+    settings=None,
+    on_change: Callable[[list[Change]], None] | None = None,
 ) -> int:
-    """Record what changed between two versions of an org. NEVER raises: a failure here must not
-    break the request or the sync that called it. Returns how many changes were stored."""
+    """Record what changed between two versions of an org (`on_change`: see `ChangeOutbox`).
+    NEVER raises: a failure here must not break the request or the sync that called it. Returns
+    how many changes were stored."""
     try:
         changes = diff_org(before, after, by=by)
         if not changes:
             return 0
-        outbox = ChangeOutbox.from_settings(docs, settings) if settings else ChangeOutbox(docs)
+        if settings:
+            outbox = ChangeOutbox.from_settings(docs, settings, on_change=on_change)
+        else:
+            outbox = ChangeOutbox(docs, on_change=on_change)
         return len(outbox.record(changes, after))
     except Exception:
         logger.warning("change outbox: could not record an org edit", exc_info=True)
