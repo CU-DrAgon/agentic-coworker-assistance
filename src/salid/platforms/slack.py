@@ -271,6 +271,35 @@ class SlackPort:
         )
         return {r["id"]: (r.get("name") or r["id"], r.get("id", "")) for r in rows if r.get("id")}
 
+    async def readable_rooms(self, uid: str) -> dict[str, str] | None:
+        """Conversations Salid is in that this member of THIS workspace can read: channel id ->
+        name. Public non-shared channels (a full member may read any; guests get none of them),
+        plus private channels and group DMs that are not shared and where Slack lists the member
+        (users.conversations with ``user``). Slack Connect / org-shared rooms and rooms whose
+        share flags are missing are never included. None when the person is not a current member
+        of this team or Slack cannot answer: nothing is known, so the caller uses nothing."""
+        u = await self.user(uid)
+        if not u or u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
+            return None
+        guest = bool(u.get("is_restricted") or u.get("is_ultra_restricted"))
+        kw = dict(types="public_channel,private_channel,mpim", exclude_archived=True, limit=200)
+        try:
+            ours = await self._pages(self.client.users_conversations, "channels", **kw)
+            mine = await self._pages(self.client.users_conversations, "channels", user=uid, **kw)
+        except Exception as e:
+            logger.warning("users.conversations failed (%s)", safe_exc(e))
+            return None
+        member_of = {r["id"] for r in mine if r.get("id")}
+        out: dict[str, str] = {}
+        for r in ours:
+            cid = r.get("id")
+            if not cid or share_state(r) is not False:
+                continue
+            private = bool(r.get("is_private") or r.get("is_mpim"))
+            if (private and cid in member_of) or (not private and not guest):
+                out[cid] = r.get("name") or cid
+        return out
+
     async def bot_rooms(self) -> dict[str, tuple[str, str]]:
         """Conversations Salid is in (public, private, group DMs): id -> (name, id)."""
         if self._bot_rooms and self._clock() - self._bot_rooms[0] < LIST_TTL_S:

@@ -233,6 +233,14 @@ answer**. Across platforms this means:
    bot side; the web buttons are for the web teammate, see "Verified identities: API" below).
 4. Org-wide scope: in a 1:1 with a verified member, memory / ledger / tasks / projects / people
    across all the org's workspaces; rooms keep the fail-closed rule above.
+   **Done for askers on Slack / LINE / Telegram / WhatsApp (memory + ledger)**: `org_scope.py`
+   (pure rules + Discord permission resolver over REST data), `org_stores.py`
+   (`MultiGuildMemoryStore`, `MultiGuildLedgerStore` adapters for the unchanged `qa` tools),
+   `platforms/org_sources.py` (Slack rooms by the member's account; LINE / Telegram / WhatsApp: the
+   member's own 1:1 only, never groups; Discord via REST with `SALID_DISCORD_TOKEN` in the
+   platforms process, absent or failing = Discord left out). Retention = the shortest of the
+   workspaces involved. **Remaining**: Discord-side askers seeing other platforms (needs the bot
+   to build the same `OrgView`), tasks / projects / people org-wide.
 5. `_agent_kwargs` takes a `Workspace` (step 2b, no behaviour change on Discord), then the first
    tool group on Slack and the other platforms: tasks + follow-ups + task cards, projects and
    progress pictures, people / handover, briefs and reports, reminders, documents (PDF / decks /
