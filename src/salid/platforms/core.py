@@ -39,6 +39,16 @@ from ..fillers import RecentLines, pick_fallback
 from ..gate import GateLine
 from ..guild_settings import BotGuildSettings
 from ..i18n import resolve_lang, t
+from ..identity_links import (
+    REPLY_ATTACHED,
+    REPLY_INVALID,
+    REPLY_LINKED,
+    REPLY_PRIVATE,
+    REPLY_SLOW_DOWN,
+    CodeError,
+    IdentityLinks,
+    parse_command,
+)
 from ..memory import MemoryService, build_message, message_text
 from ..memory_access import ChannelAccess, allowed_channel_ids
 from ..memory_summary import render_summary
@@ -57,6 +67,10 @@ HISTORY_MESSAGES = 30
 HISTORY_SECONDS = 3 * 3600
 HISTORY_CHARS = 8000
 HISTORY_LINE_CHARS = 500
+LINK_ATTEMPTS = 5  # link-code attempts per platform user ...
+LINK_ATTEMPTS_TENANT = 30  # ... and per tenant, in LINK_WINDOW_S (guessing protection)
+LINK_WINDOW_S = 600.0
+VERIFY_TTL_S = 600.0  # re-check a Slack user's profile email at most this often
 FOLLOWUP_SECONDS = 120  # a bare "@Salid" picks up the same person's message from this recently
 GATE_HISTORY = 10
 GREETING_KEYS = ("greeting", "greeting_2", "greeting_3")
@@ -297,6 +311,7 @@ class Assistant:
         sleep: Callable[[float], Awaitable] = asyncio.sleep,
         choose: Callable = random.choice,
         names: dict[tuple[int, int], str] | None = None,
+        identity: IdentityLinks | None = None,
     ) -> None:
         self.s, self.ps, self.store, self.llm, self.team = settings, ps, store, llm, team
         self.memory, self.memory_store, self.embedder = memory, memory_store, embedder
@@ -324,6 +339,10 @@ class Assistant:
         self._worker: asyncio.Task | None = None
         self._bg: set[asyncio.Task] = set()
         self.on_room_seen: Callable[[Incoming], None] | None = None  # e.g. start a history import
+        # verified identities / org workspaces (None: platforms run on their own, as before)
+        self.identity = identity
+        self._link_tries: dict[tuple, deque[float]] = {}
+        self._verified_at: OrderedDict[tuple[str, str], float] = OrderedDict()
 
     # -------------------------------------------------------------- bookkeeping
     def _first_time(self, key: tuple) -> bool:
@@ -440,6 +459,10 @@ class Assistant:
     async def _handle(self, msg: Incoming, port: Port) -> None:
         if not self._first_time(msg.key):
             return
+        if self.identity is not None and (code := parse_command(msg.text)) is not None:
+            # a link / attach code: never remembered, never shown to the model
+            await self._link_command(msg, port, code)
+            return
         gid = ids.tenant_id(msg.platform, msg.tenant)
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
         if not await asyncio.to_thread(self._owner_ok, msg, gid):
@@ -461,6 +484,7 @@ class Assistant:
             self.on_room_seen(msg)
         if not await self._addressed(msg, port, gid, rid, mode):
             return
+        await self._verify_account(msg, port)
         await self._answer(msg, port, gid, rid)
 
     async def on_edit(self, msg: Incoming) -> None:
@@ -479,6 +503,99 @@ class Assistant:
         # a deleted / unsent message must not reach the next model call through the live buffer
         self.buffer.remove((gid, ids.room_id(platform, tenant, room)), message)
         self._enqueue(partial(self.memory.delete, gid, [mid]))
+
+    # -------------------------------------------------------------- verified identity
+    def identity_of(self, msg: Incoming) -> tuple[str, str] | None:
+        """(org id, member email) when the sender is a VERIFIED member of the org that owns this
+        tenant; None for a guest of the room (also when no org store is wired). Blocking."""
+        if self.identity is None:
+            return None
+        try:
+            return self.identity.identity_of(msg.platform, msg.tenant, msg.user)
+        except Exception as e:
+            logger.warning("identity lookup failed (%s)", safe_exc(e))
+            return None
+
+    def tenant_revoked(self, platform: str, tenant: str) -> None:
+        """The platform workspace was uninstalled: forget the member links of that platform in
+        its org (unless the org keeps another workspace there). Blocking, never raises."""
+        if self.identity is None:
+            return
+        try:
+            orgs = self.identity.orgs
+            found = orgs.org_of_workspace(platform, tenant)
+            if found:
+                orgs.drop_platform_identities(found[0].id, platform, keep_workspace=found[1].id)
+        except Exception as e:
+            logger.warning("could not drop identities of %s tenant (%s)", platform, safe_exc(e))
+
+    def _tries_ok(self, key: tuple, limit: int) -> bool:
+        q = self._link_tries.setdefault(key, deque())
+        now = self._clock()
+        while q and now - q[0] > LINK_WINDOW_S:
+            q.popleft()
+        if len(q) >= limit:
+            return False
+        q.append(now)
+        if len(self._link_tries) > 5000:  # stale keys of people who never came back
+            self._link_tries = {k: v for k, v in self._link_tries.items() if v}
+        return True
+
+    async def _link_command(self, msg: Incoming, port: Port, code: str) -> None:
+        """`link 1234-5678`: redeem in a private chat without the model, answer with a fixed
+        line. In a group the code is NOT used (everyone there can read it)."""
+        if not msg.is_direct:
+            gid = ids.tenant_id(msg.platform, msg.tenant)
+            if self._rate_ok(gid, ids.room_id(msg.platform, msg.tenant, msg.room)):
+                await self._say(msg, port, REPLY_PRIVATE)
+            return
+        if not (
+            self._tries_ok(("u", msg.platform, msg.tenant, msg.user), LINK_ATTEMPTS)
+            and self._tries_ok(("t", msg.platform, msg.tenant), LINK_ATTEMPTS_TENANT)
+        ):
+            await self._say(msg, port, REPLY_SLOW_DOWN)
+            return
+        try:
+            done = await asyncio.to_thread(
+                self.identity.redeem, code, msg.platform, msg.user, msg.tenant
+            )
+        except CodeError as e:
+            logger.info("link refused platform=%s reason=%s", msg.platform, e.reason)
+            await self._say(msg, port, REPLY_INVALID)
+            return
+        except Exception as e:
+            logger.error("link failed platform=%s (%s)", msg.platform, safe_exc(e))
+            await self._say(msg, port, REPLY_INVALID)
+            return
+        logger.info("link ok platform=%s kind=%s", msg.platform, done.kind)
+        await self._say(msg, port, REPLY_ATTACHED if done.kind == "attach" else REPLY_LINKED)
+
+    async def _verify_account(self, msg: Incoming, port: Port) -> None:
+        """Slack: the profile email of a member of THIS team that equals a member email of the org
+        owning the workspace links the account (no code). Throttled; best effort."""
+        email_of = getattr(port, "profile_email", None)
+        if self.identity is None or email_of is None or msg.platform != "slack":
+            return
+        key = (msg.tenant, msg.user)
+        now = self._clock()
+        last = self._verified_at.get(key)
+        if last is not None and now - last < VERIFY_TTL_S:
+            return
+        self._verified_at[key] = now
+        while len(self._verified_at) > SEEN_KEEP:
+            self._verified_at.popitem(last=False)
+        try:
+            if not await asyncio.to_thread(
+                self.identity.orgs.org_of_workspace, msg.platform, msg.tenant
+            ):
+                return
+            email = await email_of(msg.user)
+            if email:
+                await asyncio.to_thread(
+                    self.identity.auto_link, msg.platform, msg.tenant, msg.user, email
+                )
+        except Exception as e:
+            logger.warning("could not verify the account (%s)", safe_exc(e))
 
     # -------------------------------------------------------------- addressing
     @staticmethod

@@ -40,7 +40,10 @@ LICENSE_REQS = "salid_license_reqs"
 CENTER_CHAT = "salid_center_chat"
 
 ROLES = ("owner", "admin", "member")
-PLATFORMS = ("discord", "slack", "clickup", "web")
+PLATFORMS = ("discord", "slack", "line", "telegram", "whatsapp", "clickup", "web")
+# Platforms where a person has a chat account that can be linked to an org member
+IDENTITY_PLATFORMS = ("discord", "slack", "line", "telegram", "whatsapp")
+MAX_IDENTITY_LEN = 200
 PLANS = ("trial", "monthly", "yearly", "enterprise")
 STATUSES = ("active", "past_due", "expired", "suspended")
 CATEGORIES = ("documents", "wiki", "places", "minutes", "ledger", "tasks")
@@ -96,8 +99,23 @@ class Member(BaseModel):
     email: str
     role: str = "member"  # owner | admin | member
     discord_user_id: str | None = None
+    # platform -> platform user id, VERIFIED by Salid (Slack profile email, or a one-time link
+    # code). Discord stays in `discord_user_id`; read it through `identity("discord")`.
+    identities: dict[str, str] = Field(default_factory=dict)
     department: str = ""  # PM dashboard: tech | business | finance | other | ""
     finance: bool = False  # PM dashboard: Authorized Approver, may see budgets
+
+    def identity(self, platform: str) -> str | None:
+        """The verified platform account id of this member, or None."""
+        if platform == "discord":
+            return self.identities.get("discord") or self.discord_user_id or None
+        return self.identities.get(platform) or None
+
+    def all_identities(self) -> dict[str, str]:
+        out = {k: v for k, v in self.identities.items() if v}
+        if self.discord_user_id and "discord" not in out:
+            out["discord"] = self.discord_user_id
+        return out
 
 
 class License(BaseModel):
@@ -111,7 +129,7 @@ class License(BaseModel):
 
 class Workspace(BaseModel):
     id: str
-    platform: str  # discord | slack | clickup | web
+    platform: str  # discord | slack | line | telegram | whatsapp | clickup | web
     external_id: str  # guild id / slack team id / clickup team id / org id (web)
     name: str = ""
     icon_url: str = ""
@@ -178,6 +196,18 @@ class WorkspaceTaken(Exception):
     def __init__(self, org_id: str):
         super().__init__(f"workspace already belongs to {org_id}")
         self.org_id = org_id
+
+
+class IdentityTaken(Exception):
+    """That platform account is already linked to another member of the org."""
+
+    def __init__(self, email: str):
+        super().__init__("platform account already linked to another member")
+        self.email = email
+
+
+class UnknownMember(KeyError):
+    """The email is not a member of the org."""
 
 
 # ------------------------------------------------------------------ store
@@ -318,9 +348,92 @@ class OrgStore:
             org.sharing = [
                 s for s in org.sharing if ws_id not in (s.from_workspace, s.to_workspace)
             ]
+            self._drop_orphan_identities(org, ws.platform)
             self.save(org)
             self.docs.delete(ORG_WS, ws.memory_id, "org")
             return org
+
+    # ---- verified platform identities (see salid.identity_links)
+    @staticmethod
+    def _drop_orphan_identities(org: Org, platform: str) -> None:
+        """No workspace of this platform left in the org: its member links mean nothing."""
+        if platform not in IDENTITY_PLATFORMS or platform == "discord":
+            return
+        if any(w.platform == platform for w in org.workspaces):
+            return
+        for m in org.members:
+            m.identities.pop(platform, None)
+
+    def member_by_identity(
+        self, org_id: str, platform: str, platform_user_id: str
+    ) -> Member | None:
+        org = self.get(org_id)
+        if org is None or not platform_user_id:
+            return None
+        return next((m for m in org.members if m.identity(platform) == str(platform_user_id)), None)
+
+    def link_identity(
+        self, org_id: str, email: str, platform: str, platform_user_id: str
+    ) -> Member:
+        """Bind a platform account to a member. A second claim on the same account by another
+        member is refused (`IdentityTaken`); re-linking the same member replaces the old id."""
+        pid = str(platform_user_id or "").strip()
+        if platform not in IDENTITY_PLATFORMS or not pid or len(pid) > MAX_IDENTITY_LEN:
+            raise ValueError("bad platform or account id")
+        with self._lock:
+            org = self.get(org_id)
+            if org is None:
+                raise KeyError(org_id)
+            who = next((m for m in org.members if m.email.lower() == email.lower()), None)
+            if who is None:
+                raise UnknownMember(email)
+            for m in org.members:
+                if m is not who and m.identity(platform) == pid:
+                    raise IdentityTaken(m.email)
+            if platform == "discord":
+                who.discord_user_id = pid
+                who.identities.pop("discord", None)
+            else:
+                who.identities[platform] = pid
+            self.save(org)
+            return who
+
+    def unlink_identity(self, org_id: str, email: str, platform: str) -> bool:
+        """Remove one linked account of a member. True when something was removed."""
+        with self._lock:
+            org = self.get(org_id)
+            who = (
+                next((m for m in org.members if m.email.lower() == email.lower()), None)
+                if org
+                else None
+            )
+            if org is None or who is None or platform not in IDENTITY_PLATFORMS:
+                return False
+            had = who.identity(platform) is not None
+            who.identities.pop(platform, None)
+            if platform == "discord":
+                who.discord_user_id = None
+            if had:
+                self.save(org)
+            return had
+
+    def drop_platform_identities(
+        self, org_id: str, platform: str, keep_workspace: str = ""
+    ) -> None:
+        """A platform workspace was uninstalled / revoked: forget the member links of that
+        platform unless the org still has another workspace there (`keep_workspace` = the one
+        going away, still listed in the org document)."""
+        if platform not in IDENTITY_PLATFORMS or platform == "discord":
+            return
+        with self._lock:
+            org = self.get(org_id)
+            if org is None:
+                return
+            if any(w.platform == platform and w.id != keep_workspace for w in org.workspaces):
+                return
+            changed = [m.identities.pop(platform, None) for m in org.members]
+            if any(c is not None for c in changed):
+                self.save(org)
 
     # ---- license requests
     def add_license_request(self, req: LicenseRequest) -> LicenseRequest:

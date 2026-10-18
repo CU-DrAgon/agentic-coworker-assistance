@@ -117,6 +117,32 @@ list is in memory (5000 events): after a restart a redelivered event can be hand
 Cloud Run needs CPU always allocated (instance-based billing) and `--min-instances 1`, because the
 answer is computed after the 200 is returned and LINE times out after 2 seconds.
 
+## Linking accounts to your organization
+
+Salid treats a LINE account as a **guest of its chat** until the person is verified. Verifying
+ties the account to a member of the organization (the company in the command center), which later
+lets Salid use what that member may read on the organization's other platforms in a private chat.
+
+1. In the command center, sign in with Google, open your organization and press **Link LINE**
+   (API: `POST /api/center/orgs/{org}/identities/line/code`). You get a code like `1234-5678`
+   that works **once, for 15 minutes**.
+2. Send it to Salid in a **private chat**: `link 1234-5678` (Thai: `เชื่อมบัญชี 1234-5678`).
+   Salid answers with a fixed line and never shows the message to the model or stores it.
+3. Unlink from the web (`DELETE /api/center/orgs/{org}/identities/line`); removing the
+   LINE workspace from the organization also forgets these links.
+
+Rules: a code typed in a **group is ignored** (Salid asks you to use a private chat); five wrong
+attempts per person in 10 minutes pauses that person; one LINE account belongs to at most one
+member of an organization; every failure says only "invalid or expired".
+
+**Connecting the bot itself to the organization.** An owner or admin presses **Attach LINE
+bot** (`POST /api/center/orgs/{org}/workspaces/line/attach-code`) and sends the code to the
+bot in a private chat. A bot that already belongs to another organization is refused. A bot that
+is attached to no organization keeps working on its own as before.
+
+LINE user ids are per provider; link from the LINE Official Account that belongs to this bot channel.
+
+
 ## Pricing in Thailand (LINE for Business, excluding 7% VAT)
 
 - **Free**: 300 messages per month. **Basic**: 1,280 THB per month, 15,000 messages (0.1 THB per extra

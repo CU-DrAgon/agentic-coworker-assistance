@@ -141,6 +141,17 @@ class SlackPort:
         prof = u.get("profile") or {}
         return prof.get("display_name") or u.get("real_name") or u.get("name") or uid
 
+    async def profile_email(self, uid: str) -> str:
+        """The verified-by-Slack profile email (lower case) of a real, current member of THIS
+        workspace; "" for a bot, a deleted user, a guest, someone from another workspace (Slack
+        Connect) or when the `users:read.email` scope is missing. Fails closed."""
+        u = await self.user(uid)
+        if u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
+            return ""
+        if u.get("is_restricted") or u.get("is_ultra_restricted"):
+            return ""  # guests (single / multi-channel): their address is not the company's
+        return str((u.get("profile") or {}).get("email") or "").strip().lower()
+
     async def is_admin(self, msg: Incoming) -> bool:
         return await self.is_admin_user(msg.user)
 
@@ -649,6 +660,7 @@ class SlackAdapter:
         self.port.revoked = True
         gid = ids.tenant_id(PLATFORM, team)
         logger.warning("slack %s: this workspace is removed, no more answers tenant=%d", kind, gid)
+        await asyncio.to_thread(self.a.tenant_revoked, PLATFORM, team)
         if not self.delete_data:
             return
         try:
