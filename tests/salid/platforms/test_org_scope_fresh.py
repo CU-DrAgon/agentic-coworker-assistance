@@ -48,7 +48,7 @@ def wf(s, tmp_path):
     w.clock = Clock()
     w.a = make_assistant(s, tmp_path, clock=w.clock, ask=StoreAsk())
     w.a.identity = IdentityLinks(w.orgs, clock=w.clock)
-    w.a.org_sources = OrgSources(w.orgs, clock=w.clock)
+    w.a.org_sources = OrgSources(w.orgs, clock=w.clock, line_org_linking=True)
 
     async def slack_rooms(ws, account):
         return {"C1": "ops"}

@@ -162,7 +162,10 @@ def wd(s, tmp_path):
     w.a = make_assistant(s, tmp_path, clock=w.clock, ask=StoreAsk())
     w.a.identity = w.links
     w.a.org_sources = OrgSources(
-        w.orgs, clock=w.clock, rest=DiscordRest("token-never-used", client=None)
+        w.orgs,
+        clock=w.clock,
+        rest=DiscordRest("token-never-used", client=None),
+        line_org_linking=True,  # these tests cover the linked behaviour; the default is below
     )
     w.a.org_sources.providers["discord"] = CachedProvider(DiscordRooms(w.discord), w.clock)
     # a Slack team of this org with channels the member may read (stubbed provider)
@@ -245,7 +248,7 @@ async def test_verified_line_one_to_one_also_reads_the_other_workspaces(wd):
 async def test_a_line_group_gets_only_the_group(wd):
     port = FakePort(platform="line")
     msg = await ask(wd, platform="line", tenant="Ubot", user="Lmew", direct=False, port=port)
-    assert memory_of(wd).allowed == {ids.room_id("line", "Ubot", msg.room): "team"}
+    assert memory_of(wd).allowed == {ids.room_id("line", "Ubot", msg.room): "LINE group"}
     assert wd.discord.calls == []  # nothing was even fetched
 
 
@@ -538,3 +541,48 @@ async def test_an_identity_verified_in_workspace_a_is_unknown_in_workspace_b(wd,
     assert wd.a.ask_fn.stores[-1] is wd.a.store  # B: not verified there, today's scope only
     assert memory_of(wd).guild_id == gid_b
     assert wd.a.identity_of(inc(platform=platform, tenant="B", user="Xann")) is None
+
+
+# ------------------------------------------------------------------ LINE is never linked (3.2.5)
+def test_line_org_linking_is_off_by_default(wd):
+    from salid.platforms.config import PlatformSettings
+
+    assert PlatformSettings(_env_file=None).line_org_linking is False
+    assert OrgSources(wd.orgs).line_org_linking is False
+
+
+@pytest.fixture
+def unlinked(wd, money):
+    wd.a.org_sources.line_org_linking = False
+    return wd
+
+
+async def test_a_slack_dm_of_a_member_with_a_linked_line_account_gets_no_line_source(unlinked):
+    await ask(unlinked)
+    mem = memory_of(unlinked)
+    assert GENERAL in mem.allowed and unlinked.slack_c1 in mem.allowed  # the rest still widens
+    assert not any(cid == ids.room_id("line", "Ubot", "Lmew") for cid in mem.allowed)
+    assert all("LINE" not in label for label in mem.allowed.values())
+    assert totals(unlinked) == {"THB": 100.0, "USD": 50.0}  # no LINE receipt (25) either
+    assert unlinked.line_gid not in {g for g, _ in unlinked.a.ask_fn.stores[-1].sources}
+
+
+async def test_a_verified_line_one_to_one_gets_only_its_own_room_and_ledger(unlinked):
+    port = FakePort(platform="line")
+    await ask(unlinked, platform="line", tenant="Ubot", user="Lmew", port=port)
+    mem = memory_of(unlinked)
+    assert list(mem.allowed) == [ids.room_id("line", "Ubot", "Lmew")]  # nothing else
+    assert unlinked.discord.calls == []  # nothing was even fetched
+    store = unlinked.a.ask_fn.stores[-1]
+    assert getattr(store, "sources", None) is None or {g for g, _ in store.sources} == {
+        unlinked.line_gid
+    }
+
+
+async def test_the_flag_restores_the_org_wide_view_for_line(unlinked):
+    unlinked.a.org_sources.line_org_linking = True
+    port = FakePort(platform="line")
+    await ask(unlinked, platform="line", tenant="Ubot", user="Lmew", port=port)
+    assert GENERAL in memory_of(unlinked).allowed
+    await ask(unlinked)
+    assert any("LINE" in label for label in memory_of(unlinked).allowed.values())

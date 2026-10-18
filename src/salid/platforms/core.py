@@ -307,6 +307,23 @@ NOTE_PREFIX = {"huddle": "[Huddle notes] "}  # how a remembered note says where 
 MAX_NOTE_CHARS = 30_000
 
 
+def stored_room_name(platform: str, room_name: str, room: str, direct: bool = False) -> str:
+    """The room name that may be KEPT (summaries, citations). LINE User Data Policy 3.2.3: a LINE
+    group's name is Friend and Group information and is never stored, so LINE keeps a generic
+    label; other platforms keep the real name."""
+    if platform == "line":
+        return "LINE 1:1" if direct else "LINE group"
+    return room_name or room
+
+
+def stored_user_name(platform: str, user: str, user_name: str) -> str:
+    """The author label that may be KEPT (memory records, ledger submitter). LINE display names
+    are never stored (3.2.3): a short label from the user id keeps authors apart instead."""
+    if platform == "line":
+        return f"LINE user {ids.user_id(platform, user) % 10000:04d}"
+    return user_name or user
+
+
 def tenant_label(platform: str, tenant: str) -> str:
     """The owner recorded in a tenant's settings document (its `guild_name`)."""
     return f"{platform.title()} {tenant}"
@@ -506,7 +523,9 @@ class Assistant:
         rid = ids.room_id(msg.platform, msg.tenant, msg.room)
         if not await asyncio.to_thread(self._owner_ok, msg, gid):
             return
-        self.names[(gid, rid)] = msg.room_name or msg.room
+        self.names[(gid, rid)] = stored_room_name(
+            msg.platform, msg.room_name, msg.room, msg.is_direct
+        )
         self._register(msg, gid)
         await asyncio.to_thread(self.team.current, gid)  # refresh the cache off the loop
         mode = self._mode(gid, rid, msg.room_name, msg.is_direct)
@@ -517,7 +536,11 @@ class Assistant:
             self.buffer.add(
                 bkey,
                 msg.message,
-                HistLine(msg.at, msg.user_name or msg.user, msg.text or _files_line(msg)),
+                HistLine(
+                    msg.at,
+                    stored_user_name(msg.platform, msg.user, msg.user_name),
+                    msg.text or _files_line(msg),
+                ),
             )
             self._record(msg, gid, rid)
             if self.on_room_seen is not None:
@@ -586,7 +609,7 @@ class Assistant:
                 return False
             gid = ids.tenant_id(platform, tenant)
             rid = ids.room_id(platform, tenant, room_key)
-            self.names[(gid, rid)] = room_name or room_key
+            self.names[(gid, rid)] = stored_room_name(platform, room_name, room_key)
             prefix = NOTE_PREFIX.get(kind, "")
             rec = build_message(
                 self.s,
@@ -788,7 +811,11 @@ class Assistant:
             GateLine(str(i), ln.who if not ln.mine else "สลิด", ln.text)
             for i, ln in enumerate(lines)
         ]
-        line = GateLine(msg.message, msg.user_name or msg.user, msg.text or _files_line(msg))
+        line = GateLine(
+            msg.message,
+            stored_user_name(msg.platform, msg.user, msg.user_name),
+            msg.text or _files_line(msg),
+        )
         return bool(
             await asyncio.to_thread(
                 self.gate_fn, self.llm, self.s.gate_model, history, line, channel_id=rid
@@ -837,7 +864,9 @@ class Assistant:
             author_id=ids.bot_user_id(msg.platform, msg.tenant)
             if mine
             else ids.user_id(msg.platform, msg.user),
-            author_name="Salid" if mine else (msg.user_name or msg.user),
+            author_name="Salid"
+            if mine
+            else stored_user_name(msg.platform, msg.user, msg.user_name),
             created_at=self._now() if mine else msg.at,
             text=body,
             kind="salid" if mine else "chat",
@@ -852,7 +881,7 @@ class Assistant:
         if not self.team.enabled(gid, "memory"):
             return None
         if msg.private:  # fail closed: this room's own memory, never a wider scope
-            allowed = {rid: msg.room_name or msg.room}
+            allowed = {rid: stored_room_name(msg.platform, msg.room_name, msg.room, msg.is_direct)}
             return self._tools(gid, allowed, self.memory_store, [gid])
         try:
             view = await port.room_view(msg)
@@ -874,7 +903,9 @@ class Assistant:
             )
             allowed = compute_scope(
                 answering=rid,
-                answering_name=msg.room_name or msg.room,
+                answering_name=stored_room_name(
+                    msg.platform, msg.room_name, msg.room, msg.is_direct
+                ),
                 asker=asker,
                 audience=audience,
                 rooms=rooms,
@@ -969,7 +1000,10 @@ class Assistant:
     def _previous_text(self, msg: Incoming, gid: int, rid: int) -> str:
         """The author's own message just before a bare @mention ("Hi" then "@Salid")."""
         for line in reversed(self.buffer.lines(self._bkey(msg, gid, rid), before=msg.message)):
-            if line.who == (msg.user_name or msg.user) and not line.mine:
+            if (
+                line.who == stored_user_name(msg.platform, msg.user, msg.user_name)
+                and not line.mine
+            ):
                 if (msg.at - line.at).total_seconds() <= FOLLOWUP_SECONDS and line.text:
                     return line.text
                 return ""
@@ -1016,7 +1050,7 @@ class Assistant:
                 filename=f.filename,
                 content_type=f.mime,
                 submitter_id=uid,
-                submitter_name=msg.user_name or msg.user,
+                submitter_name=stored_user_name(msg.platform, msg.user, msg.user_name),
                 channel_id=rid,
                 message_id=mid,
                 note=" ".join(x for x in ((msg.text or "").strip(), note.strip()) if x),

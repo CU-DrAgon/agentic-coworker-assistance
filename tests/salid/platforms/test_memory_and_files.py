@@ -163,11 +163,11 @@ async def test_line_group_memory_stays_in_that_group(s, tmp_path):
     group = await run(a, port, platform="line", tenant="Ubot", room="Cgroup1", user="Ualice",
                       mentions_bot=True, text="summary?", room_name="Team")  # fmt: skip
     mem = a.ask_fn.calls[0][1]["memory"]
-    assert mem.allowed == {rid_of(group): "Team"}
+    assert mem.allowed == {rid_of(group): "LINE group"}
     # a 1:1 chat reads only itself, even though the same person is in the group
     dm = await run(a, port, platform="line", tenant="Ubot", room="Ualice", user="Ualice",
                    is_direct=True, text="and me?", message="m2", room_name="")  # fmt: skip
-    assert a.ask_fn.calls[1][1]["memory"].allowed == {rid_of(dm): "Ualice"}
+    assert a.ask_fn.calls[1][1]["memory"].allowed == {rid_of(dm): "LINE 1:1"}
 
 
 async def test_any_scope_error_means_no_memory_tools(s, tmp_path):

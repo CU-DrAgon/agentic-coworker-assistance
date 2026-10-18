@@ -421,4 +421,4 @@ async def test_group_memory_never_leaves_the_group(fx):
     mem = a.ask_fn.calls[0][1]["memory"]
     group = inc(platform="line", tenant=BOT, room="Cgroup")
     assert list(mem.allowed) == [rid_of(group)]
-    assert mem.allowed[rid_of(group)] == "Ops team"
+    assert mem.allowed[rid_of(group)] == "LINE group"  # id label, not the fetched name

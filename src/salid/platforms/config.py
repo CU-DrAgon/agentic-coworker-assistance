@@ -38,6 +38,10 @@ class PlatformSettings(BaseSettings):
         "127.0.0.1"  # put TLS in front (reverse proxy / tunnel); 0.0.0.0 in a container
     )
     line_port: int = 8091
+    # LINE User Data Policy 3.2.5: LINE User Information must not be linked with information from
+    # other services unless LINE approves. Off: a verified LINE 1:1 keeps its own room and ledger,
+    # and no LINE workspace is a source for anyone else's org-wide scope.
+    line_org_linking: bool = False
     line_reply_token_seconds: float = (
         50.0  # older than this: push instead of a reply token (token lives ~1 min)
     )

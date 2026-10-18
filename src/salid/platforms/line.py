@@ -49,7 +49,7 @@ MAX_MESSAGES = 5  # one reply (free) or one push (counted once per recipient) ho
 MAX_BODY = 1_000_000
 WEBHOOK_PATH = "/line/webhook"
 LOADING_SECONDS = 30
-NAME_TTL_S = 3600.0
+NAME_TTL_S = 3600.0  # display names are Friend / Group information: never kept past 24 h (3.2.3)
 REPLY_TOKEN_SECONDS = 50.0  # the token is valid ~1 minute; never give up on it sooner than this
 PUSH_RETRY_DELAY_S = 1.0  # one retry of an ambiguous push failure, with the same retry key
 SEEN_EVENTS = 5000  # webhookEventIds remembered for de-duplication
@@ -220,29 +220,45 @@ class LinePort:
 
     async def display_name(self, kind: str, room: str, user: str) -> str:
         key = (kind, room, user)
-        hit = self._names.get(key)
-        if hit is not None and self._clock() - hit[0] < NAME_TTL_S:
-            return hit[1]
+        hit = self._lookup(key)
+        if hit is not None:
+            return hit
         try:
             name = await asyncio.to_thread(self.api.profile, kind, room, user)
         except Exception as e:
             logger.warning("LINE profile lookup failed (%s)", safe_exc(e))
             name = ""
-        self._names[key] = (self._clock(), name)
+        self._remember_name(key, name)
         return name
 
     async def group_name(self, kind: str, room: str) -> str:
         key = ("name", kind, room)
-        hit = self._names.get(key)
-        if hit is not None and self._clock() - hit[0] < NAME_TTL_S:
-            return hit[1]
+        hit = self._lookup(key)
+        if hit is not None:
+            return hit
         try:
             name = await asyncio.to_thread(self.api.group_name, kind, room)
         except Exception as e:
             logger.warning("LINE group summary failed (%s)", safe_exc(e))
             name = ""
-        self._names[key] = (self._clock(), name)
+        self._remember_name(key, name)
         return name
+
+    def _lookup(self, key: tuple) -> str | None:
+        """A cached name, or None; an expired entry is physically dropped on this read."""
+        hit = self._names.get(key)
+        if hit is None:
+            return None
+        if self._clock() - hit[0] >= NAME_TTL_S:
+            del self._names[key]
+            return None
+        return hit[1]
+
+    def _remember_name(self, key: tuple, name: str) -> None:
+        """Process memory only, never persisted; entries older than the TTL are dropped here."""
+        now = self._clock()
+        self._names = {k: v for k, v in self._names.items() if now - v[0] < NAME_TTL_S}
+        self._names[key] = (now, name)
 
     # ------------------------------------------------------------ core.Port
     async def room_view(self, msg: Incoming) -> RoomView:
