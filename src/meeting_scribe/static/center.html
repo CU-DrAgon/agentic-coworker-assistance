@@ -2055,7 +2055,7 @@ VIEWS.apps = async (body, my) => {
       isAdmin() ? el("button", { class: "btn" + (c.connected ? " ghost" : ""), type: "button", onclick: () => startConnector(c.platform) }, c.platform === "discord" ? t("add_discord") : c.platform === "slack" ? t("add_slack") : t("connect")) : null);
     return el("div", { class: "card" }, el("div", { class: "hd" }, platBadge(c.platform.startsWith("google") || c.platform === "gmail" ? "soon" : c.platform), el("div", {}, el("strong", { text: c.name }), el("div", { class: "muted small", text: t(names[c.platform] || "") }))), action);
   };
-  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).filter((c) => c.platform !== "clickup").map((c) => c.platform === "google_calendar" ? calendarCard(c) : card(c))),
+  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).filter((c) => !["clickup", "google_drive", "gmail"].includes(c.platform)).map((c) => c.platform === "google_calendar" ? calendarCard(c) : card(c))),
     linkedCard(), isAdmin() ? attachCard() : null);
 };
 
