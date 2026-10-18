@@ -703,6 +703,52 @@ def test_pending_action_is_stuck_after_60_s_only_while_the_bot_is_online(w):
     assert reasons() == {fresh: ("queued", "bot_offline"), slow: ("queued", "bot_offline")}
 
 
+def test_running_video_is_stuck_after_10_min(w, monkeypatch):
+    """The real `video_ad` source over the bot's job records (Bangkok times, as the bot writes
+    them): a step not updated for more than 600 s is stuck."""
+    real = (monitor_sources.video_source, monitor_sources.video_finder)
+    monkeypatch.setitem(monitor_sources.SOURCES, "video_ad", real)
+
+    def job(key, seconds_ago, *, requester=7, guild=GUILD):
+        at = (NOW - timedelta(seconds=seconds_ago)).astimezone(BKK).isoformat(timespec="seconds")
+        step = {"name": "stills", "state": "running", "started_at": at, "ms": None,
+                "attempts": 1, "error_code": ""}  # fmt: skip
+        rec = {"guild_id": guild, "channel_id": 55, "requester_id": requester, "state": "stills",
+               "created_at": at, "updated_at": at, "cost_usd": 0.1008, "reason": "",
+               "hero_id": SENTINEL, "brief": SENTINEL, "steps": [step]}  # fmt: skip
+        w.docs.put(monitor_sources.VIDEO_JOBS, guild, key, rec)
+
+    job("v_slow", 601)
+    job("v_fresh", 599)
+    job("v_other", 601, requester=8)
+    job("v_elsewhere", 601, guild=2000)  # a server of no org: never read
+    rows = {
+        r["id"]: r for r in get(w, "boss", "/items", params={"kind": "video_ad"}).json()["items"]
+    }
+    assert {k: (r["status"], r["attention_reason"]) for k, r in rows.items()} == {
+        "v_slow": ("running", "stuck"),
+        "v_fresh": ("running", ""),
+        "v_other": ("running", "stuck"),
+    }
+    assert set(ids_of(get(w, "mem", "/items"))) == {"v_fresh", "v_slow"}  # by discord:7
+    d = get(w, "mem", "/items/video_ad/v_slow").json()
+    assert (d["status"], d["attention"], d["attention_reason"]) == ("running", True, "stuck")
+    assert (d["title"], d["org_id"], d["workspace"]) == ("Video ad", ORG, WS)
+    assert (d["mine"], d["controls"], d["cost_usd"]) == (True, ["cancel"], 0.1008)
+    assert d["links"] == {"discord": f"https://discord.com/channels/{GUILD}/55"}
+    assert [(s["name"], s["state"]) for s in d["steps"]] == [
+        ("storyboard", "pending"),
+        ("stills", "running"),
+        ("hero", "pending"),
+        ("audio", "pending"),
+        ("render", "pending"),
+    ]
+    assert get(w, "mem", "/items/video_ad/v_other").status_code == 404
+    assert get(w, "boss", "/items/video_ad/v_elsewhere").status_code == 404
+    bodies = [get(w, "boss", "/items").json(), d, get(w, "boss", "/summary").json()]
+    assert SENTINEL not in "".join(strings(bodies)) and "audience" not in set(strings(bodies))
+
+
 # ------------------------------------------------------------------ web producers
 def test_web_enqueue_and_member_edit_emit_to_the_org_log(w, monkeypatch):
     app.dependency_overrides[center.get_library] = lambda: SimpleNamespace(docs=w.docs)

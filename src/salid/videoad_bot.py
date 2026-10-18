@@ -18,11 +18,16 @@
   without the MP4 (Discord refused the file) ends the job failed with reason `upload_refused`
   (the ad stays used: its media was billed);
 - job records in DocStore kind `salid_video_jobs` (written on every state change, with the
-  pending Omni interaction id `hero_id` while a hero clip is made; never the brief, the
-  storyboard or media), and one active-jobs index in the same kind (guild 0, key `_active`,
+  pending Omni interaction id `hero_id` while a hero clip is made and `steps`: each step's
+  name, state, start, duration in ms (the bot's clock), attempts and error code, kept by
+  `videoad.step_started` / `steps_closed`; never the brief, the storyboard or media); every
+  record written also buffers a workflow-monitor event (`monitor_sources.adapt_video`, flushed
+  by `MonitorMixin`; nothing while the monitor is off, and a monitor failure never touches the
+  job), and one active-jobs index in the same kind (guild 0, key `_active`,
   `{job id: guild id}`), changed under the slot lock when a job is reserved and when it ends;
   `_sweep_video_jobs`: on the first `on_ready`, it reads only that index and the jobs in it:
-  jobs a restart cut off are marked failed, a hero clip they left running is cancelled (best
+  jobs a restart cut off are marked failed (their running step too, with error code
+  "restarted"; an event is emitted), a hero clip they left running is cancelled (best
   effort), their ad is given back when the record shows nothing billed (state `storyboard`,
   `cost_usd` 0; a stopping bot sets `VideoHandle.shutdown`, so the runner never gives it back
   too), their requester is told to ask again, and their ids leave the index (records are never
@@ -55,9 +60,12 @@ from .dm import send_dm
 from .i18n import CATALOG, resolve_lang, t
 from .imagegen_bot import looks_spoken
 from .llm import make_media_client
+from .monitor import event_for
+from .monitor_sources import adapt_video
 from .promo import usable_photos
 from .videoad import (
     LENGTHS,
+    RETURNED,
     Cancelled,
     MediaUsage,
     MonthLimit,
@@ -66,6 +74,8 @@ from .videoad import (
     VideoRequest,
     budget_mib,
     run_video_ad,
+    step_started,
+    steps_closed,
 )
 
 logger = logging.getLogger(__name__)
@@ -109,6 +119,8 @@ class VideoJob:
     last_edit: float = float("-inf")
     edit_task: asyncio.Task | None = None
     final: bool = False
+    steps: list[dict] = field(default_factory=list)  # the record's `steps` (videoad.step_started)
+    step_t0: float = 0.0  # bot clock when the running step started
 
 
 class CancelView(discord.ui.View):
@@ -129,9 +141,9 @@ class CancelView(discord.ui.View):
 
 
 class VideoAdMixin:
-    """Needs `self.s`, `self.llm`, `self.team`, `self.docs`, `self._clock`, `self._sleep`, `_lang`,
-    `_interaction_lang`, `_may_configure` and `_reply_with_uploads`. Call `_init_video_ads()` once
-    after `self.docs` exists."""
+    """Needs `self.s`, `self.llm`, `self.team`, `self.docs`, `self.monitor` (`MonitorMixin`),
+    `self._clock`, `self._sleep`, `_lang`, `_interaction_lang`, `_may_configure` and
+    `_reply_with_uploads`. Call `_init_video_ads()` once after `self.docs` exists."""
 
     def _init_video_ads(self) -> None:
         self._video_jobs: dict[int, Any] = {}  # guild -> its job, reserved before the launch
@@ -329,7 +341,14 @@ class VideoAdMixin:
         job.last_edit = self._clock()
 
         def progress(step: str, detail: str) -> None:  # in the job's worker thread
-            self._video_save(job, step)
+            now = self._clock()
+            at = self.s.now().isoformat(timespec="seconds")
+            elapsed = self._video_elapsed_ms(job, now)
+            if step_started(job.steps, step, at=at, elapsed_ms=elapsed):
+                job.step_t0 = now
+            # the ad goes back after a cancel: the record says so, so it never shows as failed
+            cancelled = step == RETURNED and job.handle.cancelled.is_set()
+            self._video_save(job, step, reason="cancelled" if cancelled else "")
             with contextlib.suppress(RuntimeError):  # the loop is closing
                 loop.call_soon_threadsafe(self._video_progress, job, step)
 
@@ -440,6 +459,8 @@ class VideoAdMixin:
             job.edit_task.cancel()
         if job.view is not None:
             job.view.stop()
+        elapsed = self._video_elapsed_ms(job, self._clock())
+        steps_closed(job.steps, state, elapsed_ms=elapsed, error_code=reason)
         await self._video_record(job, state, reason=reason)
         # it ended in this process: out of the index even if the record could not be written
         await asyncio.to_thread(self._video_unindex, job.job_id)
@@ -507,30 +528,44 @@ class VideoAdMixin:
         return text if len(text) <= MAX_REPLY else f"{head}\n\n{tail}"
 
     def _video_save(self, job: VideoJob, state: str, *, reason: str = "") -> bool:
-        """Write the job's record (blocking), with `hero_id` while a hero clip is pending. Never
-        the brief, storyboard or media. Never raises; False when it was not written."""
+        """Write the job's record (blocking), with `hero_id` while a hero clip is pending and its
+        `steps`, then buffer its monitor event. Never the brief, storyboard or media. Never
+        raises; False when it was not written."""
         try:
-            self.docs.put(
-                JOBS,
-                job.guild_id,
-                job.job_id,
-                {
-                    "guild_id": job.guild_id,
-                    "channel_id": job.channel_id,
-                    "requester_id": job.requester_id,
-                    "state": state,
-                    "created_at": job.created_at,
-                    "updated_at": self.s.now().isoformat(timespec="seconds"),
-                    "cost_usd": round(job.handle.cost_usd, 4),
-                    "reason": reason,
-                    # the Omni clip being made: a restart cancels it (`_sweep_video_jobs`)
-                    **({"hero_id": job.handle.hero_id} if job.handle.hero_id else {}),
-                },
-            )
-            return True
+            rec = {
+                "guild_id": job.guild_id,
+                "channel_id": job.channel_id,
+                "requester_id": job.requester_id,
+                "state": state,
+                "created_at": job.created_at,
+                "updated_at": self.s.now().isoformat(timespec="seconds"),
+                "cost_usd": round(job.handle.cost_usd, 4),
+                "reason": reason,
+                "steps": [dict(s) for s in job.steps],
+                # the Omni clip being made: a restart cancels it (`_sweep_video_jobs`)
+                **({"hero_id": job.handle.hero_id} if job.handle.hero_id else {}),
+            }
+            self.docs.put(JOBS, job.guild_id, job.job_id, rec)
         except Exception:
             logger.warning("video job record not saved", exc_info=True)
             return False
+        self._video_emit(job.guild_id, job.job_id, rec)
+        return True
+
+    def _video_emit(self, guild_id: int, job_id: str, rec: dict) -> None:
+        """Buffer the monitor event of a job record just written (the monitor's own loop writes
+        it to the guild's org log). Nothing while the monitor is off; never raises, logs the
+        error type only."""
+        try:
+            if not self.monitor.enabled:
+                return
+            self.monitor.add_for_guild(guild_id, event_for(adapt_video(job_id, rec)))
+        except Exception as e:  # the type only (the text may quote the record)
+            logger.warning("monitor video event failed: %s", type(e).__name__)
+
+    def _video_elapsed_ms(self, job: VideoJob, now: float) -> int:
+        """How long the running step has taken by the bot's clock (`now`)."""
+        return max(0, int((now - job.step_t0) * 1000))
 
     async def _video_record(self, job: VideoJob, state: str, *, reason: str = "") -> bool:
         return await asyncio.to_thread(self._video_save, job, state, reason=reason)
@@ -626,11 +661,16 @@ class VideoAdMixin:
             # no await between this check and the write below starting
             if self._video_is_live(gid, key):
                 continue
+            # its running step ends with it (how long it ran before the restart is unknown)
+            stored = doc.get("steps") if isinstance(doc.get("steps"), list) else []
+            steps = [dict(s) for s in stored if isinstance(s, dict)]
+            steps_closed(steps, "failed", elapsed_ms=None, error_code="restarted")
             update = {
                 **doc,
                 "state": "failed",
                 "reason": "restarted",
                 "updated_at": self.s.now().isoformat(timespec="seconds"),
+                "steps": steps,
             }
             hero_id = str(update.pop("hero_id", "") or "")
             try:
@@ -638,6 +678,7 @@ class VideoAdMixin:
             except Exception:
                 logger.warning("video job %s not marked failed", key, exc_info=True)
                 continue
+            self._video_emit(gid, key, update)
             month = self._video_refundable(doc)
             if month:
                 await asyncio.to_thread(self._video_give_back, gid, month)

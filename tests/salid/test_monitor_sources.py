@@ -21,8 +21,11 @@ from salid.monitor_sources import (
     actions_source,
     adapt_action,
     adapt_change,
+    adapt_video,
     changes_finder,
     changes_source,
+    video_finder,
+    video_source,
 )
 from salid.orgs import Org, Workspace
 
@@ -207,6 +210,106 @@ def test_action_mapping_and_error_codes():
     assert adapt_action(action(kind=SENTINEL)).title == "Discord action · other"
 
 
+# ------------------------------------------------------------------ video adapter
+VIDEO_STEPS = ["storyboard", "stills", "hero", "audio", "render"]
+
+
+def vstep(name, state="done", ms=1000, error_code=""):
+    return {"name": name, "state": state, "started_at": "2026-10-18T16:00:00+07:00", "ms": ms,
+            "attempts": 1, "error_code": error_code}  # fmt: skip
+
+
+def video(state="stills", steps=(), reason="", **kw):
+    """A `salid_video_jobs` record as `videoad_bot._video_save` writes it (Bangkok times)."""
+    rec = {
+        "guild_id": GUILD,
+        "channel_id": 55,
+        "requester_id": 7,
+        "state": state,
+        "created_at": "2026-10-18T16:00:00+07:00",
+        "updated_at": "2026-10-18T16:02:00+07:00",
+        "cost_usd": 0.1008,
+        "reason": reason,
+        "hero_id": SENTINEL,  # an Omni interaction id: never shown
+        "steps": list(steps),
+    }
+    return {**rec, **kw}
+
+
+def test_adapt_video_mapping():
+    running = adapt_video(
+        "j1", video("stills", [vstep("storyboard"), vstep("stills", "running", None)])
+    )
+    assert (running.kind, running.id, running.title) == ("video_ad", "j1", "Video ad")
+    assert (running.status, running.raw_status, running.attention) == ("running", "stills", False)
+    assert [s.name for s in running.steps] == VIDEO_STEPS  # 5 steps
+    assert [s.state for s in running.steps] == ["done", "running", "pending", "pending", "pending"]
+    assert running.steps[0].ms == 1000 and running.steps[0].attempts == 1
+    assert running.steps[0].started_at == "2026-10-18T09:00:00+00:00"  # UTC
+    assert running.steps[2].started_at == "" and running.steps[2].ms is None
+    assert running.requester_id == "discord:7" and running.workspace == f"discord-{GUILD}"
+    assert running.audience == Audience(people=["discord:7"])
+    assert running.cost_usd == 0.1008 and running.error is None and running.org_id == ""
+    assert running.links == {"discord": f"https://discord.com/channels/{GUILD}/55"}
+    assert running.started_at == "2026-10-18T09:00:00+00:00"
+    assert running.updated_at == "2026-10-18T09:02:00+00:00" and running.finished_at == ""
+    assert adapt_video("j1", video("queued")).status == "queued"
+    assert [s.state for s in adapt_video("j1", video("queued")).steps] == ["pending"] * 5
+
+    done_steps = [vstep(n) for n in ("storyboard", "stills", "audio", "render")]
+    done = adapt_video("j1", video("done", done_steps))
+    assert (done.status, done.attention, done.error) == ("done", False, None)
+    assert {s.name: s.state for s in done.steps}["hero"] == "skipped"
+    assert done.finished_at == done.updated_at == "2026-10-18T09:02:00+00:00"
+
+    refused = adapt_video(
+        "j1", video("failed", [vstep("render", "failed", 5, "upload_refused")], "upload_refused")
+    )
+    assert (refused.status, refused.attention, refused.attention_reason) == (
+        "failed",
+        True,
+        "failed",
+    )
+    assert refused.error is not None and refused.error.code == "upload_refused"
+    assert {s.name: s.error_code for s in refused.steps}["render"] == "upload_refused"
+    assert [s.state for s in refused.steps] == ["skipped"] * 4 + ["failed"]
+
+    returned = adapt_video("j1", video("returned", reason=""))
+    assert (returned.status, returned.attention) == ("failed", True)
+    assert returned.error is not None and returned.error.code == "unknown"
+    assert adapt_video("j1", video("returned", reason="cancelled")).status == "cancelled"
+    cancelled = adapt_video("j1", video("cancelled", [vstep("stills", "cancelled", 3)]))
+    assert (cancelled.status, cancelled.attention, cancelled.error) == ("cancelled", False, None)
+    assert {s.name: s.state for s in cancelled.steps}["stills"] == "cancelled"
+    restarted = adapt_video("j1", video("failed", reason="restarted"))
+    assert restarted.error.code == "restarted"
+
+
+def test_adapt_video_never_echoes_stored_text():
+    rec = video(
+        SENTINEL,
+        [vstep("stills", SENTINEL, error_code=SENTINEL), {"name": SENTINEL}, SENTINEL],
+        SENTINEL,
+        brief=SENTINEL,
+        storyboard={"title": SENTINEL},
+        channel_id=SENTINEL,
+    )
+    it = adapt_video("j1", rec)
+    assert (it.status, it.raw_status, it.error.code) == ("failed", "unknown", "unknown")
+    assert [s.name for s in it.steps] == VIDEO_STEPS
+    assert {s.name: (s.state, s.error_code) for s in it.steps}["stills"] == ("pending", "unknown")
+    assert it.links == {}  # no usable channel id
+    assert SENTINEL not in "".join(strings(it.model_dump()))
+    bare = adapt_video("j2", {"state": "render"})
+    assert (bare.status, bare.requester_id, bare.audience, bare.links) == (
+        "running",
+        "",
+        Audience(),
+        {},
+    )
+    assert (bare.workspace, bare.cost_usd, bare.started_at) == ("", None, "")
+
+
 # ------------------------------------------------------------------ sources and finders
 def org(org_id="o1", *workspaces):
     return Org(id=org_id, name=org_id, workspaces=list(workspaces))
@@ -215,6 +318,7 @@ def org(org_id="o1", *workspaces):
 def test_sources_are_registered_on_import():
     assert monitor_sources.SOURCES["change"] == (changes_source, changes_finder)
     assert monitor_sources.SOURCES["action"] == (actions_source, actions_finder)
+    assert monitor_sources.SOURCES["video_ad"] == (video_source, video_finder)
 
 
 def test_change_source_and_finder_read_only_the_orgs_changes(docs, monkeypatch):
@@ -259,3 +363,26 @@ def test_action_source_and_finder_read_the_orgs_discord_workspaces(docs):
     assert actions_finder(docs, o1, a3["id"]) is None  # a disconnected server
     assert actions_finder(docs, org("o9"), a1["id"]) is None  # an org without that server
     assert actions_finder(docs, o1, "A-nope") is None
+
+
+def test_video_source_and_finder_read_the_orgs_discord_workspaces(docs):
+    docs.put(monitor_sources.VIDEO_JOBS, GUILD, "j1", video("stills"))
+    docs.put(monitor_sources.VIDEO_JOBS, 2000, "j2", video("done", guild_id=2000))
+    docs.put(monitor_sources.VIDEO_JOBS, 3000, "j3", video("render", guild_id=3000))  # other org
+    docs.put(monitor_sources.VIDEO_JOBS, 0, "_active", {"j1": GUILD})  # the bot's index
+    o1 = org(
+        "o1",
+        Workspace(id=f"discord-{GUILD}", platform="discord", external_id=str(GUILD)),
+        Workspace(id="discord-2000", platform="discord", external_id="2000"),
+        Workspace(id="discord-3000", platform="discord", external_id="3000", status="disconnected"),
+    )
+    items = {it.id: it for it in video_source(docs, o1, T0)}
+    assert set(items) == {"j1", "j2"}
+    assert {it.org_id for it in items.values()} == {"o1"}
+    assert (items["j1"].status, items["j2"].status) == ("running", "done")
+    assert items["j2"].workspace == "discord-2000"
+    found = video_finder(docs, o1, "j2")
+    assert found is not None and (found.id, found.org_id, found.status) == ("j2", "o1", "done")
+    assert video_finder(docs, o1, "j3") is None  # a disconnected server
+    assert video_finder(docs, org("o9"), "j1") is None  # an org without that server
+    assert video_finder(docs, o1, "_active") is None and video_finder(docs, o1, "nope") is None

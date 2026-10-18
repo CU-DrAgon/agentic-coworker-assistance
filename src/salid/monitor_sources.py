@@ -2,9 +2,9 @@
 
 No ``discord`` import. A source turns one kind's own records (the source of truth) into
 ``MonitorItem``s for one org; a finder looks one item up by id. The per-kind adapters register
-themselves here when the module is imported (today: the change outbox and the web -> Discord
-action queue; later phases: video ads, deep tasks, research); this module holds the registry and
-the helpers the web API (``meeting_scribe.monitor_api``) calls. Design:
+themselves here when the module is imported (today: the change outbox, the web -> Discord
+action queue and video-ad jobs; later phases: deep tasks, research); this module holds the
+registry and the helpers the web API (``meeting_scribe.monitor_api``) calls. Design:
 ``docs/superpowers/specs/2026-10-18-salid-workflow-monitor-design.md`` sections 3.2 and 4.
 
 Sources return every item of their kind they may hold; who may see an item is decided later by
@@ -14,8 +14,9 @@ org's records). A raising source or finder is logged (the error type only, never
 may quote stored data) and skipped, so one broken kind never empties the whole monitor.
 
 Adapters copy only safe labels, states, times and account keys: never action ``args``, raw
-errors (``error``, ``last_error``), result fields other than a Discord link, or a change's
-subject (email, name, before / after values). Errors become codes (``monitor.safe_error``).
+errors (``error``, ``last_error``), result fields other than a Discord link, a change's
+subject (email, name, before / after values), or a video job's brief, storyboard, captions or
+Omni interaction id. Errors become codes (``monitor.safe_error``).
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from .actions import ActionQueue
 from .change_outbox import KINDS as CHANGE_KINDS
 from .change_outbox import MAX_ATTEMPTS, RESEND_MINUTES, Change, ChangeOutbox, Target
 from .coo_store import DocStore
-from .monitor import ACTIVE, FINAL, Audience, MonitorItem, Step, safe_error
+from .monitor import ACTIVE, FINAL, Audience, MonitorItem, Step, person_key, safe_error
 from .orgs import Org, Workspace
 
 logger = logging.getLogger(__name__)
@@ -296,5 +297,142 @@ def actions_finder(docs: DocStore, org: Org, item_id: str) -> MonitorItem | None
     return None
 
 
+# ------------------------------------------------------------------ video ads
+# mirrored from the bot (`videoad_bot.JOBS`, `videoad.STEPS`, `videoad.RETURNED`; a test keeps
+# them equal) so the web service never imports the render pipeline
+VIDEO_JOBS = "salid_video_jobs"  # DocStore kind: per Discord server, key = job id
+VIDEO_STEPS = ("storyboard", "stills", "hero", "audio", "render")
+VIDEO_RETURNED = "returned"  # the runner gave the month's ad back; the job ends right after
+_VIDEO_STATUS = {"queued": "queued", "done": "done", "failed": "failed", "cancelled": "cancelled"}
+_VIDEO_RAW = (*_VIDEO_STATUS, *VIDEO_STEPS, VIDEO_RETURNED)
+_VIDEO_STEP_STATES = ("running", "done", "failed", "cancelled")
+
+
+def _video_status(raw: str, reason: str) -> str:
+    """queued -> queued; a step -> running; done / failed / cancelled as they are; RETURNED ->
+    cancelled when its reason says so, else failed; anything else counts as failed."""
+    if raw in VIDEO_STEPS:
+        return "running"
+    if raw == VIDEO_RETURNED:
+        return "cancelled" if reason == "cancelled" else "failed"
+    return _VIDEO_STATUS.get(raw, "failed")
+
+
+def _discord_id(value: Any) -> int:
+    """A positive Discord id from a record, else 0."""
+    if isinstance(value, bool):
+        return 0
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(n, 0)
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def _count(value: Any) -> int | None:
+    n = _number(value)
+    return None if n is None else int(n)
+
+
+def _video_steps(rec: dict, final: bool) -> list[Step]:
+    """Every step of STEPS in order: as recorded (the last entry of a name wins), else pending
+    while the job is active and skipped once it ended (a hero step that never ran)."""
+    stored = rec.get("steps")
+    by_name = {
+        s.get("name"): s
+        for s in (stored if isinstance(stored, list) else [])
+        if isinstance(s, dict) and s.get("name") in VIDEO_STEPS
+    }
+    out: list[Step] = []
+    for name in VIDEO_STEPS:
+        s = by_name.get(name)
+        if s is None:
+            out.append(Step(name=name, state="skipped" if final else "pending"))
+            continue
+        state = s.get("state")
+        code = s.get("error_code")
+        out.append(
+            Step(
+                name=name,
+                state=state if state in _VIDEO_STEP_STATES else "pending",
+                started_at=_iso(_utc(s.get("started_at"))),
+                ms=_count(s.get("ms")),
+                attempts=_count(s.get("attempts")) or 0,
+                error_code=safe_error(code).code if code else "",
+            )
+        )
+    return out
+
+
+def adapt_video(job_id: str, rec: dict) -> MonitorItem:
+    """One video-ad job record (`salid_video_jobs`) as an item: queued -> queued, a step ->
+    running (that step), done -> done, failed -> failed with attention and its reason code,
+    cancelled -> cancelled, RETURNED -> cancelled or failed by its reason. Every step of
+    `VIDEO_STEPS` is listed. Seen by the requester (`discord:<id>`) and by owners and admins.
+    Never the brief, storyboard, captions or Omni interaction id; `org_id` is left for the
+    source to set."""
+    raw, reason = str(rec.get("state") or ""), str(rec.get("reason") or "")
+    status = _video_status(raw, reason)
+    final = status in FINAL
+    rid = _discord_id(rec.get("requester_id"))
+    requester = person_key("discord", rid) if rid else ""
+    gid, cid = _discord_id(rec.get("guild_id")), _discord_id(rec.get("channel_id"))
+    created, updated = _utc(rec.get("created_at")), _utc(rec.get("updated_at"))
+    return MonitorItem(
+        kind="video_ad",
+        id=str(job_id),
+        workspace=f"discord-{gid}" if gid else "",
+        title="Video ad",
+        status=status,
+        attention=status == "failed",
+        attention_reason="failed" if status == "failed" else "",
+        raw_status=raw if raw in _VIDEO_RAW else "unknown",
+        requester_id=requester,
+        steps=_video_steps(rec, final),
+        started_at=_iso(created),
+        updated_at=_iso(updated or created),
+        finished_at=_iso(updated or created) if final else "",
+        cost_usd=_number(rec.get("cost_usd")),
+        error=safe_error(reason) if status == "failed" else None,
+        links={"discord": f"{DISCORD_URL}channels/{gid}/{cid}"} if gid and cid else {},
+        audience=Audience(people=[requester] if requester else []),
+    )
+
+
+def _is_video_job(rec: Any) -> bool:
+    """A job record (the bot's active-jobs index in the same kind has no `state`)."""
+    return isinstance(rec, dict) and "state" in rec
+
+
+def _org_video(job_id: str, rec: dict, org: Org) -> MonitorItem:
+    return adapt_video(job_id, rec).model_copy(update={"org_id": org.id})
+
+
+def video_source(docs: DocStore, org: Org, now: datetime) -> list[MonitorItem]:
+    """Every video-ad job of the org's connected Discord servers (one read per server)."""
+    return [
+        _org_video(key, rec, org)
+        for ws in discord_workspaces(org)
+        for key, rec in docs.find_items(VIDEO_JOBS, ws.memory_id)
+        if _is_video_job(rec)
+    ]
+
+
+def video_finder(docs: DocStore, org: Org, item_id: str) -> MonitorItem | None:
+    """One video-ad job by id, looked up in each of the org's connected Discord servers."""
+    for ws in discord_workspaces(org):
+        rec = docs.get(VIDEO_JOBS, ws.memory_id, item_id)
+        if _is_video_job(rec):
+            return _org_video(item_id, rec, org)
+    return None
+
+
 register("change", changes_source, changes_finder)
 register("action", actions_source, actions_finder)
+register("video_ad", video_source, video_finder)

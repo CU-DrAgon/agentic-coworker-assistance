@@ -8,6 +8,7 @@ import inspect
 import json
 import threading
 from types import SimpleNamespace
+from unittest.mock import ANY
 
 import discord
 import pytest
@@ -16,9 +17,10 @@ from promo_helpers import png_bytes
 from test_coordinator import world  # fixture: world.g, .pub, .secret, .staff, .boss
 from test_modes import Chan, TMsg, bot  # fixture
 
-from salid import videoad, videoad_bot
+from salid import monitor_sources, videoad, videoad_bot
 from salid.guild_settings import FEATURES, Features, GuildSettingsUpdate
 from salid.i18n import resolve_lang, t
+from salid.monitor import read_log
 from salid.profiles import Profile, effective_language
 from salid.qa import FileInput
 
@@ -40,9 +42,11 @@ Args:
     music: add background music (only when enabled for this server)."""
 RECORD_KEYS = {
     "guild_id", "channel_id", "requester_id", "state", "created_at", "updated_at", "cost_usd",
-    "reason", "hero_id",
+    "reason", "hero_id", "steps",
 }  # fmt: skip
 FILE = "ad-20261014-1200.mp4"
+AT = "2026-10-14T12:00:00+07:00"  # FixedClockSettings.now()
+ANY_STEP = {"name": ANY, "state": ANY, "started_at": AT, "ms": ANY, "attempts": 1, "error_code": ""}
 
 
 # ------------------------------------------------------------------ fakes
@@ -654,6 +658,162 @@ async def test_a_label_that_comes_during_an_edit_is_shown_after_it(ready):
     assert [c for c, _ in job.msg.edits] == steps and sleeps == [5.0]  # still throttled
 
 
+# ------------------------------------------------------------------ steps and monitor events
+def step(name, state="running", ms=None, error_code="", at=AT):
+    return {"name": name, "state": state, "started_at": at, "ms": ms, "attempts": 1,
+            "error_code": error_code}  # fmt: skip
+
+
+def test_step_started_closes_the_running_step_and_ignores_repeats():
+    steps = []
+    assert videoad.step_started(steps, "storyboard", at="t0", elapsed_ms=None) is True
+    assert steps == [step("storyboard", at="t0")]
+    assert videoad.step_started(steps, "stills", at="t1", elapsed_ms=1500) is True
+    assert steps == [step("storyboard", "done", 1500, at="t0"), step("stills", at="t1")]
+    for name in ("stills", videoad.RETURNED, "nope"):  # the running one again, or no step
+        assert videoad.step_started(steps, name, at="t2", elapsed_ms=9) is False
+    assert steps == [step("storyboard", "done", 1500, at="t0"), step("stills", at="t1")]
+
+
+def test_steps_closed_ends_the_running_step_only():
+    steps = [step("storyboard", "done", 10), step("render")]
+    videoad.steps_closed(steps, "failed", elapsed_ms=2500, error_code="render")
+    assert steps == [step("storyboard", "done", 10), step("render", "failed", 2500, "render")]
+    videoad.steps_closed(steps, "cancelled", elapsed_ms=1)  # nothing runs any more
+    assert steps[-1] == step("render", "failed", 2500, "render")
+    empty = []
+    videoad.steps_closed(empty, "done", elapsed_ms=None)
+    assert empty == []
+
+
+def test_video_constant_matches_the_bot():
+    assert monitor_sources.VIDEO_JOBS == videoad_bot.JOBS
+    assert monitor_sources.VIDEO_STEPS == videoad.STEPS
+    assert monitor_sources.VIDEO_RETURNED == videoad.RETURNED
+
+
+async def test_a_job_records_its_steps_with_timings(on, world, runner):
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    rec = records(on)[0]
+    assert [s["name"] for s in rec["steps"]] == ["storyboard", "stills", "audio", "render"]
+    assert {s["state"] for s in rec["steps"]} == {"done"}
+    assert all(isinstance(s["ms"], int) and s["ms"] >= 0 for s in rec["steps"])
+    assert all(s == {**ANY_STEP, "name": s["name"], "state": "done"} for s in rec["steps"])
+
+
+async def test_step_timings_follow_the_bot_clock(on, world, runner, monkeypatch):
+    """Each step lasts until the next one starts; the last until the job ends."""
+    capture_posts(world.pub)  # progress edits sleep (and move the clock): keep them out
+    monkeypatch.setattr(on, "_video_progress", lambda job, step: None)
+    real, seconds = on._video_save, {"storyboard": 1, "stills": 2, "audio": 3, "render": 4}
+
+    def save(job, state, **kw):  # the clock moves on right after each step started
+        on.clock.advance(seconds.get(state, 0))
+        return real(job, state, **kw)
+
+    monkeypatch.setattr(on, "_video_save", save)
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    assert [s["ms"] for s in records(on)[0]["steps"]] == [1000, 2000, 3000, 4000]
+
+
+async def test_a_failed_render_marks_the_running_step_failed(on, world, runner):
+    runner.error = RuntimeError("x")
+    tool, _ = tool_for(on, world)
+    tool(brief="a")
+    await settle(on)
+    steps = records(on)[0]["steps"]
+    assert steps[-1] == {**ANY_STEP, "name": "render", "state": "failed", "error_code": "render"}
+    assert [s["state"] for s in steps] == ["done", "done", "done", "failed"]
+
+
+async def test_a_cancelled_job_marks_the_running_step_cancelled(on, world, runner):
+    runner.cancel_at_end = True  # Cancel pressed while the render ran
+    tool, _ = tool_for(on, world)
+    tool(brief="a")
+    await settle(on)
+    [rec] = records(on)
+    assert rec["state"] == "cancelled"
+    assert [s["state"] for s in rec["steps"]] == ["done", "done", "done", "cancelled"]
+    assert rec["steps"][-1] == {**ANY_STEP, "name": "render", "state": "cancelled"}
+
+
+async def test_video_progress_emits_in_order(on, world, runner):
+    on.monitor.enabled = True
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    job_id = on._video_jobs[GUILD].job_id
+    await settle(on)
+    await on._monitor_due()
+    events = sorted(read_log(on.docs, f"guild:{GUILD}")["events"], key=lambda e: e["seq"])
+    assert {(e["kind"], e["id"]) for e in events} == {("video_ad", job_id)}
+    statuses = [e["status"] for e in events]
+    assert statuses[0] == "queued" and "running" in statuses and statuses[-1] == "done"
+    assert statuses == ["queued", "running", "running", "running", "running", "done"]
+    assert events[-1]["audience"]["people"] == [f"discord:{world.staff.id}"]
+    keys = {"v", "seq", "at", "kind", "id", "status", "attention", "audience"}
+    assert all(set(e) == keys for e in events)  # no title, steps or other content
+
+
+async def test_a_job_cancelled_before_anything_was_billed_never_shows_as_failed(
+    on, world, monkeypatch
+):
+    """Cancel pressed while the storyboard is planned: the real runner records RETURNED (with
+    reason "cancelled") before it gives the ad back, then the job ends cancelled."""
+    seen = []
+    real_put = on.docs.put
+
+    def put(kind, gid, key, doc):
+        if kind == "salid_video_jobs" and key != "_active":
+            seen.append((doc["state"], doc["reason"]))
+        return real_put(kind, gid, key, doc)
+
+    def plan(*a, **kw):
+        on._video_jobs[GUILD].handle.cancelled.set()  # pressed during the storyboard
+        return board()
+
+    on.docs.put = put
+    monkeypatch.setattr(videoad, "plan_storyboard", plan)
+    on.monitor.enabled = True
+    tool, _ = tool_for(on, world)
+    assert tool(brief="a") == STARTED
+    await settle(on)
+    await on._monitor_due()
+    assert seen == [("queued", ""), ("storyboard", ""), ("returned", "cancelled"),
+                    ("cancelled", "")]  # fmt: skip
+    statuses = [e["status"] for e in read_log(on.docs, f"guild:{GUILD}")["events"]]
+    assert statuses == ["queued", "running", "cancelled", "cancelled"]
+    assert on.docs.get("salid_media_usage", GUILD, "2026-10") == {"ads": 0}  # given back
+
+
+async def test_video_jobs_emit_nothing_while_the_monitor_is_off(on, world, runner, monkeypatch):
+    assert on.monitor.enabled is False
+    added = []
+    monkeypatch.setattr(on.monitor, "add_for_guild", lambda *a: added.append(a))
+    tool, _ = tool_for(on, world)
+    tool(brief="a")
+    await settle(on)
+    assert added == [] and records(on)[0]["state"] == "done"
+
+
+async def test_a_monitor_failure_never_breaks_the_job(on, world, runner, monkeypatch, caplog):
+    on.monitor.enabled = True
+
+    def broken(*a):
+        raise RuntimeError("secret G")
+
+    monkeypatch.setattr(on.monitor, "add_for_guild", broken)
+    tool, msg = tool_for(on, world)
+    tool(brief="a")
+    await settle(on)
+    [rec] = records(on)
+    assert rec["state"] == "done" and [s["state"] for s in rec["steps"]] == ["done"] * 4
+    assert msg.replies and "RuntimeError" in caplog.text and "secret G" not in caplog.text
+
+
 # ------------------------------------------------------------------ cancel
 async def start_waiting_job(bot, world, runner):
     runner.wait_cancel = True
@@ -765,6 +925,26 @@ async def test_restart_marks_running_jobs_failed_and_tells_the_requester(
     assert any("video_restarted" in m or t("video_restarted", "th") in m for m in world.pub.sent)
     assert any(f"<@{world.staff.id}>" in m for m in world.pub.sent)
     assert active(bot) == {}  # only the index entry goes; the record stays
+
+
+async def test_the_sweep_closes_steps_as_restarted_and_emits(bot, world):
+    bot.monitor.enabled = True
+    done, running = step("storyboard", "done", 1200), step("stills")
+    seed(
+        bot,
+        "j1",
+        {"guild_id": GUILD, "channel_id": world.pub.id, "requester_id": world.staff.id,
+         "state": "stills", "cost_usd": 0.1, "steps": [done, running]},
+    )  # fmt: skip
+    seed(bot, "old", {"guild_id": GUILD, "channel_id": world.pub.id, "state": "stills"})
+    await bot._sweep_video_jobs()
+    rec = bot.docs.get("salid_video_jobs", GUILD, "j1")
+    assert rec["steps"] == [done, {**running, "state": "failed", "error_code": "restarted"}]
+    assert bot.docs.get("salid_video_jobs", GUILD, "old")["steps"] == []  # a record from before
+    await bot._monitor_due()
+    events = read_log(bot.docs, f"guild:{GUILD}")["events"]
+    got = {e["id"]: (e["kind"], e["status"], e["attention"]) for e in events}
+    assert got == {"j1": ("video_ad", "failed", True), "old": ("video_ad", "failed", True)}
 
 
 async def test_the_record_holds_the_pending_hero_id_only_while_it_runs(bot, world):
