@@ -44,7 +44,7 @@ def test_center_page_sets_the_monitor_flag(client, monkeypatch):
     monkeypatch.setenv("MONITOR_ENABLED", "true")
     get_settings.cache_clear()
     assert 'const MONITOR = "1" === "1"' in client.get("/center").text
-    monkeypatch.delenv("MONITOR_ENABLED")
+    monkeypatch.setenv("MONITOR_ENABLED", "false")  # explicit: a local .env must not decide this
     get_settings.cache_clear()
     page = client.get("/center").text
     assert 'const MONITOR = "" === "1"' in page and "__MONITOR__" not in page

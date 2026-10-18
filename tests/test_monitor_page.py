@@ -116,6 +116,18 @@ out.errors = {
 const net = monOnError(0), noHeader = monOnError(429);
 out.errors_more = { net: [net.action, net.failure], no_retry_after: noHeader.delayMs, stop: [401, 402, 403].map((s) => monOnError(s).failure) };
 
+// the hidden tab polls only for armed OS notifications, and then at most once a minute
+out.poll_delay = [
+  monPollDelay(5000, { hidden: false, armed: false }), monPollDelay(5000, { hidden: true, armed: false }),
+  monPollDelay(5000, { hidden: true, armed: true }), monPollDelay(90000, { hidden: true, armed: true }),
+];
+// a title without its leading English kind label (shown after the localized kind label)
+out.title_rest = [
+  monTitleRest("Video ad · 5 scenes", "Video ad"), monTitleRest("Deep research", "Deep research"),
+  monTitleRest("Change → Slack", "Change delivery"), monTitleRest("Video adverts", "Video ad"),
+  monTitleRest("video AD  ·  x", "Video ad"), monTitleRest("", "Video ad"), monTitleRest("Discord action · send DM", ""),
+];
+
 console.log(JSON.stringify(out));
 """
 
@@ -206,6 +218,16 @@ def test_monitor_pure_functions_in_node(tmp_path):
         "429": ["wait", 7000, False],
         "304": ["unchanged", 0, False],
     }  # Retry-After: 7
+    assert out["poll_delay"] == [5000, None, 60000, 90000]
+    assert out["title_rest"] == [
+        "5 scenes",
+        "",
+        "Change → Slack",
+        "Video adverts",
+        "x",
+        "",
+        "Discord action · send DM",
+    ]
     assert out["errors_more"] == {
         "net": ["retry", True],
         "no_retry_after": 2000,

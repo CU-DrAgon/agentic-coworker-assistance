@@ -516,6 +516,8 @@ details.sys > .inner { padding-top: 12px; }
 .mon-chip { display: inline-flex; align-items: center; gap: 2px; min-height: 28px; padding: 2px 2px 2px 12px; border-radius: 99px; background: var(--chip); color: var(--indigo); font-size: 13.5px; font-weight: 500; }
 .mon-x { display: grid; place-items: center; min-width: 24px; min-height: 24px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--indigo); font-size: 17px; line-height: 1; }
 .mon-x:hover { background: #fff; }
+.mon-pillbar { display: flex; justify-content: center; }
+.mon-times { display: inline-flex; flex-wrap: wrap; gap: 2px 12px; }
 .mon-newpill { align-self: center; min-height: 32px; padding: 4px 14px; border-radius: 99px; border: 1px solid var(--lavender); background: var(--nav-active); color: var(--indigo); font-weight: 600; font-size: 14px; }
 .mon-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .mon-row { display: flex; gap: 8px; align-items: center; border-bottom: 1px solid var(--line-soft); border-radius: 10px; }
@@ -1280,6 +1282,23 @@ function monHash(st) {
   }
   return "#/monitor" + (parts.length ? "?" + parts.join("&") : "");
 }
+// The wait before the next poll, or null to stop: a hidden tab polls only while OS notifications are armed (opted in and
+// allowed), and then at most once per MON_HEAL_MS; a visible tab keeps `ms`.
+function monPollDelay(ms, { hidden = false, armed = false } = {}) {
+  if (!hidden) return ms;
+  return armed ? Math.max(ms, MON_HEAL_MS) : null;
+}
+// The title without its leading English kind label ("Video ad · 5 scenes" -> "5 scenes"), so the page shows the localized
+// kind label first without repeating it; "" when the title is only that label. The label must end at the end of the
+// title or at a " · "; case is ignored.
+function monTitleRest(title, labelEn) {
+  const s = String(title || "").trim(), en = String(labelEn || "").trim();
+  if (!en || s.slice(0, en.length).toLowerCase() !== en.toLowerCase()) return s;
+  const tail = s.slice(en.length);
+  if (!tail.trim()) return "";
+  const m = tail.match(/^\s*·\s*/);
+  return m ? tail.slice(m[0].length).trim() : s;
+}
 /* ---------- monitor: end pure functions ---------- */
 
 /* ---------- state & routing ---------- */
@@ -1322,13 +1341,14 @@ function route() {
     history.replaceState(null, "", location.pathname + location.search + "#/overview"); id = "overview"; panelWanted(true);
   }
   if (!NAV.some((n) => n[0] === id) || !pageVisible(id)) { id = "overview"; history.replaceState(null, "", location.pathname + location.search + "#/overview"); }
+  const moved = cur !== id;
   cur = id; renderNav();
   if (!panel.open && panelWanted()) setTimeout(panelOpen, 0); // this tab had the panel open (reload, #/chat link)
   const nm = NAV.find((n) => n[0] === id);
   $("topbar-title").textContent = t(nm[1]);
   const c = $("content"); c.replaceChildren(el("h1", { text: t(nm[1]) }));
   const body = el("div", { "aria-busy": "true" }, loading()); c.append(body);
-  c.focus({ preventScroll: true }); // a route change moves keyboard and screen-reader focus to the new page
+  if (moved) c.focus({ preventScroll: true }); // a new page takes keyboard and screen-reader focus; a re-render (language, company) does not
   const my = ++navSeq;
   if (MONITOR) monBadgeStart();
   if (!orgId && id !== "settings" && id !== "account") { body.replaceWith(noOrg()); return; }
@@ -3004,6 +3024,10 @@ const monLabel = (prefix, v) => (v && I.en[prefix + v] ? t(prefix + v) : String(
 const monKindLabel = (k) => monLabel("mon_k_", k);
 const monStatusLabel = (s) => monLabel("mon_s_", s === "pending" ? "waiting" : s); // a step that has not started waits
 const monReason = (r) => monLabel("mon_a_", r);
+// the title after the localized kind label: the English safe title minus its own leading kind label (R11)
+const monRest = (x) => monTitleRest(x.title || x.id, I.en["mon_k_" + x.kind] || "");
+const monItemTitle = (x) => { const rest = monRest(x); return monKindLabel(x.kind) + (rest ? " · " + rest : ""); };
+const monWaitText = (who, d) => (d ? t("mon_waiting_on", { who, d }) : t("mon_waiting_on", { who, d: "" }).replace(/\s*·\s*$/, ""));
 const monErrText = (e) => (e && I.en["mon_err_" + e.code] ? t("mon_err_" + e.code) : (e && e.message) || t("mon_err_unknown"));
 const monHint = (code) => t(I.en["mon_do_" + code] ? "mon_do_" + code : "mon_do_default");
 // the signed-in person's account keys (email + verified platform accounts), so their own items read "You"
@@ -3052,7 +3076,7 @@ function monPaintTimes(root, clock) {
   const now = Date.now(), srv = clock.serverNow ? Date.parse(clock.serverNow) + (now - clock.fetchedAt) : now;
   for (const n of root.querySelectorAll("[data-mon-dur]")) { const ms = monElapsed(n.dataset.monDur, n.dataset.monEnd || "", clock.serverNow, clock.fetchedAt, now); n.textContent = ms == null ? "" : monDur(ms); }
   for (const n of root.querySelectorAll("[data-mon-wait]")) { const ms = monElapsed(n.dataset.monWait, "", clock.serverNow, clock.fetchedAt, now);
-    n.textContent = ms == null ? n.dataset.monWho : t("mon_waiting_on", { who: n.dataset.monWho, d: monDur(ms) }); }
+    n.textContent = monWaitText(n.dataset.monWho, ms == null ? "" : monDur(ms)); }
   for (const n of root.querySelectorAll("[data-mon-ago]")) n.textContent = t(n.dataset.monTpl || "mon_updated", { t: monAgo(n.dataset.monAgo, srv) });
   for (const n of root.querySelectorAll("[data-mon-ago-local]")) n.textContent = t("mon_updated", { t: monAgo(n.dataset.monAgoLocal, now) });
 }
@@ -3129,7 +3153,7 @@ function monDrawer(item, opener, ctx = {}) {
   const x = item, back = opener || document.activeElement;
   const xBtn = el("button", { class: "x", type: "button", "aria-label": t("close"), title: t("close") }, "×");
   const dlg = el("div", { class: "drawer mon-drawer", role: "dialog", "aria-modal": "true", "aria-labelledby": "mon-d-title", tabindex: "-1" },
-    el("div", { class: "dh" }, el("h2", { id: "mon-d-title" }, monKindLabel(x.kind) + " · " + (x.title || x.id)), xBtn));
+    el("div", { class: "dh" }, el("h2", { id: "mon-d-title" }, monItemTitle(x)), xBtn));
   const scrim = el("div", { class: "scrim mon-scrim" });
   const clock = ctx.clock || { serverNow: "", fetchedAt: 0 };
   const owner = x.requester_id || x.assignee_id;
@@ -3332,13 +3356,15 @@ VIEWS.monitor = async (body, my) => {
     ["priority", "mon_f_priority", (v) => monLabel("mon_p_", v), selPri], ["q", "mon_f_q", (v) => "“" + v + "”", inQ],
   ];
   // ---- the list
-  const newPill = el("button", { class: "mon-newpill", type: "button", hidden: true, onclick: () => { const k = [...S.pending.keys()][0]; flushPending(true); const e = k && rowEls.get(k); if (e) e.btn.focus(); } });
+  const newPill = el("button", { class: "mon-newpill", type: "button", hidden: true, onclick: () => showNew() });
   const list = el("ul", { class: "mon-list" });
+  // the frozen zone: the pill and the rows, so reaching the pill (Tab or pointer) does not unfreeze and hide it
+  const zone = el("div", { class: "mon-zone" }, el("div", { class: "mon-pillbar" }, newPill), list);
   const moreBtn = el("button", { class: "btn ghost sm", type: "button", onclick: () => loadMore() }, t("mon_load_more"));
   const more = el("div", { class: "mon-more", hidden: true }, moreBtn);
   const emptyEl = el("div", { class: "empty", hidden: true }, el("p", { text: t("mon_empty") }));
   const listErr = el("div"), opsBox = el("div", { class: "mon-ops", hidden: true });
-  const panel = el("div", { id: "mon-panel", role: "tabpanel" }, opsBox, el("div", { style: "display:flex;justify-content:center" }, newPill), listErr, list, emptyEl, more);
+  const panel = el("div", { id: "mon-panel", role: "tabpanel" }, opsBox, listErr, zone, emptyEl, more);
   const live = el("div", { id: "mon-live", class: "sr", "aria-live": "polite" });
   const memberNote = role() === "member" && !ops ? el("p", { class: "muted small mon-note", text: t("mon_member_note") }) : null;
   body.replaceChildren(memberNote, botBanner, feedBanner, health, tilesEl, el("div", { class: "card" }, tabsEl, fsheet, chips, panel), live);
@@ -3346,20 +3372,26 @@ VIEWS.monitor = async (body, my) => {
   // ---- rows: updated in place (the focused row keeps focus), never reordered while frozen
   const rowEls = new Map(); // "kind:id" -> {li, btn, id, sig, item, dis}
   const sig = (x) => [x.updated_at, x.status, x.attention, x.attention_reason, x.title, x.waiting_on, (x.steps || []).map((s) => s.state).join(","), x.org_id].join("|");
-  const rowContent = (x, titleId) => {
-    const steps = x.steps || [], owner = x.requester_id || x.assignee_id, active = MON_ACTIVE.includes(x.status);
+  const stepsText = (x) => { const steps = x.steps || []; return steps.length ? t("mon_steps", { d: steps.filter((s) => s.state === "done").length, n: steps.length }) : ""; };
+  // the row button's name: everything but the ticking times, so a focused row's name does not change every second
+  const rowName = (x) => { const owner = x.requester_id || x.assignee_id;
+    return [monItemTitle(x), monStatusLabel(x.status), x.attention ? monReason(x.attention_reason) : "", S.tab === "ops" && x.org_id ? S.orgNames[x.org_id] || x.org_id : "",
+      owner ? monWho(owner) : "", stepsText(x), x.status === "waiting" && x.waiting_on ? monWaitText(monWho(x.waiting_on), "") : ""].filter(Boolean).join(", "); };
+  const rowContent = (x, titleId, timesId) => {
+    const owner = x.requester_id || x.assignee_id, active = MON_ACTIVE.includes(x.status), rest = monRest(x);
     return [el("span", { class: "mon-ic " + x.status, "aria-hidden": "true" }, MON_ICON[x.status] || "•"),
       el("span", { class: "mon-tx" },
-        el("span", { class: "mon-title", id: titleId }, el("span", { class: "mon-kind" }, monKindLabel(x.kind) + " · "), x.title || x.id),
+        el("span", { class: "mon-title", id: titleId }, rest ? [el("span", { class: "mon-kind" }, monKindLabel(x.kind) + " · "), rest] : monKindLabel(x.kind)),
         el("span", { class: "mon-meta" },
           el("span", {}, monStatusLabel(x.status)),
           x.attention ? el("span", { class: "mon-att" }, "⚠ " + monReason(x.attention_reason)) : null,
           S.tab === "ops" && x.org_id ? el("span", {}, S.orgNames[x.org_id] || x.org_id) : null,
           owner ? el("span", { title: owner }, monWho(owner)) : null,
-          steps.length ? el("span", {}, t("mon_steps", { d: steps.filter((s) => s.state === "done").length, n: steps.length })) : null,
-          x.status === "waiting" && x.waiting_on ? el("span", { "data-mon-wait": x.updated_at || x.started_at, "data-mon-who": monWho(x.waiting_on) }) : null,
-          x.started_at && (active || x.finished_at) ? el("span", { "data-mon-dur": x.started_at, "data-mon-end": active ? "" : x.finished_at }) : null,
-          x.updated_at ? el("span", { "data-mon-ago": x.updated_at, title: monExact(x.updated_at) }) : null))];
+          stepsText(x) ? el("span", {}, stepsText(x)) : null,
+          el("span", { class: "mon-times", id: timesId },
+            x.status === "waiting" && x.waiting_on ? el("span", { "data-mon-wait": x.updated_at || x.started_at, "data-mon-who": monWho(x.waiting_on) }) : null,
+            x.started_at && (active || x.finished_at) ? el("span", { "data-mon-dur": x.started_at, "data-mon-end": active ? "" : x.finished_at }) : null,
+            x.updated_at ? el("span", { "data-mon-ago": x.updated_at, title: monExact(x.updated_at) }) : null)))];
   };
   function rowEl(x) {
     const k = monKey(x);
@@ -3373,7 +3405,11 @@ VIEWS.monitor = async (body, my) => {
     }
     e.item = x;
     const s = sig(x) + "|" + S.tab;
-    if (s !== e.sig) { e.btn.replaceChildren(...rowContent(x, e.id)); e.sig = s; }
+    if (s !== e.sig) {
+      e.btn.replaceChildren(...rowContent(x, e.id, e.id + "-t"));
+      for (const [k, v] of Object.entries({ "aria-label": rowName(x), "aria-describedby": e.id + "-t" })) e.btn.setAttribute(k, v);
+      e.sig = s;
+    }
     const wantDismiss = S.tab === "attention" && !!x.attention;
     if (wantDismiss && !e.dis) { e.dis = el("button", { class: "btn ghost sm mon-dismiss", type: "button", "aria-describedby": e.id, onclick: () => dismiss(k) }, t("mon_dismiss")); e.li.append(e.dis); }
     else if (!wantDismiss && e.dis) { e.dis.remove(); e.dis = null; }
@@ -3423,10 +3459,17 @@ VIEWS.monitor = async (body, my) => {
     if (S.healDue && !S.frozen) { S.healDue = false; heal(); }
   }
   const setFrozen = () => { const f = S.hover || S.focusIn; if (f === S.frozen) return; S.frozen = f; if (!f && alive()) flushPending(); };
-  list.addEventListener("pointerenter", () => { S.hover = true; setFrozen(); });
-  list.addEventListener("pointerleave", () => { S.hover = false; setFrozen(); });
-  list.addEventListener("focusin", () => { S.focusIn = true; setFrozen(); });
-  list.addEventListener("focusout", () => setTimeout(() => { if (!list.contains(document.activeElement)) { S.focusIn = false; setFrozen(); } }, 0));
+  zone.addEventListener("pointerenter", () => { S.hover = true; setFrozen(); });
+  zone.addEventListener("pointerleave", () => { S.hover = false; setFrozen(); });
+  zone.addEventListener("focusin", () => { S.focusIn = true; setFrozen(); });
+  zone.addEventListener("focusout", () => setTimeout(() => { if (!zone.contains(document.activeElement)) { S.focusIn = false; setFrozen(); } }, 0));
+  // the pill: apply the waiting rows now and move focus to the first new one (the pill hides itself)
+  function showNew() {
+    const fresh = new Set(S.pending.keys());
+    flushPending(true);
+    const x = S.rows.find((r) => fresh.has(monKey(r))), e = x && rowEls.get(monKey(x));
+    (e ? e.btn : list.querySelector(".mon-open") || restoreFocus()).focus();
+  }
 
   // ---- loading
   function applyList(r, opts = {}) {
@@ -3546,16 +3589,22 @@ VIEWS.monitor = async (body, my) => {
     feedBanner.hidden = !(state === "delayed" || state === "offline");
     feedBanner.textContent = t("mon_banner_delayed", { t: S.lastOk ? new Date(S.lastOk).toLocaleTimeString(loc(), { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit" }) : "–" });
     pauseBtn.textContent = t(S.paused ? "mon_resume" : "mon_pause");
-    const on = canNotify && Notification.permission === "granted" && monNotifyOptIn();
-    notifyBtn.setAttribute("aria-pressed", String(on));
+    notifyBtn.setAttribute("aria-pressed", String(notifyArmed()));
     notifyBtn.disabled = canNotify && Notification.permission === "denied";
     monPaintTimes(stateEl, S);
   }
-  const sched = (ms) => { clearTimeout(S.timer); S.timer = 0; if (alive() && !S.paused && !document.hidden) S.timer = setTimeout(poll, ms); };
+  // OS notifications are armed: opted in and allowed. Only then does a hidden tab keep polling (R10)
+  const notifyArmed = () => canNotify && Notification.permission === "granted" && monNotifyOptIn();
+  const sched = (ms) => {
+    clearTimeout(S.timer); S.timer = 0;
+    if (!alive() || S.paused) return;
+    const wait = monPollDelay(ms, { hidden: document.hidden, armed: notifyArmed() });
+    if (wait != null) S.timer = setTimeout(poll, wait);
+  };
   async function poll() {
     S.timer = 0;
     if (!alive()) { stop(); return; }
-    if (S.paused || document.hidden || S.busy) return;
+    if (S.paused || S.busy || monPollDelay(0, { hidden: document.hidden, armed: notifyArmed() }) == null) return;
     S.busy = true;
     let wait = null;
     try {
@@ -3627,7 +3676,7 @@ VIEWS.monitor = async (body, my) => {
   function notifyFor(list) {
     if (!list.length) return;
     const one = list.length === 1 ? list[0] : null;
-    const label = (x) => monKindLabel(x.kind) + " · " + (x.title || x.id) + ": " + (x.status === "failed" ? monStatusLabel("failed") : monReason(x.attention_reason));
+    const label = (x) => monItemTitle(x) + ": " + (x.status === "failed" ? monStatusLabel("failed") : monReason(x.attention_reason));
     const view = (x) => { if (!alive()) return; if (x) openItem(x); else setTab("attention"); };
     if (monToastGate(S.lastToast, Date.now())) {
       S.lastToast = Date.now();
@@ -3642,7 +3691,7 @@ VIEWS.monitor = async (body, my) => {
     if (!ping.length) return;
     try {
       const p1 = ping.length === 1 ? ping[0] : null;
-      const note = new Notification(p1 ? monKindLabel(p1.kind) + " · " + (p1.title || p1.id) : t("mon_toast", { n: ping.length }), { tag: "salid-monitor" });
+      const note = new Notification(p1 ? monItemTitle(p1) : t("mon_toast", { n: ping.length }), { tag: "salid-monitor" });
       note.onclick = () => { window.focus(); note.close(); view(p1); };
     } catch { /* the browser refused the notification */ }
   }
@@ -3710,7 +3759,7 @@ VIEWS.monitor = async (body, my) => {
   // ---- page events (removed by stop())
   function onVis() {
     if (!alive()) { stop(); return; }
-    if (document.hidden) { clearTimeout(S.timer); S.timer = 0; paintHealth(); return; } // hidden tabs cost nothing
+    if (document.hidden) { paintHealth(); sched(MON_HEAL_MS); return; } // hidden tabs cost nothing, unless notifications are armed
     if (!S.paused) refresh();
   }
   function onOnline() { if (!alive()) { stop(); return; } paintHealth(); if (!S.paused) sched(0); }

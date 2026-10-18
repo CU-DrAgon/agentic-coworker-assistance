@@ -111,3 +111,34 @@ def test_inline_script_parses(tmp_path):
     probe.write_text(code, encoding="utf-8")
     run = subprocess.run(["node", "--check", str(probe)], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
+
+
+def monitor_view() -> str:
+    return between("/* ---------- Monitor: a calm live view", "\nVIEWS.settings = async")
+
+
+def test_monitor_hidden_tab_polls_only_for_armed_notifications():
+    view = monitor_view()
+    # R10: sched() and poll() ask monPollDelay (hidden + armed -> every MON_HEAL_MS, hidden alone -> stop)
+    assert view.count("monPollDelay(") >= 2
+    assert 'Notification.permission === "granted" && monNotifyOptIn()' in view
+
+
+def test_monitor_new_pill_is_inside_the_frozen_zone():
+    view = monitor_view()
+    for ev in ("pointerenter", "pointerleave", "focusin", "focusout"):
+        assert (
+            f'zone.addEventListener("{ev}"' in view and f'list.addEventListener("{ev}"' not in view
+        )
+    assert re.search(r"const zone = el\([^;]*newPill[^;]*list", view)
+
+
+def test_monitor_row_name_has_no_ticking_time_and_no_repeated_kind():
+    view = monitor_view()
+    assert '"aria-label": rowName(x)' in view and "monTitleRest(" in view
+
+
+def test_route_focuses_content_only_on_a_new_page():
+    s = html()
+    assert "const moved = cur !== id;" in s
+    assert "if (moved) c.focus({ preventScroll: true });" in s
