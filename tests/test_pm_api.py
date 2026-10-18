@@ -753,7 +753,7 @@ def test_settings_patch_is_admin_only_and_validated(w):
     }
     assert call(w, "mem", "PATCH", "/settings", body).status_code == 403
     assert call(w, "fin", "PATCH", "/settings", body).status_code == 403  # finance is not admin
-    s = call(w, "adm", "PATCH", "/settings", body).json()
+    s = call(w, "adm", "PATCH", "/settings", body).json()  # admins grant admin (Members page)
     peat = next(m for m in s["members"] if m["email"] == "peat@example.com")
     assert (peat["department"], peat["finance"], peat["role"]) == ("tech", True, "admin")
     assert s["defaults"]["visibility"] == "members"
@@ -775,6 +775,34 @@ def test_settings_patch_is_admin_only_and_validated(w):
     ):  # fmt: skip
         assert call(w, "adm", "PATCH", "/settings", bad).status_code == 422, bad
     assert w.orgs.get(w.org_id).role_of("boss@example.com") == "owner"
+
+
+def test_settings_role_changes_follow_the_members_page_rules(w):
+    """Roles change by `center.role_change_error`, as on the Members page: an admin may grant
+    admin, but only the owner (or a super admin) changes somebody who already is an admin, and
+    nobody raises their own role. Other PM settings stay open to every admin."""
+
+    def patch(who, target, **fields):
+        member = {"email": f"{target}@example.com", **fields}
+        return call(w, who, "PATCH", "/settings", {"members": [member]})
+
+    def member(name):
+        org = w.orgs.get(w.org_id)
+        return next(m for m in org.members if m.email == f"{name}@example.com")
+
+    assert patch("adm", "peat", role="admin").status_code == 200  # an admin grants admin
+    r = patch("peat", "adm", role="member", department="finance")
+    assert r.status_code == 403, r.text  # an admin cannot demote another admin
+    assert (member("adm").role, member("adm").department) == ("admin", "")  # nothing saved
+    assert patch("peat", "adm", role="admin", department="tech").status_code == 200  # no change
+    assert (member("adm").role, member("adm").department) == ("admin", "tech")
+    assert patch("boss", "peat", role="member").status_code == 200  # the owner may
+    assert member("peat").role == "member"
+    assert patch("adm", "peat", role="admin").status_code == 200
+    assert patch("root", "peat", role="member").status_code == 200  # so may a super admin
+    assert member("peat").role == "member"
+    assert patch("adm", "adm", role="member").status_code == 200  # lowering yourself is fine
+    assert member("adm").role == "member"
 
 
 def test_finance_flag_from_settings_opens_the_budget(w):
