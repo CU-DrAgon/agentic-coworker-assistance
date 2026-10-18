@@ -220,9 +220,9 @@ class LinePort:
 
     async def display_name(self, kind: str, room: str, user: str) -> str:
         key = (kind, room, user)
-        hit = self._names.get(key)
-        if hit is not None and self._clock() - hit[0] < NAME_TTL_S:
-            return hit[1]
+        hit = self._lookup(key)
+        if hit is not None:
+            return hit
         try:
             name = await asyncio.to_thread(self.api.profile, kind, room, user)
         except Exception as e:
@@ -233,9 +233,9 @@ class LinePort:
 
     async def group_name(self, kind: str, room: str) -> str:
         key = ("name", kind, room)
-        hit = self._names.get(key)
-        if hit is not None and self._clock() - hit[0] < NAME_TTL_S:
-            return hit[1]
+        hit = self._lookup(key)
+        if hit is not None:
+            return hit
         try:
             name = await asyncio.to_thread(self.api.group_name, kind, room)
         except Exception as e:
@@ -243,6 +243,16 @@ class LinePort:
             name = ""
         self._remember_name(key, name)
         return name
+
+    def _lookup(self, key: tuple) -> str | None:
+        """A cached name, or None; an expired entry is physically dropped on this read."""
+        hit = self._names.get(key)
+        if hit is None:
+            return None
+        if self._clock() - hit[0] >= NAME_TTL_S:
+            del self._names[key]
+            return None
+        return hit[1]
 
     def _remember_name(self, key: tuple, name: str) -> None:
         """Process memory only, never persisted; entries older than the TTL are dropped here."""

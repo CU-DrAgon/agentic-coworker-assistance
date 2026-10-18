@@ -288,3 +288,23 @@ def test_feature_off_when_any_setting_is_missing(monkeypatch, missing):
     ps = PlatformSettings(_env_file=None)
     assert CalendarGlue.from_settings(ps, docs, "Asia/Bangkok") is None
     assert not GoogleConfig.from_settings(ps).enabled()
+
+
+async def test_line_gets_no_calendar_tools_unless_org_linking_is_on(w):
+    """LINE User Data Policy 3.2.5: a LINE sender never reaches the org's tools by default."""
+    from salid.platforms import calendar_glue as cg
+
+    w.orgs.attach_workspace(
+        "org_a", Workspace(id=workspace_id("line", "Ubot"), platform="line", external_id="Ubot")
+    )
+    w.orgs.link_identity("org_a", "mew@example.com", "line", "Ualice")
+    msg = inc(platform="line", tenant="Ubot", room="Cg", user="Ualice")
+    assert w.a.ps.line_org_linking is False
+    assert await cg.calendar_tools_for(w.a, msg, 1, 2, "en", False) == []
+    assert w.oauth.checks == 0
+    w.a.ps.line_org_linking = True  # the same flag that gates the org-wide scope
+    assert len(await cg.calendar_tools_for(w.a, msg, 1, 2, "en", False)) == 2
+    # Slack is not touched by the LINE flag
+    w.a.ps.line_org_linking = False
+    slack = inc(platform="slack", tenant=TEAM, user="U1")
+    assert len(await cg.calendar_tools_for(w.a, slack, 1, 2, "en", False)) == 2

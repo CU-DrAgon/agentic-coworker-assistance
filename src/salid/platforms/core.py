@@ -536,7 +536,11 @@ class Assistant:
             self.buffer.add(
                 bkey,
                 msg.message,
-                HistLine(msg.at, msg.user_name or msg.user, msg.text or _files_line(msg)),
+                HistLine(
+                    msg.at,
+                    stored_user_name(msg.platform, msg.user, msg.user_name),
+                    msg.text or _files_line(msg),
+                ),
             )
             self._record(msg, gid, rid)
             if self.on_room_seen is not None:
@@ -807,7 +811,11 @@ class Assistant:
             GateLine(str(i), ln.who if not ln.mine else "สลิด", ln.text)
             for i, ln in enumerate(lines)
         ]
-        line = GateLine(msg.message, msg.user_name or msg.user, msg.text or _files_line(msg))
+        line = GateLine(
+            msg.message,
+            stored_user_name(msg.platform, msg.user, msg.user_name),
+            msg.text or _files_line(msg),
+        )
         return bool(
             await asyncio.to_thread(
                 self.gate_fn, self.llm, self.s.gate_model, history, line, channel_id=rid
@@ -873,7 +881,7 @@ class Assistant:
         if not self.team.enabled(gid, "memory"):
             return None
         if msg.private:  # fail closed: this room's own memory, never a wider scope
-            allowed = {rid: msg.room_name or msg.room}
+            allowed = {rid: stored_room_name(msg.platform, msg.room_name, msg.room, msg.is_direct)}
             return self._tools(gid, allowed, self.memory_store, [gid])
         try:
             view = await port.room_view(msg)
@@ -895,7 +903,9 @@ class Assistant:
             )
             allowed = compute_scope(
                 answering=rid,
-                answering_name=msg.room_name or msg.room,
+                answering_name=stored_room_name(
+                    msg.platform, msg.room_name, msg.room, msg.is_direct
+                ),
                 asker=asker,
                 audience=audience,
                 rooms=rooms,
@@ -990,7 +1000,10 @@ class Assistant:
     def _previous_text(self, msg: Incoming, gid: int, rid: int) -> str:
         """The author's own message just before a bare @mention ("Hi" then "@Salid")."""
         for line in reversed(self.buffer.lines(self._bkey(msg, gid, rid), before=msg.message)):
-            if line.who == (msg.user_name or msg.user) and not line.mine:
+            if (
+                line.who == stored_user_name(msg.platform, msg.user, msg.user_name)
+                and not line.mine
+            ):
                 if (msg.at - line.at).total_seconds() <= FOLLOWUP_SECONDS and line.text:
                     return line.text
                 return ""

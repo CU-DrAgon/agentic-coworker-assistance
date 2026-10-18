@@ -248,7 +248,7 @@ async def test_verified_line_one_to_one_also_reads_the_other_workspaces(wd):
 async def test_a_line_group_gets_only_the_group(wd):
     port = FakePort(platform="line")
     msg = await ask(wd, platform="line", tenant="Ubot", user="Lmew", direct=False, port=port)
-    assert memory_of(wd).allowed == {ids.room_id("line", "Ubot", msg.room): "team"}
+    assert memory_of(wd).allowed == {ids.room_id("line", "Ubot", msg.room): "LINE group"}
     assert wd.discord.calls == []  # nothing was even fetched
 
 
