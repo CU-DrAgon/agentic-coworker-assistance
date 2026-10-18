@@ -25,6 +25,7 @@ from .people import (
     RosterEntry,
     build_org,
     clean,
+    contact_graph,
     department_label,
     evidence_visible,
     norm,
@@ -87,7 +88,10 @@ KNOWLEDGE_PROMPT = {
         "อ้างที่มาเบาๆ เช่น “จากห้อง #dev เมื่อ 12 ต.ค.” ห้ามเปิดเผยห้องส่วนตัวหรือบันทึก DM และถ้าไม่มีหลักฐาน "
         "ให้บอกว่า “ยังไม่รู้ค่ะ” ห้ามเดาชื่อคนหรือแต่งขั้นตอน. คนที่ออกไปแล้ว: บอกว่าเคยทำอะไร ชี้ไปที่ผู้รับช่วง "
         "หรือเอกสารส่งมอบงาน (handover). ผู้บริหารบอกว่ามีคนลาออก → person_left; บอกตำแหน่ง/แผนก → set_role. "
-        "ข้อมูลส่วนตัว/ความชอบของคนไม่อยู่ในที่นี้ (ใช้ได้แค่ข้อมูลด้านงาน).\n"
+        "ข้อมูลส่วนตัว/ความชอบของคนไม่อยู่ในที่นี้ (ใช้ได้แค่ข้อมูลด้านงาน). "
+        "ใครทำงานกับใคร ใครเป็นศูนย์กลาง ใครเชื่อมแผนก ใครคุยกับลูกค้า/คู่ค้าเจ้าไหนบ่อย → who_works_with_whom "
+        "(ไม่ใส่ชื่อ = ภาพรวม ใส่ชื่อ = เครือข่ายของคนนั้น). ผู้บริหารถามว่า “น้องเรียนรู้ไปถึงไหนแล้ว” → "
+        "knowledge_status.\n"
     ),
     "en": (
         "\nSalid is the company's institutional memory: when asked what the company does, who does "
@@ -98,7 +102,10 @@ KNOWLEDGE_PROMPT = {
         'evidence say "I don\'t know yet"; never guess a name or invent a procedure. For someone '
         "who has left: say what they used to do and point to the successor or the handover. An "
         "executive saying someone left -> person_left; stating a role or department -> set_role. "
-        "Personal preferences are not part of this: work knowledge only.\n"
+        "Personal preferences are not part of this: work knowledge only. Who works with whom, who is "
+        "central, who bridges departments, who deals with which client or supplier -> "
+        "who_works_with_whom (no name = the overview, a name = that person's network). An "
+        "executive asking how much you have learned about us -> knowledge_status.\n"
     ),
 }
 
@@ -228,6 +235,14 @@ def company_overview_data(ctx: PeopleCtx) -> dict:
             "procedures": [s.title for s in pb.sop][:MAX_LIST],
         },
     }
+    try:
+        hubs = contact_graph(ctx.repo.list(ctx.guild_id), ctx.readable(), ctx.see_all()).hubs(3)
+        if hubs:
+            out["collaboration"] = "most connected: " + ", ".join(
+                f"{n.name} ({n.in_weight} contacts)" for n in hubs
+            )
+    except Exception:
+        logger.warning("collaboration line failed", exc_info=True)
     if not (pb.about or pb.industry or depts):
         out["note"] = (
             "Salid has not learned what the company does yet; say so and invite an admin to "
@@ -291,6 +306,119 @@ def who_to_ask_data(ctx: PeopleCtx, topic: str) -> dict:
         "people": [],
         "note": "Salid has no evidence yet of who handles this; say 'I don't know yet' and "
         "suggest asking a manager. Do not guess a name.",
+    }
+
+
+def _top(counter, n: int = 3) -> list[str]:
+    return [k for k, _ in counter.most_common(n)]
+
+
+def who_works_with_whom_data(ctx: PeopleCtx, name: str) -> dict:
+    """The contact structure. No name: hubs, bridges, strongest pairs. A name: that person's map."""
+    g = contact_graph(ctx.repo.list(ctx.guild_id), ctx.readable(), ctx.see_all())
+    name = " ".join((name or "").split())
+    if not name:
+        if not g.edges:
+            return {
+                "found": False,
+                "note": "Salid has not seen who works with whom yet; say so, do not guess.",
+            }
+        return {
+            "found": True,
+            "hubs": [
+                {
+                    "name": n.name,
+                    "named_by_others": n.in_weight,
+                    "distinct_contacts": n.degree,
+                    "contacted_about": _top(n.topics),
+                }
+                for n in g.hubs()
+            ],
+            "bridges": [
+                {"name": n.name, "departments": depts, "distinct_contacts": n.degree}
+                for n, depts in g.bridges()
+            ],
+            "strongest_pairs": [
+                {
+                    "between": [g.nodes[e.a].name, g.nodes[e.b].name],
+                    "times": e.weight,
+                    "about": _top(e.topics, 3),
+                }
+                for e in g.pairs(10)
+            ],
+        }
+    d, err = _find(ctx, name)
+    if err:
+        return err
+    key = f"u{d.user_id}"
+    if key not in g.nodes:
+        return {
+            "name": d.name,
+            "found": False,
+            "note": "No contacts for this person are known (or none the asker may see); say so.",
+        }
+    me = g.nodes[key]
+    return {
+        "name": me.name,
+        "found": True,
+        "department": me.department or None,
+        "contacts": [
+            {
+                "who": n.name,
+                "outside_party": n.external,
+                "times": e.weight,
+                "about": _top(e.topics, 3),
+            }
+            for n, e in g.around(key)[:MAX_LIST]
+        ],
+        "named_by_others": me.in_weight,
+        "also_dealing_with_the_same_parties": [
+            {"name": n.name, "shared": shared[:4]} for n, shared in g.also_talk_to(key)
+        ],
+    }
+
+
+def knowledge_status_data(ctx: PeopleCtx) -> dict:
+    """How much Salid has learned about the company (executives only): counts, no content."""
+    if not ctx.is_exec:
+        return {"status": "error", "error": "only executives can see the learning status"}
+    people = ctx.repo.list(ctx.guild_id)
+    bots = len(ctx.repo.list(ctx.guild_id, include_bots=True)) - len(people)
+    pb = ctx.company.get(ctx.guild_id)
+    facts = topics = contacts = 0
+    last = ""
+    for d in people:
+        lists = (d.responsibilities, d.how_they_work, d.systems, d.recurring)
+        facts += sum(len(x) for x in lists)
+        topics += len(d.expertise)
+        contacts += len(d.contacts)
+        seen = [i.last_seen for items in (*lists, d.expertise, d.contacts) for i in items]
+        last = max([last, *seen])
+    have = {d.user_id for d in people}
+    roster = ctx.roster()
+    no_dossier = [r.name for r in roster if r.user_id not in have]
+    titles = {d.user_id: d.role_title for d in people}
+    no_role = [r.name for r in roster if not (titles.get(r.user_id) or r.title)]
+    return {
+        "people_with_dossiers": len(people),
+        "people_in_server": len(roster),
+        "facts": facts,
+        "topics": topics,
+        "contacts": contacts,
+        "last_learned": last or None,
+        "map_built_at": pb.org_built_at or None,
+        "map": {
+            "departments": len(pb.org),
+            "who_to_ask_topics": len(pb.who_to_ask),
+            "key_contacts": len(pb.key_contacts),
+        },
+        "bots_excluded": bots,
+        "missing": {
+            "no_dossier_yet": no_dossier[:15],
+            "no_dossier_count": len(no_dossier),
+            "no_role": no_role[:15],
+            "no_role_count": len(no_role),
+        },
     }
 
 
@@ -832,6 +960,26 @@ def people_tools(ctx: PeopleCtx) -> list[Callable]:
         """
         return safe(lambda: person_left_data(ctx, name, successor))
 
+    def who_works_with_whom(name: str = "") -> dict:
+        """Who works with whom, who is central, who connects departments, who deals with which
+        outside party: "ใครทำงานกับใครบ้าง", "who works with Mali", "who is central here", "who talks
+        to the supplier". No name: the hubs (most named by others), the bridges (contacts across
+        the most departments) and the strongest pairs with what they talk about. With a name:
+        that person's contacts (colleagues and outside parties) with what and how often, and who
+        else deals with the same parties. Only what the asker may see; never DMs.
+
+        Args:
+            name: a person (name, @mention or id); empty = the whole company.
+        """
+        return safe(lambda: who_works_with_whom_data(ctx, name))
+
+    def knowledge_status() -> dict:
+        """Executives only: how much Salid has learned about the company so far ("น้องเรียนรู้ไปถึง
+        ไหนแล้ว", "how much have you learned about us"): people with dossiers, facts / topics /
+        contacts, when it last learned, when the company map was built, and what is missing (people
+        with no dossier yet, people with no role). Counts only, no private content."""
+        return safe(lambda: knowledge_status_data(ctx))
+
     tools = [
         company_overview,
         who_to_ask,
@@ -841,6 +989,8 @@ def people_tools(ctx: PeopleCtx) -> list[Callable]:
         handover,
         set_role,
         person_left,
+        who_works_with_whom,
+        knowledge_status,
     ]
     for fn in tools:
         fn.outbox = ctx.outbox  # type: ignore[attr-defined]

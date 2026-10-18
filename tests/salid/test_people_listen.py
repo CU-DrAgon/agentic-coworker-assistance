@@ -260,3 +260,53 @@ def test_the_backfill_script_dry_run_reports_counts_only(docs, tmp_path, capsys)
         and out["dossiers"] == 0
     )
     assert "hello" not in repr(out)
+
+
+def _script():
+    path = Path(__file__).parents[2] / "scripts" / "salid_people_backfill.py"
+    spec = importlib.util.spec_from_file_location("salid_people_backfill", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_script_drops_bot_dossiers_and_bot_contacts(docs):
+    from salid import people as P
+
+    mod, repo = _script(), P.PeopleRepo(docs)
+    ev = P.Evidence(day="2026-10-14", channel_id=10, message_id=1)
+    repo.put(GUILD, P.Dossier(user_id=500, name="ซาลิด bot"))
+    mali = P.Dossier(user_id=1, name="Mali")
+    mali.contacts = [
+        P.Contact(who="สลิด", evidence=[ev]),
+        P.Contact(who="Helper", user_id=500, evidence=[ev]),
+        P.Contact(who="ACME", evidence=[ev]),
+    ]
+    repo.put(GUILD, mali)
+    dry = mod.drop_bots(docs, GUILD, {500}, apply=False)
+    assert dry == {"dossiers_deleted": 1, "contacts_removed": 2, "dossiers_cleaned": 1}
+    assert repo.get(GUILD, 500) is not None and len(repo.get(GUILD, 1).contacts) == 3
+    mod.drop_bots(docs, GUILD, {500}, apply=True)
+    assert repo.get(GUILD, 500) is None
+    assert [c.who for c in repo.get(GUILD, 1).contacts] == ["ACME"]
+
+
+def test_the_script_rebuilds_the_map_from_dossiers_skipping_private_channels(docs):
+    from salid import people as P
+    from salid.company_brain import CompanyRepo
+    from salid.private_chat import PrivateChatRepo
+
+    mod, repo = _script(), P.PeopleRepo(docs)
+    d = P.Dossier(user_id=1, name="Mali", department="finance", role_title="Accountant")
+    P.merge_topic(
+        d.expertise, "invoices", P.Evidence(day="2026-10-14", channel_id=10), "2026-10-14"
+    )
+    P.merge_topic(d.expertise, "diary", P.Evidence(day="2026-10-14", channel_id=77), "2026-10-14")
+    repo.put(GUILD, d)
+    PrivateChatRepo(docs).put(GUILD, 28, 77)
+    dry = mod.rebuild_map(docs, GUILD, apply=False)
+    assert dry == {"dossiers": 1, "departments": 1, "topics": 1, "contacts": 0, "saved": 0}
+    assert CompanyRepo(docs).get(GUILD).org_built_at == ""
+    mod.rebuild_map(docs, GUILD, apply=True)
+    pb = CompanyRepo(docs).get(GUILD)
+    assert pb.org_built_at and [w.topic for w in pb.who_to_ask] == ["invoices"]
