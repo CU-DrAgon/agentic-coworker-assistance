@@ -106,7 +106,7 @@ async def schedule(tools, **over):
 async def test_verified_and_connected_gets_the_tools(w):
     kw = await ask(w, platform="slack", tenant=TEAM, user="U1")
     tools = tool_map(kw)
-    assert set(tools) == {"schedule_google_meeting", "cancel_google_meeting"}
+    assert {"schedule_google_meeting", "cancel_google_meeting"} <= set(tools)
     assert w.oauth.checks == 1
 
 
@@ -159,7 +159,7 @@ async def test_unverified_sender_gets_nothing(w):
 
 async def test_verified_but_not_connected_gets_nothing(w):
     kw = await ask(w, platform="slack", tenant=TEAM, user="U2")  # boss linked, not connected
-    assert "extra_tools" not in kw
+    assert not any("google" in n for n in tool_map(kw))  # org tools may still be there
 
 
 async def test_tenant_without_an_org_gets_nothing(w):
@@ -170,7 +170,7 @@ async def test_tenant_without_an_org_gets_nothing(w):
 async def test_feature_off_gets_nothing(w):
     w.a.calendar = None
     kw = await ask(w, platform="slack", tenant=TEAM, user="U1")
-    assert "extra_tools" not in kw
+    assert not any("google" in n for n in tool_map(kw))  # org tools may still be there
     assert w.oauth.checks == 0
 
 
