@@ -263,7 +263,7 @@ async def test_change_outbox_run_notes_pending_targets(bot, monkeypatch):
         (SimpleNamespace(org_id="o1"), target("discord", "discord-999")),  # not this bot's
         (SimpleNamespace(org_id="o1"), target("slack", "slack-T1")),
     ]
-    bot.change_outbox = SimpleNamespace(prune=lambda: 0, due=lambda: due)
+    bot.change_outbox = SimpleNamespace(prune=lambda org_ids: 0, due=lambda org_ids: due)
 
     async def nothing(*a, **k):
         return None

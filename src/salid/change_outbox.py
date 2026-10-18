@@ -1,17 +1,19 @@
 """The change outbox: every change made on the central website reaches every platform and person,
 is acknowledged, and is sent again every 15 minutes until it is (owner's rule, 2026-10-18).
 
-Pure logic plus a store (DocStore kind `salid_change_outbox`, guild 0, key = change id; SQLite and
-Firestore like the other stores). No Discord, no platform SDK: the consumers are
-`change_outbox_bot.ChangeOutboxMixin` (Discord) and `platforms.change_outbox_platform`
-(Slack / LINE / Telegram / WhatsApp).
+Pure logic plus a store (DocStore kind `salid_change_outbox`, guild = `org_guild(org id)`, key =
+change id; SQLite and Firestore like the other stores). Every read names its orgs, so a consumer
+reads only the changes of the orgs it serves. Before 2026-10-18 every change sat under guild 0
+(`LEGACY_GUILD`); `migrate_legacy` (run by `scripts/salid_outbox_migrate.py`) moves them. No
+Discord, no platform SDK: the consumers are `change_outbox_bot.ChangeOutboxMixin` (Discord) and
+`platforms.change_outbox_platform` (Slack / LINE / Telegram / WhatsApp).
 
 Flow: a producer (the web route in `meeting_scribe.center`, or the Discord bot's watcher as a
 safety net) calls `record_org_edit` / `ChangeOutbox.record`. `record` fills the targets: one
 `apply` target per connected chat workspace of the org (the platform makes the change real:
 Discord roles, ...) and one `notify` target per platform where the subject person is linked (the
-person must confirm they saw it). A consumer asks `due()` for what to (re)send, sends, and calls
-`mark_attempt`; a button click or a reply "รับทราบ / ok / got it" calls `ack`. After
+person must confirm they saw it). A consumer asks `due(its org ids)` for what to (re)send, sends,
+and calls `mark_attempt`; a button click or a reply "รับทราบ / ok / got it" calls `ack`. After
 `max_attempts` unanswered sends (or past the deadline for a platform nobody serves) the target is
 `failed`, kept forever as an audit trail, and the org's owners and admins get one alert per platform.
 """
@@ -22,7 +24,7 @@ import logging
 import re
 import threading
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -30,12 +32,12 @@ from pydantic import BaseModel, Field
 
 from .coo_store import DocStore
 from .i18n import CATALOG, t
-from .orgs import Member, Org
+from .orgs import Member, Org, OrgStore, workspace_memory_id
 
 logger = logging.getLogger(__name__)
 
 KIND = "salid_change_outbox"  # DocStore kind
-GUILD = 0
+LEGACY_GUILD = 0  # where every org's changes lived before the per-org key (see migrate_legacy)
 RESEND_MINUTES = 15
 MAX_ATTEMPTS = 8  # about two hours
 KEEP_DAYS = 90  # acked changes; a change with a failed target is kept forever
@@ -64,6 +66,11 @@ def _utcnow() -> datetime:
 
 def _iso(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat(timespec="seconds")
+
+
+def org_guild(org_id: str) -> int:
+    """The DocStore guild of an org's changes (the same id as the org's web workspace memory)."""
+    return workspace_memory_id("web", org_id)
 
 
 def _parse(value: str) -> datetime | None:
@@ -216,15 +223,27 @@ class ChangeOutbox:
         )
 
     # ---- reading
-    def get(self, change_id: str) -> Change | None:
-        d = self.docs.get(KIND, GUILD, change_id)
+    def get(self, change_id: str, org_id: str = "") -> Change | None:
+        """One change. Without `org_id` it is found by its id alone (a button click knows only
+        the change id)."""
+        if org_id:
+            d = self.docs.get(KIND, org_guild(org_id), change_id)
+        else:
+            d = self.docs.find_any(KIND, change_id)
         return Change(**d) if d else None
 
-    def _all(self) -> list[Change]:
-        return [Change(**d) for d in self.docs.find(KIND, GUILD)]
+    def _org_changes(self, org_id: str) -> list[Change]:
+        """Every change of one org: one read of that org's guild."""
+        return [
+            Change(**d)
+            for d in self.docs.find(KIND, org_guild(org_id), lambda d: d.get("org_id") == org_id)
+        ]
+
+    def _orgs_changes(self, org_ids: Iterable[str]) -> list[Change]:
+        return [c for oid in sorted({str(o) for o in org_ids if o}) for c in self._org_changes(oid)]
 
     def list_changes(self, org_id: str, limit: int = 50) -> list[Change]:
-        mine = [c for c in self._all() if c.org_id == org_id]
+        mine = self._org_changes(org_id)
         mine.sort(key=lambda c: c.at, reverse=True)
         return mine[: max(int(limit), 0)]
 
@@ -252,32 +271,44 @@ class ChangeOutbox:
             return []
         now = self.now()
         horizon = _iso(now - timedelta(minutes=DEDUPE_MINUTES))
+        guild = org_guild(org.id)
         with self._lock:
             recent = {
-                (c.org_id, c.subject_email, c.kind, c.after) for c in self._all() if c.at >= horizon
+                (c.subject_email, c.kind, c.after)
+                for c in self._org_changes(org.id)
+                if c.at >= horizon
             }
             stored: list[Change] = []
             for c in changes:
-                key = (c.org_id, c.subject_email, c.kind, c.after)
+                key = (c.subject_email, c.kind, c.after)
                 if key in recent:
                     continue
                 recent.add(key)
-                c.at = _iso(now)
+                c.org_id, c.at = org.id, _iso(now)  # stored under this org, so it is this org's
                 c.targets = self.targets_for(c, org)
-                self.docs.put(KIND, GUILD, c.id, c.model_dump())
+                self.docs.put(KIND, guild, c.id, c.model_dump())
                 stored.append(c)
         return stored
 
     # ---- state changes (each one atomic)
-    def _update(self, change_id: str, fn: Callable[[Change], bool]) -> bool:
+    def _update(self, change_id: str, fn: Callable[[Change], bool], org_id: str = "") -> bool:
+        """Read-modify-write one change in ONE transaction. Without `org_id` the org is found
+        from the change id first (one extra read)."""
+        if not org_id:
+            d = self.docs.find_any(KIND, change_id)
+            org_id = str((d or {}).get("org_id") or "")
+            if not org_id:
+                return False
+        guild = org_guild(org_id)
+
         def run(tx) -> bool:
-            d = tx.get(KIND, GUILD, change_id)
+            d = tx.get(KIND, guild, change_id)
             if d is None:
                 return False
             c = Change(**d)
             if not fn(c):
                 return False
-            tx.put(KIND, GUILD, c.id, c.model_dump())
+            tx.put(KIND, guild, c.id, c.model_dump())
             return True
 
         return self.docs.transact(run)
@@ -294,7 +325,9 @@ class ChangeOutbox:
             None,
         )
 
-    def ack(self, change_id: str, workspace_id: str, person: str, how: str) -> bool:
+    def ack(
+        self, change_id: str, workspace_id: str, person: str, how: str, org_id: str = ""
+    ) -> bool:
         """Mark a target acknowledged. Idempotent: True only the first time."""
 
         def fn(c: Change) -> bool:
@@ -305,7 +338,7 @@ class ChangeOutbox:
             x.last_error = ""
             return True
 
-        return self._update(change_id, fn)
+        return self._update(change_id, fn, org_id)
 
     def mark_attempt(
         self,
@@ -315,6 +348,7 @@ class ChangeOutbox:
         *,
         error: str = "",
         message_ref: str = "",
+        org_id: str = "",
     ) -> bool:
         """One send (or apply) attempt: counts, stamps the time, remembers the message."""
 
@@ -331,13 +365,18 @@ class ChangeOutbox:
                 x.message_ref = message_ref
             return True
 
-        return self._update(change_id, fn)
+        return self._update(change_id, fn, org_id)
 
     def open_for(self, workspace_id: str, person: str) -> list[tuple[Change, Target]]:
-        """Notices this person was sent and has not confirmed (newest first)."""
+        """Notices this person was sent and has not confirmed (newest first). Only the changes
+        of the org that owns the workspace are read; a workspace of no org has none."""
+        platform, _, external_id = workspace_id.partition("-")
+        found = OrgStore(self.docs).org_of_workspace(platform, external_id) if external_id else None
+        if found is None:
+            return []
         out = [
             (c, x)
-            for c in self._all()
+            for c in self._org_changes(found[0].id)
             for x in c.targets
             if x.workspace_id == workspace_id
             and x.kind == "notify"
@@ -348,11 +387,12 @@ class ChangeOutbox:
         return out
 
     # ---- what to send
-    def due(self) -> list[tuple[Change, Target]]:
-        """Targets to (re)send now. Also fails the ones that ran out of attempts or time."""
+    def due(self, org_ids: Iterable[str]) -> list[tuple[Change, Target]]:
+        """Targets of these orgs to (re)send now. Also fails the ones that ran out of attempts or
+        time."""
         now = self.now()
         out: list[tuple[Change, Target]] = []
-        for c in self._all():
+        for c in self._orgs_changes(org_ids):
             if not any(x.status in OPEN for x in c.targets):
                 continue
             born = _parse(c.at) or now
@@ -380,7 +420,7 @@ class ChangeOutbox:
                             hit = True
                     return hit
 
-                self._update(c.id, fn)
+                self._update(c.id, fn, c.org_id)
                 out = [
                     (cc, x)
                     for cc, x in out
@@ -388,25 +428,27 @@ class ChangeOutbox:
                 ]
         return out
 
-    def to_alert(self, platform: str) -> list[Change]:
-        """Changes with a failed target whose admins on `platform` were not told yet."""
+    def to_alert(self, platform: str, org_ids: Iterable[str]) -> list[Change]:
+        """Changes of these orgs with a failed target whose admins on `platform` were not told
+        yet."""
         return [
             c
-            for c in self._all()
+            for c in self._orgs_changes(org_ids)
             if platform not in c.alerted_on and any(x.status == "failed" for x in c.targets)
         ]
 
-    def mark_alerted(self, change_id: str, platform: str) -> bool:
+    def mark_alerted(self, change_id: str, platform: str, org_id: str = "") -> bool:
         def fn(c: Change) -> bool:
             if platform in c.alerted_on:
                 return False
             c.alerted_on.append(platform)
             return True
 
-        return self._update(change_id, fn)
+        return self._update(change_id, fn, org_id)
 
-    def prune(self, force: bool = False) -> int:
-        """Drop acked changes older than `KEEP_DAYS`; changes with a failed target stay forever."""
+    def prune(self, org_ids: Iterable[str], force: bool = False) -> int:
+        """Drop these orgs' acked changes older than `KEEP_DAYS`; changes with a failed target stay
+        forever. At most once per `PRUNE_EVERY_S` unless `force`."""
         import time
 
         mono = time.monotonic()
@@ -415,9 +457,9 @@ class ChangeOutbox:
         self._pruned = mono or 1.0
         cutoff = _iso(self.now() - timedelta(days=KEEP_DAYS))
         n = 0
-        for c in self._all():
+        for c in self._orgs_changes(org_ids):
             if c.at < cutoff and not any(x.status in ("failed", *OPEN) for x in c.targets):
-                self.docs.delete(KIND, GUILD, c.id)
+                self.docs.delete(KIND, org_guild(c.org_id), c.id)
                 n += 1
         return n
 
@@ -437,6 +479,37 @@ def record_org_edit(
     except Exception:
         logger.warning("change outbox: could not record an org edit", exc_info=True)
         return 0
+
+
+# ------------------------------------------------------------------ one-time migration
+def migrate_legacy(docs: DocStore, *, apply: bool) -> dict[str, int]:
+    """Move the changes stored before the per-org key (every org under `LEGACY_GUILD`) to their
+    org's guild. Dry run (counts only, nothing written) unless `apply`. Each move is ONE
+    transaction (put under `org_guild`, delete at guild 0), so a re-run or a crash midway never
+    loses or doubles a change. A doc without `org_id` is skipped and stays where it is.
+    Returns counts only: found, movable, moved, skipped."""
+    items = docs.find_items(KIND, LEGACY_GUILD)
+    counts = {"found": len(items), "movable": 0, "moved": 0, "skipped": 0}
+    for key, doc in items:
+        org_id = str(doc.get("org_id") or "")
+        if not org_id:
+            counts["skipped"] += 1
+            continue
+        counts["movable"] += 1
+        if not apply:
+            continue
+
+        def move(tx, key=key, org_id=org_id) -> bool:
+            d = tx.get(KIND, LEGACY_GUILD, key)
+            if d is None:
+                return False  # already moved by another run
+            tx.put(KIND, org_guild(org_id), key, d)
+            tx.delete(KIND, LEGACY_GUILD, key)
+            return True
+
+        if docs.transact(move):
+            counts["moved"] += 1
+    return counts
 
 
 # ------------------------------------------------------------------ texts

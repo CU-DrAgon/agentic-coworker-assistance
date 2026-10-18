@@ -2,7 +2,7 @@
 
 One generic consumer for the platform process. Each platform runtime registers a *pusher* for its
 tenant (`add_pusher`): an async function `(person, text) -> message ref` that sends a 1:1 message.
-Every 30 s `tick`:
+Every 30 s `tick` reads only the changes of the orgs that own a tenant with a pusher (`_org_ids`):
 - `apply` target of a served workspace: no adapter can change anything on its platform yet, so it
   is acked at once as `nothing_to_apply`;
 - `notify` target: the notice goes to the person with "reply OK to confirm"; a reply (see
@@ -48,6 +48,15 @@ class PlatformChanges:
         push = self._pushers.get((platform, key))
         return (key, push) if push else None
 
+    def _org_ids(self) -> set[str]:
+        """The orgs that own a tenant this process can message: the only changes it reads."""
+        out: set[str] = set()
+        for platform, tenant in list(self._pushers):
+            found = self.orgs.org_of_workspace(platform, tenant)
+            if found is not None:
+                out.add(found[0].id)
+        return out
+
     def _lang(self, platform: str, tenant: str) -> str:
         try:
             gid = ids.tenant_id(platform, tenant)
@@ -66,9 +75,10 @@ class PlatformChanges:
 
     async def _run(self) -> None:
         outbox = self.outbox
-        await asyncio.to_thread(outbox.prune)
+        org_ids = await asyncio.to_thread(self._org_ids)
+        await asyncio.to_thread(outbox.prune, org_ids)
         names: dict[str, str] = {}
-        for change, target in await asyncio.to_thread(outbox.due):
+        for change, target in await asyncio.to_thread(outbox.due, org_ids):
             served = self._served(target.workspace_id, target.platform)
             if served is None:
                 continue  # not configured here: stays pending, fails at the deadline
@@ -76,8 +86,9 @@ class PlatformChanges:
             try:
                 if target.kind == "apply":
                     await asyncio.to_thread(
-                        outbox.ack, change.id, target.workspace_id, "", "nothing_to_apply"
-                    )
+                        outbox.ack, change.id, target.workspace_id, "", "nothing_to_apply",
+                        org_id=change.org_id,
+                    )  # fmt: skip
                     continue
                 if change.org_id not in names:
                     org = await asyncio.to_thread(self.orgs.get, change.org_id)
@@ -92,6 +103,7 @@ class PlatformChanges:
                     target.workspace_id,
                     target.person,
                     message_ref=str(ref or ""),
+                    org_id=change.org_id,
                 )
             except Exception as e:
                 logger.warning("change outbox: send failed (%s)", safe_exc(e))
@@ -101,13 +113,14 @@ class PlatformChanges:
                     target.workspace_id,
                     target.person,
                     error=type(e).__name__,
+                    org_id=change.org_id,
                 )
-        await self._alerts()
+        await self._alerts(org_ids)
 
-    async def _alerts(self) -> None:
+    async def _alerts(self, org_ids: set[str]) -> None:
         outbox = self.outbox
         for platform in sorted({p for p, _ in self._pushers}):
-            for change in await asyncio.to_thread(outbox.to_alert, platform):
+            for change in await asyncio.to_thread(outbox.to_alert, platform, org_ids):
                 org = await asyncio.to_thread(self.orgs.get, change.org_id)
                 if org is None:
                     continue
@@ -127,7 +140,9 @@ class PlatformChanges:
                             await push(uid, text)
                         except Exception as e:
                             logger.info("change outbox: alert not sent (%s)", safe_exc(e))
-                await asyncio.to_thread(outbox.mark_alerted, change.id, platform)
+                await asyncio.to_thread(
+                    outbox.mark_alerted, change.id, platform, org_id=change.org_id
+                )
 
     # ------------------------------------------------------------- acknowledgement
     async def on_message(self, msg) -> str | None:
@@ -140,7 +155,9 @@ class PlatformChanges:
         if not open_:
             return None
         for change, _target in open_:
-            await asyncio.to_thread(self.outbox.ack, change.id, ws, str(msg.user), "reply")
+            await asyncio.to_thread(
+                self.outbox.ack, change.id, ws, str(msg.user), "reply", org_id=change.org_id
+            )
         return t("chg_thanks", self._lang(msg.platform, msg.tenant))
 
     async def ack_message(self, workspace: str, user: str, ref: str) -> str | None:
@@ -160,7 +177,12 @@ class PlatformChanges:
         for change, _target in hit:
             done = (
                 await asyncio.to_thread(
-                    self.outbox.ack, change.id, workspace, str(user), "reaction"
+                    self.outbox.ack,
+                    change.id,
+                    workspace,
+                    str(user),
+                    "reaction",
+                    org_id=change.org_id,
                 )
                 or done
             )
