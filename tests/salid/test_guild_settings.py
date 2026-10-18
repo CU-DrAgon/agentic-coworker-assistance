@@ -121,7 +121,7 @@ def test_document_layout(gstore):
         "channel_languages", "memory_retention_days",
         "followup_time", "report_time", "report_channel_id", "morning_brief_time", "evening_brief_time",
         "channel_tones", "default_tone", "tone_note", "task_confirm_mode", "personal_settings", "language_mode", "exec_max_level", "department_roles",
-        "captions_default", "voice_talk",
+        "captions_default", "voice_talk", "wake_policy", "room_voice_talk", "room_captions",
     }  # fmt: skip
     assert doc["ask_channel_ids"] == ["12", "34"] and doc["active"] is True
     # the form only echoed "auto" for a server that never chose a language: nothing was chosen
