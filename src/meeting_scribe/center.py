@@ -142,7 +142,7 @@ def _library() -> Library:
         if "fn" not in lazy:
             from salid.llm import make_client
 
-            lazy["fn"] = make_analyzer(make_client(s), s.gate_model)
+            lazy["fn"] = make_analyzer(make_client(s), s.gate_model, read_model=s.gemini_model)
         return lazy["fn"](data, filename, mime)
 
     return Library(
@@ -3074,7 +3074,29 @@ async def my_calendar(
     guilds=Depends(hub.get_guild_store),
 ) -> dict:
     """What is coming up for the person: their reminders (set in Discord or here) and the due
-    dates of their tasks, grouped by day. Google Calendar joins this list once connected."""
+    dates of their tasks, plus the company's meetings and events, grouped by day."""
+    return await run_in_threadpool(calendar_view, ctx, orgs, lib, guilds, True, True)
+
+
+@router.get("/orgs/{org_id}/calendar")
+async def company_calendar(
+    mine: bool = Query(default=False),  # overlay the caller's personal calendar
+    ctx: Ctx = Depends(member_ctx),
+    orgs: OrgStore = Depends(get_orgs),
+    lib: Library = Depends(get_library),
+    guilds=Depends(hub.get_guild_store),
+) -> dict:
+    """The COMPANY calendar: meetings (held and scheduled), Discord events, project deadlines
+    and milestones. `mine=1` overlays the caller's personal items (reminders, their task due
+    dates); every item says its `layer` (company | personal)."""
+    return await run_in_threadpool(calendar_view, ctx, orgs, lib, guilds, True, mine)
+
+
+def calendar_view(
+    ctx: Ctx, orgs: OrgStore, lib: Library, guilds: Any, company: bool, personal: bool
+) -> dict:
+    """Calendar items by day. Company layer: meetings, Discord events, project deadlines and
+    milestones (projects the caller may read). Personal layer: their reminders and task dues."""
     from salid.reminders import KIND as REMINDERS
 
     def run() -> dict:
@@ -3084,7 +3106,7 @@ async def my_calendar(
         for ws in ctx.org.workspaces:
             if ws.platform != "discord" or ws.status != "connected":
                 continue
-            if did:
+            if did and personal:
                 for r in lib.docs.find(
                     REMINDERS,
                     ws.memory_id,
@@ -3093,18 +3115,20 @@ async def my_calendar(
                     items.append(
                         {
                             "kind": "reminder",
+                            "layer": "personal",
                             "at": r.get("next_at", ""),
                             "title": r.get("message", ""),
                             "repeat": r.get("every") or "",
                             "workspace_name": ws.name,
                         }
                     )
-        tasks = my_tasks_sync(ctx, orgs, lib)
+        tasks = my_tasks_sync(ctx, orgs, lib) if personal else []
         for t in tasks:
             if t["status"] == "open" and t["due"]:
                 items.append(
                     {
                         "kind": "task",
+                        "layer": "personal",
                         "at": t["due"],
                         "title": t["title"],
                         "url": t["url"],
@@ -3125,9 +3149,12 @@ async def my_calendar(
                 visible = ctx.is_exec or int(d.get("voice_channel_id", 0)) in public_by_ws[ws.id]
                 if not (mine or visible):
                     continue
+                if not company and not mine:
+                    continue
                 items.append(
                     {
                         "kind": "meeting",
+                        "layer": "company",
                         "at": d.get("started_at") or d.get("ended_at", ""),
                         "end": d.get("ended_at", ""),
                         "title": d.get("voice_channel_name") or "Meeting",
@@ -3151,6 +3178,7 @@ async def my_calendar(
                     items.append(
                         {
                             "kind": "meeting",
+                            "layer": "company",
                             "at": m.get("start_utc", ""),
                             "end": m.get("end_utc", ""),
                             "title": m.get("title") or "Meeting",
@@ -3170,6 +3198,7 @@ async def my_calendar(
                     items.append(
                         {
                             "kind": "event",
+                            "layer": "company",
                             "at": ev.get("start", ""),
                             "end": ev.get("end", ""),
                             "title": ev.get("name", ""),
@@ -3180,6 +3209,8 @@ async def my_calendar(
                     )
             except Exception:  # the calendar must never fail on a guild read
                 logger.exception("could not read events of %s", ws.id)
+        if company:
+            items.extend(project_calendar_items(ctx, lib))
         items = [it for it in items if it.get("at")]
         items.sort(key=lambda x: x["at"])
         days: dict[str, list[dict]] = defaultdict(list)
@@ -3193,12 +3224,54 @@ async def my_calendar(
                 "meetings": True,
                 "scheduled_meetings": True,
                 "discord_events": True,
+                "projects": True,
                 "google_calendar": False,
             },
+            "layers": [x for x, on in (("company", company), ("personal", personal)) if on],
             "linked_discord": bool(did),
         }
 
-    return await run_in_threadpool(run)
+    return run()
+
+
+def project_calendar_items(ctx: Ctx, lib: Library) -> list[dict]:
+    """Deadlines and open milestones of the projects the caller may read (team projects, all
+    for owners / admins), on the company layer."""
+    from salid.projects import PROJECTS, Project
+
+    out: list[dict] = []
+    for ws in ctx.org.workspaces:
+        if ws.status != "connected" or ws.platform not in ("discord", "web"):
+            continue
+        for d in lib.docs.find(PROJECTS, ws.memory_id):
+            try:
+                p = Project.model_validate(d)
+            except Exception:
+                continue
+            if p.deleted or not (ctx.is_exec or p.visibility == "team"):
+                continue
+            if p.deadline and p.status not in ("completed", "cancelled"):
+                out.append(
+                    {
+                        "kind": "deadline",
+                        "layer": "company",
+                        "at": p.deadline,
+                        "title": p.name,
+                        "workspace_name": ws.name,
+                    }
+                )
+            for m in p.milestones:
+                if m.due and m.status != "done":
+                    out.append(
+                        {
+                            "kind": "milestone",
+                            "layer": "company",
+                            "at": m.due,
+                            "title": f"{p.name}: {m.title}",
+                            "workspace_name": ws.name,
+                        }
+                    )
+    return out
 
 
 def my_tasks_sync(ctx: Ctx, orgs: OrgStore, lib: Library) -> list[dict]:
@@ -3345,12 +3418,56 @@ class ChatBody(BaseModel):
     workspace_id: str | None = None
     page: str | None = Field(default=None, max_length=80)  # which page the person is looking at
     document_id: str | None = Field(default=None, max_length=200)  # just uploaded in the chat
+    document_ids: list[str] = Field(default_factory=list, max_length=10)  # several at once
 
 
-DOC_BLOCK_TEXT = 6000  # characters of the uploaded file's text Salid reads in the chat
+DOC_BLOCK_TEXT = 20_000  # characters of ONE uploaded file's text Salid reads in the chat
+DOC_BLOCK_TOTAL = 45_000  # all files of one chat message together
 
 
-def uploaded_doc_block(lib: Library, ctx: Ctx, doc_id: str) -> str:
+def uploaded_docs_block(lib: Library, ctx: Ctx, doc_ids: list[str]) -> str:
+    """The secretary request for SEVERAL files uploaded together: each file's block, the text
+    budget shared (DOC_BLOCK_TOTAL), one set of instructions at the end."""
+    per = max(4_000, min(DOC_BLOCK_TEXT, DOC_BLOCK_TOTAL // max(1, len(doc_ids))))
+    blocks = [
+        b for d in doc_ids if (b := uploaded_doc_block(lib, ctx, d, text_limit=per, tail=False))
+    ]
+    if not blocks:
+        return ""
+    return "\n\n".join(blocks) + "\n" + secretary_instructions(ctx, len(blocks))
+
+
+def secretary_instructions(ctx: Ctx, n: int) -> str:
+    act = (
+        "If a file is one of the company's own records (registration certificate, articles of "
+        "association / memorandum, company regulations, shareholder papers, licences): call "
+        "update_company_profile with every legal-entity fact it states (registered_name, "
+        "registration_no, tax_id, registered_capital, registered_address, directors, "
+        "objectives, founded = registration date) and, for work rules / working conditions / "
+        "regulations, record each rule with teach_company (kind rule). Copy names, numbers "
+        "and addresses EXACTLY as written. When several company papers disagree (a scanned "
+        "copy can be misread), the registration certificate (หนังสือรับรอง) wins; mention the "
+        "difference instead of guessing. "
+        if ctx.is_exec
+        else "Only owners and admins may change the company profile: if a file is a company "
+        "record, say an admin can ask you to update the profile from it. "
+    )
+    return (
+        (
+            "Act like the company's secretary for these files. "
+            if n > 1
+            else "Act like the company's secretary: "
+        )
+        + "say in one line per file where it was filed (offer to move it if another group fits "
+        "better; say so when it was already on file), "
+        + act
+        + "Then report briefly what you updated. Never invent facts that are not in the text."
+    )
+
+
+def uploaded_doc_block(
+    lib: Library, ctx: Ctx, doc_id: str, *, text_limit: int = 0, tail: bool = True
+) -> str:
     """What Salid needs to act like a secretary on a file just uploaded in the chat: where it
     was filed, its summary and text, and what to do with a company record. "" when unknown."""
     from salid.library import ORG_DOCS, classify_group
@@ -3363,28 +3480,15 @@ def uploaded_doc_block(lib: Library, ctx: Ctx, doc_id: str) -> str:
     group = rec.get("group") or classify_group(
         rec.get("tag", ""), rec.get("filename", ""), rec.get("summary", "")
     )
-    act = (
-        "If it is one of the company's own records (registration certificate, articles of "
-        "association / memorandum, company regulations, shareholder papers, licences): call "
-        "update_company_profile with every legal-entity fact it states (registered_name, "
-        "registration_no, tax_id, registered_capital, registered_address, directors, "
-        "objectives, founded = registration date) and, for work rules / working conditions / "
-        "regulations, record each rule with teach_company (kind rule). "
-        if ctx.is_exec
-        else "Only owners and admins may change the company profile: if it is a company record, "
-        "say an admin can ask you to update the profile from it. "
-    )
-    return (
+    limit = text_limit or DOC_BLOCK_TEXT
+    block = (
         "[Document just uploaded in this chat by the person: "
         f"{rec.get('filename', '')} — filed under the Documents group '{group}' "
         f"(id {doc_id}; groups: company records, legal, finance, hr, other). "
         f"Summary: {(rec.get('summary') or '').strip()[:600]}\n"
-        f"Text:\n{(rec.get('text') or '').strip()[:DOC_BLOCK_TEXT]}\n]\n"
-        "Act like the company's secretary: say in one line where it was filed (and offer to "
-        "move it if another group fits better), "
-        + act
-        + "Then report briefly what you updated. Never invent facts that are not in the text."
+        f"Text:\n{(rec.get('text') or '').strip()[:limit]}\n]"
     )
+    return block + ("\n" + secretary_instructions(ctx, 1) if tail else "")
 
 
 class ChatReply(BaseModel):
@@ -3703,8 +3807,11 @@ async def chat(
         raise HTTPException(429, "Too many messages; try again later")
     question = body.message.strip()
     asked = question
-    if body.document_id:
-        block = await run_in_threadpool(uploaded_doc_block, lib, ctx, body.document_id)
+    ids = list(
+        dict.fromkeys([*body.document_ids, *([body.document_id] if body.document_id else [])])
+    )
+    if ids:
+        block = await run_in_threadpool(uploaded_docs_block, lib, ctx, ids)
         if block:
             asked = question + "\n\n" + block
 

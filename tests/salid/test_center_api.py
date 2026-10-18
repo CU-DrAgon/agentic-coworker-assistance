@@ -752,7 +752,7 @@ def test_uploads_reach_discord_workspaces_only_through_a_documents_share_link(w)
     copies = w.memory.messages(A, {SHARED_DOCS_CHANNEL}, "2026-10-01", today)
     assert len(copies) == 1 and "plan.txt" in copies[0].text
     assert w.memory.messages(B, {SHARED_DOCS_CHANNEL}, "2026-10-01", today) == []
-    upload(w, "mem", name="two.txt")  # new uploads follow the link
+    upload(w, "mem", name="two.txt", data=b"second file")  # new uploads follow the link
     assert len(w.memory.messages(A, {SHARED_DOCS_CHANNEL}, "2026-10-01", today)) == 2
     # the bot adds the channel to what Salid may read in that guild
     from salid.sharing import Sharing
@@ -2824,3 +2824,132 @@ def test_long_profile_and_company_text_is_kept_whole_with_line_breaks(w):
         headers=H["adm"],
     )
     assert pos.json()["policies"] == about
+
+
+def test_several_company_papers_in_one_chat_message_and_duplicates_kept_once(w):
+    """The owner drops several registration papers into the chat at once: one Salid request
+    with every file (shared text budget), the same file twice is stored once."""
+    cert = "หนังสือรับรอง ทะเบียนนิติบุคคลเลขที่ 0105569193528 กรรมการ นายพสิณ พรวรภัตช์".encode()
+    a = upload(w, "boss", name="certificate_2.pdf", data=cert, mime="application/pdf").json()
+    b = upload(w, "boss", name="certificate_3.pdf", data=cert, mime="application/pdf").json()
+    assert b["duplicate"] is True and b["id"] == a["id"] and a["duplicate"] is False
+    c = upload(
+        w,
+        "boss",
+        name="cert-of-regist.pdf",
+        data="ใบสำคัญแสดงการจดทะเบียน".encode(),
+        mime="application/pdf",
+    ).json()
+    url = "/api/center/orgs/org_t/chat"
+    r = w.client.post(
+        url,
+        json={"message": "my company papers", "document_ids": [a["id"], c["id"]]},
+        headers=H["boss"],
+    )
+    assert r.status_code == 200, r.text
+    q = w.asks[-1][0]
+    assert (
+        q.count("[Document just uploaded") == 2 and q.count("Act like the company's secretary") == 1
+    )
+    assert "นายพสิณ พรวรภัตช์" in q and "registration certificate (หนังสือรับรอง) wins" in q
+    assert "already on file" in q
+    assert (
+        len(
+            w.client.post(
+                url, json={"message": "x", "document_ids": ["a"] * 11}, headers=H["boss"]
+            ).json()["detail"]
+        )
+        >= 1
+    )
+
+
+def test_page_reading_rules_for_untrustworthy_pdf_text():
+    from salid.docs import DocText
+    from salid.library import needs_page_reading, squeeze_fill_lines
+
+    wm = "กรมพัฒนาธุรกิจการค้า Ref:E69\n" * 4  # a watermark on every page, nothing else
+    assert needs_page_reading(DocText(text=wm, pages=4)) is True
+    assert needs_page_reading(DocText(text="ใบสำคัญแสดงการจดทะเบียน " * 30, pages=1)) is True  # Thai
+    english = "\n".join(
+        f"Line {i} of a normal English contract with real content." for i in range(40)
+    )
+    assert needs_page_reading(DocText(text=english, pages=1)) is False
+    assert squeeze_fill_lines("ชื่อ" + "." * 900 + " ปี") == "ชื่อ… ปี"
+
+
+# ------------------------------------------------------------------ company calendar + personal overlay
+def test_company_calendar_with_an_optional_personal_overlay(w):
+    from salid.orgs import Identity
+    from salid.projects import PROJECTS
+
+    w.orgs.set_user_identity(
+        "mem@example.com", Identity(platform="discord", external_id="12", verified=True)
+    )
+    w.docs.put(
+        "salid_reminders",
+        A,
+        "R-1",
+        {"active": True, "user_id": 12, "next_at": "2026-10-20T09:00", "message": "call A"},
+    )
+    w.docs.put(
+        "salid_tasks",
+        A,
+        "t1",
+        {
+            "id": "t1",
+            "guild_id": A,
+            "assignee_id": 12,
+            "title": "send quote",
+            "status": "open",
+            "due": "2026-10-21",
+        },
+    )
+    w.docs.put(
+        PROJECTS,
+        A,
+        "p1",
+        {
+            "id": "p1",
+            "name": "Launch",
+            "owner": {"email": "boss@example.com"},
+            "status": "in_progress",
+            "deadline": "2026-10-30",
+            "visibility": "team",
+            "milestones": [{"id": "m1", "title": "Beta", "due": "2026-10-25"}],
+        },
+    )
+    w.docs.put(
+        PROJECTS,
+        A,
+        "p2",
+        {
+            "id": "p2",
+            "name": "Secret",
+            "owner": {"email": "boss@example.com"},
+            "status": "planned",
+            "deadline": "2026-11-01",
+            "visibility": "members",
+        },
+    )
+    url = "/api/center/orgs/org_t/calendar"
+
+    def flat(r):
+        return {(i["kind"], i["layer"], i["title"]) for d in r.json()["days"] for i in d["items"]}
+
+    company = flat(w.client.get(url, headers=H["mem"]))
+    assert ("deadline", "company", "Launch") in company and (
+        "milestone",
+        "company",
+        "Launch: Beta",
+    ) in company
+    assert not any(x[1] == "personal" for x in company)  # no overlay by default
+    assert ("deadline", "company", "Secret") not in company  # a private project stays private
+    both = flat(w.client.get(url + "?mine=1", headers=H["mem"]))
+    assert ("reminder", "personal", "call A") in both and ("task", "personal", "send quote") in both
+    assert w.client.get(url + "?mine=1", headers=H["mem"]).json()["layers"] == [
+        "company",
+        "personal",
+    ]
+    assert ("deadline", "company", "Secret") in flat(
+        w.client.get(url, headers=H["adm"])
+    )  # admins see all

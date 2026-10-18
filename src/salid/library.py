@@ -24,6 +24,7 @@ guild's memory under `SHARED_DOCS_CHANNEL` (the bot adds that channel to its rea
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
@@ -213,6 +214,7 @@ class DocItem(BaseModel):
     tags: list[str] = []
     shared_from: str | None = None  # workspace name when it came in through a ShareLink
     group: str = ""  # DOC_GROUPS for files ("" for knowledge)
+    duplicate: bool = False  # an upload whose exact bytes were already on file (not stored twice)
 
 
 class DocDetail(DocItem):
@@ -302,8 +304,12 @@ def _ext(filename: str) -> str:
 
 
 # ------------------------------------------------------------------ analysis (Flash-Lite)
-def make_analyzer(client, model: str) -> Callable[[bytes, str, str], dict]:
-    """(data, filename, mime) -> {tag, summary, text}. Raises when the file cannot be read."""
+def make_analyzer(
+    client, model: str, read_model: str | None = None
+) -> Callable[[bytes, str, str], dict]:
+    """(data, filename, mime) -> {tag, summary, text}. Raises when the file cannot be read.
+    `read_model` reads PDF pages as images (names and numbers on official papers must be
+    exact; the cheap model misread Thai names), default = `model`."""
 
     def analyze(data: bytes, filename: str, mime: str) -> dict:
         from .image_memory import describe_image
@@ -322,11 +328,23 @@ def make_analyzer(client, model: str) -> Callable[[bytes, str, str], dict]:
         if kind is None:
             raise docs_mod.DocUnreadable("unsupported document type")
         dt = docs_mod.extract_text(data, kind)
+        if kind == "pdf" and needs_page_reading(dt) and len(data) <= docs_mod.MAX_DOC_BYTES:
+            # the text layer is only a watermark, or Thai with broken glyph maps (official
+            # PDFs drop tone marks and vowels): read the page IMAGES instead, so names and
+            # numbers on company records come out right
+            try:
+                seen = squeeze_fill_lines(docs_mod.ocr_text(client, read_model or model, data))
+                if len(seen.strip()) >= docs_mod.MIN_TEXT_CHARS:
+                    dt = docs_mod.DocText(text=seen, pages=dt.pages)
+            except Exception:
+                logger.warning("page reading failed; keeping the text layer", exc_info=True)
         note = None
-        try:
-            note = docs_mod.analyze(client, model, data, kind, dt)
-        except Exception:
-            logger.warning("upload analysis failed", exc_info=True)
+        for _ in range(2):  # one retry: a cut-off JSON reply should not lose the note
+            try:
+                note = docs_mod.analyze(client, model, data, kind, dt)
+                break
+            except Exception:
+                logger.warning("upload analysis failed", exc_info=True)
         text = dt.text or (note.text if note else "")
         return {
             "tag": (note.doc_type if note else "other")[:30] or "other",
@@ -335,6 +353,33 @@ def make_analyzer(client, model: str) -> Callable[[bytes, str, str], dict]:
         }
 
     return analyze
+
+
+def squeeze_fill_lines(text: str) -> str:
+    """Blank form lines ("......", "____") read off a scanned form become one "…": a DBD
+    form turned 6 pages into 100,000 characters of dots."""
+    import re
+
+    text = re.sub(r"[.·…_\-–—]{6,}", "…", text)
+    return re.sub(r"(?:…\s*){2,}", "… ", text)
+
+
+def needs_page_reading(dt) -> bool:
+    """True when a PDF's text layer cannot be trusted: (a) little text left once the lines
+    repeated on several pages (watermarks, headers) are dropped, e.g. a scanned certified copy
+    with a printed DBD footer; (b) Thai text, whose glyph maps in government PDFs often lose
+    tone marks and vowels ("หางหุนสวน")."""
+    from .i18n import has_thai
+
+    text = dt.text or ""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    counts: dict[str, int] = {}
+    for ln in lines:
+        counts[ln] = counts.get(ln, 0) + 1
+    own = sum(len(ln) for ln in lines if counts[ln] == 1)
+    if own < 150 * max(1, dt.pages):
+        return True
+    return has_thai(text)
 
 
 # ------------------------------------------------------------------ the library
@@ -738,6 +783,27 @@ class Library:
             raise ValueError("empty file")
         if self.analyzer is None:
             raise RuntimeError("no analyzer configured")
+        sha = hashlib.sha256(data).hexdigest()
+        same = self.docs.find(ORG_DOCS, web.memory_id, lambda d: d.get("sha256") == sha)
+        if same:  # the very same file again: keep one copy, say which one
+            d = same[0]
+            return DocItem(
+                id=f"{web.id}:upload:{d['id']}",
+                title=d.get("title") or d.get("filename", ""),
+                category="uploads",
+                kind="file",
+                workspace=web.id,
+                workspace_name=web.name,
+                platform="web",
+                date=d.get("created_at", ""),
+                who=d.get("by", ""),
+                size=d.get("size"),
+                preview=(d.get("summary") or "")[:PREVIEW],
+                tags=[d["tag"]] if d.get("tag") else [],
+                group=d.get("group")
+                or classify_group(d.get("tag", ""), d.get("filename", ""), d.get("summary", "")),
+                duplicate=True,
+            )
         info = self.analyzer(data, filename, mime)  # raises DocUnreadable for unsupported files
         doc_id = uuid.uuid4().hex[:16]
         uri = self.blobs.save(org.id, doc_id, filename, data, mime)
@@ -754,6 +820,7 @@ class Library:
             "text": (info.get("text") or "")[:STORED_TEXT],
             "created_at": now.isoformat(timespec="seconds"),
             "by": email,
+            "sha256": sha,
         }
         self.docs.put(ORG_DOCS, web.memory_id, doc_id, rec)
         self._index(org, web, rec)

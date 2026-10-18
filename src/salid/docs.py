@@ -285,7 +285,7 @@ def analyze(client, model: str, data: bytes, kind: str, dt: DocText) -> DocNote:
         contents,
         types.GenerateContentConfig(
             temperature=0,
-            max_output_tokens=900,
+            max_output_tokens=4000,  # 900 cut long Thai notes mid-JSON (18 Oct 2026)
             response_mime_type="application/json",
             response_schema=DocNote,
         ),

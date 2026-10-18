@@ -227,7 +227,7 @@ input[readonly] { background: var(--bg-2); color: var(--muted); }
 .wsgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; }
 .wsgrid > .card { margin: 0; }
 .plat { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: #fff; font-weight: 700; flex: none; }
-.plat.discord { background: #5865F2; } .plat.slack { background: #4A154B; } .plat.clickup { background: #7B68EE; } .plat.web { background: var(--indigo-2); } .plat.soon { background: var(--faint); }
+.plat.discord { background: #5865F2; } .plat.google_calendar, .plat.google { background: #1A73E8; } .plat.telegram { background: #229ED9; } .plat.whatsapp { background: #25D366; } .plat.slack { background: #4A154B; } .plat.clickup { background: #7B68EE; } .plat.web { background: var(--indigo-2); } .plat.soon { background: var(--faint); }
 .hd { display: flex; gap: 12px; align-items: center; min-width: 0; }
 .hd > div { min-width: 0; overflow-wrap: anywhere; }
 .matrix td, .matrix th { text-align: center; }
@@ -536,9 +536,9 @@ details.sys > .inner { padding-top: 12px; }
 .cal-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 12px; }
 .cal-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .cal-nav h2 { font-size: 18px; margin: 0 0 0 8px; }
-.cal-head { display: grid; grid-template-columns: repeat(7, 1fr); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); text-align: center; padding: 4px 0; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); border-left: 1px solid var(--line-soft); border-top: 1px solid var(--line-soft); }
-.cal-cell { display: flex; flex-direction: column; gap: 3px; align-items: stretch; min-height: 96px; padding: 6px; border: 0; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: #fff; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+.cal-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); text-align: center; padding: 4px 0; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-left: 1px solid var(--line-soft); border-top: 1px solid var(--line-soft); }
+.cal-cell { min-width: 0; display: flex; flex-direction: column; gap: 3px; align-items: stretch; min-height: 96px; padding: 6px; border: 0; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); background: #fff; text-align: left; font: inherit; color: inherit; cursor: pointer; }
 .cal-cell:hover { background: var(--bg); }
 .cal-cell.outside { background: var(--bg-2); color: var(--muted); }
 .cal-cell.sel { box-shadow: inset 0 0 0 2px var(--lavender); }
@@ -549,9 +549,14 @@ details.sys > .inner { padding-top: 12px; }
 .cal-chip.task { background: #E6EEFF; color: #1F3A8A; border-left-color: #3B63D6; }
 .cal-chip.meeting { background: #E2F5E8; color: #1B5E34; border-left-color: #2E9E5B; }
 .cal-chip.event { background: #FFF0D6; color: #7A4B00; border-left-color: #E8A33A; }
+.cal-chip.deadline { background: #FDE2E2; color: #8A1C1C; border-left-color: #D64545; }
+.cal-chip.milestone { background: #E8F4FD; color: #0B4F79; border-left-color: #2D8FD5; }
+.cal-chip.personal { background: #fff; border: 1px dashed #8A6CF0; border-left-width: 3px; border-left-style: solid; }
+.cal-item.personal { border-style: dashed; border-color: #B9A6F5; }
+.chk.ovl { font-weight: 600; font-size: 14px; cursor: pointer; padding: 6px 10px; border: 1px solid var(--line); border-radius: 99px; background: #fff; }
 .cal-chip b { font-weight: 700; margin-right: 3px; }
 .cal-cell .more { font-size: 11px; color: var(--muted); padding-left: 4px; }
-.cal-week { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.cal-week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
 .wk-col { border: 1px solid var(--line-soft); border-radius: 10px; background: #fff; min-height: 180px; display: flex; flex-direction: column; }
 .wk-col.today { border-color: var(--lavender); }
 .wk-col.sel { box-shadow: inset 0 0 0 2px var(--lavender); }
@@ -800,7 +805,7 @@ th: {
   ab_h:"เชื่อมบอทเข้าองค์กร", ab_p:"สำหรับผู้ดูแล: ขอรหัสแล้วส่งให้บอทของ LINE, Telegram หรือ WhatsApp", ab_instr:"ส่งรหัสนี้ให้บอทในแชทส่วนตัว",
   set_h:"ตั้งค่าเซิร์ฟเวอร์", set_p:"การตั้งค่าเฉพาะเซิร์ฟเวอร์ เช่น เปิด/ปิดฟีเจอร์ อยู่ที่หน้า Hub", set_go:"เปิดหน้า Hub",
   org_settings:"ตั้งค่าองค์กร",
-  n_account:"โปรไฟล์ของฉัน", n_mytasks:"งานของฉัน", n_mycal:"ปฏิทินของฉัน", talk:"คุยกับสลิด", panel_p:"ถามเรื่องบริษัทได้เลย ทั้งใบเสร็จ เอกสาร การประชุม และงานค่ะ", typing_dots:"สลิดกำลังพิมพ์…",
+  n_account:"โปรไฟล์ของฉัน", n_mytasks:"งานของฉัน", n_mycal:"ปฏิทินบริษัท", cal_overlay:"ซ้อนปฏิทินของฉัน", cal_company:"บริษัท", cal_mine:"ของฉัน", mc_deadline:"กำหนดส่งโปรเจกต์", mc_milestone:"เป้าหมายย่อย", talk:"คุยกับสลิด", panel_p:"ถามเรื่องบริษัทได้เลย ทั้งใบเสร็จ เอกสาร การประชุม และงานค่ะ", typing_dots:"สลิดกำลังพิมพ์…",
   platforms:"แพลตฟอร์ม", connected_of:"เชื่อมต่อแล้ว {x} จาก {y}", p_not_connected:"ยังไม่เชื่อมต่อ", members_linked:"เชื่อมบัญชีของตัวเองแล้ว {n} คน", members_n:"สมาชิก {n} คน",
   mem_name:"สมาชิก", mem_linked:"บัญชีที่เชื่อม", linked_n:"เชื่อมแล้ว {n} แพลตฟอร์ม", linked_none:"ยังไม่ได้เชื่อมบัญชี",
   verified:"ยืนยันแล้ว", unverified:"ยังไม่ยืนยัน", not_linked:"ยังไม่เชื่อม",
@@ -816,6 +821,7 @@ th: {
   tv_board:"บอร์ด", tv_list:"รายการ", tb_overdue:"เลยกำหนด", tb_today:"วันนี้", tb_week:"สัปดาห์นี้", tb_later:"ถัดไป / ไม่มีกำหนด", tb_salid:"สั่งสลิดไว้", tb_none:"ว่าง", tb_show_done:"ดูที่เสร็จแล้ว", tb_hide_done:"ซ่อนที่เสร็จแล้ว",
   cal_month:"เดือน", cal_week:"สัปดาห์", cal_agenda:"กำหนดการ", cal_today:"วันนี้", cal_prev:"ก่อนหน้า", cal_next:"ถัดไป", cal_more:"+{n} รายการ", cal_none_day:"ไม่มีนัดหมายในวันนี้", mc_meeting:"ประชุม", mc_event:"กิจกรรม",
   due_over:"เลยกำหนด", due_today:"วันนี้", due_tomorrow:"พรุ่งนี้", due_in:"อีก {n} วัน", no_due:"ไม่มีกำหนด",
+  mc_gcal_on:"เชื่อมต่อแล้ว {e}", mc_gcal_on_p:"สลิดใช้ดูเวลาว่างและนัดประชุมลงปฏิทินของคุณ", mc_gcal_off_p:"เชื่อม Google Calendar เพื่อให้สลิดเห็นเวลาว่างและนัดประชุมให้คุณ", mc_gcal_connect:"เชื่อม Google Calendar", mc_gcal_na:"ยังไม่เปิดใช้การเชื่อม Google Calendar",
   mc_empty:"ยังไม่มีนัดหมาย", mc_empty_hint:"การเตือนที่ตั้งไว้กับสลิดและกำหนดส่งงานของคุณจะแสดงที่นี่", mc_sources:"จาก: การเตือนของสลิด และกำหนดส่งงาน", mc_gcal:"Google Calendar", mc_gcal_soon:"เร็วๆ นี้: นัดหมายจาก Google Calendar ของคุณจะมาแสดงที่นี่ด้วย", mc_reminder:"การเตือน", mc_task:"งาน", mc_repeat:"ทุก {x}", today:"วันนี้", tomorrow:"พรุ่งนี้",
   acc_first:"ชื่อจริง", acc_last:"นามสกุล", acc_real_hint:"ระบบกรอกให้จากบัญชี Google ตอนเข้าสู่ระบบ แก้ไขให้ถูกต้องได้เลยค่ะ",
   act_h:"คำสั่งที่ส่งไป Discord", act_hint:"บอทสลิดจะทำให้ภายในไม่กี่วินาที หรือจะบอกสลิดในแชทเฉย ๆ ก็ได้ค่ะ", act_none:"ยังไม่มีคำสั่ง", act_queue:"ส่งคำสั่ง", act_kind:"คำสั่ง", act_by:"โดย", act_result:"ผล", act_open:"เปิด", act_queued:"ส่งคำสั่งแล้ว", act_no_discord:"ต้องเชื่อมต่อเซิร์ฟเวอร์ Discord ก่อน",
@@ -823,7 +829,7 @@ th: {
   lg_h:"ข้อมูลนิติบุคคล", lg_p:"ตามหนังสือรับรองและเอกสารจดทะเบียน อัปโหลดเอกสารในแชทให้สลิด สลิดจะกรอกให้", lg_registered_name:"ชื่อนิติบุคคล", lg_registration_no:"เลขทะเบียนนิติบุคคล", lg_tax_id:"เลขประจำตัวผู้เสียภาษี", lg_registered_capital:"ทุนจดทะเบียน", lg_registered_address:"ที่ตั้งสำนักงานใหญ่", lg_directors:"กรรมการผู้มีอำนาจ", lg_objectives:"วัตถุประสงค์",
   cp_edit:"แก้ไขโปรไฟล์", cp_name:"ชื่อบริษัท", cp_logo:"ลิงก์โลโก้ (https://…)", cp_tagline:"สโลแกน", cp_about:"เกี่ยวกับบริษัท", cp_industry:"ธุรกิจ", cp_founded:"ก่อตั้ง", cp_location:"ที่ตั้ง", cp_size:"ขนาดองค์กร", cp_website:"เว็บไซต์", cp_email:"อีเมล", cp_phone:"โทรศัพท์", cp_values:"ค่านิยม", cp_values_hint:"คั่นด้วยจุลภาค ไม่เกิน 8 ข้อ",
   cp_leadership:"ผู้บริหาร", cp_no_lead:"ยังไม่มีรายชื่อผู้บริหาร", cp_depts:"แผนก", cp_no_depts:"ยังไม่มีแผนก (สมาชิกตั้งค่าได้ในหน้า โปรไฟล์ของฉัน)", cp_sys:"สลิดและระบบ", cp_sys_p:"การเชื่อมต่อ แพ็กเกจ และสิ่งที่สลิดทำ (เฉพาะผู้ดูแล)", cp_empty:"ยังไม่มีข้อมูลบริษัท", cp_empty_hint:"ผู้ดูแล: เล่าเรื่องบริษัทให้สลิดฟังในแชท หรือกด “แก้ไขโปรไฟล์”", cp_about_empty:"เล่าสั้น ๆ ว่าบริษัททำอะไร เพื่อใคร", cp_people:"พนักงาน {n} คน",
-  up_attach:"แนบเอกสารให้สลิด", up_drop:"วางไฟล์เพื่ออัปโหลด", up_sys:"📎 อัปโหลด {name} แล้ว — เก็บไว้ที่", up_ask:"ฉันเพิ่งอัปโหลด \"{name}\" ช่วยอ่านแล้วสรุปให้หน่อย", up_too_big:"ไฟล์ใหญ่เกินไป (สูงสุด 20 MB)", up_bad_type:"ไม่รองรับไฟล์ชนิดนี้ (PDF, Word, Excel, PowerPoint, รูปภาพ, ข้อความ)",
+  up_attach:"แนบเอกสารให้สลิด", up_dup:"📎 {name} มีอยู่ในระบบแล้ว (ไฟล์เดียวกัน ไม่เก็บซ้ำ) —", up_ask_n:"ฉันเพิ่งอัปโหลดเอกสาร {n} ไฟล์: {names} ช่วยอ่าน จัดเก็บให้ถูกแฟ้ม และอัปเดตข้อมูลบริษัทให้ด้วย", up_drop:"วางไฟล์เพื่ออัปโหลด", up_sys:"📎 อัปโหลด {name} แล้ว — เก็บไว้ที่", up_ask:"ฉันเพิ่งอัปโหลด \"{name}\" ช่วยอ่านแล้วสรุปให้หน่อย", up_too_big:"ไฟล์ใหญ่เกินไป (สูงสุด 20 MB)", up_bad_type:"ไม่รองรับไฟล์ชนิดนี้ (PDF, Word, Excel, PowerPoint, รูปภาพ, ข้อความ)",
   org_chart:"ผังองค์กร", oc_edit:"แก้ไขที่ สมาชิก → ผังองค์กร", oc_set:"ตั้งค่า “ฉันรายงานต่อ” ในหน้า โปรไฟล์ของฉัน",
   dg_all:"ทั้งหมด", dg_company:"เอกสารบริษัท", dg_legal:"สัญญาและกฎหมาย", dg_finance:"การเงิน (ใบแจ้งหนี้ ใบเสร็จ ค่าใช้จ่าย)", dg_hr:"บุคคล", dg_other:"อื่นๆ", dg_p:"เอกสารสำคัญของบริษัท (จดทะเบียน ข้อบังคับ ผู้ถือหุ้น ใบอนุญาต) แยกจากเอกสารการเงิน สลิดจัดหมวดให้อัตโนมัติ ผู้ดูแลย้ายหมวดได้", dg_move:"ย้ายไปหมวด", dg_moved:"ย้ายไป {g} แล้ว",
   tab_people:"รายชื่อ", tab_chart:"ผังองค์กร", tab_everyone:"ทุกคนบนแพลตฟอร์ม", tab_positions:"ตำแหน่งงาน", tab_experts:"หาผู้เชี่ยวชาญ",
@@ -890,7 +896,7 @@ en: {
   ab_h:"Connect a bot workspace", ab_p:"For admins: get a code and send it to your LINE, Telegram or WhatsApp bot", ab_instr:"Send this code to the bot in a private chat",
   set_h:"Server settings", set_p:"Per-server settings such as feature toggles live on the Hub page.", set_go:"Open Hub",
   org_settings:"Organization settings",
-  n_account:"My profile", n_mytasks:"My tasks", n_mycal:"My calendar", talk:"Talk to Salid", panel_p:"Ask about the company: receipts, documents, meetings, tasks.", typing_dots:"Salid is typing…",
+  n_account:"My profile", n_mytasks:"My tasks", n_mycal:"Calendar", cal_overlay:"Overlay my calendar", cal_company:"Company", cal_mine:"Mine", mc_deadline:"Project deadline", mc_milestone:"Milestone", talk:"Talk to Salid", panel_p:"Ask about the company: receipts, documents, meetings, tasks.", typing_dots:"Salid is typing…",
   platforms:"Platforms", connected_of:"Connected {x} of {y}", p_not_connected:"Not connected", members_linked:"{n} linked their accounts", members_n:"Members: {n}",
   mem_name:"Member", mem_linked:"Linked accounts", linked_n:"Linked: {n} platforms", linked_none:"No linked accounts",
   verified:"Verified", unverified:"Unverified", not_linked:"Not linked",
@@ -906,6 +912,7 @@ en: {
   tv_board:"Board", tv_list:"List", tb_overdue:"Overdue", tb_today:"Today", tb_week:"This week", tb_later:"Later / no date", tb_salid:"Asked Salid", tb_none:"Nothing here", tb_show_done:"Show done", tb_hide_done:"Hide done",
   cal_month:"Month", cal_week:"Week", cal_agenda:"Agenda", cal_today:"Today", cal_prev:"Previous", cal_next:"Next", cal_more:"+{n} more", cal_none_day:"Nothing on this day", mc_meeting:"Meeting", mc_event:"Event",
   due_over:"Overdue", due_today:"Today", due_tomorrow:"Tomorrow", due_in:"In {n} days", no_due:"No due date",
+  mc_gcal_on:"Connected {e}", mc_gcal_on_p:"Salid uses it to see when you are free and to put meetings in your calendar.", mc_gcal_off_p:"Connect Google Calendar so Salid can see when you are free and book meetings for you.", mc_gcal_connect:"Connect Google Calendar", mc_gcal_na:"Google Calendar connection is not enabled",
   mc_empty:"Nothing scheduled yet", mc_empty_hint:"Reminders you set with Salid and your task due dates show up here.", mc_sources:"From: Salid reminders and task due dates", mc_gcal:"Google Calendar", mc_gcal_soon:"Coming soon: your Google Calendar events will appear here too.", mc_reminder:"Reminder", mc_task:"Task", mc_repeat:"Every {x}", today:"Today", tomorrow:"Tomorrow",
   acc_first:"First name", acc_last:"Last name", acc_real_hint:"Filled from your Google account at sign-in; you can correct it.",
   act_h:"Actions on Discord", act_hint:"Salid's bot performs these within seconds; you can also just ask Salid in chat.", act_none:"No actions yet", act_queue:"Queue action", act_kind:"Action", act_by:"By", act_result:"Result", act_open:"Open", act_queued:"Action queued", act_no_discord:"Connect a Discord server first",
@@ -913,7 +920,7 @@ en: {
   lg_h:"Legal entity", lg_p:"As on the registration certificate. Upload the papers to Salid in the chat and she fills this in.", lg_registered_name:"Registered name", lg_registration_no:"Registration number", lg_tax_id:"Tax ID", lg_registered_capital:"Registered capital", lg_registered_address:"Head office address", lg_directors:"Authorised directors", lg_objectives:"Business objectives",
   cp_edit:"Edit profile", cp_name:"Company name", cp_logo:"Logo URL (https://…)", cp_tagline:"Tagline", cp_about:"About", cp_industry:"Industry", cp_founded:"Founded", cp_location:"Location", cp_size:"Company size", cp_website:"Website", cp_email:"Email", cp_phone:"Phone", cp_values:"Values", cp_values_hint:"Comma-separated, up to 8",
   cp_leadership:"Leadership", cp_no_lead:"No leaders listed yet", cp_depts:"Departments", cp_no_depts:"No departments yet (members set theirs on My profile)", cp_sys:"Salid & systems", cp_sys_p:"Connections, license and what Salid does (admins only)", cp_empty:"No company profile yet", cp_empty_hint:"Admins: tell Salid about the company in chat, or press “Edit profile”", cp_about_empty:"A few lines on what the company does, and for whom", cp_people:"{n} people",
-  up_attach:"Attach a document for Salid", up_drop:"Drop a file to upload it", up_sys:"📎 Uploaded {name} — saved under", up_ask:"I just uploaded \"{name}\" — please read it and tell me what it is about", up_too_big:"File too large (20 MB max)", up_bad_type:"Unsupported file type (PDF, Word, Excel, PowerPoint, images, text)",
+  up_attach:"Attach documents for Salid", up_dup:"📎 {name} is already on file (same file, not stored twice) —", up_ask_n:"I just uploaded {n} documents: {names}. Please read them, file them in the right place and update the company information.", up_drop:"Drop a file to upload it", up_sys:"📎 Uploaded {name} — saved under", up_ask:"I just uploaded \"{name}\" — please read it and tell me what it is about", up_too_big:"File too large (20 MB max)", up_bad_type:"Unsupported file type (PDF, Word, Excel, PowerPoint, images, text)",
   org_chart:"Organization chart", oc_edit:"Edit in Members → Org chart", oc_set:"Set “I report to” on My profile",
   dg_all:"All", dg_company:"Company records", dg_legal:"Contracts & legal", dg_finance:"Finance (invoices, receipts, expenses)", dg_hr:"HR", dg_other:"Other", dg_p:"The company's key records (registration, articles and regulations, shareholders, licences) are kept apart from finance papers. Salid files each document automatically; admins can move one.", dg_move:"Move to group", dg_moved:"Moved to {g}",
   tab_people:"People", tab_chart:"Org chart", tab_everyone:"Everyone on platforms", tab_positions:"Positions", tab_experts:"Find an expert",
@@ -1043,8 +1050,8 @@ let me = null, orgId = null, cur = null;
 // Company settings and personal settings are two labelled groups. "Talk to Salid" is not a page: it is the
 // floating panel (bottom-right), so the old #/chat route opens the panel over the company profile.
 const NAV_SECTIONS = [
-  ["sec_company", [["overview", "n_overview", "▦"], ["docs", "n_docs", "▤"], ["ws", "n_ws", "◫"], ["apps", "n_apps", "⚙"], ["members", "n_members", "☺"], ["license", "n_license", "★"], ["settings", "n_settings", "⚒"]]],
-  ["sec_personal", [["account", "n_account", "☉"], ["mytasks", "n_mytasks", "☑"], ["mycal", "n_mycal", "▣"]]],
+  ["sec_company", [["overview", "n_overview", "▦"], ["mycal", "n_mycal", "▣"], ["docs", "n_docs", "▤"], ["ws", "n_ws", "◫"], ["apps", "n_apps", "⚙"], ["members", "n_members", "☺"], ["license", "n_license", "★"], ["settings", "n_settings", "⚒"]]],
+  ["sec_personal", [["account", "n_account", "☉"], ["mytasks", "n_mytasks", "☑"]]],
 ];
 const NAV = NAV_SECTIONS.flatMap(([, pages]) => pages);
 const ADMIN_PAGES = ["apps", "license", "settings"]; // hidden from plain members of the current org
@@ -1114,7 +1121,7 @@ async function start() {
 }
 
 /* ---------- helpers ---------- */
-const PLAT = { discord: "D", slack: "S", clickup: "C", web: "W", line: "L", google: "G" };
+const PLAT = { discord: "D", slack: "S", clickup: "C", web: "W", line: "L", google: "G", google_calendar: "G", telegram: "T", whatsapp: "W" };
 const PNAME = { discord: "Discord", slack: "Slack", clickup: "ClickUp", line: "LINE", telegram: "Telegram", whatsapp: "WhatsApp", web: "Web", google: "Google", google_drive: "Google Drive", gmail: "Gmail", google_calendar: "Google Calendar" };
 const pname = (p) => PNAME[p] || p;
 const platBadge = (p, sm) => el("div", { class: "plat " + (p in PLAT ? p : "soon") + (sm ? " sm" : ""), "aria-hidden": "true" }, PLAT[p] || "?");
@@ -1875,24 +1882,32 @@ function chatWidget(hist, prefix) {
   const ta = el("textarea", { id: prefix + "-in", rows: "1", placeholder: t("chat_ph"), "aria-label": t("chat_ph") });
   const btn = el("button", { class: "btn", type: "submit" }, t("send"));
   const clip = el("button", { class: "clip", type: "button", "aria-label": t("up_attach"), title: t("up_attach") }); clip.innerHTML = ICON.clip;
-  const fileIn = el("input", { type: "file", class: "sr", id: prefix + "-file", accept: UP_ACCEPT, "aria-label": t("up_attach") });
+  const fileIn = el("input", { type: "file", class: "sr", id: prefix + "-file", accept: UP_ACCEPT, multiple: true, "aria-label": t("up_attach") });
   const form = el("form", { class: "compose" }, clip, ta, btn);
   const wrap = el("div", { class: "chat" }, msgs, form, fileIn);
   const unEmpty = () => { const emp = msgs.querySelector(".empty"); if (emp) emp.remove(); };
   const live = liveCall(wrap, (who, text) => { unEmpty(); add(who, text); }); // finished call turns land in the chat log too
   // attach a document: upload to the company's Documents, say so in the log, then ask Salid about it (through the call when one is on)
-  const attach = async (file) => {
-    if (!file) return; const bad = checkUpload(file); if (bad) { toast(t(bad), "error"); return; }
-    unEmpty(); const line = el("div", { class: "msg sys", role: "status" }, el("span", { class: "spin", "aria-hidden": "true" }), t("uploading", { name: file.name })); msgs.append(line); msgs.scrollTop = msgs.scrollHeight;
-    try {
-      const doc = await uploadDoc(file);
-      line.replaceChildren(t("up_sys", { name: file.name }), " ", el("a", { href: "#/docs", text: t("n_docs") }), doc && doc.group ? [" · ", el("span", { class: "chip gchip " + doc.group, text: t("dg_" + doc.group) })] : null);
-      const ask = t("up_ask", { name: file.name });
-      if (live.active()) live.say(ask); else sendWhenFree(ask, 0, doc && doc.id);
-    } catch (e) { line.remove(); if (e instanceof AuthError) return; toast(uploadErr(e), "error"); }
+  // several files at once (e.g. all the company's registration papers): each is uploaded and
+  // filed, then ONE request hands them all to Salid, who reads them together
+  const attach = async (files) => {
+    const list = [...(files || [])].slice(0, 10); if (!list.length) return;
+    const ids = [], names = [];
+    for (const file of list) {
+      const bad = checkUpload(file); if (bad) { toast(file.name + ": " + t(bad), "error"); continue; }
+      unEmpty(); const line = el("div", { class: "msg sys", role: "status" }, el("span", { class: "spin", "aria-hidden": "true" }), t("uploading", { name: file.name })); msgs.append(line); msgs.scrollTop = msgs.scrollHeight;
+      try {
+        const doc = await uploadDoc(file);
+        line.replaceChildren(t(doc && doc.duplicate ? "up_dup" : "up_sys", { name: file.name }), " ", el("a", { href: "#/docs", text: t("n_docs") }), doc && doc.group ? [" · ", el("span", { class: "chip gchip " + doc.group, text: t("dg_" + doc.group) })] : null);
+        if (doc && doc.id && !ids.includes(doc.id)) { ids.push(doc.id); names.push(file.name); }
+      } catch (e) { line.remove(); if (e instanceof AuthError) return; toast(file.name + ": " + uploadErr(e), "error"); }
+    }
+    if (!ids.length) return;
+    const ask = ids.length === 1 ? t("up_ask", { name: names[0] }) : t("up_ask_n", { n: ids.length, names: names.join(", ") });
+    if (live.active()) live.say(ask); else sendWhenFree(ask, 0, ids);
   };
   clip.addEventListener("click", () => fileIn.click());
-  fileIn.addEventListener("change", () => { attach(fileIn.files[0]); fileIn.value = ""; });
+  fileIn.addEventListener("change", () => { attach(fileIn.files); fileIn.value = ""; });
   const sendWhenFree = (x, n = 0, docId) => { if (!btn.disabled || n > 60) send(x, docId); else setTimeout(() => sendWhenFree(x, n + 1, docId), 500); };
   const send = async (preset, docId) => {
     const text = String(preset || ta.value).trim(); if (!text || btn.disabled) return;
@@ -1901,7 +1916,7 @@ function chatWidget(hist, prefix) {
     add("user", text); btn.disabled = true;
     const ty = el("div", { class: "msg typing", role: "status", "aria-label": t("typing") }, el("span"), el("span"), el("span"), el("em", { text: t("typing_dots") })); msgs.append(ty); msgs.scrollTop = msgs.scrollHeight;
     try {
-      const r = await api(O("/chat"), J("POST", { message: text, page: pageName(), document_id: docId || null }));
+      const r = await api(O("/chat"), J("POST", { message: text, page: pageName(), document_ids: Array.isArray(docId) ? docId : docId ? [docId] : [] }));
       ty.remove(); add("bot", r.answer || "");
     } catch (e) { ty.remove(); if (handleAuth(e)) return; msgs.append(el("div", { class: "notice error", role: "alert", text: errText(e) })); }
     btn.disabled = false; ta.focus();
@@ -2666,13 +2681,15 @@ VIEWS.mytasks = async (body, my) => {
   body.replaceChildren(el("div", { class: "card" }, el("div", { class: "pline" }, el("p", { class: "muted small", text: t("mt_intro") }), toggle), host));
 };
 VIEWS.mycal = async (body, my) => {
-  const r = await api(O("/me/calendar")); if (stale(my)) return; done(body);
+  // the COMPANY calendar; "Overlay my calendar" adds the person's reminders and task dues
+  let overlay = false; try { overlay = localStorage.getItem("salid_cal_overlay") === "1"; } catch { /* ignore */ }
+  const r = await api(O("/calendar") + (overlay ? "?mine=1" : "")); if (stale(my)) return; done(body);
   const days = items(r, "days"), src = r.sources || {};
   const byDate = {}; for (const dd of days) byDate[String(dd.date || "").slice(0, 10)] = items(dd);
   const ymd = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
   const parse = (k) => { const m = String(k).match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(); };
-  const kindKey = (it) => ({ reminder: "mc_reminder", task: "mc_task", meeting: "mc_meeting", event: "mc_event" })[it.kind] || "mc_event";
-  const item = (it) => { const tm = timeOf(it.at); return el("div", { class: "cal-item " + (it.kind || "event") }, el("span", { class: "ci", "aria-hidden": "true", text: { reminder: "⏰", task: "☑", meeting: "🎧", event: "📅" }[it.kind] || "📅" }),
+  const kindKey = (it) => ({ reminder: "mc_reminder", task: "mc_task", meeting: "mc_meeting", event: "mc_event", deadline: "mc_deadline", milestone: "mc_milestone" })[it.kind] || "mc_event";
+  const item = (it) => { const tm = timeOf(it.at); return el("div", { class: "cal-item " + (it.kind || "event") + (it.layer === "personal" ? " personal" : "") }, el("span", { class: "ci", "aria-hidden": "true", text: { reminder: "⏰", task: "☑", meeting: "🎧", event: "📅", deadline: "🏁", milestone: "◆" }[it.kind] || "📅" }),
     el("div", { class: "cx" }, el("div", { class: "ct", text: it.title }),
       el("div", { class: "cm" }, el("span", { text: t(kindKey(it)) + (tm ? " · " + tm : "") }), it.repeat ? el("span", { class: "chip", text: t("mc_repeat", { x: it.repeat }) }) : null, it.workspace_name ? el("span", { text: it.workspace_name }) : null, discordLink(it.url)))); };
   // ---- a real calendar: month grid (Google-Calendar style), week columns, or the agenda list
@@ -2682,7 +2699,7 @@ VIEWS.mycal = async (body, my) => {
   const monday = (d) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
   const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
   const weekdayNames = (() => { const m = monday(new Date(2024, 0, 8)); return [...Array(7)].map((_, i) => addDays(m, i).toLocaleDateString(loc(), { weekday: "short" })); })();
-  const chip = (it) => { const tm = timeOf(it.at); return el("div", { class: "cal-chip " + (it.kind || "event"), title: it.title }, tm ? el("b", { text: tm }) : null, " ", it.title); };
+  const chip = (it) => { const tm = timeOf(it.at); return el("div", { class: "cal-chip " + (it.kind || "event") + (it.layer === "personal" ? " personal" : ""), title: (it.layer === "personal" ? t("cal_mine") + " · " : "") + it.title }, tm ? el("b", { text: tm }) : null, " ", it.title); };
   const grid = el("div"), detail = el("div", { class: "cal-detail" }), title = el("h2"), host = el("div");
   const drawDetail = () => { const d = parse(selected), list = byDate[selected] || [];
     detail.replaceChildren(el("h3", { text: d.toLocaleDateString(loc(), { weekday: "long", day: "numeric", month: "long", year: "numeric" }) }),
@@ -2709,14 +2726,26 @@ VIEWS.mycal = async (body, my) => {
   const move = (n) => { if (mode === "month") cursor = new Date(cursor.getFullYear(), cursor.getMonth() + n, 1); else cursor = addDays(cursor, 7 * n); draw(); };
   const tabs = el("div", { class: "ktabs", role: "tablist" }, ["month", "week", "agenda"].map((k) => el("button", { type: "button", role: "tab", id: "cal-tab-" + k, "aria-selected": String(mode === k), onclick: () => { mode = k; try { localStorage.setItem("salid_cal_view", k); } catch { /* ignore */ } draw(); } }, t("cal_" + k))));
   const nav = el("div", { class: "cal-nav" }, el("button", { class: "btn ghost sm", type: "button", "aria-label": t("cal_prev"), onclick: () => move(-1) }, "‹"), el("button", { class: "btn ghost sm", type: "button", onclick: () => { cursor = new Date(); selected = todayKey; draw(); } }, t("cal_today")), el("button", { class: "btn ghost sm", type: "button", "aria-label": t("cal_next"), onclick: () => move(1) }, "›"), title);
-  const draw = () => { for (const k of ["month", "week", "agenda"]) $("cal-tab-" + k).setAttribute("aria-selected", String(mode === k)); nav.hidden = mode === "agenda";
+  // the tabs are looked up inside this view (not by document id): draw() runs before the view
+  // is attached to the page, where getElementById finds nothing
+  const draw = () => { for (const b of tabs.children) b.setAttribute("aria-selected", String(b.id === "cal-tab-" + mode)); nav.hidden = mode === "agenda";
     if (mode === "month") drawMonth(); else if (mode === "week") drawWeek(); else drawAgenda(); detail.hidden = mode === "agenda"; if (mode !== "agenda") drawDetail(); };
   host.replaceChildren(el("div", { class: "cal-toolbar" }, tabs, nav), grid, detail);
   draw();
-  const legend = el("div", { class: "cal-legend" }, ["reminder", "task", "meeting", "event"].map((k) => el("span", { class: "cal-chip " + k }, t({ reminder: "mc_reminder", task: "mc_task", meeting: "mc_meeting", event: "mc_event" }[k]))));
-  const out = [el("div", { class: "card calcard" }, el("div", { class: "pline" }, el("h2", { text: t("n_mycal") }), legend), host)];
-  if (!src.google_calendar) out.push(el("div", { class: "card soonbox" }, el("div", { class: "hd" }, el("div", { class: "plat soon", "aria-hidden": "true" }, "G"), el("div", {}, el("strong", { text: t("mc_gcal") }), " ", el("span", { class: "badge soon", text: t("soon") }), el("div", { class: "muted small", text: t("mc_gcal_soon") })))));
+  const ov = el("input", { type: "checkbox", id: "cal-overlay", checked: overlay });
+  ov.addEventListener("change", () => { try { localStorage.setItem("salid_cal_overlay", ov.checked ? "1" : "0"); } catch { /* ignore */ } route(); });
+  const legend = el("div", { class: "cal-legend" }, ["meeting", "event", "deadline", "milestone"].map((k) => el("span", { class: "cal-chip " + k }, t(kindKey({ kind: k })))),
+    overlay ? ["reminder", "task"].map((k) => el("span", { class: "cal-chip personal " + k }, t(kindKey({ kind: k })))) : null);
+  const out = [el("div", { class: "card calcard" }, el("div", { class: "pline" }, el("h2", { text: t("n_mycal") }), el("label", { class: "chk ovl" }, ov, " ", t("cal_overlay"))), legend, host)];
+  // Google Calendar: the person's own connection (main's /google/calendar API), not "coming soon"
+  const gbox = el("div", { class: "card" }), gstat = el("div", { class: "muted small", text: t("loading") });
+  gbox.replaceChildren(el("div", { class: "hd" }, platBadge("google_calendar"), el("div", {}, el("strong", { text: t("mc_gcal") }), gstat)));
+  out.push(gbox);
   body.replaceChildren(...out);
+  api(O("/google/calendar")).then((g) => {
+    if (g && g.connected) gstat.replaceChildren(el("span", { class: "badge ok", text: "✓ " + t("mc_gcal_on", { e: g.email || "" }) }), el("div", { class: "muted small", text: t("mc_gcal_on_p") }));
+    else gstat.replaceChildren(el("div", { class: "muted small", text: t("mc_gcal_off_p") }), el("button", { class: "btn sm", type: "button", style: "margin-top:6px", onclick: async () => { try { const r = await api(O("/google/calendar/connect"), { method: "POST" }); if (r && r.auth_url && !MOCK) location.href = r.auth_url; else toast("mock: " + (r && r.auth_url)); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); } } }, t("mc_gcal_connect")));
+  }).catch(() => gstat.replaceChildren(el("span", { class: "muted small", text: t("mc_gcal_na") })));
 };
 
 VIEWS.settings = async (body) => {
@@ -2767,7 +2796,7 @@ $("panel-live").addEventListener("click", () => { if (panel.w) panel.w.live.togg
   p.addEventListener("dragenter", (ev) => { if (!panel.w) return; ev.preventDefault(); n++; p.classList.add("over"); });
   p.addEventListener("dragover", (ev) => { if (!panel.w) return; ev.preventDefault(); });
   p.addEventListener("dragleave", () => { if (--n <= 0) { n = 0; p.classList.remove("over"); } });
-  p.addEventListener("drop", (ev) => { ev.preventDefault(); n = 0; p.classList.remove("over"); const f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0]; if (f && panel.w) panel.w.attach(f); }); }
+  p.addEventListener("drop", (ev) => { ev.preventDefault(); n = 0; p.classList.remove("over"); const f = ev.dataTransfer && ev.dataTransfer.files; if (f && f.length && panel.w) panel.w.attach(f); }); }
 window.addEventListener("pagehide", () => { if (panel.w) panel.w.stop(); });
 $("lang").addEventListener("click", () => setLang(lang === "th" ? "en" : "th"));
 $("login-lang").addEventListener("click", () => setLang(lang === "th" ? "en" : "th"));
@@ -2989,6 +3018,11 @@ function mockApi(method, path, body) {
     { id: "T-0016", title: "สรุปค่าใช้จ่ายไตรมาส 3 เป็นสไลด์", due: day(1), status: "open", url: "https://discord.com/channels/1/2/44", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", assignee: "สลิด" },
     { id: "T-0017", title: "เตือนทีมขายส่งรายงานทุกวันศุกร์ 17:00", due: "", status: "open", url: "", workspace: "discord-2", workspace_name: "ทีมเชียงใหม่", platform: "discord", assignee: "สลิด" },
     { id: "T-0011", title: "รวบรวมใบเสร็จเดือนกันยายนเป็น PDF", due: day(-3), status: "done", url: "https://discord.com/channels/1/2/38", workspace: "discord-1", workspace_name: "ออฟฟิศกรุงเทพ", platform: "discord", assignee: "สลิด" }] });
+  if (sub === "/calendar") { const mine = qp.get("mine") === "1"; const base = (mockApi.calBase = mockApi.calBase || null);
+    const all = [{ date: day(0), items: [{ kind: "reminder", layer: "personal", at: day(0) + "T09:30", title: "โทรหาลูกค้า A เรื่องใบเสนอราคา" }, { kind: "meeting", layer: "company", at: day(0) + "T14:00", title: "ประชุมทีมขายประจำสัปดาห์", workspace_name: "ออฟฟิศกรุงเทพ" }] },
+      { date: day(2), items: [{ kind: "task", layer: "personal", at: day(2), title: "ส่งใบเสนอราคาลูกค้า A ฉบับแก้ไข" }, { kind: "event", layer: "company", at: day(2) + "T10:00", title: "Town hall ไตรมาส 4" }] },
+      { date: day(5), items: [{ kind: "milestone", layer: "company", at: day(5), title: "แอปใหม่: เปิดเบต้า" }] }, { date: day(9), items: [{ kind: "deadline", layer: "company", at: day(9), title: "แอปใหม่" }] }];
+    void base; return ok({ days: all.map((d) => ({ date: d.date, items: d.items.filter((i) => mine || i.layer === "company") })).filter((d) => d.items.length), sources: { google_calendar: false }, layers: mine ? ["company", "personal"] : ["company"] }); }
   if (sub === "/me/calendar") return ok({ days: [
     { date: day(0), items: [{ kind: "reminder", at: day(0) + "T09:30", title: "โทรหาลูกค้า A เรื่องใบเสนอราคา", repeat: "", workspace_name: "ออฟฟิศกรุงเทพ" }, { kind: "task", at: day(0), title: "เตรียมสไลด์ประชุมบอร์ดไตรมาส 4", url: "", workspace_name: "ทีมเชียงใหม่" }] },
     { date: day(1), items: [{ kind: "reminder", at: day(1) + "T10:00", title: "ประชุมทีมขายประจำสัปดาห์", repeat: "week", workspace_name: "ออฟฟิศกรุงเทพ" }] },
