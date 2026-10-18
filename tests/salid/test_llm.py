@@ -27,6 +27,21 @@ def test_client_has_a_request_timeout():
     assert client._api_client._http_options.timeout == llm.REQUEST_TIMEOUT_MS
 
 
+def test_chat_agent_model_calls_have_the_request_timeout_and_keep_retries(seeded, settings):
+    """The ADK chat agent built its own genai client with no timeout: one stuck Vertex call left
+    the answer (and its worker thread) hanging. The timeout rides on every request's config."""
+    from conftest import EXEC_ID, GUILD, scripted, text_resp
+
+    from salid.qa import RETRY_OPTIONS, ask, build_agent
+
+    agent = build_agent(settings, [], scoped=False)
+    assert agent.model.retry_options is RETRY_OPTIONS  # 429 / 5xx are still retried
+    assert agent.generate_content_config.http_options.timeout == llm.REQUEST_TIMEOUT_MS
+    model = scripted(text_resp("ok"))
+    ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=model)
+    assert model.requests[0].config.http_options.timeout == llm.REQUEST_TIMEOUT_MS
+
+
 def test_timeout_is_retried(monkeypatch):
     """A hung call used to block a voice meeting's worker forever; now it times out and retries."""
     monkeypatch.setattr(llm.time, "sleep", lambda _s: None)

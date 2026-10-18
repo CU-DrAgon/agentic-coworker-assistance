@@ -188,6 +188,28 @@ def test_bad_tool_args_return_error_to_model(seeded, settings):
     assert a.text == "ขออภัย" and "bad group_by" in _tool_results(llm)
 
 
+def test_a_crashing_tool_is_reported_to_the_model_and_the_turn_goes_on(
+    seeded, settings, monkeypatch, caplog
+):
+    """A Firestore / network error inside a tool used to abort the whole answer."""
+
+    def down(self, **kw):
+        raise ConnectionError("firestore unavailable")
+
+    monkeypatch.setattr(LedgerTools, "spending_summary", down)
+    llm = scripted(fc_resp(("spending_summary", EVERYTHING)), text_resp("ตอนนี้ดึงยอดไม่ได้ค่ะ"))
+    with caplog.at_level("WARNING", logger="salid.qa"):
+        a = ask(settings, seeded, "ยอดปีนี้", guild_id=GUILD, is_exec=True, user_id=EXEC_ID,
+                model=llm)  # fmt: skip
+    assert a.text == "ตอนนี้ดึงยอดไม่ได้ค่ะ" and a.rounds == 1
+    shown = _tool_results(llm)
+    assert "internal error" in shown and "firestore unavailable" not in shown  # no internals
+    assert "spending_summary" in a.tool_ms  # still timed
+    (rec,) = [r for r in caplog.records if r.name == "salid.qa" and r.exc_info]
+    assert "spending_summary" in rec.getMessage()
+    assert "2026-01-01" not in rec.getMessage() and "ยอดปีนี้" not in rec.getMessage()
+
+
 def test_round_cap(seeded, settings):
     llm = scripted(*[fc_resp(("flagged_receipts", {}))] * MAX_ROUNDS, text_resp("สรุป"))
     a = ask(settings, seeded, "x", guild_id=GUILD, is_exec=True, user_id=EXEC_ID, model=llm)
