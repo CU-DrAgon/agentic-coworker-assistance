@@ -12,7 +12,7 @@ from meeting_scribe import center, hub
 from meeting_scribe.app import app
 from meeting_scribe.config import get_settings
 from salid.coo_store import SQLiteDocStore
-from salid.google_oauth import CALENDAR_SCOPE, STATE_KIND, TOKENS_KIND, GoogleConfig, GoogleOAuth
+from salid.google_oauth import CALENDAR_SCOPES, STATE_KIND, TOKENS_KIND, GoogleConfig, GoogleOAuth
 from salid.orgs import License, Member, OrgStore
 
 CLIENT_ID = "123-abc.apps.googleusercontent.com"
@@ -63,7 +63,7 @@ def w(monkeypatch):
                     "access_token": "AT",
                     "refresh_token": "RT-route-secret",
                     "expires_in": 3600,
-                    "scope": f"openid email {CALENDAR_SCOPE}",
+                    "scope": "openid email " + " ".join(CALENDAR_SCOPES),
                 },
             )
         if "userinfo" in url:

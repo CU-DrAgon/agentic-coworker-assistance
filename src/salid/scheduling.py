@@ -309,8 +309,22 @@ class DiscordCalendar:
 GOOGLE_EVENTS = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 GOOGLE_FREEBUSY = "https://www.googleapis.com/calendar/v3/freeBusy"
 GOOGLE_MAX_FREEBUSY = 50
+
+
 # Event marker so Salid only ever cancels / moves events it created itself.
-GOOGLE_MARK = {"salid": "1"}
+def google_mark(account) -> dict[str, str]:
+    """Private extended properties that tie an event to the org and member that created it."""
+    return {
+        "salid": "1",
+        "salid_org": str(account.org_id),
+        "salid_owner": str(account.email).strip().lower(),
+    }
+
+
+def is_salid_event(ev: dict, account) -> bool:
+    """True only when ALL three marks match this exact (org, member)."""
+    priv = (ev.get("extendedProperties") or {}).get("private") or {}
+    return all(priv.get(k) == v for k, v in google_mark(account).items())
 
 
 class GoogleCalendarError(CalendarError):
@@ -355,16 +369,41 @@ class GoogleCalendar:
             raise GoogleCalendarError(
                 "not_connected" if e.code == "not_connected" else "failed"
             ) from None
+        r = await self._send(token, method, url, **kw)
+        if r.status_code != 401:
+            return r
+        # A 401 means the cached access token went stale: drop it, refresh once, retry once.
+        # (403 is a permission answer, never retried; invalid_grant surfaces as not_connected.)
+        self.oauth.evict(account.org_id, account.email)
+        try:
+            token = await asyncio.to_thread(self.oauth.access_token, account.org_id, account.email)
+        except GoogleOAuthError as e:
+            raise GoogleCalendarError(
+                "not_connected" if e.code == "not_connected" else "failed"
+            ) from None
+        return await self._send(token, method, url, **kw)
+
+    async def _send(self, token: str, method: str, url: str, **kw) -> httpx.Response:
         headers = {"Authorization": f"Bearer {token}"}
         try:
             if self._client is not None:
-                r = await self._client.request(method, url, headers=headers, **kw)
-            else:
-                async with httpx.AsyncClient(timeout=15) as c:
-                    r = await c.request(method, url, headers=headers, **kw)
+                return await self._client.request(method, url, headers=headers, **kw)
+            async with httpx.AsyncClient(timeout=15) as c:
+                return await c.request(method, url, headers=headers, **kw)
         except httpx.HTTPError:
             raise GoogleCalendarError("failed") from None
-        return r
+
+    async def _require_own(self, account, event_id: str) -> bool:
+        """GET the event and demand all three marks. False when it is already gone."""
+        try:
+            ev = await self.get_event(account, event_id)
+        except GoogleCalendarError as e:
+            if e.code == "not_found":
+                return False
+            raise
+        if not is_salid_event(ev, account):
+            raise GoogleCalendarError("not_created_by_salid")
+        return True
 
     @staticmethod
     def _fail(r: httpx.Response) -> GoogleCalendarError:
@@ -400,7 +439,7 @@ class GoogleCalendar:
             "start": self._when(spec.start),
             "end": self._when(spec.end),
             "attendees": [{"email": e} for e in attendees],
-            "extendedProperties": {"private": dict(GOOGLE_MARK)},
+            "extendedProperties": {"private": google_mark(account)},
         }
         if meet:
             body["conferenceData"] = {
@@ -432,6 +471,8 @@ class GoogleCalendar:
         return r.json()
 
     async def update_event(self, guild, event_id: str, start: datetime, end: datetime) -> None:
+        if not await self._require_own(guild, event_id):
+            raise GoogleCalendarError("not_found", 404)
         r = await self._call(
             guild,
             "PATCH",
@@ -443,6 +484,8 @@ class GoogleCalendar:
             raise self._fail(r)
 
     async def delete_event(self, guild, event_id: str) -> None:
+        if not await self._require_own(guild, event_id):
+            return  # already gone
         r = await self._call(
             guild,
             "DELETE",

@@ -28,6 +28,7 @@ from .scheduling import (
     EventSpec,
     GoogleCalendar,
     fmt_when,
+    is_salid_event,
     parse_local,
 )
 from .secretary import SecretaryState, fingerprint
@@ -49,6 +50,9 @@ class CalendarToolContext:
     state: SecretaryState
     run: Callable[[Any], Any]  # run a coroutine and return its result
     zone: Any
+    # Trusted conversation scope (platform, tenant, room, thread) set by the bot, never by the
+    # model: a draft can only be confirmed in the conversation that made it.
+    scope: tuple[str, str, str, str]
     lang: str = "en"
     request_id: str = field(default_factory=new_id)
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
@@ -165,6 +169,7 @@ def calendar_tools(ctx: CalendarToolContext) -> list:
                 return _not_connected()
             key = (
                 "gmeet",
+                ctx.scope,
                 account.org_id,
                 account.email,
                 fingerprint(
@@ -222,9 +227,9 @@ def calendar_tools(ctx: CalendarToolContext) -> list:
             if not ctx.oauth.is_connected(account.org_id, account.email):
                 return _not_connected()
             ev = ctx.run(ctx.calendar.get_event(account, eid))
-            if (ev.get("extendedProperties") or {}).get("private", {}).get("salid") != "1":
+            if not is_salid_event(ev, account):
                 return {"error": "not_created_by_salid", "event_id": eid}
-            key = ("gmeet-cancel", account.org_id, account.email, eid)
+            key = ("gmeet-cancel", ctx.scope, account.org_id, account.email, eid)
             if not _confirmed(key, confirm):
                 return {
                     "status": "needs_confirmation",

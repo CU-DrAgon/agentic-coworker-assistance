@@ -13,7 +13,7 @@ from cryptography.fernet import Fernet
 
 from salid.coo_store import SQLiteDocStore
 from salid.google_oauth import (
-    CALENDAR_SCOPE,
+    CALENDAR_SCOPES,
     STATE_KIND,
     TOKENS_KIND,
     Account,
@@ -45,7 +45,7 @@ class Google:
     def __init__(self):
         self.log = []
         self.userinfo = {"email": ME, "email_verified": True}
-        self.scope = f"openid email {CALENDAR_SCOPE}"
+        self.scope = "openid email " + " ".join(CALENDAR_SCOPES)
         self.refresh_token = "RT-secret-1"
         self.token_status = 200
         self.token_error = ""
@@ -140,7 +140,7 @@ def test_auth_url_has_required_parameters(oauth):
     q = parse_qs(urlparse(oauth.auth_url(state)).query)
     assert q["client_id"] == ["cid"] and q["redirect_uri"] == ["https://x/cb"]
     assert q["response_type"] == ["code"]
-    assert CALENDAR_SCOPE in q["scope"][0].split()
+    assert q["scope"][0].split() == ["openid", "email", *CALENDAR_SCOPES]
     assert q["access_type"] == ["offline"] and q["prompt"] == ["consent"]
     assert q["include_granted_scopes"] == ["true"]
     assert q["code_challenge_method"] == ["S256"] and q["state"] == [state]
@@ -227,11 +227,22 @@ def test_missing_calendar_scope_refused(oauth, g, docs):
     assert docs.find_items(TOKENS_KIND, 0) == []
 
 
-def test_no_refresh_token_refused(oauth, g):
+def test_only_one_calendar_scope_refused_and_grant_revoked(oauth, g, docs):
+    for missing in CALENDAR_SCOPES:
+        g.scope = "openid email " + " ".join(s for s in CALENDAR_SCOPES if s != missing)
+        with pytest.raises(GoogleOAuthError) as e:
+            connect(oauth)
+        assert e.value.code == "scope_missing"
+    assert len(g.of("/revoke")) == 2 and docs.find_items(TOKENS_KIND, 0) == []
+
+
+def test_no_refresh_token_refused_and_access_token_revoked(oauth, g):
     g.refresh_token = ""
     with pytest.raises(GoogleOAuthError) as e:
         connect(oauth)
     assert e.value.code == "no_refresh_token"
+    rev = g.of("/revoke")
+    assert len(rev) == 1 and parse_qs(rev[0].content.decode())["token"] == ["AT-1"]
 
 
 # ------------------------------------------------------------------ token store
@@ -357,6 +368,9 @@ END = START + timedelta(hours=1)
 ACCT = Account(ORG, ME)
 
 
+MARK = {"salid": "1", "salid_org": ORG, "salid_owner": ME}
+
+
 def google_event(**kw):
     ev = {
         "id": "ev1",
@@ -364,7 +378,7 @@ def google_event(**kw):
         "hangoutLink": "https://meet.google.com/abc-defg-hij",
         "summary": "Sync",
         "start": {"dateTime": "2026-10-20T14:00:00+07:00"},
-        "extendedProperties": {"private": {"salid": "1"}},
+        "extendedProperties": {"private": dict(MARK)},
     }
     return {**ev, **kw}
 
@@ -395,7 +409,7 @@ def test_create_event_payload_and_meet_request(oauth, g):
     assert body["attendees"] == [{"email": "a@example.com"}, {"email": "b@example.com"}]
     cr = body["conferenceData"]["createRequest"]
     assert cr["conferenceSolutionKey"] == {"type": "hangoutsMeet"} and len(cr["requestId"]) >= 16
-    assert body["extendedProperties"]["private"] == {"salid": "1"}
+    assert body["extendedProperties"]["private"] == MARK
 
 
 def test_create_event_request_ids_differ(oauth, g):
@@ -456,6 +470,7 @@ def test_update_event_moves_with_send_updates(oauth, g):
     g.calendar = lambda r: httpx.Response(200, json=google_event())
     cal = make_calendar(g, oauth)
     run(cal.update_event(ACCT, "ev/1", START + timedelta(days=1), END + timedelta(days=1)))
+    assert [r.method for r in g.of("/calendars/primary/events")] == ["GET", "PATCH"]
     req = g.of("/calendars/primary/events")[-1]
     assert req.method == "PATCH" and str(req.url).split("?")[0].endswith("/events/ev%2F1")
     assert parse_qs(urlparse(str(req.url)).query)["sendUpdates"] == ["all"]
@@ -464,7 +479,9 @@ def test_update_event_moves_with_send_updates(oauth, g):
 
 def test_delete_event_notifies_attendees_and_tolerates_gone(oauth, g):
     connect(oauth)
-    g.calendar = lambda r: httpx.Response(204)
+    g.calendar = lambda r: (
+        httpx.Response(200, json=google_event()) if r.method == "GET" else httpx.Response(204)
+    )
     cal = make_calendar(g, oauth)
     run(cal.delete_event(ACCT, "ev1"))
     req = g.of("/calendars/primary/events")[-1]
@@ -569,9 +586,9 @@ def test_free_busy_query_and_unreadable_calendars(oauth, g):
 
 
 # ------------------------------------------------------------------ agent tools
-def org():
+def org(org_id=ORG):
     return Org(
-        id=ORG,
+        id=org_id,
         name="Cafe",
         owner_email=ME,
         created_at="2026-01-01",
@@ -584,10 +601,15 @@ def org():
     )
 
 
-def tools_for(oauth, g, state, *, rid, email=ME, is_exec=True, now=None):
+ROOM_A = ("discord", "t1", "roomA", "")
+ROOM_B = ("discord", "t1", "roomB", "")
+
+
+def tools_for(oauth, g, state, *, rid, email=ME, is_exec=True, now=None, scope=ROOM_A, org_id=ORG):
     cal = make_calendar(g, oauth)
     ctx = CalendarToolContext(
-        org=org(),
+        scope=scope,
+        org=org(org_id),
         email=email,
         is_exec=is_exec,
         calendar=cal,
@@ -758,3 +780,123 @@ def test_tools_bound_to_asker_not_arguments(oauth, g):
         assert not {"org", "org_id", "email", "organizer"} & set(inspect.signature(fn).parameters)
     other = tools_for(oauth, g, SecretaryState(), rid="r1", email="bob@example.com")
     assert sched(other)["status"] == "not_connected"  # bob never connected; mine is not used
+
+
+# ------------------------------------------------------------------ review fixes
+ORG_B = "org_other"
+ACCT_B = Account(ORG_B, ME)
+
+
+def connect_b(oauth):
+    return oauth.exchange("code-b", oauth.begin(ORG_B, ME))
+
+
+def test_same_email_in_two_orgs_cannot_touch_each_others_events(oauth, g):
+    connect(oauth)
+    connect_b(oauth)
+    g.calendar = lambda r: httpx.Response(200, json=google_event())  # marked by org A
+    cal = make_calendar(g, oauth)
+    for call in (
+        lambda: cal.update_event(ACCT_B, "ev1", START, END),
+        lambda: cal.delete_event(ACCT_B, "ev1"),
+    ):
+        with pytest.raises(GoogleCalendarError) as e:
+            run(call())
+        assert e.value.code == "not_created_by_salid"
+    assert not [r for r in g.log if r.method in ("PATCH", "DELETE")]
+    state = SecretaryState()
+    cancel = tools_for(oauth, g, state, rid="r1", org_id=ORG_B)["cancel_google_meeting"]
+    assert cancel("ev1")["error"] == "not_created_by_salid"
+    assert cancel("ev1", confirm=True)["error"] == "not_created_by_salid"
+    assert not [r for r in g.log if r.method == "DELETE"]
+
+
+@pytest.mark.parametrize("field", ["salid", "salid_org", "salid_owner"])
+def test_all_three_marks_required_before_cancel(oauth, g, field):
+    connect(oauth)
+    mark = {k: v for k, v in MARK.items() if k != field}
+    g.calendar = lambda r: httpx.Response(
+        200, json=google_event(extendedProperties={"private": mark})
+    )
+    cancel = tools_for(oauth, g, SecretaryState(), rid="r1")["cancel_google_meeting"]
+    assert cancel("ev1")["error"] == "not_created_by_salid"
+
+
+def test_confirm_is_bound_to_the_conversation_scope(oauth, g):
+    connect(oauth)
+    g.calendar = lambda r: httpx.Response(200, json=google_event())
+    state = SecretaryState()
+    assert (
+        sched(tools_for(oauth, g, state, rid="r1", scope=ROOM_A))["status"] == "needs_confirmation"
+    )
+    # a different room (or thread) cannot confirm room A's draft
+    for other in (ROOM_B, ("discord", "t1", "roomA", "thread9"), ("slack", "t1", "roomA", "")):
+        r = sched(tools_for(oauth, g, state, rid="r2", scope=other), confirm=True)
+        assert r["status"] == "needs_confirmation" and creates(g) == []
+    # room A's own draft survived and still confirms later
+    done = sched(tools_for(oauth, g, state, rid="r3", scope=ROOM_A), confirm=True)
+    assert done["status"] == "scheduled" and len(creates(g)) == 1
+
+
+def test_cancel_confirm_is_bound_to_the_conversation_scope(oauth, g):
+    connect(oauth)
+    g.calendar = lambda r: (
+        httpx.Response(200, json=google_event()) if r.method == "GET" else httpx.Response(204)
+    )
+    state = SecretaryState()
+    tools_for(oauth, g, state, rid="r1", scope=ROOM_A)["cancel_google_meeting"]("ev1")
+    other = tools_for(oauth, g, state, rid="r2", scope=ROOM_B)["cancel_google_meeting"]
+    assert other("ev1", confirm=True)["status"] == "needs_confirmation"
+    assert not [r for r in g.log if r.method == "DELETE"]
+    mine = tools_for(oauth, g, state, rid="r3", scope=ROOM_A)["cancel_google_meeting"]
+    assert mine("ev1", confirm=True)["status"] == "cancelled"
+
+
+def _flaky_calendar(g, statuses):
+    seen = []
+
+    def cal(r):
+        seen.append(r.headers["authorization"])
+        return httpx.Response(statuses[min(len(seen), len(statuses)) - 1], json=google_event())
+
+    g.calendar = cal
+    return seen
+
+
+def test_first_401_evicts_cached_token_refreshes_once_and_retries_once(oauth, g):
+    connect(oauth)
+    seen = _flaky_calendar(g, [401, 200])
+    cal = make_calendar(g, oauth)
+    run(cal.get_event(ACCT, "ev1"))
+    assert len(seen) == 2
+    refreshes = [r for r in g.of("/token") if "refresh_token" in r.content.decode()]
+    assert len(refreshes) == 1  # the cached token was dropped, so a real refresh happened
+
+
+def test_second_401_is_not_retried_again(oauth, g):
+    connect(oauth)
+    seen = _flaky_calendar(g, [401])
+    cal = make_calendar(g, oauth)
+    with pytest.raises(GoogleCalendarError) as e:
+        run(cal.get_event(ACCT, "ev1"))
+    assert e.value.code == "unauthorized" and len(seen) == 2
+
+
+def test_403_is_never_retried(oauth, g):
+    connect(oauth)
+    seen = _flaky_calendar(g, [403])
+    cal = make_calendar(g, oauth)
+    with pytest.raises(GoogleCalendarError) as e:
+        run(cal.get_event(ACCT, "ev1"))
+    assert e.value.code == "unauthorized" and len(seen) == 1
+
+
+def test_401_then_invalid_grant_deletes_record_and_reports_not_connected(oauth, g, docs):
+    connect(oauth)
+    seen = _flaky_calendar(g, [401])
+    g.token_status, g.token_error = 400, "invalid_grant"
+    cal = make_calendar(g, oauth)
+    with pytest.raises(GoogleCalendarError) as e:
+        run(cal.get_event(ACCT, "ev1"))
+    assert e.value.code == "not_connected" and len(seen) == 1
+    assert not oauth.is_connected(ORG, ME)

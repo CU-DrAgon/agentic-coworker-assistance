@@ -17,9 +17,11 @@ yet), routes at the end of `meeting_scribe/center.py`.
 1. **Enable the API**: APIs & Services > Library > *Google Calendar API* > Enable.
 2. **OAuth consent screen** (APIs & Services > OAuth consent screen):
    - User type *External* (or *Internal* if everyone is in one Workspace domain).
-   - Scopes to add: `openid`, `email` (non-sensitive) and
-     `https://www.googleapis.com/auth/calendar.events` (**sensitive**: Google requires app
-     verification before the general public can consent; see below).
+   - Scopes to add: `openid`, `email` (non-sensitive) and the two narrow calendar scopes
+     `https://www.googleapis.com/auth/calendar.events.owned` (events the member owns) and
+     `https://www.googleapis.com/auth/calendar.events.freebusy` (availability). Both are
+     **sensitive**: Google requires app verification before the general public can consent; see
+     below. Salid asks for both and refuses (and revokes) a grant that lacks either.
    - While the app is in *Testing* only the listed **test users** (up to 100) can connect, and their
      refresh tokens expire after 7 days. Add every pilot member's Google account under
      *Test users*. Publish to *In production* and finish verification for real customers.
@@ -53,19 +55,25 @@ not offered).
 - The consent `state` is random, stored server-side with (org, member email, PKCE verifier, expiry
   10 minutes) and single use. PKCE (S256) is used as well as the client secret.
 - After consent Salid asks Google who consented (userinfo) and refuses, and revokes the grant, if it
-  is not the member's own email, or if the calendar scope was not granted.
+  is not the member's own email, or if either calendar scope was not granted. A grant with no
+  refresh token is revoked too.
 - Members can disconnect from the web (`DELETE`), which revokes at Google and deletes the record.
 
 ## Behaviour
 
 - Event: summary, description, start/end in `SALID_TZ`, attendees by email,
   `conferenceData.createRequest` (`hangoutsMeet`, fresh `requestId`) with `conferenceDataVersion=1`,
-  `sendUpdates=all` on create, move and cancel. Salid marks its events and only cancels its own.
+  `sendUpdates=all` on create, move and cancel. Salid marks each event it creates with private extended
+  properties `salid=1`, `salid_org=<org id>` and `salid_owner=<member email>`, and only cancels or
+  moves an event when all three match the asker (so the same Google email in two orgs cannot touch
+  the other org's events). A 401 evicts the cached access token, refreshes once and retries once; a
+  403 is never retried; `invalid_grant` deletes the record (`not_connected`).
 - Free/busy (`GoogleCalendar.free_busy`) uses the organiser's token; calendars that token cannot read
   come back as `None` ("unknown"), never as free.
 - Agent tools (`google_tools.calendar_tools`): `schedule_google_meeting` and
   `cancel_google_meeting` use the secretary rule: the first call returns a draft, and only the same
-  call repeated with `confirm=true` in a **later** message acts. Attendees must be members of the
+  call repeated with `confirm=true` in a **later** message **of the same conversation** (platform,
+  tenant, room, thread: `CalendarToolContext.scope`, set by the bot) acts. Attendees must be members of the
   asker's organization (email, or the unique start of an email's name). An outside email is accepted
   only from an executive (owner, admin, super admin). Without a connection the tool answers
   `not_connected` and says to press Connect.

@@ -34,9 +34,11 @@ from cryptography.fernet import Fernet, InvalidToken
 
 logger = logging.getLogger(__name__)
 
-CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
+EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.owned"
+FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.events.freebusy"
+CALENDAR_SCOPES = (EVENTS_SCOPE, FREEBUSY_SCOPE)
 # openid + email only so userinfo can prove WHICH Google account consented (non-sensitive scopes).
-REQUEST_SCOPES = ("openid", "email", CALENDAR_SCOPE)
+REQUEST_SCOPES = ("openid", "email", *CALENDAR_SCOPES)
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
@@ -211,10 +213,12 @@ class GoogleOAuth:
         if who.get("email_verified") is not True or str(who.get("email", "")).lower() != email:
             self._revoke_token(refresh or access)
             raise GoogleOAuthError("email_mismatch")
-        if CALENDAR_SCOPE not in str(tok.get("scope", "")).split():
+        granted = set(str(tok.get("scope", "")).split())
+        if not set(CALENDAR_SCOPES) <= granted:
             self._revoke_token(refresh or access)
             raise GoogleOAuthError("scope_missing")
         if not refresh:
+            self._revoke_token(access)
             raise GoogleOAuthError("no_refresh_token")
         self._store(rec["org_id"], email, refresh, str(tok.get("scope", "")))
         self._remember(rec["org_id"], email, access, tok.get("expires_in"))
@@ -277,6 +281,10 @@ class GoogleOAuth:
         if hit and hit[1] > self._mono():
             return hit[0]
         return self.refresh(Account(org_id, email.strip().lower()))
+
+    def evict(self, org_id: str, email: str) -> None:
+        """Forget the cached access token (e.g. Google answered 401); the next use refreshes."""
+        self._cache.pop(_key(org_id, email), None)
 
     def refresh(self, member: Account) -> str:
         """Force a refresh. `invalid_grant` (revoked / expired consent) deletes the record."""
