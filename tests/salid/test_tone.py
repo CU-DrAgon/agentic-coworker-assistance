@@ -378,7 +378,7 @@ async def test_tone_without_argument_shows_the_current_tone_and_the_presets(bot,
     assert ephemeral and text.startswith("โทนของสลิดในห้องนี้ตอนนี้: สดใส ร่าเริง")
     for k in ALL:
         assert T.label(k, "th") in text
-    bot.guilds_store.set_channel_language(GUILD, 10, "en")
+    bot.guilds_store.set_server_language(GUILD, "en")  # the company language
     bot.team._cache.clear()
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
     await bot.handle_tone(it, None)
@@ -394,7 +394,7 @@ async def test_manager_sets_the_channel_tone_with_an_ephemeral_confirmation_in_t
     assert it.sent == [(t("tone_set_professional_channel", "th"), True)]
     assert bot.guilds_store.get(GUILD).channel_tones == {"10": "professional"}
     assert tone_of(bot, 10) == "professional" and tone_of(bot, 11) == "cheerful"  # immediate
-    bot.guilds_store.set_channel_language(GUILD, 10, "en")
+    bot.guilds_store.set_server_language(GUILD, "en")  # the company language
     bot.team._cache.clear()
     ex = Interaction(world.g, member(world.g, EXEC), world.gen)
     await bot.handle_tone(ex, "calm")
@@ -466,7 +466,7 @@ async def test_manager_changes_the_channel_tone_by_mention_in_both_languages(bot
     )
     assert m.replies == [t("tone_set_professional_channel", "th")] and bot.calls == []
     assert tone_of(bot, 10) == "professional" and tone_of(bot, 11) == "cheerful"
-    bot.guilds_store.set_channel_language(GUILD, 10, "en")
+    bot.guilds_store.set_server_language(GUILD, "en")  # the company language
     bot.team._cache.clear()
     m = await send(
         bot, world, world.gen, "<@999> change tone to calm", who=manager(world), mention=True
@@ -499,7 +499,7 @@ async def test_regular_member_asking_to_talk_formally_is_not_refused_but_goes_to
 async def test_anyone_may_ask_what_tone(bot, world):
     m = await send(bot, world, world.gen, "<@999> โทนอะไร", who=STAFF, mention=True)
     assert m.replies[0].startswith("โทนของสลิดในห้องนี้ตอนนี้: สดใส ร่าเริง") and bot.calls == []
-    bot.guilds_store.set_channel_language(GUILD, 10, "en")
+    bot.guilds_store.set_server_language(GUILD, "en")  # the company language
     bot.team._cache.clear()
     m = await send(bot, world, world.gen, "<@999> what tone", who=STAFF, mention=True)
     assert m.replies[0].startswith("Salid's tone in this channel right now:")
@@ -538,9 +538,9 @@ async def test_typed_tone_in_a_private_channel_sets_the_persons_own_tone(bot, wo
     assert profile_tone(bot, STAFF) is None and "ตามห้องและเซิร์ฟเวอร์ (สดใส ร่าเริง)" in m.replies[0]
 
 
-async def test_an_english_private_channel_confirms_in_english(bot, world):
+async def test_a_private_channel_on_an_english_server_confirms_in_english(bot, world):
     bot._pc_owners[10] = STAFF
-    bot.guilds_store.set_channel_language(GUILD, 10, "en")
+    bot.guilds_store.set_server_language(GUILD, "en")  # the company language
     bot.team._cache.clear()
     m = await send(bot, world, world.gen, "change tone to professional", who=STAFF)
     assert m.replies == ["Done. I'll keep a professional tone with you from now on."]

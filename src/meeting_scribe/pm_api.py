@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from meeting_scribe import hub
-from meeting_scribe.center import Ctx, get_orgs, member_ctx
+from meeting_scribe.center import Ctx, get_orgs, member_ctx, role_change_error
 from salid import projects as P
 from salid.i18n import LANG_NAMES, lang_name
 from salid.orgs import Member, OrgStore, Workspace
@@ -1014,6 +1014,10 @@ def patch_pm_settings(
             if "role" in sent and sent["role"] is not None:
                 if m.email.lower() == org.owner_email.lower() or m.role == "owner":
                     raise HTTPException(422, "owner_role_fixed")
+                if sent["role"] != m.role:  # the Members page's rules (`role_change_error`)
+                    me = m.email.lower() == pm.ctx.email.lower()
+                    if why := role_change_error(pm.ctx, m.role, sent["role"], me):
+                        raise HTTPException(*why)
                 m.role = sent["role"]
             if sent.get("department") is not None:
                 m.department = sent["department"]

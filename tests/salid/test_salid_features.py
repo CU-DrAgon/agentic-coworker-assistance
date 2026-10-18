@@ -542,7 +542,9 @@ async def test_name_prefixed_snooze_and_language(bot, world):
     m = await send(bot, world, world.gen, "สลิด คุยได้แล้วนะ")
     assert m.replies == [t("unsnooze", "th")]
     m = await send(bot, world, world.gen, "สลิด พูดภาษาอังกฤษหน่อย", who=manager(world))
-    assert bot.team.channel_language(GUILD, 10) == "en" and len(m.replies) == 1
+    # "speak English" without a scope is the speaker's own language; the company stays Thai
+    assert bot.profiles.get(GUILD, manager(world).id).language == "en" and len(m.replies) == 1
+    assert bot.team.channel_language(GUILD, 10) == "th"
     assert bot.calls == []
 
 
