@@ -199,6 +199,7 @@ async def test_meeting_reason_replies_only_count_in_the_chosen_company(two, worl
         "text_channel_id": 10, "attendee_ids": [STAFF], "attendee_names": ["x"],
         "dm_sent": {str(STAFF): now.isoformat(timespec="seconds")}, "attendance_notes": {},
         "start_utc": (now + timedelta(minutes=5)).isoformat(timespec="seconds"),
+        "end_utc": (now + timedelta(minutes=35)).isoformat(timespec="seconds"),
     })  # fmt: skip
     monkeypatch.setattr(two.scheduler, "get_guild", lambda gid: world.a)
     monkeypatch.setattr(two.scheduler, "clock", lambda: now)
