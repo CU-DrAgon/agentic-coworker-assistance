@@ -64,6 +64,7 @@ from ..web_read import extract_urls
 from . import ids
 from .calendar_glue import calendar_tools_for
 from .config import PlatformSettings
+from .org_people import org_people_tools_for
 
 logger = logging.getLogger(__name__)
 
@@ -1113,6 +1114,9 @@ class Assistant:
             lang = resolve_lang(setting, q)
         if tools := await calendar_tools_for(self, msg, gid, rid, lang, is_exec):
             kwargs["extra_tools"] = tools  # Google Calendar for a verified, connected asker
+        if people := await org_people_tools_for(self, msg):
+            # own org record + people list for a verified member (emails only in a 1:1 chat)
+            kwargs["extra_tools"] = [*kwargs.get("extra_tools", []), *people]
         t_ctx = self._clock()
         await _port_hook(port, "mark", msg, "👀")  # "seen, working on it" (the port removes it)
         slow = _Slow(self, msg, port, q, lang, rid)
