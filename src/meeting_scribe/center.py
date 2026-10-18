@@ -1450,3 +1450,98 @@ async def create_attach_code(
             raise HTTPException(400, "Cannot create a code") from exc
 
     return _issued_view(await run_in_threadpool(run))
+
+
+# ------------------------------------------------------------------ Google Calendar (per member)
+def get_google_oauth(orgs: OrgStore = Depends(get_orgs)) -> Any:
+    from salid.google_oauth import GoogleConfig, GoogleOAuth
+
+    return GoogleOAuth(orgs.docs, GoogleConfig.from_settings(get_settings()))
+
+
+def _google_member(ctx: Ctx, g: Any) -> str:
+    """503 when the feature is off; 403 unless the caller is a real member (a super admin who is
+    not in the org has no calendar here). Returns the member's email."""
+    if not g.enabled():
+        raise HTTPException(503, "Google Calendar is not configured")
+    if ctx.org.role_of(ctx.email) is None:
+        raise HTTPException(403, "Only members of the organization can connect a calendar")
+    return ctx.email
+
+
+@router.get("/orgs/{org_id}/google/calendar")
+async def google_calendar_status(
+    ctx: Ctx = Depends(member_ctx), g: Any = Depends(get_google_oauth)
+) -> dict:
+    """The caller's own Google Calendar connection: `{connected, email, connected_at}`."""
+    email = _google_member(ctx, g)
+    return await run_in_threadpool(g.status, ctx.org.id, email)
+
+
+@router.post("/orgs/{org_id}/google/calendar/connect")
+async def google_calendar_connect(
+    ctx: Ctx = Depends(member_ctx), g: Any = Depends(get_google_oauth)
+) -> dict:
+    """`{auth_url}`: navigate the browser there (Google consent, single-use state, 10 minutes)."""
+    email = _google_member(ctx, g)
+    return {"auth_url": await run_in_threadpool(g.start, ctx.org.id, email)}
+
+
+@router.delete("/orgs/{org_id}/google/calendar")
+async def google_calendar_disconnect(
+    ctx: Ctx = Depends(member_ctx), g: Any = Depends(get_google_oauth)
+) -> dict:
+    """Revoke at Google and delete the stored token."""
+    from salid.google_oauth import Account
+
+    email = _google_member(ctx, g)
+    await run_in_threadpool(g.revoke, Account(ctx.org.id, email))
+    return {"connected": False, "email": None, "connected_at": None}
+
+
+@router.get("/connectors/google/callback", include_in_schema=False)
+async def google_calendar_callback(
+    request: Request,
+    orgs: OrgStore = Depends(get_orgs),
+    g: Any = Depends(get_google_oauth),
+) -> RedirectResponse:
+    """Browser redirect from Google (no Bearer header): the single-use `state` made by /connect
+    identifies the org and member. Redirects to `/center?calendar=connected` or
+    `/center?calendar=error&reason=<code>`."""
+    from salid.google_oauth import Account, GoogleOAuthError
+
+    params = dict(request.query_params)
+
+    def fail(reason: str) -> RedirectResponse:
+        return RedirectResponse(
+            f"/center?{urlencode({'calendar': 'error', 'reason': reason})}", status_code=303
+        )
+
+    if not g.enabled():
+        return fail("not_available")
+    if params.get("error"):  # the user pressed Cancel at Google
+        if params.get("state"):
+            await run_in_threadpool(lambda: g.docs.delete("salid_google_state", 0, params["state"]))
+        return fail("denied")
+
+    def run() -> tuple[str, Account | None]:
+        try:
+            acct = g.exchange(params.get("code", ""), params.get("state", ""))
+        except GoogleOAuthError as exc:
+            return exc.code, None
+        org = orgs.get(acct.org_id)
+        if org is None or org.role_of(acct.email) is None:  # removed meanwhile
+            g.revoke(acct)
+            return "forbidden", None
+        return "", acct
+
+    reason, acct = await run_in_threadpool(run)
+    if acct is None:
+        return fail(reason)
+    return RedirectResponse(
+        f"/center?{urlencode({'calendar': 'connected', 'org': acct.org_id})}", status_code=303
+    )
+
+
+# `/connectors/{platform}/callback` above would swallow `google`; routes match in order.
+router.routes.insert(0, router.routes.pop())

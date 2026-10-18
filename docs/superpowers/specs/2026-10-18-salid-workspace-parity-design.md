@@ -247,6 +247,14 @@ answer**. Across platforms this means:
    quotations), deliver-file, profiles, catch-up, wiki.
 6. Google Calendar + Meet: "Connect Google Calendar" consent, `GoogleCalendar` backend, meetings
    and reminders from any platform.
+   **Done in part** (see `docs/platforms/google.md`): OAuth per member (`google_oauth.py`, PKCE,
+   single-use state, Fernet-encrypted refresh token in `salid_google_tokens`), routes
+   `/api/center/orgs/{org}/google/calendar[/connect]` + `/connectors/google/callback`,
+   `scheduling.GoogleCalendar` (create with Meet / move / cancel / attendee status / free-busy), and
+   the confirm-first agent tools in `google_tools.py`. **Remaining**: wire `calendar_tools` into the
+   agents (bot.py / platforms), keep the Google event id on the `salid_meetings` record and use
+   Google next to the Discord event, reminders for Google-only meetings, `freetime.py` reading
+   `free_busy`, the web "Connect Google Calendar" card, Google app verification.
 7. Buttons on Slack (Block Kit): task cards, approvals, votes, polls, video-ad cancel.
 8. Parity test and a capability table in this file, updated with every feature.
 
