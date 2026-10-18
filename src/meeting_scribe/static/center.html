@@ -603,6 +603,38 @@ details.sys > .inner { padding-top: 12px; }
 .chip.conf.high { background: var(--ok-bg); color: var(--ok-ink); } .chip.conf.low { background: var(--warn-bg); color: var(--warn-ink); }
 textarea.grow { field-sizing: content; min-height: 5.5em; max-height: 60vh; resize: vertical; }
 .pre { white-space: pre-wrap; }
+/* filing cabinet */
+.cabwrap { margin: 8px 0 4px; }
+.cabinet { max-width: 560px; margin: 0 auto; padding: 14px 14px 18px; border-radius: 14px; background: linear-gradient(180deg, #5B6178, #474C61); box-shadow: inset 0 2px 0 rgba(255,255,255,.15), 0 10px 24px rgba(27,31,59,.25); display: flex; flex-direction: column; gap: 10px; }
+.cabtop { display: flex; justify-content: space-between; align-items: center; color: #fff; padding: 0 4px 2px; }
+.cabtop .muted { color: rgba(255,255,255,.75); }
+.drawer-front { position: relative; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; min-height: 58px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; font: inherit; color: #2B2F45; text-align: left;
+  background: linear-gradient(180deg, #F4F1EA, #DCD7CC); box-shadow: inset 0 -3px 0 rgba(0,0,0,.12), 0 2px 0 rgba(0,0,0,.25); transition: transform .15s, box-shadow .15s; }
+.drawer-front:hover { transform: translateY(-1px); }
+.drawer-front.open { transform: translateX(10px); box-shadow: inset 0 -3px 0 rgba(0,0,0,.12), -10px 4px 0 rgba(0,0,0,.3); outline: 3px solid var(--lavender); }
+.drawer-front .dlabel { font-weight: 700; font-size: 14px; background: #fff; border: 1px solid #C9C2B4; border-radius: 4px; padding: 3px 8px; justify-self: start; box-shadow: inset 0 1px 2px rgba(0,0,0,.08); }
+.drawer-front .dhandle { width: 70px; height: 12px; border-radius: 6px; background: linear-gradient(180deg, #B9BDC9, #7D8296); box-shadow: 0 2px 2px rgba(0,0,0,.3); }
+.drawer-front .dcount { justify-self: end; font-size: 12.5px; color: #5B5446; }
+.drawer-front.company { background: linear-gradient(180deg, #FFF3C4, #EBD88E); } .drawer-front.company .dlabel { border-color: #D9B84A; }
+.folders { display: flex; gap: 12px; flex-wrap: wrap; margin: 14px 0 6px; }
+.folder { position: relative; width: 150px; min-height: 92px; padding: 22px 12px 10px; border: 0; border-radius: 4px 10px 10px 10px; background: #F2C66D; color: #4A3810; font: inherit; text-align: left; cursor: pointer; display: flex; flex-direction: column; justify-content: space-between; box-shadow: 0 3px 8px rgba(80,60,10,.18); transition: transform .12s; }
+.folder .ftab { position: absolute; top: -10px; left: 0; width: 64px; height: 14px; border-radius: 6px 6px 0 0; background: #E9B84F; }
+.folder .fname { font-weight: 700; font-size: 13.5px; text-transform: capitalize; overflow-wrap: anywhere; }
+.folder .fcount { font-size: 12px; opacity: .8; }
+.folder:hover { transform: translateY(-2px); } .folder.open { background: #FFE08F; outline: 3px solid var(--indigo); }
+@media (max-width: 640px) { .folder { width: calc(50% - 6px); } .drawer-front { grid-template-columns: 1fr auto; } .drawer-front .dhandle { display: none; } }
+/* document viewer */
+.viewer { position: fixed; inset: 0; z-index: 90; background: rgba(27, 31, 59, .55); display: flex; flex-direction: column; padding: 16px; gap: 10px; }
+.vbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; background: var(--card); border-radius: 12px; padding: 10px 14px; flex-wrap: wrap; }
+.vtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60vw; }
+.vacts { display: flex; gap: 8px; flex-wrap: wrap; }
+.vbody { flex: 1; min-height: 0; background: var(--card); border-radius: 12px; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.vframe { flex: 1; width: 100%; min-height: 70vh; border: 0; border-radius: 8px; }
+.vimg { max-width: 100%; max-height: 80vh; margin: 0 auto; object-fit: contain; }
+.vtext { white-space: pre-wrap; word-break: break-word; font-size: 14px; margin: 0; }
+.vdoc { max-width: 820px; margin: 0 auto; line-height: 1.6; } .vdoc img { max-width: 100%; } .vdoc table { border-collapse: collapse; } .vdoc td, .vdoc th { border: 1px solid var(--line); padding: 4px 8px; }
+.vsheet { overflow: auto; } .vsheet .tbl th { position: sticky; top: 0; background: var(--bg-2); }
+@media (max-width: 640px) { .viewer { padding: 0; } .vbar, .vbody { border-radius: 0; } }
 /* invite links */
 .invlist { display: grid; gap: 10px; margin-top: 8px; }
 .invrow { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
@@ -747,6 +779,8 @@ th: {
   apps_h:"เชื่อมต่อแอป", connect:"เชื่อมต่อ", not_enabled:"ยังไม่เปิดใช้", connected_n:"เชื่อมต่อแล้ว {n} เซิร์ฟเวอร์", app_discord:"แชทและเอกสารในเซิร์ฟเวอร์", app_slack:"ข้อความจาก Slack workspace", app_clickup:"งานและรายการจาก ClickUp (อ่านอย่างเดียว)", app_drive:"ไฟล์ใน Drive", app_gmail:"อีเมล", app_calendar:"ปฏิทิน",
   mem_h:"สมาชิก", mem_email:"อีเมล", mem_role:"บทบาท", mem_invite:"เชิญสมาชิก", mem_none:"ยังไม่มีสมาชิก", mem_ro:"เฉพาะเจ้าของและผู้ดูแลที่จัดการสมาชิกได้", confirm_rm:"ลบ {e} ออกจากองค์กร?", invited:"เชิญแล้ว",
   prof_jd:"รายละเอียดงาน (Job description)", prof_jd_ph:"หน้าที่ ขอบเขตงาน สิ่งที่ต้องส่งมอบ ใครทำงานด้วย… เขียนยาวได้ไม่จำกัด",
+  cab_h:"ตู้เอกสาร", cab_p:"เลือกลิ้นชัก แล้วเลือกแฟ้ม", cab_all_folders:"ทุกแฟ้ม", cab_folder_other:"ทั่วไป", cab_empty:"ลิ้นชักนี้ยังว่าง", cab_files:"{n} ไฟล์", cab_file1:"1 ไฟล์", ds_company:"เอกสารบริษัท", ds_legal:"สัญญา/กฎหมาย", ds_finance:"การเงิน", ds_hr:"บุคคล", ds_other:"อื่นๆ", cab_list:"มุมมองรายการ", cab_cabinet:"มุมมองตู้เอกสาร",
+  view:"เปิดดู", vw_loading:"กำลังเปิดเอกสาร…", vw_newtab:"เปิดในแท็บใหม่", vw_text_only:"แสดงเป็นข้อความที่สลิดอ่านได้ ดาวน์โหลดเพื่อดูไฟล์ต้นฉบับ", vw_cant:"เปิดไฟล์นี้ในเว็บไม่ได้ ดาวน์โหลดเพื่อเปิดด้วยโปรแกรมของคุณ", vw_sheet:"ชีต",
   mp_edit:"แก้ไขข้อมูล", mp_h:"ข้อมูลของ {n}", mp_p:"ตำแหน่ง แผนก และหน้าที่ จะแสดงในสารบบและผังองค์กร และสลิดใช้ตอบว่าใครทำอะไร", mp_boss:"รายงานต่อ", mp_boss_none:"ไม่มี (บนสุด)", mp_saved:"บันทึกข้อมูลของ {n} แล้ว",
   role_self_h:"เปลี่ยนสิทธิ์ของตัวเอง?", role_self_p:"คุณกำลังจะเปลี่ยนสิทธิ์ของตัวเองจาก {a} เป็น {b} การกระทำนี้ยกเลิกไม่ได้: คุณจะไม่สามารถให้สิทธิ์ที่สูงกว่ากับตัวเองได้อีก มีเพียงเจ้าของหรือผู้ดูแลเท่านั้นที่คืนสิทธิ์ให้ได้", role_self_ok:"ใช่ เปลี่ยนสิทธิ์ของฉัน",
   xfer_btn:"โอนความเป็นเจ้าของ…", xfer_h:"โอนความเป็นเจ้าของ", xfer_p:"มอบองค์กรนี้ให้สมาชิกอีกคน คุณจะสละความเป็นเจ้าของและกลายเป็นสิทธิ์ที่เลือกด้านล่าง เพื่อความปลอดภัย คุณเรียกคืนได้ภายใน 24 ชั่วโมง หลังจากนั้นถือเป็นที่สิ้นสุด", xfer_to:"เจ้าของคนใหม่", xfer_me:"ฉันจะเป็น", xfer_ok:"โอนความเป็นเจ้าของ", xfer_done:"โอนความเป็นเจ้าของให้ {e} แล้ว", xfer_none:"ต้องเพิ่มคนนั้นเป็นสมาชิกก่อน: ความเป็นเจ้าของมอบให้สมาชิกที่มีอยู่แล้วเท่านั้น",
@@ -835,6 +869,8 @@ en: {
   apps_h:"Integrations", connect:"Connect", not_enabled:"Not enabled yet", connected_n:"{n} servers connected", app_discord:"Server chat and documents", app_slack:"Messages from a Slack workspace", app_clickup:"Tasks and lists from ClickUp (read-only)", app_drive:"Files in Drive", app_gmail:"Email", app_calendar:"Calendar",
   mem_h:"Members", mem_email:"Email", mem_role:"Role", mem_invite:"Invite a member", mem_none:"No members yet", mem_ro:"Only owners and admins can manage members.", confirm_rm:"Remove {e} from the organization?", invited:"Invited",
   prof_jd:"Job description", prof_jd_ph:"Duties, scope, deliverables, who they work with… write as much as you need",
+  cab_h:"Filing cabinet", cab_p:"Pick a drawer, then a folder", cab_all_folders:"All folders", cab_folder_other:"General", cab_empty:"This drawer is empty", cab_files:"{n} files", cab_file1:"1 file", ds_company:"Company records", ds_legal:"Contracts & legal", ds_finance:"Finance", ds_hr:"HR", ds_other:"Other", cab_list:"List view", cab_cabinet:"Cabinet view",
+  view:"View", vw_loading:"Opening the document…", vw_newtab:"Open in a new tab", vw_text_only:"Shown as the text Salid read. Download for the original file.", vw_cant:"This file cannot be shown in the browser. Download it to open it with your app.", vw_sheet:"Sheet",
   mp_edit:"Edit profile", mp_h:"Profile of {n}", mp_p:"Job title, department and what they do show in the directory and the org chart, and Salid uses them to say who does what.", mp_boss:"Reports to", mp_boss_none:"Nobody (top of the chart)", mp_saved:"Profile of {n} saved",
   role_self_h:"Change your own role?", role_self_p:"You are about to change your role from {a} to {b}. This cannot be undone: you will not be able to give yourself a higher role again. Only the owner or an admin can restore it.", role_self_ok:"Yes, change my role",
   xfer_btn:"Transfer ownership…", xfer_h:"Transfer ownership", xfer_p:"Hand this organization to another member. You give up ownership and become the role you pick below. Security first: you can take ownership back within 24 hours; after that it is final.", xfer_to:"New owner", xfer_me:"I become", xfer_ok:"Transfer ownership", xfer_done:"Ownership transferred to {e}", xfer_none:"Add the person as a member first: ownership can only go to an existing member.",
@@ -1152,6 +1188,65 @@ async function downloadDoc(r) {
     const u = URL.createObjectURL(await res.blob()); const a = el("a", { href: u, download: r.title || "file" }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000);
   } catch (e) { toast(errText(e), "error"); }
 }
+// ---- open a document in the browser (no download): PDF / image / video / audio / text as is,
+// .docx through mammoth, .xlsx / .xls / .csv through SheetJS (loaded on demand from cdnjs),
+// anything else as the text Salid extracted. HTML and other active types are shown as TEXT.
+const libs = {};
+function loadScript(url) { return libs[url] || (libs[url] = new Promise((res, rej) => { const sc = document.createElement("script"); sc.src = url; sc.crossOrigin = "anonymous"; sc.onload = res; sc.onerror = () => { delete libs[url]; rej(new Error("library")); }; document.head.append(sc); })); }
+const extOf = (n) => ((String(n || "").match(/\.([a-z0-9]+)$/i) || [])[1] || "").toLowerCase();
+async function viewDoc(r) {
+  const prev = document.activeElement;
+  const body = el("div", { class: "vbody" }, el("div", { class: "muted", text: t("vw_loading") }));
+  let url = null;
+  const close = () => { wrap.remove(); if (url) URL.revokeObjectURL(url); prev && prev.focus && prev.focus(); };
+  const bar = el("div", { class: "vbar" }, el("strong", { class: "vtitle", text: r.title || "" }),
+    el("div", { class: "vacts" }, el("button", { class: "btn ghost sm", type: "button", onclick: () => downloadDoc(r) }, t("download")), el("button", { class: "btn sm", type: "button", onclick: close }, t("close"))));
+  const wrap = el("div", { class: "viewer", role: "dialog", "aria-modal": "true", "aria-label": r.title || "", tabindex: "-1" }, bar, body);
+  wrap.addEventListener("keydown", (ev) => { if (ev.key === "Escape") close(); });
+  document.body.append(wrap); wrap.focus();
+  const asText = async (note) => { let txt = ""; try { const d = await api(O("/documents/" + encodeURIComponent(r.id))); txt = d.text || d.preview || ""; } catch { /* none */ }
+    body.replaceChildren(el("p", { class: "notice", text: txt ? note : t("vw_cant") }), txt ? el("pre", { class: "vtext", text: txt }) : null); };
+  if (r.kind !== "file" || MOCK) { await asText(t("vw_text_only")); return; }
+  let blob;
+  try { const res = await fetch(O("/documents/" + encodeURIComponent(r.id) + "/file"), { headers: { Authorization: "Bearer " + token } });
+    if (res.status === 401) { close(); toLogin("err_expired"); return; } if (!res.ok) throw new ApiError("", res.status); blob = await res.blob(); }
+  catch (e) { body.replaceChildren(el("div", { class: "notice error", text: errText(e) })); return; }
+  const ext = extOf(r.title), mime = (blob.type || "").toLowerCase();
+  const typed = (type) => new Blob([blob], { type });
+  try {
+    if (ext === "pdf" || mime === "application/pdf") {
+      url = URL.createObjectURL(typed("application/pdf"));
+      body.replaceChildren(el("iframe", { class: "vframe", src: url, title: r.title || "PDF" }));
+      bar.lastChild.prepend(el("a", { class: "btn ghost sm", href: url, target: "_blank", rel: "noopener" }, t("vw_newtab")));
+    } else if (["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg"].includes(ext) || mime.startsWith("image/")) {
+      url = URL.createObjectURL(ext === "svg" ? typed("image/svg+xml") : blob);
+      body.replaceChildren(el("img", { class: "vimg", src: url, alt: r.title || "" }));
+    } else if (mime.startsWith("video/") || ["mp4", "webm", "mov"].includes(ext)) {
+      url = URL.createObjectURL(blob); body.replaceChildren(el("video", { class: "vimg", src: url, controls: true }));
+    } else if (mime.startsWith("audio/") || ["mp3", "m4a", "wav", "ogg"].includes(ext)) {
+      url = URL.createObjectURL(blob); body.replaceChildren(el("audio", { src: url, controls: true }));
+    } else if (ext === "docx") {
+      await loadScript("https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js");
+      const out = await window.mammoth.convertToHtml({ arrayBuffer: await blob.arrayBuffer() });
+      // mammoth's HTML is rebuilt through a template and stripped of scripts / handlers / links
+      const tpl = document.createElement("template"); tpl.innerHTML = out.value;
+      tpl.content.querySelectorAll("script,style,iframe,object,embed,link,meta").forEach((n) => n.remove());
+      tpl.content.querySelectorAll("*").forEach((n) => { for (const a of [...n.attributes]) if (/^on/i.test(a.name) || (/^(href|src)$/i.test(a.name) && !/^(https?:|data:image\/)/i.test(a.value))) n.removeAttribute(a.name); if (n.tagName === "A") { n.target = "_blank"; n.rel = "noopener noreferrer"; } });
+      const page = el("article", { class: "vdoc" }); page.append(tpl.content); body.replaceChildren(page);
+    } else if (["xlsx", "xlsm", "xls", "csv", "tsv", "ods"].includes(ext)) {
+      await loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js");
+      const wb = window.XLSX.read(await blob.arrayBuffer(), { type: "array" });
+      const tabs = el("div", { class: "ktabs", role: "tablist" }), sheet = el("div", { class: "vsheet" });
+      const show = (name) => { for (const b of tabs.children) b.setAttribute("aria-selected", String(b.textContent === name));
+        const rows = window.XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: "" }).slice(0, 2000);
+        sheet.replaceChildren(el("table", { class: "tbl" }, el("tbody", {}, rows.map((row, i) => el("tr", {}, row.map((c) => el(i ? "td" : "th", { text: String(c) }))))))); };
+      tabs.replaceChildren(...wb.SheetNames.map((n) => el("button", { type: "button", role: "tab", onclick: () => show(n) }, n)));
+      body.replaceChildren(wb.SheetNames.length > 1 ? tabs : el("span"), sheet); show(wb.SheetNames[0]);
+    } else if (["txt", "md", "json", "log", "xml", "html", "htm", "yaml", "yml", "rtf"].includes(ext) || mime.startsWith("text/")) {
+      body.replaceChildren(el("pre", { class: "vtext", text: await blob.text() })); // never rendered as HTML
+    } else { await asText(t("vw_text_only")); }
+  } catch { await asText(t("vw_text_only")); }
+}
 async function startConnector(p) {
   try { const r = await api("/api/center/connectors/" + p + "/start" + q({ org: orgId })); if (MOCK) { toast("mock: " + r.url); return; } if (r.kind === "invite") window.open(r.url, "_blank", "noopener"); else location.href = r.url; }
   catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
@@ -1394,7 +1489,36 @@ VIEWS.docs = async (body, my) => {
   const loadCounts = async () => { try { gcounts = await api(O("/documents/groups") + q({ workspace: wsSel.value })); } catch { gcounts = {}; } drawGroups(); };
   const drawGroups = () => { gbar.hidden = kind !== "file";
     gbar.replaceChildren(...["all", ...GROUPS].map((g) => el("button", { type: "button", role: "tab", class: "gpill " + g, "aria-selected": String(g === grp), onclick: () => { grp = g; drawGroups(); load(true); } },
-      g === "company" ? "★ " : "", t("dg_" + g), g !== "all" && gcounts[g] != null ? el("span", { class: "n", text: gcounts[g] }) : null))); };
+      g === "company" ? "★ " : "", t("dg_" + g), g !== "all" && gcounts[g] != null ? el("span", { class: "n", text: gcounts[g] }) : null)));
+    drawCabinet(); };
+  // the filing cabinet: one drawn drawer per group (company records on top), folders = the
+  // document type Salid read (invoice, receipt, contract...), files inside the open folder
+  let view = "cabinet", folder = "";
+  try { view = localStorage.getItem("salid_docs_view") || "cabinet"; } catch { /* ignore */ }
+  const cab = el("div", { class: "cabwrap" }), folders = el("div", { class: "folders" });
+  const ICON_G = { company: "🏛️", legal: "⚖️", finance: "💰", hr: "👥", other: "🗂️" };
+  const folderOf = (r) => (r.tags && r.tags[0] ? String(r.tags[0]).toLowerCase() : "");
+  const drawFolders = () => {
+    folders.hidden = view !== "cabinet" || kind !== "file" || grp === "all";
+    if (folders.hidden) return;
+    const n = {}; for (const r of rows) { const f = folderOf(r); n[f] = (n[f] || 0) + 1; }
+    const keys = Object.keys(n).sort((a, b) => n[b] - n[a]);
+    folders.replaceChildren(...(rows.length ? ["*", ...keys] : []).map((f) => el("button", { type: "button", class: "folder" + ((f === "*" ? "" : f) === folder ? " open" : ""), onclick: () => { folder = f === "*" ? "" : f; drawFolders(); drawList(); } },
+      el("span", { class: "ftab", "aria-hidden": "true" }), el("span", { class: "fname", text: f === "*" ? t("cab_all_folders") : f ? f.replace(/_/g, " ") : t("cab_folder_other") }), el("span", { class: "fcount", text: f === "*" ? rows.length : n[f] }))));
+  };
+  function drawCabinet() {
+    cab.hidden = view !== "cabinet" || kind !== "file"; gbar.hidden = kind !== "file" || view === "cabinet";
+    if (cab.hidden) { drawFolders(); return; }
+    const total = GROUPS.reduce((a, g) => a + (gcounts[g] || 0), 0);
+    cab.replaceChildren(el("div", { class: "cabinet", role: "tablist", "aria-label": t("cab_h") },
+      el("div", { class: "cabtop" }, el("strong", { text: t("cab_h") }), el("span", { class: "muted small", text: t("cab_files", { n: total }) })),
+      GROUPS.map((g) => el("button", { type: "button", role: "tab", class: "drawer-front " + g + (grp === g ? " open" : ""), "aria-selected": String(grp === g), onclick: () => { grp = grp === g ? "all" : g; folder = ""; drawGroups(); load(true); } },
+        el("span", { class: "dlabel", title: t("dg_" + g) }, el("span", { "aria-hidden": "true", text: ICON_G[g] + " " }), t("ds_" + g)), el("span", { class: "dhandle", "aria-hidden": "true" }), el("span", { class: "dcount", text: gcounts[g] == null ? "" : gcounts[g] === 1 ? t("cab_file1") : t("cab_files", { n: gcounts[g] }) })))),
+      el("p", { class: "muted small", text: t("cab_p") }));
+    drawFolders();
+  }
+  const viewBtn = el("button", { class: "btn ghost sm", type: "button", onclick: () => { view = view === "cabinet" ? "list" : "cabinet"; try { localStorage.setItem("salid_docs_view", view); } catch { /* ignore */ } viewBtn.textContent = t(view === "cabinet" ? "cab_list" : "cab_cabinet"); folder = ""; drawGroups(); drawList(); } }, "");
+  viewBtn.textContent = t(view === "cabinet" ? "cab_list" : "cab_cabinet");
   try { const k = sessionStorage.getItem("center_kind"), c = sessionStorage.getItem("center_cat"); sessionStorage.removeItem("center_kind"); sessionStorage.removeItem("center_cat");
     if (c) { cat = c; kind = c === "uploads" ? "file" : "knowledge"; } if (k === "file" || k === "knowledge") kind = k; } catch { /* ignore */ }
   let rows = [], cursor = null, seq = 0, total = 0;
@@ -1423,7 +1547,8 @@ VIEWS.docs = async (body, my) => {
     el("td", { class: "acts2" }, r.group ? (isAdmin() && String(r.id).includes(":upload:") ? (() => { const sel = el("select", { class: "gsel " + r.group, "aria-label": t("dg_move") }, GROUPS.map((g) => el("option", { value: g, selected: g === r.group }, t("dg_" + g))));
         sel.addEventListener("change", async () => { try { await api(O("/documents/" + encodeURIComponent(r.id) + "/group"), J("PUT", { group: sel.value })); toast(t("dg_moved", { g: t("dg_" + sel.value) })); r.group = sel.value; loadCounts(); if (grp !== "all") load(true); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); sel.value = r.group; } }); return sel; })()
         : el("span", { class: "chip gchip " + r.group, text: t("dg_" + r.group) })) : null,
-      el("button", { class: "btn sm", type: "button", onclick: () => downloadDoc(r) }, t("download")),
+      el("button", { class: "btn sm", type: "button", onclick: () => viewDoc(r) }, t("view")),
+      el("button", { class: "btn ghost sm", type: "button", onclick: () => downloadDoc(r) }, t("download")),
       safeUrl(r.source_url) ? el("a", { class: "btn ghost sm", href: r.source_url, target: "_blank", rel: "noopener noreferrer" }, t("open_source")) : null));
   const knowRow = (r) => el("tr", { class: "click" },
     el("td", {}, el("button", { class: "btn ghost sm", type: "button", style: "text-align:left;border:0;padding:0;min-height:0;font-weight:600;color:var(--link)", onclick: () => openDoc(r) }, r.title || "(untitled)"), " ", el("span", { class: "chip", text: t("cat_" + r.category) }),
@@ -1434,7 +1559,7 @@ VIEWS.docs = async (body, my) => {
     const emptyBox = () => el("div", { class: "empty" }, el("p", { text: t(kind === "file" ? "no_files" : "no_knowledge") }), el("p", { class: "small", text: t(kind === "file" ? "no_files_hint" : "no_knowledge_hint") }));
     if (!rows.length) { list.replaceChildren(emptyBox()); return; }
     const f0 = from.value, t0 = to.value;
-    const vis = rows.filter((r) => { const dd = (r.date || "").slice(0, 10); return (!f0 || dd >= f0) && (!t0 || dd <= t0); });
+    const vis = rows.filter((r) => { const dd = (r.date || "").slice(0, 10); return (!f0 || dd >= f0) && (!t0 || dd <= t0) && (kind !== "file" || view !== "cabinet" || !folder || folderOf(r) === folder); });
     if (!vis.length) { list.replaceChildren(emptyBox(), cursor ? el("p", {}, el("button", { class: "btn ghost", type: "button", onclick: () => load(false) }, t("more"))) : null); return; }
     const heads = kind === "file" ? [["c_title"], ["c_date"], ["c_size"], ["c_actions", true]] : [["c_title"], ["c_ws"], ["c_date"], ["c_who"]];
     const tb = el("table", { class: "tbl stack" }, el("thead", {}, el("tr", {}, heads.map(([k, sr]) => el("th", { scope: "col" }, sr ? el("span", { class: "sr", text: t(k) }) : t(k))))),
@@ -1451,7 +1576,7 @@ VIEWS.docs = async (body, my) => {
       let more = false; for (const x of rows) if (x.category && !seen[k].has(x.category)) { seen[k].add(x.category); more = true; }
       if (cat === "all" && !wsSel.value && !search.value.trim()) counts[k] = total;
       if (more || cat === "all") draw();
-      drawList();
+      drawFolders(); drawList();
     } catch (e) { if (!handleAuth(e) && me2 === seq) drawList(e); }
   };
   const openDoc = async (r) => {
@@ -1463,7 +1588,7 @@ VIEWS.docs = async (body, my) => {
     const dr = el("div", { class: "drawer", role: "dialog", "aria-modal": "true", "aria-label": r.title, tabindex: "-1" },
       el("h2", { text: r.title }), el("div", {}, el("span", { class: "chip", text: t("cat_" + r.category) }), " ", el("span", { class: "muted small", text: [r.workspace_name, fmtDate(r.date), r.who, fmtSize(r.size)].filter(Boolean).join(" · ") })),
       src ? el("a", { class: "btn ghost sm", href: src, target: "_blank", rel: "noopener noreferrer", style: "text-decoration:none;align-self:flex-start" }, t("open_source")) : null,
-      r.kind === "file" ? el("button", { class: "btn ghost sm", type: "button", style: "align-self:flex-start", onclick: () => downloadDoc(r) }, t("download")) : null,
+      r.kind === "file" ? el("div", { class: "row", style: "gap:8px" }, el("button", { class: "btn sm", type: "button", onclick: () => { close(); viewDoc(r); } }, t("view")), el("button", { class: "btn ghost sm", type: "button", onclick: () => downloadDoc(r) }, t("download"))) : null,
       el("h3", { text: t("preview") }), pre, el("button", { class: "btn ghost", type: "button", onclick: close }, t("close")));
     dr.addEventListener("keydown", (ev) => { if (ev.key === "Escape") close(); });
     document.body.append(sc, dr); dr.focus();
@@ -1496,8 +1621,8 @@ VIEWS.docs = async (body, my) => {
     try { const r = await api(O("/documents/reindex"), { method: "POST" }); toast(t("reindexed", { n: r.indexed })); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
     ev.target.disabled = false; } }, t("reindex")) : null;
   const gnote = el("p", { class: "muted small", text: t("dg_p") });
-  const syncNote = () => { gnote.hidden = kind !== "file"; };
-  body.replaceChildren(el("div", { class: "card" }, ktabs, gnote, gbar, tabs,
+  const syncNote = () => { gnote.hidden = kind !== "file"; viewBtn.hidden = kind !== "file"; drawCabinet(); };
+  body.replaceChildren(el("div", { class: "card" }, el("div", { class: "pline" }, ktabs, viewBtn), gnote, cab, gbar, folders, tabs,
     el("div", { class: "row" }, field(t("f_ws"), wsSel), field(t("f_from"), from), field(t("f_to"), to), field(t("f_search"), search)), reidx, list), upBox);
   draw(); syncNote(); loadCounts(); load(true);
   ktabs.addEventListener("click", () => setTimeout(syncNote, 0));
