@@ -149,6 +149,46 @@ from all of the org's workspaces, under the same fail-closed audience rule.
   WhatsApp bots attach once with an admin link code (like Discord's `/ตั้งค่า`).
 - A platform tenant that belongs to no org keeps working alone (today's behaviour).
 
+### Verified identities: API and flow (step 3, done)
+
+Code: `salid/identity_links.py` (codes, redeem, `identity_of`, `auto_link`), `orgs.Member.identities`
++ `OrgStore.member_by_identity / link_identity / unlink_identity / drop_platform_identities`,
+`platforms/core.py` (`Assistant.identity_of(msg) -> (org_id, member_email) | None`, link command,
+Slack auto verification), `platforms/slack.py` (`SlackPort.profile_email`).
+
+Routes (all under `/api/center`, Bearer Google ID token like the rest):
+
+- `POST /orgs/{org}/identities/{platform}/code` (any member; platform `slack|line|telegram|whatsapp`)
+  -> `{code: "1234-5678", platform, kind: "identity", expires_at, command: "link 1234-5678"}`.
+  The button shows the code, the expiry and the command to send to Salid in a PRIVATE chat.
+  403 not a member (a super admin who is not a member too), 400 unknown platform / discord, 429 when
+  5 unused codes are live (wait up to 15 minutes).
+- `GET /orgs/{org}/identities` -> `[{platform, account_hint}]`, the caller's own linked accounts
+  (`account_hint` = last 4 characters; Discord is listed read-only). Poll it after showing a code
+  (or on focus) to flip the button to "Linked".
+- `DELETE /orgs/{org}/identities/{platform}` -> the updated list; 404 when nothing is linked.
+- `POST /orgs/{org}/workspaces/{platform}/attach-code` (owner / admin / super) -> same shape with
+  `kind: "attach"`. The admin sends `link 1234-5678` to the BOT in a private chat; the bot tenant
+  (LINE channel, Telegram bot, WhatsApp number, Slack team) becomes an `orgs.Workspace`
+  (`id = <platform>-<tenant>`, `external_id` = tenant key) and then shows up in
+  `GET /orgs/{org}/workspaces`. Refused (generic "invalid or expired" in the chat) when that bot
+  belongs to another org.
+
+Chat side, same for both kinds: only in a 1:1 (a group gets "please send the code in a private
+chat" and the code is not used); fixed Thai + English reply; the message never reaches the model,
+the memory log or the room buffer; 5 attempts per person and 30 per bot in 10 minutes. A member
+code from a bot attached to ANOTHER org is refused; from a bot attached to no org it links the
+account (usable once the admin attaches the bot). Slack needs no code when `users:read.email` is
+granted (see `docs/platforms/slack.md`).
+
+Decisions: one account id per platform per member (a second Slack workspace in the same org uses
+the same slot, so the first link wins and is not replaced automatically); `identity_of` requires
+the sender's tenant to belong to the org that holds the link, so an id linked in org A never counts
+in org B's bot; guests (Slack restricted accounts) are never auto-verified; removing the last
+workspace of a platform from an org, or uninstalling Slack, forgets that platform's links.
+The OAuth connector's `SCOPES` (`salid/connectors/slack.py`) still lacks `users:read.email`; add it
+if the OAuth-installed app (not only the Socket Mode app) must auto-verify.
+
 ### Scope across platforms (the security rule, unchanged in spirit)
 
 The answer may use a source only if **the asker may read it and so can everyone who reads the
@@ -189,7 +229,8 @@ answer**. Across platforms this means:
 1. Unify the workspace id scheme. **Done** (#32).
 2. `Workspace` protocol + `DiscordWorkspace` + `SlackWorkspace`. **Done** (#33, step 2a).
 3. Verified identities: `Member.identities`, Slack email match, link codes for LINE / Telegram /
-   WhatsApp (web button + 1:1 redeem), platform workspaces attached to the org.
+   WhatsApp (web button + 1:1 redeem), platform workspaces attached to the org. **Done** (API and
+   bot side; the web buttons are for the web teammate, see "Verified identities: API" below).
 4. Org-wide scope: in a 1:1 with a verified member, memory / ledger / tasks / projects / people
    across all the org's workspaces; rooms keep the fail-closed rule above.
 5. `_agent_kwargs` takes a `Workspace` (step 2b, no behaviour change on Discord), then the first

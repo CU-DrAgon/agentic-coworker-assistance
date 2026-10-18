@@ -21,7 +21,7 @@ import httpx
 from ..qa import MAX_FILE_BYTES
 from . import ids, textfmt
 from .config import PlatformSettings
-from .core import Assistant, FileRef, HistLine, Incoming, RoomInfo, RoomView, safe_exc
+from .core import AccountState, Assistant, FileRef, HistLine, Incoming, RoomInfo, RoomView, safe_exc
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ MAX_MESSAGES = 10
 MEMBERS_TTL_S = 60.0
 LIST_TTL_S = 300.0
 USER_TTL_S = 600.0
+USER_FAIL_TTL_S = 30.0  # a failed users.info is retried after this long, not after USER_TTL_S
 MAX_MEMBERS = 5000  # a bigger room: audience unknown, so memory stays in that room
 MAX_ROOMS = 60  # other rooms considered for memory scope
 MAX_PAGES = 20
@@ -44,13 +45,16 @@ POST_WAIT_MAX_S = 60.0
 MENTION_WAIT_S = 1.0  # an app_mention waits this long for its twin `message` event
 MAX_FILE_LOOKUPS = 4
 REVOKED_EVENTS = {"app_uninstalled", "tokens_revoked"}
+USER_EVENTS = {"user_change"}  # a profile / role / deactivation change: re-verify the person
 ROOM_EVENTS = {
     "channel_rename", "group_rename", "channel_archive", "group_archive", "channel_unarchive",
     "group_unarchive", "channel_left", "group_left", "channel_deleted", "group_deleted",
     "member_joined_channel", "member_left_channel",
 }  # fmt: skip
 # One Bolt listener for every non-message event (keeps the listener count at three).
-LIFECYCLE_EVENTS = re.compile("^(" + "|".join(sorted(ROOM_EVENTS | REVOKED_EVENTS)) + ")$")
+LIFECYCLE_EVENTS = re.compile(
+    "^(" + "|".join(sorted(ROOM_EVENTS | REVOKED_EVENTS | USER_EVENTS)) + ")$"
+)
 
 
 def retry_after(e: BaseException) -> float | None:
@@ -133,13 +137,42 @@ class SlackPort:
         except Exception as e:
             logger.warning("users.info failed (%s)", safe_exc(e))
             info = {}
-        self._users[uid] = (self._clock(), info)
+        # a failure is remembered only briefly, so one blip does not blind us for ten minutes
+        stamp = self._clock() if info else self._clock() - USER_TTL_S + USER_FAIL_TTL_S
+        self._users[uid] = (stamp, info)
         return info
+
+    def forget_user(self, uid: str) -> None:
+        """The person changed (user_change): the next lookup asks Slack again."""
+        self._users.pop(uid, None)
 
     async def user_name(self, uid: str) -> str:
         u = await self.user(uid)
         prof = u.get("profile") or {}
         return prof.get("display_name") or u.get("real_name") or u.get("name") or uid
+
+    async def account_state(self, uid: str) -> AccountState:
+        """What Slack says about this person NOW (users.info, cached up to 10 minutes):
+
+        * ``member``: a real, full member of THIS workspace with a readable profile email;
+        * ``revoked``: a bot, deleted, guest (single / multi-channel) or a person of another
+          workspace (Slack Connect): not a member whose address means anything here;
+        * ``unavailable``: the lookup failed or the email is not readable (scope missing).
+          Nothing is known, so the caller must fail closed without removing any link."""
+        u = await self.user(uid)
+        if not u:
+            return AccountState("unavailable", "")
+        if u.get("is_bot") or u.get("deleted") or u.get("team_id") != self.team_id:
+            return AccountState("revoked", "")
+        if u.get("is_restricted") or u.get("is_ultra_restricted"):
+            return AccountState("revoked", "")  # guests: their address is not the company's
+        email = str((u.get("profile") or {}).get("email") or "").strip().lower()
+        return AccountState("member", email) if email else AccountState("unavailable", "")
+
+    async def profile_email(self, uid: str) -> str:
+        """The verified-by-Slack profile email (lower case) of a real, current member of THIS
+        workspace; "" otherwise (see `account_state`). Fails closed."""
+        return (await self.account_state(uid)).email
 
     async def is_admin(self, msg: Incoming) -> bool:
         return await self.is_admin_user(msg.user)
@@ -623,6 +656,9 @@ class SlackAdapter:
         if kind in REVOKED_EVENTS:
             await self._revoked(kind, event, team)
             return
+        if kind in USER_EVENTS:
+            await self._user_changed(event, team)
+            return
         if self.port.revoked or kind not in ROOM_EVENTS:
             return
         ch = event.get("channel")
@@ -639,6 +675,17 @@ class SlackAdapter:
             return
         self.port.forget_room(channel)  # archived, unarchived, left, deleted
 
+    async def _user_changed(self, event: dict, team: str) -> None:
+        """user_change: forget what we cached about the person and re-verify the account at
+        once, so a deactivation, a switch to guest or a new email takes effect now instead of
+        after the next refresh."""
+        user = event.get("user")
+        uid = user.get("id") if isinstance(user, dict) else user
+        if not uid or self.port.revoked or team != self.port.team_id:
+            return
+        self.port.forget_user(uid)
+        await self.a.recheck_account(PLATFORM, team, uid, self.port)
+
     async def _revoked(self, kind: str, event: dict, team: str) -> None:
         """app_uninstalled / tokens_revoked: stop answering this workspace and erase what Salid
         remembered of it (memory with its vectors). Only a revoked *bot* token counts."""
@@ -649,6 +696,7 @@ class SlackAdapter:
         self.port.revoked = True
         gid = ids.tenant_id(PLATFORM, team)
         logger.warning("slack %s: this workspace is removed, no more answers tenant=%d", kind, gid)
+        await asyncio.to_thread(self.a.tenant_revoked, PLATFORM, team)
         if not self.delete_data:
             return
         try:

@@ -82,6 +82,8 @@ def build_assistant(
         embedder=embedder,
     )
     from ..archive import make_archive
+    from ..identity_links import IdentityLinks
+    from ..orgs import make_org_store
 
     return Assistant(
         settings=s,
@@ -95,7 +97,7 @@ def build_assistant(
         archive=make_archive(s),
         guilds_store=team.store,
         names=names,
-        **kw,
+        **({"identity": IdentityLinks(make_org_store(s, store))} | kw),
     )
 
 

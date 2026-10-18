@@ -129,6 +129,32 @@ SALID_WHATSAPP_EXEC_NUMBERS=66811112222,66833334444   # optional, digits only (+
 All four secrets/ids are needed for the platform to start. Check them without sending anything:
 `uv run python scripts/platforms_smoke.py` (looks up the number and prints only its verified name).
 
+## Linking accounts to your organization
+
+Salid treats a WhatsApp account as a **guest of its chat** until the person is verified. Verifying
+ties the account to a member of the organization (the company in the command center), which later
+lets Salid use what that member may read on the organization's other platforms in a private chat.
+
+1. In the command center, sign in with Google, open your organization and press **Link WhatsApp**
+   (API: `POST /api/center/orgs/{org}/identities/whatsapp/code`). You get a code like `1234-5678`
+   that works **once, for 15 minutes**.
+2. Send it to Salid in a **private chat**: `link 1234-5678` (Thai: `เชื่อมบัญชี 1234-5678`).
+   Salid answers with a fixed line and never shows the message to the model or stores it.
+3. Unlink from the web (`DELETE /api/center/orgs/{org}/identities/whatsapp`); removing the
+   WhatsApp workspace from the organization also forgets these links.
+
+Rules: a code typed in a **group is ignored** (Salid asks you to use a private chat); five wrong
+attempts per person in 10 minutes pauses that person; one WhatsApp account belongs to at most one
+member of an organization; every failure says only "invalid or expired".
+
+**Connecting the bot itself to the organization.** An owner or admin presses **Attach WhatsApp
+bot** (`POST /api/center/orgs/{org}/workspaces/whatsapp/attach-code`) and sends the code to the
+bot in a private chat. A bot that already belongs to another organization is refused. A bot that
+is attached to no organization keeps working on its own as before.
+
+The linked id is what WhatsApp sends as the sender (BSUID, or the phone number while it is still delivered). It is personal data: Salid never logs it.
+
+
 ## Security
 
 - The webhook verifies `X-Hub-Signature-256` (HMAC-SHA256 of the raw body, constant time) **before

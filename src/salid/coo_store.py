@@ -14,7 +14,10 @@ import threading
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypeVar
+
+T = TypeVar("T")
+SQLITE_BUSY_RETRIES = 4
 
 TASKS = "salid_tasks"
 DISCLOSURES = "salid_disclosures"
@@ -54,6 +57,45 @@ class DocStore(Protocol):
     def find_any(self, kind: str, doc_key: str) -> dict[str, Any] | None:
         """One doc by key across guilds (a button click knows only its request id)."""
         ...
+
+    def transact(self, fn: Callable[[Tx], T]) -> T:
+        """Run `fn(tx)` as ONE atomic read-modify-write that is safe across processes.
+
+        `tx` offers get / put / delete (same arguments as the store). `fn` may run more than
+        once (Firestore retries a contended transaction), so it must have no side effects other
+        than through `tx`. Any exception rolls everything back and propagates."""
+        ...
+
+
+class Tx(Protocol):
+    def get(self, kind: str, guild_id: int, key: str) -> dict[str, Any] | None: ...
+    def put(self, kind: str, guild_id: int, key: str, doc: dict[str, Any]) -> None: ...
+    def delete(self, kind: str, guild_id: int, key: str) -> None: ...
+
+
+class _SqliteTx:
+    """The transaction handle of `SQLiteDocStore.transact`: one connection, writes immediate."""
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._c = conn
+
+    def get(self, kind, guild_id, key):
+        row = self._c.execute(
+            "SELECT doc FROM salid_docs WHERE kind=? AND guild_id=? AND key=?",
+            (kind, guild_id, key),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def put(self, kind, guild_id, key, doc) -> None:
+        self._c.execute(
+            "INSERT OR REPLACE INTO salid_docs (kind, guild_id, key, doc) VALUES (?,?,?,?)",
+            (kind, guild_id, key, json.dumps(doc, ensure_ascii=False)),
+        )
+
+    def delete(self, kind, guild_id, key) -> None:
+        self._c.execute(
+            "DELETE FROM salid_docs WHERE kind=? AND guild_id=? AND key=?", (kind, guild_id, key)
+        )
 
 
 class SQLiteDocStore:
@@ -126,6 +168,67 @@ class SQLiteDocStore:
             ).fetchone()
         return json.loads(row[0]) if row else None
 
+    def transact(self, fn):
+        """`BEGIN IMMEDIATE` takes the database write lock, so two processes (or two store
+        instances) can never interleave inside `fn`. A busy database is retried a few times."""
+        with self._lock:
+            for attempt in range(SQLITE_BUSY_RETRIES):
+                try:
+                    return self._transact_once(fn)
+                except sqlite3.OperationalError as exc:
+                    busy = "locked" in str(exc) or "busy" in str(exc)
+                    if not busy or attempt == SQLITE_BUSY_RETRIES - 1:
+                        raise
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    def _transact_once(self, fn):
+        shared = self._shared
+        c = shared if shared is not None else sqlite3.connect(self.path, timeout=10)
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            try:
+                result = fn(_SqliteTx(c))
+            except BaseException:
+                c.rollback()
+                raise
+            c.commit()
+            return result
+        finally:
+            if shared is None:
+                c.close()
+
+
+class _FirestoreTx:
+    """Reads go through the Firestore transaction; writes are queued and applied by the
+    transaction on commit (Firestore wants every read before any write). Reads see the
+    queued writes of this same transaction."""
+
+    def __init__(self, store: FirestoreDocStore, txn: Any):
+        self._store, self._txn = store, txn
+        self._pending: dict[tuple[str, int, str], dict | None] = {}
+
+    def get(self, kind, guild_id, key):
+        k = (kind, guild_id, key)
+        if k in self._pending:
+            doc = self._pending[k]
+            return None if doc is None else {kk: v for kk, v in doc.items() if kk != "_key"}
+        snap = self._store._ref(kind, guild_id, key).get(transaction=self._txn)
+        return self._store._clean(snap.to_dict()) if snap.exists else None
+
+    def put(self, kind, guild_id, key, doc) -> None:
+        self._pending[(kind, guild_id, key)] = {**doc, "guild_id": guild_id, "_key": key}
+
+    def delete(self, kind, guild_id, key) -> None:
+        self._pending[(kind, guild_id, key)] = None
+
+    def flush(self) -> None:
+        for (kind, guild_id, key), doc in self._pending.items():
+            ref = self._store._ref(kind, guild_id, key)
+            if doc is None:
+                self._txn.delete(ref)
+            else:
+                self._txn.set(ref, doc)
+
 
 class FirestoreDocStore:
     """Collection = kind, doc id = `{guild_id}_{key}`, plus `guild_id` and `_key` fields."""
@@ -175,6 +278,19 @@ class FirestoreDocStore:
         for s in q.stream():
             return self._clean(s.to_dict())
         return None
+
+    def transact(self, fn):
+        """A Firestore transaction (optimistic: a conflicting commit re-runs `fn`)."""
+        from google.cloud import firestore
+
+        @firestore.transactional
+        def run(txn):
+            tx = _FirestoreTx(self, txn)
+            result = fn(tx)
+            tx.flush()
+            return result
+
+        return run(self.client.transaction())
 
 
 def make_doc_store(settings, store=None) -> DocStore:

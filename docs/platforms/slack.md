@@ -68,6 +68,7 @@ oauth_config:
       - mpim:read
       - files:read
       - users:read
+      - users:read.email
 settings:
   event_subscriptions:
     bot_events:
@@ -90,6 +91,7 @@ settings:
       - group_left
       - app_uninstalled
       - tokens_revoked
+      - user_change
   interactivity:
     is_enabled: false
   org_deploy_enabled: false
@@ -112,11 +114,33 @@ Workspace**). Until you do, Slack keeps the old token and the old subscriptions.
 12 hours and stop it.
 
 Event notes: `app_uninstalled` and `tokens_revoked` tell Salid the workspace removed it (see
-Privacy). The channel events (`channel_rename`, archive, delete, `member_left_channel`, ...) only
+Privacy). `user_change` makes Salid re-check a person at once (deactivated, switched to a guest, new
+email), which removes their verified link to the organization. The channel events (`channel_rename`, archive, delete, `member_left_channel`, ...) only
 refresh cached names and member lists sooner; without them the caches expire after 10 minutes.
 
-Scope notes: `users:read` gives names and the admin/owner flag; `*:read` scopes let Salid list the
+Scope notes: `users:read` gives names and the admin/owner flag; `users:read.email` lets Salid read the profile email to verify members of an organization (optional, see Linking accounts); `*:read` scopes let Salid list the
 conversations it is in and who is in them (for memory scope). `reactions:write` is not needed.
+
+## Linking accounts to your organization
+
+When the Slack workspace is attached to an organization (the command center's **Connect Slack**
+button, or an attach code, below), Salid verifies people **automatically**: the Slack profile email
+(`users.info` → `profile.email`, scope `users:read.email`) of a real member of this workspace
+that equals the email of an organization member links that Slack account to the member. Not
+accepted: bots, deleted users, guests (single / multi-channel), people from another workspace
+(Slack Connect) and anyone whose address is hidden. A member's existing Slack link is never replaced
+this way, and an account another member already holds is never taken. Slack is trusted to have
+confirmed the address; an admin who can change members' emails can therefore act as them. Salid
+asks Slack at most every 10 minutes per person, and only for workspaces that belong to an organization.
+
+Fallback without the scope: the same one-time code as the other platforms
+(`POST /api/center/orgs/{org}/identities/slack/code`, then `link 1234-5678` in a DM; never in a
+channel). Uninstalling the app (`app_uninstalled` / `tokens_revoked`) forgets the organization's
+Slack links.
+
+**After adding the `users:read.email` scope to an existing app, reinstall it** (Install App →
+Reinstall to Workspace); until then `profile.email` is absent and Salid falls back to codes.
+
 
 ## 2. Configure and run
 
