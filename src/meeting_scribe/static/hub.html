@@ -2101,6 +2101,8 @@ async function loadMemoryStatus() {
   try { lastProgress = await gapi("/memory-status"); renderProgress(); } catch { /* progress is optional */ }
 }
 function fillRetention(days) {
+  // 0 = keep forever (the default). Never `|| <days>` here: 0 is falsy and would save a purge.
+  days = days ?? 0;
   const sel = $("mem-days"), box = $("mem-days-custom");
   const preset = [...sel.options].some((o) => o.value === String(days));
   sel.value = preset ? String(days) : "custom";
@@ -2109,7 +2111,7 @@ function fillRetention(days) {
 function collectRetention() {
   const sel = $("mem-days");
   const n = Number(sel.value === "custom" ? $("mem-days-custom").value : sel.value);
-  return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : 90;
+  return Number.isInteger(n) && n >= 0 && n <= 3650 ? n : 0; // invalid: keep forever, never purge
 }
 // Channels Salid cannot read, from the bot-synced flags (missing flags count as visible).
 function hiddenChannels(channels) {
@@ -2162,7 +2164,7 @@ function fillSettings(s) {
   $("report-time").value = s.report_time || "18:30";
   $("morning-time").value = s.morning_brief_time || "08:30";
   $("evening-time").value = s.evening_brief_time || "18:00";
-  fillRetention(s.memory_retention_days || 90);
+  fillRetention(s.memory_retention_days);
   loadMemoryStatus();
   $("exec-roles").value = (s.exec_role_names || []).join(", ");
   $("exec-max-level").value = String([1, 2, 3, 4].includes(s.exec_max_level) ? s.exec_max_level : 3);
