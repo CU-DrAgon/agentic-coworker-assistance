@@ -1411,7 +1411,7 @@ ROUNDS_EXHAUSTED = (
 )
 
 SECRETARY_PROMPT = (
-    "\nงานเลขา (เครื่องมือ schedule_meeting, list_meetings, cancel_meeting, reschedule_meeting, "
+    "\nงานเลขา (เครื่องมือ schedule_meeting, list_meetings, cancel_meeting, reschedule_meeting, meeting_attendance, "
     "make_report_pdf, draft_email, send_email ถ้ามีให้ใช้): "
     "การกระทำที่มีผลกับคนอื่นต้องได้รับการยืนยันเสมอ. "
     "นัดประชุม: แปลงเวลาที่ผู้ใช้พูด (เช่น พรุ่งนี้บ่ายสอง) เป็น ISO 8601 ตามวันที่และเขตเวลาข้างต้น แล้วเรียก schedule_meeting; "
@@ -1421,6 +1421,16 @@ SECRETARY_PROMPT = (
     "ถ้าไม่รู้เวลาหรือผู้เข้าร่วมให้ถามสั้นๆ ก่อน ห้ามเดาชื่อคน (unresolved_attendees = ถามว่าหมายถึงใคร). "
     "ถ้าผู้ใช้ให้ลิงก์ Google Meet/Zoom/Teams ใส่ใน link. ถ้าได้ error missing_permission ให้ส่งข้อความใน how_to_grant ต่อให้ผู้ใช้ตามนั้น (สั้นๆ ไม่ต้องอธิบายขั้นตอนเพิ่ม ไม่ต้องใส่อีโมจิ). "
     "ยกเลิก/เลื่อนนัด: เรียก list_meetings หา event_id ก่อน แล้วขอยืนยันแบบเดียวกัน. "
+    "ตารางมีสองชั้น ห้ามปนกัน: ของบริษัท (schedule/reschedule/cancel_meeting = มีผลกับทุกคนที่เข้าประชุม) และของส่วนตัว "
+    "(meeting_attendance, set_availability, my_schedule = ของผู้พูดคนเดียว). "
+    "ประโยคที่อ้างถึงตัวผู้พูด (ผมสะดวก 15:00, ฉันเข้าเวลานี้ไม่ได้ ขอเข้า 16:00, ผมเข้าได้แค่ครึ่งแรก, I can only join at 3, I'll be 20 min late, I can't attend) "
+    "= ส่วนตัว → เรียก list_meetings หา event_id แล้ว meeting_attendance (ไม่ต้องขอยืนยัน; ระบบบันทึกไว้ในสลิดและแจ้งผู้จัดเอง) "
+    "ห้ามเรียก reschedule_meeting เด็ดขาด และบอกผู้ใช้ว่าบันทึกเป็นแผนของเขาเอง ไม่ได้เลื่อนนัดของทุกคน; not_attendee = เขาไม่ได้อยู่ในนัดนี้. "
+    "ประโยคที่ไม่อ้างถึงตัวเอง (เลื่อนประชุมไป 15:00, ย้ายนัดทีมเป็นบ่ายสาม, move the standup to Friday) = ของบริษัท → reschedule_meeting พร้อมขอยืนยัน; "
+    "ถ้าไม่ใช่ผู้จัดหรือผู้บริหารจะได้ not_allowed ให้เสนอบันทึกแผนส่วนตัวด้วย meeting_attendance แทนและแจ้งผู้จัด. "
+    "ถ้าแยกไม่ออก (เช่นผู้เข้าร่วมพูดว่า “ขอเป็น 15:00 ได้ไหม”, “can we do 3 pm instead?”) ให้ถามก่อน ห้ามเดา ห้ามเรียกเครื่องมือใดๆ: "
+    "“เลื่อนประชุมทั้งนัดสำหรับทุกคน หรือเป็นเวลาที่คุณจะเข้าได้คะ?” / “Move the meeting for everyone, or is that the time you can join?”. "
+    "“ตารางของฉัน / my schedule” = my_schedule (ของผู้ถามคนเดียว); “ตารางบริษัท / the team's meetings” = list_meetings. "
     "เอกสาร PDF: เรียก make_report_pdf ด้วยช่วงวันที่ที่ถูกต้อง ไฟล์จะแนบกับคำตอบเอง ให้บอกสั้นๆ ว่ามีอะไรในไฟล์และยอดตามสกุลเงิน (อย่าบวกต่างสกุล). "
     "อีเมล: draft_email แล้วแสดงร่างฉบับเต็ม (ถึง สำเนา หัวเรื่อง เนื้อหา ไฟล์แนบ) ให้ผู้ใช้ตรวจ ห้ามบอกว่าส่งแล้ว; "
     "เรียก send_email ได้เฉพาะหลังผู้ใช้ยืนยันร่างนั้นในข้อความถัดมา. ถ้าได้ not_configured ให้บอกว่ายังไม่ได้ตั้งค่าการส่งอีเมล (บันทึกร่างไว้แล้ว); "

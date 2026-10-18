@@ -381,3 +381,58 @@ def test_approved_leave_counts_as_busy_through_the_bot(bot):  # noqa: F811
         )
     ]
     assert leave_src.busy(8, [1], NOW, at(23, 0)) == {}  # other guild
+
+
+# ------------------------------------------------------------------ my_schedule (personal view)
+def _meeting(mid, start, organiser, attendees, plans=None, title="Sync"):
+    s = start.astimezone(UTC)
+    return {
+        "id": mid, "guild_id": 7, "event_id": f"e{mid}", "title": title,
+        "start_utc": s.isoformat(timespec="seconds"),
+        "end_utc": (s + timedelta(hours=1)).isoformat(timespec="seconds"),
+        "organizer_id": organiser, "attendee_ids": attendees, "attendee_names": ["x"] * len(attendees),
+        "status": "scheduled", "kind": "voice", "attendance_plans": plans or {},
+    }  # fmt: skip
+
+
+def test_my_schedule_shows_only_the_askers_own_items():
+    store = SecretaryStore(SqliteDocs())
+    plan = {"name": "Me", "status": "custom", "from_utc": at(20, 15).astimezone(UTC).isoformat(), "until_utc": None, "note": "mine"}  # fmt: skip
+    other = {
+        "name": "Aom",
+        "status": "cannot",
+        "from_utc": None,
+        "until_utc": None,
+        "note": "SECRET",
+    }
+    store.put_meeting(_meeting("a", at(20, 14), 9, [1, 2], {"1": plan, "2": other}, "Mine"))
+    store.put_meeting(_meeting("b", at(20, 10), 1, [3], title="Organised by me"))
+    store.put_meeting(_meeting("c", at(20, 11), 9, [2, 3], title="Not mine"))
+    repo = AvailabilityRepo(SQLiteDocStore(":memory:"))
+    c = ctx([MeetingsSource(store), LeaveSource(None)], repo=repo)
+    t = {f.__name__: f for f in freetime_tools(c)}
+    t["set_availability"]("busy_once", date="2026-10-20", part="morning", note="ลา")
+    t["set_availability"]("busy_once", date="2026-11-30", part="day")  # outside the range
+    out = t["my_schedule"]("2026-10-20")
+    titles = [m["title"] for m in out["meetings"]]
+    assert titles == ["Organised by me", "Mine"]
+    assert out["meetings"][0]["role"] == "organiser"
+    assert out["meetings"][1]["my_plan"]["from"] == "15:00"
+    blob = json.dumps(out, ensure_ascii=False)
+    assert "SECRET" not in blob and "Aom" not in blob and "Not mine" not in blob
+    assert len(out["availability"]["busy_once"]) == 1
+    assert out["leave"] == []
+
+
+def test_my_schedule_lists_approved_leave_and_rejects_a_bad_range():
+    leave = LeaveSource(lambda g, u, a, b: [(at(20, 0), at(21, 0))] if u == 1 else [])
+    t = {f.__name__: f for f in freetime_tools(ctx([leave]))}
+    assert t["my_schedule"]("2026-10-20")["leave"] == [{"from": "2026-10-20", "to": "2026-10-21"}]
+    assert "error" in t["my_schedule"]("someday")
+
+
+def test_freetime_prompt_routes_schedule_questions():
+    from salid.freetime import FREETIME_PROMPT
+
+    assert "my_schedule" in FREETIME_PROMPT and "list_meetings" in FREETIME_PROMPT
+    assert "meeting_attendance" in FREETIME_PROMPT

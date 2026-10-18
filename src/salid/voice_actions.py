@@ -18,6 +18,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "schedule_meeting",
         "cancel_meeting",
         "reschedule_meeting",
+        "meeting_attendance",  # the speaker's own plan for a meeting
         # chat actions
         "send_dm",
         "deliver_minutes",
@@ -36,6 +37,7 @@ ACTION_TOOL_NAMES: frozenset[str] = frozenset(
         "send_dm_many",
         "post_message",
         "set_availability",
+        "my_schedule",  # the speaker's own day, never the room's
         "create_poll",
         "call_vote",  # votes: the opener is the speaker
         "close_vote",

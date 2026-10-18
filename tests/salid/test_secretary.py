@@ -8,6 +8,7 @@ import json
 import threading
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import discord
 import httpx
@@ -944,7 +945,7 @@ def test_tool_set_follows_features_and_roles(w):
 
     names = lambda **kw: {f.__name__ for f in build_secretary_tools(w.tools(**kw), [])}  # noqa: E731
     assert names() == {
-        "schedule_meeting", "list_meetings", "cancel_meeting", "reschedule_meeting",
+        "schedule_meeting", "list_meetings", "cancel_meeting", "reschedule_meeting", "meeting_attendance",
         "make_report_pdf", "draft_email", "send_email",
     }  # fmt: skip
     assert names(can_email=False, scheduling=False) == {"make_report_pdf"}
@@ -1076,3 +1077,226 @@ def test_calendar_error_codes():
     g = Guild(manage_events=False)
     with pytest.raises(CalendarError):
         DiscordCalendar.check_permissions(g)
+
+
+# ------------------------------------------------------------------ personal attendance plans
+BKK = ZoneInfo("Asia/Bangkok")
+P_START = datetime(2026, 10, 19, 14, 0, tzinfo=BKK)
+P_END = P_START + timedelta(hours=1)
+
+
+def at_(h, m=0):
+    return datetime(2026, 10, 19, h, m, tzinfo=BKK)
+
+
+@pytest.mark.parametrize(
+    ("text", "want"),
+    [
+        ("จะเข้า 15:00", ("custom", at_(15), None)),
+        ("ผมเข้า 14.30 น.", ("custom", at_(14, 30), None)),
+        ("ฉันไม่สะดวกเวลานี้ ขอเข้า 16:00 นะ", ("custom", at_(16), None)),
+        ("I can't make 14:00, I'll join at 3pm", ("custom", at_(15), None)),
+        ("I'll be there at 3:30 pm", ("custom", at_(15, 30), None)),
+        ("เข้า บ่าย 3 โมง", ("custom", at_(15), None)),
+        ("สาย 20 นาที", ("late", at_(14, 20), None)),
+        ("ไปช้า 10 นาที", ("late", at_(14, 10), None)),
+        ("I'll be late 20 min", ("late", at_(14, 20), None)),
+        ("15 minutes late", ("late", at_(14, 15), None)),
+        ("ออกก่อน 14:45", ("partial", None, at_(14, 45))),
+        ("I have to leave at 14:40", ("partial", None, at_(14, 40))),
+        ("join 14:10 but leave at 14:50", ("partial", at_(14, 10), at_(14, 50))),
+        ("ผมเข้าได้แค่ครึ่งแรก", ("partial", None, at_(14, 30))),
+        ("only the second half", ("partial", at_(14, 30), None)),
+        ("ไม่สะดวกครับ", ("cannot", None, None)),
+        ("I can't attend", ("cannot", None, None)),
+        ("can't join today", ("cannot", None, None)),
+    ],
+)
+def test_parse_plan(text, want):
+    from salid.scheduling import parse_plan
+
+    assert parse_plan(text, P_START, BKK, P_END) == want
+
+
+@pytest.mark.parametrize("text", ["", "ขอบคุณครับ", "ติดลูกค้า", "can't join at 14:00", "ไม่สะดวก 14:00"])
+def test_parse_plan_ignores_other_sentences(text):
+    from salid.scheduling import parse_plan
+
+    got = parse_plan(text, P_START, BKK, P_END)
+    assert got is None or (text == "can't join at 14:00" and got[0] == "cannot")
+
+
+def plan_meeting(w, **over):
+    over.setdefault("attendees", (10, 11))
+    return meeting_at(w, P_START.astimezone(UTC), **over)
+
+
+async def test_set_attendance_plan_validates_stores_and_tells_the_organiser(w):
+    plan_meeting(w)
+    m = w.store.get_meeting("m1")
+    svc, g = w.svc, w.guild
+    bad = await svc.set_attendance_plan(g, m, 10, "custom", at_(18), None, "")
+    assert bad == {"error": "time_out_of_range"}
+    assert (await svc.set_attendance_plan(g, m, 10, "custom", at_(13), None, ""))["error"]
+    assert (await svc.set_attendance_plan(g, m, 10, "late", None, None, ""))[
+        "error"
+    ] == "time_required"
+    assert (await svc.set_attendance_plan(g, m, 10, "bogus", at_(15), None, ""))[
+        "error"
+    ] == "invalid_status"
+    assert (await svc.set_attendance_plan(g, m, 10, "partial", None, at_(16, 30), ""))["error"]
+    assert w.room.sent == [] and not w.store.get_meeting("m1").get("attendance_plans")
+
+    ok = await svc.set_attendance_plan(g, m, 10, "custom", at_(14, 45), None, "ติดลูกค้า @everyone")
+    assert ok["status"] == "recorded" and "Sync" in ok["ack"]
+    (line,) = w.room.sent  # ONE line to the meeting channel
+    assert "Ann จะเข้า 14:45" in line and "Sync" in line and "@everyone" not in line.replace("@​", "")
+    got = w.store.get_meeting("m1")["attendance_plans"]["10"]  # round-trips through the store
+    assert got["status"] == "custom" and got["from_utc"] == at_(14, 45).astimezone(UTC).isoformat(
+        timespec="seconds"
+    )
+    assert w.store.get_meeting("m1")["start_utc"] == P_START.astimezone(UTC).isoformat(
+        timespec="seconds"
+    )
+
+    w.room.sent.clear()
+    await svc.set_attendance_plan(g, m, 11, "late", at_(14, 20), None, "")
+    await svc.set_attendance_plan(g, m, 11, "cannot", at_(15), None, "")
+    assert "~20 นาที" in w.room.sent[0] or "สายประมาณ 20" in w.room.sent[0]
+    assert "เข้าประชุม “Sync” ไม่ได้" in w.room.sent[1]
+    assert (
+        w.store.get_meeting("m1")["attendance_plans"]["11"]["from_utc"] is None
+    )  # cannot: no times
+
+
+def test_tool_records_the_askers_own_plan_only_and_never_moves_the_meeting(w):
+    plan_meeting(w)
+    before = dict(w.store.get_meeting("m1"))
+    r = w.tools(uid=10, name="Ann", is_exec=False).meeting_attendance("9000", "custom", "15:00")
+    assert r["status"] == "recorded" and r["scope"] == "personal_plan_only" and r["organiser_told"]
+    assert r["meeting"]["my_plan"]["from"] == "15:00"
+    after = w.store.get_meeting("m1")
+    assert after["start_utc"] == before["start_utc"] and after["status"] == "scheduled"
+    assert list(after["attendance_plans"]) == ["10"]  # bound to the asker, no name argument
+
+
+def test_tool_rejects_non_attendees_and_bad_input(w):
+    plan_meeting(w)
+    r = w.tools(uid=12, name="Cat", is_exec=True).meeting_attendance("9000", "cannot")
+    assert r["error"] == "not_attendee"  # even an executive: it is THEIR plan, they are not invited
+    assert w.tools(uid=10, name="Ann").meeting_attendance("nope", "cannot")["error"]
+    r = w.tools(uid=10, name="Ann").meeting_attendance("9000", "custom", "23:00")
+    assert r["error"] == "time_out_of_range" and "meeting_window" in r
+    assert "error" in w.tools(uid=10, name="Ann").meeting_attendance("9000", "custom", "soon")
+    assert not w.store.get_meeting("m1").get("attendance_plans")
+    # the organiser may record a plan for their own meeting
+    assert w.tools(uid=1).meeting_attendance("9000", "late", "14:10")["status"] == "recorded"
+
+
+def test_my_plan_shows_in_list_meetings_for_the_asker_only(w):
+    m = plan_meeting(w)
+    w.tools(uid=10, name="Ann", is_exec=False).meeting_attendance("9000", "cannot", note="sick")
+    mine = w.tools(
+        uid=10, name="Ann", is_exec=False, now=lambda: P_START - timedelta(hours=2)
+    ).list_meetings("2026-10-19")
+    other = w.tools(
+        uid=11, name="Bob", is_exec=False, now=lambda: P_START - timedelta(hours=2)
+    ).list_meetings("2026-10-19")
+    assert mine["meetings"][0]["my_plan"]["status"] == "cannot"
+    assert "my_plan" not in other["meetings"][0]
+    assert "sick" not in json.dumps(other, ensure_ascii=False)
+    assert m["id"] == "m1"
+
+
+async def test_nudge_skips_cannot_and_future_late_then_nudges_after_the_time(w):
+    start = P_START.astimezone(UTC)
+    plan_meeting(w, attendees=(10, 11, 12))
+    w.now = start
+    await w.svc.tick()
+    m = w.store.get_meeting("m1")
+    await w.svc.set_attendance_plan(w.guild, m, 10, "cannot")
+    await w.svc.set_attendance_plan(w.guild, m, 11, "late", at_(14, 30))
+    n = {i: len(w.guild.members[i].sent) for i in (10, 11, 12)}
+    w.now = start + timedelta(minutes=5)
+    await w.svc.tick()
+    assert len(w.ann.sent) == n[10] and len(w.bob.sent) == n[11]  # they said so
+    assert len(w.cat.sent) == n[12] + 1 and "มีปัญหาอะไรหรือเปล่า" in w.cat.sent[-1]
+    w.now = start + timedelta(minutes=31)
+    await w.svc.tick()
+    assert len(w.ann.sent) == n[10]
+    late = w.bob.sent[-1]
+    assert "14:30" in late and f"https://discord.com/channels/{GUILD}/600" in late
+    await w.svc.tick()
+    assert len(w.bob.sent) == n[11] + 1  # once
+
+
+async def test_nudge_after_the_planned_time_already_passed_uses_the_late_text(w):
+    start = P_START.astimezone(UTC)
+    plan_meeting(w)
+    w.now = start
+    await w.svc.tick()
+    m = w.store.get_meeting("m1")
+    await w.svc.set_attendance_plan(w.guild, m, 11, "custom", at_(14, 2))
+    w.now = start + timedelta(minutes=5)
+    await w.svc.tick()
+    assert "14:02" in w.bob.sent[-1] and "มีปัญหาอะไรหรือเปล่า" not in w.bob.sent[-1]
+
+
+async def test_reminder_dm_carries_the_recipients_plan_line(w):
+    start = P_START.astimezone(UTC)
+    plan_meeting(w)
+    m = w.store.get_meeting("m1")
+    await w.svc.set_attendance_plan(w.guild, m, 10, "custom", at_(14, 45))
+    w.now = start - timedelta(minutes=10)
+    await w.svc.tick()
+    assert "แผนของคุณ: เข้า 14:45" in w.ann.sent[0]
+    assert "แผนของคุณ" not in w.bob.sent[0]
+
+
+async def test_attendance_text_and_minutes_include_plans(w):
+    m = plan_meeting(w, attendees=(10, 11, 12), attended=[10])
+    await w.svc.set_attendance_plan(w.guild, m, 10, "custom", at_(14, 45))
+    await w.svc.set_attendance_plan(w.guild, m, 11, "cannot")
+    await w.svc.set_attendance_plan(w.guild, m, 12, "late", at_(14, 20))
+    en = w.svc.attendance_text(w.guild, m, "en")
+    assert "Ann (joined 14:45 as planned)" in en
+    assert "Bob (said: can't attend)" in en and "Cat (said: ~20 min late)" in en
+    assert w.svc.attendance_map(m, "en")["Bob"] == "said: can't attend"
+
+
+async def test_dm_reply_that_parses_as_a_plan_is_also_stored_without_a_second_post(w):
+    start = P_START.astimezone(UTC)
+    plan_meeting(w)
+    w.now = start + timedelta(minutes=5)
+    await w.svc.tick()
+    w.room.sent.clear()
+    assert await w.svc.handle_dm_reply(11, "จะเข้า 14:40")
+    assert len(w.room.sent) == 1  # the existing absence note only
+    assert w.store.get_meeting("m1")["attendance_plans"]["11"]["status"] == "custom"
+    assert await w.svc.handle_dm_reply(11, "ติดลูกค้า")
+    assert w.store.get_meeting("m1")["attendance_plans"]["11"]["status"] == "custom"
+
+
+async def test_reschedule_clears_plans_made_for_the_old_time(w):
+    m = plan_meeting(w, event_id=None)
+    await w.svc.set_attendance_plan(w.guild, m, 10, "cannot")
+    m = await w.svc.reschedule(w.guild, w.store.get_meeting("m1"), P_START + timedelta(days=1))
+    assert m["attendance_plans"] == {}
+
+
+def test_prompt_carries_the_two_schedule_rule_and_the_clarifying_question():
+    from salid.qa import SECRETARY_PROMPT
+
+    assert "meeting_attendance" in SECRETARY_PROMPT
+    assert "เลื่อนประชุมทั้งนัดสำหรับทุกคน หรือเป็นเวลาที่คุณจะเข้าได้คะ?" in SECRETARY_PROMPT
+    assert "Move the meeting for everyone, or is that the time you can join?" in SECRETARY_PROMPT
+    assert "ห้ามเรียก reschedule_meeting" in SECRETARY_PROMPT
+
+
+def test_tool_list_has_meeting_attendance_and_it_is_a_voice_action(w):
+    from salid.secretary import build_secretary_tools
+    from salid.voice_actions import ACTION_TOOL_NAMES
+
+    names = [f.__name__ for f in build_secretary_tools(w.tools(), [])]
+    assert "meeting_attendance" in names and "meeting_attendance" in ACTION_TOOL_NAMES
+    assert "my_schedule" in ACTION_TOOL_NAMES

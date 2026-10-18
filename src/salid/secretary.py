@@ -301,7 +301,64 @@ class SecretaryTools:
             }
         rows = c.service.upcoming(c.guild_id, a, b)
         lang = self._lang()
-        return {"count": len(rows), "meetings": [c.service.display(m, lang) for m in rows[:30]]}
+        return {
+            "count": len(rows),
+            "meetings": [c.service.display(m, lang, c.author_id) for m in rows[:30]],
+        }
+
+    def meeting_attendance(
+        self,
+        event_id: str,
+        status: str,
+        from_time: str | None = None,
+        until_time: str | None = None,
+        note: str = "",
+    ) -> dict:
+        """The ASKER's own attendance plan for one meeting (personal schedule, never the company
+        one): stored in Salid's system, the organiser is told, the meeting is NOT moved."""
+        c = self.c
+        if not c.scheduling or c.service is None:
+            return {"status": "disabled"}
+        m = c.service.find(c.guild_id, event_id)
+        if m is None or m["status"] not in ("scheduled", "started"):
+            return {"error": "meeting not found"}
+        if c.author_id not in (m.get("attendee_ids") or []) and c.author_id != m.get(
+            "organizer_id"
+        ):
+            return {"error": "not_attendee", "note": "the asker is not invited to this meeting"}
+        status = (status or "").strip().lower()
+        zone = c.settings.zone
+        day = datetime.fromisoformat(m["start_utc"]).astimezone(zone).date()
+
+        def when(text: str | None) -> datetime | None:
+            s = (text or "").strip()
+            if not s:
+                return None
+            if len(s) <= 5 and ":" in s:  # a bare "15:00" is on the meeting's own day
+                s = f"{day.isoformat()}T{s}"
+            return parse_local(s, zone)
+
+        try:
+            frm, until = when(from_time), when(until_time)
+        except ValueError:
+            return {"error": "from_time / until_time must be ISO 8601 date-times (or HH:MM)"}
+        res = c.run(
+            c.service.set_attendance_plan(self._guild(), m, c.author_id, status, frm, until, note)
+        )
+        if "error" in res:
+            return {
+                **res,
+                "meeting_window": c.service.display(m, self._lang())["when"],
+                "statuses": "cannot | late | partial | custom",
+            }
+        return {
+            "status": "recorded",
+            "scope": "personal_plan_only",
+            "plan": res["plan"],
+            "meeting": c.service.display(m, self._lang(), c.author_id),
+            "organiser_told": True,
+            "say": res["ack"],
+        }
 
     def _may_change(self, m: dict) -> bool:
         return self.c.is_exec or self.c.author_id in (m.get("organizer_id"),)
@@ -431,10 +488,7 @@ class SecretaryTools:
                 when=when,
                 attendees=m.get("attendee_names", []),
                 summary=m.get("summary", ""),
-                attendance={
-                    v.get("name", k): v.get("note", "")
-                    for k, v in (m.get("attendance_notes") or {}).items()
-                },
+                attendance=c.service.attendance_map(m, lang),
                 notes=notes,
                 lang=lang,
                 generated_at=now,
@@ -668,7 +722,8 @@ def build_secretary_tools(tools: SecretaryTools, calls: list[tuple[str, dict]]) 
         return logged("schedule_meeting", a, lambda: tools.schedule_meeting(**a))
 
     def list_meetings(range: str = "upcoming") -> dict:  # noqa: A002
-        """List scheduled meetings of this server.
+        """List the company's scheduled meetings (the team's meetings; each row has my_plan when
+        the asker recorded their own attendance plan). For the asker's own day use my_schedule.
 
         Args:
             range: today, tomorrow, week, month, upcoming, or YYYY-MM-DD or YYYY-MM-DD..YYYY-MM-DD.
@@ -687,8 +742,10 @@ def build_secretary_tools(tools: SecretaryTools, calls: list[tuple[str, dict]]) 
         )
 
     def reschedule_meeting(event_id: str, new_start: str) -> dict:
-        """Move a meeting to a new start time (same length). Needs the user's confirmation in a
-        later message like schedule_meeting.
+        """COMPANY schedule: move a meeting to a new start time (same length) for EVERYONE. Only
+        for sentences that do not talk about the speaker ("เลื่อนประชุมไป 15:00", "move the
+        standup to Friday"). Never for "ผมสะดวก 15:00" / "I can only join at 3": that is
+        meeting_attendance. Needs the user's confirmation in a later message like schedule_meeting.
 
         Args:
             event_id: the meeting's event_id or id from list_meetings.
@@ -696,6 +753,34 @@ def build_secretary_tools(tools: SecretaryTools, calls: list[tuple[str, dict]]) 
         """
         a = dict(event_id=event_id, new_start=new_start)
         return logged("reschedule_meeting", a, lambda: tools.reschedule_meeting(**a))
+
+    def meeting_attendance(
+        event_id: str,
+        status: str,
+        from_time: str | None = None,
+        until_time: str | None = None,
+        note: str = "",
+    ) -> dict:
+        """PERSONAL schedule: record the ASKER's own plan for one meeting. Use it when the speaker
+        talks about their own convenience: "ผมสะดวก 15:00", "ฉันไม่สะดวกเวลานี้ ขอเข้า 16:00 นะ",
+        "ผมเข้าได้แค่ครึ่งแรก", "I can't make 14:00, I'll join at 15:00", "I'll be 20 min late",
+        "I can't attend". It is stored in Salid's system and the organiser is told; the meeting is
+        NOT moved and nobody else's calendar changes (say it was recorded as THEIR plan). No
+        confirmation needed. Only for the asker; error not_attendee = they are not invited.
+
+        Args:
+            event_id: the meeting's event_id or id from list_meetings.
+            status: cannot (will not attend), late (arrives at from_time), partial (only part of
+                it: from_time and/or until_time) or custom (joins at from_time).
+            from_time: when they join, ISO 8601 or HH:MM on the meeting's day, inside the meeting
+                (at most 15 min before the start). For "20 min late" give start + 20 min.
+            until_time: when they must leave, ISO 8601 or HH:MM, optional.
+            note: short reason, optional.
+        """
+        a = dict(
+            event_id=event_id, status=status, from_time=from_time, until_time=until_time, note=note
+        )
+        return logged("meeting_attendance", a, lambda: tools.meeting_attendance(**a))
 
     def make_report_pdf(
         kind: str,
@@ -759,7 +844,13 @@ def build_secretary_tools(tools: SecretaryTools, calls: list[tuple[str, dict]]) 
 
     out = []
     if tools.c.scheduling:
-        out += [schedule_meeting, list_meetings, cancel_meeting, reschedule_meeting]
+        out += [
+            schedule_meeting,
+            list_meetings,
+            cancel_meeting,
+            reschedule_meeting,
+            meeting_attendance,
+        ]
     if tools.c.documents:
         out.append(make_report_pdf)
     if tools.c.email and tools.c.can_email:
