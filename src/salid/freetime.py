@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from .coo_store import AVAILABILITY, DocStore
-from .scheduling import fmt_when, parse_local, parse_range
+from .scheduling import fmt_when, parse_local, parse_range, plan_view
 
 logger = logging.getLogger(__name__)
 
@@ -691,8 +691,77 @@ class FreetimeTools:
         c.repo.save(c.guild_id, c.asker.id, doc)
         return {"status": "cleared", "availability": self._view(doc)}
 
+    # ---- my_schedule
+    def my_schedule(self, range: str = "week") -> dict:  # noqa: A002 (tool parameter name)
+        """The ASKER's personal schedule: their own meetings (with their own attendance plan),
+        availability rules and approved leave in the range. Nothing about anyone else."""
+        c = self.c
+        now = c.now().astimezone(c.zone)
+        try:
+            a, b = parse_range(range or "week", now)
+        except ValueError:
+            return {
+                "error": "range must be today, tomorrow, week, month, upcoming or YYYY-MM-DD[..YYYY-MM-DD]"
+            }
+        me = c.asker.id
+        meetings = []
+        for src in c.sources:
+            if not isinstance(src, MeetingsSource):
+                continue
+            lo = (a - timedelta(hours=12)).astimezone(UTC).isoformat()
+            hi = b.astimezone(UTC).isoformat()
+            for m in src.store.list_meetings(c.guild_id, lo, hi, statuses=("scheduled", "started")):
+                try:
+                    s0 = datetime.fromisoformat(m["start_utc"])
+                    e0 = datetime.fromisoformat(m["end_utc"])
+                except (KeyError, ValueError):
+                    continue
+                organiser = m.get("organizer_id") == me
+                if not (organiser or me in (m.get("attendee_ids") or [])):
+                    continue
+                if not _overlaps(s0, e0, a, b):
+                    continue
+                row = {
+                    "event_id": m.get("event_id") or m["id"],
+                    "title": m["title"],
+                    "when": f"{fmt_when(s0, c.lang, c.zone)}-{e0.astimezone(c.zone):%H:%M}",
+                    "role": "organiser" if organiser else "attendee",
+                }
+                if plan := (m.get("attendance_plans") or {}).get(str(me)):
+                    row["my_plan"] = plan_view(plan, m, c.lang, c.zone)
+                meetings.append((s0, row))
+            break
+        leave = []
+        for src in c.sources:
+            if not isinstance(src, LeaveSource):
+                continue
+            try:
+                got = src.busy(c.guild_id, [me], a, b).get(me, [])
+            except Exception:
+                logger.exception("leave source failed")
+                continue
+            leave += [
+                {
+                    "from": f"{x.start.astimezone(c.zone):%Y-%m-%d}",
+                    "to": f"{x.end.astimezone(c.zone):%Y-%m-%d}",
+                }
+                for x in got
+            ]
+        view = self._view(c.repo.get(c.guild_id, me))
+        view["busy_once"] = [
+            o
+            for o in view["busy_once"]
+            if o["from"] < f"{b:%Y-%m-%d %H:%M}" and o["to"] >= f"{a:%Y-%m-%d %H:%M}"
+        ]
+        return {
+            "range": f"{a:%Y-%m-%d}..{(b - timedelta(seconds=1)):%Y-%m-%d} ({c.tz_name})",
+            "meetings": [r for _, r in sorted(meetings, key=lambda x: x[0])][:30],
+            "availability": view,
+            "leave": leave,
+        }
 
-FREETIME_TOOL_NAMES = ("find_free_time", "set_availability", "my_availability")
+
+FREETIME_TOOL_NAMES = ("find_free_time", "set_availability", "my_availability", "my_schedule")
 
 
 def freetime_tools(c: FreetimeContext, calls: list | None = None) -> list:
@@ -776,7 +845,17 @@ def freetime_tools(c: FreetimeContext, calls: list | None = None) -> list:
         a = dict(action=action, rule_id=rule_id)
         return safe("my_availability", a, lambda: t.my_availability(**a))
 
-    return [find_free_time, set_availability, my_availability]
+    def my_schedule(range: str = "week") -> dict:  # noqa: A002
+        """The asker's PERSONAL schedule: their own meetings (with their own attendance plan),
+        their availability rules and approved leave. Use for "ตารางของฉัน", "วันนี้ฉันมีอะไรบ้าง",
+        "my schedule", "what's on my calendar". For the team's meetings use list_meetings.
+
+        Args:
+            range: today, tomorrow, week (default), month, upcoming, or YYYY-MM-DD or YYYY-MM-DD..YYYY-MM-DD.
+        """
+        return safe("my_schedule", {"range": range}, lambda: t.my_schedule(range))
+
+    return [find_free_time, set_availability, my_availability, my_schedule]
 
 
 FREETIME_PROMPT = (
@@ -786,7 +865,12 @@ FREETIME_PROMPT = (
     "(บอกแค่ว่าง/ไม่ว่าง ห้ามเดาหรือบอกเหตุผล). ถ้าได้ needs_info ให้ถามว่าหมายถึงใคร ห้ามเดาชื่อ. "
     "เมื่อผู้ใช้เลือก (“เอาอันแรก”, “ตัวที่ 2”) ให้เรียก schedule_meeting ด้วยเวลาและผู้เข้าร่วมของตัวเลือกนั้น (ยังต้องขอยืนยันตามปกติ). "
     "ถ้าผู้ใช้บอกว่าตัวเองไม่ว่าง/เวลาทำงาน/ลา (เช่น “ผมไม่ว่างทุกวันพุธบ่าย”, “I work 10-19”, “พรุ่งนี้ลาครึ่งวันเช้า”) "
-    "ให้เรียก set_availability (แปลงวันที่สัมพัทธ์เป็น YYYY-MM-DD) ตั้งได้เฉพาะของผู้ถามเอง; ดูหรือล้างด้วย my_availability."
+    "ให้เรียก set_availability (แปลงวันที่สัมพัทธ์เป็น YYYY-MM-DD) ตั้งได้เฉพาะของผู้ถามเอง; ดูหรือล้างด้วย my_availability. "
+    "ตารางมีสองชั้น ห้ามปนกัน: ของบริษัท (schedule/reschedule/cancel_meeting = มีผลกับทุกคน) และของส่วนตัว "
+    "(meeting_attendance, set_availability, my_schedule = ของผู้พูดคนเดียว). "
+    "“ตารางของฉัน / วันนี้ฉันมีอะไรบ้าง / my schedule / what's on my calendar” เรียก my_schedule (เห็นเฉพาะของผู้ถามเอง); "
+    "“ตารางบริษัท / ประชุมของทีม / the team's meetings” เรียก list_meetings. "
+    "ประโยคที่อ้างถึงตัวผู้พูด (ผมสะดวก…, ฉันเข้าไม่ได้…, I can only join at…) = ส่วนตัว → meeting_attendance ห้ามเลื่อนนัด."
 )
 
 __all__ = [

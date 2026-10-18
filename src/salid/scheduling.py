@@ -318,6 +318,168 @@ def looks_like_request(text: str) -> bool:
     return bool(_REQUEST_RE.search(text or ""))
 
 
+# ------------------------------------------------------------------ personal attendance plans
+# A plan is ONE person's own intention for ONE meeting ("I can only join at 15:00"). It lives on the
+# meeting record in Salid's store and never touches the Discord event or anybody else's calendar.
+PLAN_STATUSES = ("cannot", "late", "partial", "custom")
+PLAN_EARLY = timedelta(minutes=15)  # a plan may start / end this far outside the meeting window
+MAX_LATE_MIN = 240
+
+_CLOCK = re.compile(r"(?<![\d:.])(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm|น\.?|โมง)?(?!\d)", re.I)
+_JOIN_KW = re.compile(
+    r"ขอเข้า|เข้าได้|เข้าร่วม|เข้า|จะมา|มาได้|มาถึง|มา(?=\s*\d)|join|come|arrive|be there|be in|"
+    r"available|(?<!ไม่)สะดวก",
+    re.I,
+)
+_LEAVE_KW = re.compile(
+    r"ออกก่อน|ขอออก|ต้องออก|ขอตัว|leave|have to go|need to go|must go|drop off|log off", re.I
+)
+_NEG_JOIN = re.compile(
+    r"(?:can['’]?t|cannot|can not|won['’]?t|unable to|not able to|don['’]?t|ไม่)\s*"
+    r"(?:be able to\s*)?(?:join|come|make|attend|เข้า|มา)|(?:เข้า|มา)[^,.;]{0,12}ไม่ได้",
+    re.I,
+)
+_FIRST_HALF = re.compile(r"ครึ่งแรก|ครึ่งชั่วโมงแรก|ช่วงแรก|first half|first part", re.I)
+_SECOND_HALF = re.compile(r"ครึ่งหลัง|ช่วงหลัง|second half|latter half|last half", re.I)
+_UNIT = r"(นาที|min(?:ute)?s?|m|ชั่วโมง|ชม\.?|hours?|hrs?|h)(?![a-z])"
+_LATE_A = re.compile(r"(?:สาย|ช้า|ล่าช้า|late|delayed|behind)\D{0,12}?(\d{1,3})\s*" + _UNIT, re.I)
+_LATE_B = re.compile(r"(\d{1,3})\s*" + _UNIT + r"\s*(?:late|behind|สาย|ช้า)", re.I)
+_CANNOT = re.compile(
+    r"ไม่สะดวก|ไม่ได้|ไม่ไหว|ไม่เข้า|ไม่มา|ขอลา|ไม่ว่าง|can['’]?t|cannot|can not|"
+    r"won['’]?t (?:be able|make|come)|unable|not able|not (?:coming|attending|joining)",
+    re.I,
+)
+
+
+def _clock_after(text: str, pos: int, day: date, zone, span: int = 24) -> datetime | None:
+    """The first clock time within `span` characters after `pos`, on `day` in `zone`."""
+    seg = text[pos : pos + span]
+    for mo in _CLOCK.finditer(seg):
+        mi, suf = mo.group(2), (mo.group(3) or "").lower()
+        if mi is None and not suf:
+            continue  # a bare number is not a time ("late 15 min")
+        h, mi = int(mo.group(1)), int(mi or 0)
+        before = text[max(0, pos + mo.start() - 5) : pos + mo.start()]
+        if (suf == "pm" and h < 12) or (
+            suf == "โมง" and h < 7 and ("บ่าย" in before or "เย็น" in before)
+        ):
+            h += 12
+        elif suf == "am" and h == 12:
+            h = 0
+        if h > 23 or mi > 59:
+            continue
+        return datetime(day.year, day.month, day.day, h, mi, tzinfo=zone)
+    return None
+
+
+def parse_plan(
+    text: str, start: datetime, zone, end: datetime | None = None
+) -> tuple[str, datetime | None, datetime | None] | None:
+    """A sentence about the speaker's own attendance -> (status, from, until), or None.
+
+    "จะเข้า 15:00" / "I'll join at 3pm" -> custom, from; "สาย 20 นาที" / "late 20 min" -> late, from
+    = start + N; "ออกก่อน 16:00" / "leave at 4pm" -> partial, until; "ครึ่งแรก" / "first half" ->
+    partial, until = the middle of the meeting (needs `end`); "ไม่สะดวก" / "can't" without a time
+    -> cannot. Pure; the caller validates the times against the meeting window."""
+    s = (text or "").strip()
+    if not s:
+        return None
+    day = start.astimezone(zone).date()
+    masked = _NEG_JOIN.sub(lambda mo: " " * len(mo.group(0)), s)  # "can't join at 14:00" is no join
+    if end is not None:
+        mid = start + (end - start) / 2
+        if _FIRST_HALF.search(s):
+            return ("partial", None, mid)
+        if _SECOND_HALF.search(s):
+            return ("partial", mid, None)
+    frm = until = None
+    for mo in _LEAVE_KW.finditer(masked):
+        until = _clock_after(masked, mo.end(), day, zone)
+        if until:
+            break
+    for mo in _JOIN_KW.finditer(masked):
+        frm = _clock_after(masked, mo.end(), day, zone)
+        if frm:
+            break
+    if frm and until:
+        return ("partial", frm, until)
+    if until:
+        return ("partial", None, until)
+    if frm:
+        return ("custom", frm, None)
+    for rx in (_LATE_A, _LATE_B):
+        mo = rx.search(s)
+        if mo:
+            n = int(mo.group(1)) * (60 if mo.group(2).lower().startswith(("ช", "h")) else 1)
+            if 0 < n <= MAX_LATE_MIN:
+                return ("late", start + timedelta(minutes=n), None)
+    if _CANNOT.search(s) and not _CLOCK_ANY.search(s):
+        return ("cannot", None, None)
+    return None
+
+
+_CLOCK_ANY = re.compile(r"\d{1,2}[:.]\d{2}|\d{1,2}\s*(?:am|pm|น\.?|โมง)", re.I)
+
+
+def plan_error(m: dict, status: str, frm: datetime | None, until: datetime | None) -> str | None:
+    """Why this plan does not fit the meeting window (None = fine)."""
+    if status not in PLAN_STATUSES:
+        return "invalid_status"
+    if status == "cannot":
+        return None
+    if (status == "late" and frm is None) or (frm is None and until is None):
+        return "time_required"
+    start = datetime.fromisoformat(m["start_utc"])
+    end = datetime.fromisoformat(m["end_utc"])
+    if frm is not None and not (start - PLAN_EARLY <= frm <= end):
+        return "time_out_of_range"
+    if until is not None and not (start < until <= end + PLAN_EARLY):
+        return "time_out_of_range"
+    if frm is not None and until is not None and until <= frm:
+        return "time_out_of_range"
+    return None
+
+
+def _hm_in(iso: str, zone) -> str:
+    return f"{datetime.fromisoformat(iso).astimezone(zone):%H:%M}"
+
+
+def plan_when(plan: dict, zone) -> str:
+    """ "15:00", "until 16:00" is left to the caller; "15:00-16:00" when both ends are known."""
+    a, b = plan.get("from_utc"), plan.get("until_utc")
+    if a and b:
+        return f"{_hm_in(a, zone)}-{_hm_in(b, zone)}"
+    return _hm_in(a or b, zone) if (a or b) else ""
+
+
+def plan_summary(plan: dict, m: dict, lang: str, zone) -> str:
+    """One short phrase: "joins 15:00", "~20 min late", "stays until 16:00", "can't attend"."""
+    if plan.get("status") == "cannot":
+        return t("sched_ps_cannot", lang)
+    a, b = plan.get("from_utc"), plan.get("until_utc")
+    if plan.get("status") == "late" and a:
+        mins = round(
+            (datetime.fromisoformat(a) - datetime.fromisoformat(m["start_utc"])).total_seconds()
+            / 60
+        )
+        return t("sched_ps_late", lang, mins=max(1, mins))
+    if b and not a:
+        return t("sched_ps_until", lang, when=_hm_in(b, zone))
+    return t("sched_ps_join", lang, when=plan_when(plan, zone))
+
+
+def plan_view(plan: dict, m: dict, lang: str, zone) -> dict:
+    """The plan as the model/user sees it (the speaker's own, so the note is included)."""
+    out = {"status": plan.get("status"), "summary": plan_summary(plan, m, lang, zone)}
+    if plan.get("from_utc"):
+        out["from"] = _hm_in(plan["from_utc"], zone)
+    if plan.get("until_utc"):
+        out["until"] = _hm_in(plan["until_utc"], zone)
+    if plan.get("note"):
+        out["note"] = plan["note"]
+    return out
+
+
 class MeetingService:
     """Meeting records + the reminder loop. `clock()` returns an aware datetime (injectable);
     `get_guild(id)` is the bot's `get_guild`; `meetings` is the voice `MeetingManager`."""
@@ -367,12 +529,13 @@ class MeetingService:
             out.append(getattr(mem, "display_name", None) or str(i))
         return out
 
-    def display(self, m: dict, lang: str) -> dict:
-        """The meeting as the model/user sees it."""
+    def display(self, m: dict, lang: str, viewer_id: int | None = None) -> dict:
+        """The meeting as the model/user sees it. `viewer_id`: the asker, whose OWN attendance plan
+        (and nobody else's) is added as `my_plan`."""
         zone = self.s.zone
         start = datetime.fromisoformat(m["start_utc"])
         end = datetime.fromisoformat(m["end_utc"])
-        return {
+        out = {
             "id": m["id"],
             "event_id": m.get("event_id"),
             "title": m["title"],
@@ -382,6 +545,10 @@ class MeetingService:
             "attendees": m.get("attendee_names", []),
             "status": m["status"],
         }
+        plan = (m.get("attendance_plans") or {}).get(str(viewer_id)) if viewer_id else None
+        if plan:
+            out["my_plan"] = plan_view(plan, m, lang, zone)
+        return out
 
     # ---- creation / changes
     async def create(
@@ -445,6 +612,7 @@ class MeetingService:
             "dm_sent": {},
             "dm_failed": [],
             "attendance_notes": {},
+            "attendance_plans": {},
             "summary": "",
             "summary_url": "",
             "created_at": self.clock().isoformat(timespec="seconds"),
@@ -505,6 +673,7 @@ class MeetingService:
             nudged=False,
             joined=False,
             status="scheduled",
+            attendance_plans={},  # personal plans were made for the old time
         )
         self.store.put_meeting(m)
         lang = self.lang_for(guild.id, m.get("text_channel_id"))
@@ -599,6 +768,7 @@ class MeetingService:
             "dm_sent": {},
             "dm_failed": [],
             "attendance_notes": {},
+            "attendance_plans": {},
             "summary": "",
             "summary_url": "",
             "created_at": self.clock().isoformat(timespec="seconds"),
@@ -742,6 +912,8 @@ class MeetingService:
             if now < start + NUDGE_GRACE and m["kind"] == "voice":
                 await self._refresh_attendees(guild, m)
                 await self._nudge(guild, m, lang)
+        if m["nudged"] and m["kind"] == "voice" and start <= now < end:
+            dirty |= await self._nudge_late_joiners(guild, m, lang, now)
         if dirty:
             self.store.put_meeting(m)
 
@@ -757,8 +929,13 @@ class MeetingService:
             body += "\n" + t("sched_reply_if_stuck", lang)
         mentions = self.mentions(m)
         await self.post(guild, m.get("text_channel_id"), f"{mentions} {body}".strip())
+        plans = m.get("attendance_plans") or {}
         for uid in m.get("attendee_ids", []):
-            if await self.dm(guild, uid, body):
+            text = body
+            if plan := plans.get(str(uid)):
+                summary = plan_summary(plan, m, lang, self.s.zone)
+                text += "\n" + t("sched_remind_plan", lang, plan=summary)
+            if await self.dm(guild, uid, text):
                 self._stamp(m, uid)
             elif (n := self._names(guild, [uid])[0]) not in m["dm_failed"]:
                 m["dm_failed"].append(n)
@@ -766,12 +943,42 @@ class MeetingService:
     async def _nudge(self, guild, m: dict, lang: str) -> None:
         present = {h.id for h in self._humans_in_voice(m, guild)}
         link = join_link(m)
+        now = self.clock()
+        plans = m.get("attendance_plans") or {}
         for uid in m.get("attendee_ids", []):
             if uid in present:
                 continue
+            plan = plans.get(str(uid))
             text = t("sched_nudge_dm", lang, title=m["title"], link=link)
+            if plan:
+                if plan["status"] == "cannot":
+                    continue  # they said so
+                due = plan.get("from_utc")
+                if due and datetime.fromisoformat(due) > now:
+                    continue  # they said they would come later
+                if due:
+                    plan["nudged"] = True
+                    text = t("sched_nudge_late_dm", lang, when=_hm_in(due, self.s.zone), link=link)
             if await self.dm(guild, uid, text):
                 self._stamp(m, uid)
+
+    async def _nudge_late_joiners(self, guild, m: dict, lang: str, now: datetime) -> bool:
+        """Someone who said they would join later and is still not in the room once that time has
+        passed gets one DM (the general no-show nudge skipped them). True when a plan changed."""
+        present = {h.id for h in self._humans_in_voice(m, guild)}
+        changed = False
+        for uid in m.get("attendee_ids", []):
+            plan = (m.get("attendance_plans") or {}).get(str(uid))
+            due = plan.get("from_utc") if plan else None
+            if not due or plan["status"] == "cannot" or plan.get("nudged") or uid in present:
+                continue
+            if datetime.fromisoformat(due) > now:
+                continue
+            plan["nudged"] = changed = True
+            text = t("sched_nudge_late_dm", lang, when=_hm_in(due, self.s.zone), link=join_link(m))
+            if await self.dm(guild, uid, text):
+                self._stamp(m, uid)
+        return changed
 
     async def _auto_join(self, guild, m: dict, lang: str) -> bool:
         ch = guild.get_channel(m["voice_channel_id"])
@@ -810,13 +1017,26 @@ class MeetingService:
     def attendance_text(self, guild, m: dict, lang: str) -> str:
         attended = set(m.get("attended", []))
         notes = m.get("attendance_notes", {})
+        plans = m.get("attendance_plans") or {}
+        zone = self.s.zone
         names = {i: n for i, n in zip(m["attendee_ids"], m["attendee_names"], strict=False)}
-        came = [names.get(i) or self._names(guild, [i])[0] for i in sorted(attended)]
+        came = []
+        for i in sorted(attended):
+            nm = names.get(i) or self._names(guild, [i])[0]
+            plan = plans.get(str(i))
+            if plan and plan.get("from_utc") and plan["status"] != "cannot":
+                nm += (
+                    " (" + t("sched_plan_att_came", lang, when=_hm_in(plan["from_utc"], zone)) + ")"
+                )
+            came.append(nm)
         away = []
         for uid in m["attendee_ids"]:
             if uid in attended:
                 continue
             why = (notes.get(str(uid)) or {}).get("note")
+            if plan := plans.get(str(uid)):
+                said = t("sched_plan_att_said", lang, plan=plan_summary(plan, m, lang, zone))
+                why = f"{said}; {why}" if why else said
             nm = names.get(uid) or str(uid)
             away.append(f"{nm} ({why})" if why else nm)
         lines = []
@@ -825,6 +1045,19 @@ class MeetingService:
         if away:
             lines.append(t("sched_absent", lang, names=", ".join(away)))
         return "\n".join(lines)
+
+    def attendance_map(self, m: dict, lang: str) -> dict[str, str]:
+        """{name: note} for the minutes PDF: DM notes plus the people's own plans."""
+        out = {
+            v.get("name", k): v.get("note", "")
+            for k, v in (m.get("attendance_notes") or {}).items()
+        }
+        for k, plan in (m.get("attendance_plans") or {}).items():
+            name = plan.get("name") or k
+            said = t("sched_plan_att_said", lang, plan=plan_summary(plan, m, lang, self.s.zone))
+            old = out.get(name)
+            out[name] = f"{said}; {old}" if old else said
+        return out
 
     async def on_voice_end(self, meeting_id: str, session) -> None:
         """The auto-joined voice meeting ended: store the summary link and post attendance."""
@@ -849,12 +1082,79 @@ class MeetingService:
 
     async def _finish(self, guild, m: dict, lang: str) -> None:
         m["status"] = "done"
-        if not m.get("attendance_posted") and m.get("attendance_notes"):
+        if not m.get("attendance_posted") and (
+            m.get("attendance_notes") or m.get("attendance_plans")
+        ):
             m["attendance_posted"] = True
             text = self.attendance_text(guild, m, lang)
             if text:
                 await self.post(guild, m.get("text_channel_id"), text)
         self.store.put_meeting(m)
+
+    def _store_plan(
+        self,
+        m: dict,
+        user_id: int,
+        name: str,
+        status: str,
+        frm: datetime | None,
+        until: datetime | None,
+        note: str = "",
+    ) -> dict:
+        if status == "cannot":
+            frm = until = None
+        plan = {
+            "name": name,
+            "status": status,
+            "from_utc": frm.astimezone(UTC).isoformat(timespec="seconds") if frm else None,
+            "until_utc": until.astimezone(UTC).isoformat(timespec="seconds") if until else None,
+            "note": " ".join((note or "").split())[:MAX_REASON_CHARS].replace("@", "@\u200b"),
+            "at": self.clock().isoformat(timespec="seconds"),
+        }
+        m.setdefault("attendance_plans", {})[str(user_id)] = plan
+        return plan
+
+    async def set_attendance_plan(
+        self,
+        guild,
+        m: dict,
+        user_id: int,
+        status: str,
+        from_dt: datetime | None = None,
+        until_dt: datetime | None = None,
+        note: str = "",
+    ) -> dict:
+        """Record ONE person's own plan for this meeting ("I'll join at 15:00", "can't attend"):
+        validated against the meeting window, stored on the meeting record (the Discord event and
+        everybody else's schedule are untouched), and ONE line goes to the meeting's text channel
+        for the organiser. Returns {status: recorded, plan, ack} or {error}."""
+        status = (status or "").strip().lower()
+        if err := plan_error(m, status, from_dt, until_dt):
+            return {"error": err}
+        mem = guild.get_member(user_id)
+        name = getattr(mem, "display_name", None) or str(user_id)
+        plan = self._store_plan(m, user_id, name, status, from_dt, until_dt, note)
+        self.store.put_meeting(m)
+        lang = self.lang_for(guild.id, m.get("text_channel_id"))
+        zone = self.s.zone
+        title = m["title"]
+        if status == "cannot":
+            line = t("sched_plan_cannot", lang, name=name, title=title)
+        elif status == "late":
+            mins = round((from_dt - datetime.fromisoformat(m["start_utc"])).total_seconds() / 60)
+            line = t("sched_plan_late", lang, name=name, mins=max(1, mins), title=title)
+        elif plan["until_utc"] and not plan["from_utc"]:
+            line = t("sched_plan_until", lang, name=name, when=plan_when(plan, zone), title=title)
+        else:
+            line = t("sched_plan_note", lang, name=name, when=plan_when(plan, zone), title=title)
+        if plan["note"]:
+            line += f" — {plan['note']}"
+        await self.post(guild, m.get("text_channel_id"), line)
+        return {
+            "status": "recorded",
+            "plan": plan_view(plan, m, lang, zone),
+            "ack": t("sched_plan_ack", lang, title=title),
+        }
 
     async def handle_dm_reply(
         self, user_id: int, text: str, guild_id: int | None = None
@@ -891,6 +1191,14 @@ class MeetingService:
             "note": reason,
             "at": now.isoformat(timespec="seconds"),
         }
+        parsed = parse_plan(
+            text,
+            datetime.fromisoformat(m["start_utc"]),
+            self.s.zone,
+            datetime.fromisoformat(m["end_utc"]),
+        )
+        if parsed and not plan_error(m, *parsed):  # also a plan, so the nudges respect it
+            self._store_plan(m, user_id, name, *parsed, note=reason)
         self.store.put_meeting(m)
         await self.post(
             guild,
@@ -901,6 +1209,7 @@ class MeetingService:
 
 
 __all__ = [
+    "PLAN_STATUSES",
     "CalendarBackend",
     "CalendarError",
     "DiscordCalendar",
@@ -911,8 +1220,12 @@ __all__ = [
     "join_link",
     "normalize_link",
     "parse_local",
+    "parse_plan",
     "parse_range",
     "pick_voice_channel",
+    "plan_error",
+    "plan_summary",
+    "plan_view",
     "resolve_attendees",
     "voice_link",
 ]

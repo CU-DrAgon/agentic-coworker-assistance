@@ -1932,6 +1932,40 @@ CATALOG: dict[str, dict[str, str]] = {
         "th": "รับทราบค่ะ แจ้งผู้จัดการประชุม “{title}” แล้ว",
         "en": "Got it, I let the organiser of “{title}” know.",
     },
+    "sched_plan_note": {
+        "th": "{name} จะเข้า {when} (การประชุม “{title}”)",
+        "en": "{name} will join at {when} (meeting “{title}”)",
+    },
+    "sched_plan_until": {
+        "th": "{name} จะอยู่ถึง {when} (การประชุม “{title}”)",
+        "en": "{name} can stay until {when} (meeting “{title}”)",
+    },
+    "sched_plan_late": {
+        "th": "{name} จะสายประมาณ {mins} นาที (การประชุม “{title}”)",
+        "en": "{name} will be ~{mins} min late (meeting “{title}”)",
+    },
+    "sched_plan_cannot": {
+        "th": "{name} แจ้งว่าเข้าประชุม “{title}” ไม่ได้",
+        "en": "{name} can't attend “{title}”",
+    },
+    "sched_plan_ack": {
+        "th": "บันทึกเป็นแผนของคุณสำหรับ “{title}” แล้ว และแจ้งผู้จัดแล้วค่ะ (นัดของทุกคนยังเหมือนเดิม)",
+        "en": "Saved as your own plan for “{title}” and the organiser is told (the meeting itself is unchanged for everyone).",
+    },
+    "sched_ps_join": {"th": "เข้า {when}", "en": "joins {when}"},
+    "sched_ps_until": {"th": "อยู่ถึง {when}", "en": "stays until {when}"},
+    "sched_ps_late": {"th": "สายประมาณ {mins} นาที", "en": "~{mins} min late"},
+    "sched_ps_cannot": {"th": "เข้าไม่ได้", "en": "can't attend"},
+    "sched_plan_att_came": {"th": "เข้า {when} ตามที่แจ้ง", "en": "joined {when} as planned"},
+    "sched_plan_att_said": {"th": "แจ้งไว้: {plan}", "en": "said: {plan}"},
+    "sched_remind_plan": {
+        "th": "(แผนของคุณ: {plan})",
+        "en": "(your plan: {plan})",
+    },
+    "sched_nudge_late_dm": {
+        "th": "คุณแจ้งว่าจะเข้า {when} ตอนนี้ประชุมอยู่นะคะ เข้าได้ที่นี่: {link}",
+        "en": "You said you'd join at {when}; the meeting is on: {link}",
+    },
     "perm_missing": {
         "th": "ตอนนี้สลิดยังขาดสิทธิ์ {what} อยู่ค่ะ ให้แอดมินเปิดลิงก์นี้ครั้งเดียวแล้วเลือกเซิร์ฟเวอร์นี้ก็เรียบร้อย {url}",
         "en": "I'm missing the {what} permission here. An admin just needs to open this link once "
