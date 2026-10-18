@@ -441,10 +441,17 @@ async def add_member(
             owners = sum(1 for m in org.members if m.role == "owner")
             if current == "owner" and body.role != "owner" and owners <= 1:
                 raise HTTPException(409, "An organization needs at least one owner")
+            prev = next((m for m in org.members if m.email.lower() == email), None)
             org.members = [m for m in org.members if m.email.lower() != email]
-            org.members.append(
-                Member(email=email, role=body.role, discord_user_id=body.discord_user_id)
-            )
+            if prev is not None:  # an edit: keep title, level, department, identities...
+                kept = prev.model_copy(update={"role": body.role})
+                if body.discord_user_id:
+                    kept.discord_user_id = body.discord_user_id
+                org.members.append(kept)
+            else:
+                org.members.append(
+                    Member(email=email, role=body.role, discord_user_id=body.discord_user_id)
+                )
             if body.role == "owner" and not org.owner_email:
                 org.owner_email = email
             return orgs.save(org)
