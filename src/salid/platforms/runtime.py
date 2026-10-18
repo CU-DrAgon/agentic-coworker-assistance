@@ -154,17 +154,19 @@ def platform_monitor(s: Settings, a: Assistant) -> PlatformMonitor | None:
 
 async def monitor_tick(m: PlatformMonitor) -> None:
     """Flush the buffered events and, every `HEARTBEAT_EVERY_S`, write the `platforms` heartbeat.
-    The store work runs off the event loop. Never raises."""
+    The store work and `queues()` (the memory backlog takes the scheduler lock, which a seed can
+    hold across a store read) run off the event loop. Never raises."""
+
+    def beat() -> bool:
+        return monitor.write_heartbeat(m.docs, "platforms", queues=m.queues(), now=m.emitter.now())
+
     try:
         await asyncio.to_thread(m.emitter.flush)
         now = m.clock()
         if now - m.last_beat < HEARTBEAT_EVERY_S:
             return
         m.last_beat = now  # a failed write is tried again on the next beat
-        queues = m.queues()
-        await asyncio.to_thread(
-            monitor.write_heartbeat, m.docs, "platforms", queues=queues, now=m.emitter.now()
-        )
+        await asyncio.to_thread(beat)
     except Exception as e:  # the type only: the text may quote stored data
         logger.warning("platform monitor tick failed (%s)", type(e).__name__)
 

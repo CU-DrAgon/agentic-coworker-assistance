@@ -412,7 +412,7 @@ class SecretaryBot(
     ContestsMixin,
     BizfinMixin,
     CooMixin,
-    MonitorMixin,  # change-log emitter + heartbeat, last in every tick (salid.monitor_bot)
+    MonitorMixin,  # change-log emitter + heartbeat in their own loop (salid.monitor_bot)
     ActionsMixin,
     BriefingMixin,
     HintsMixin,
@@ -627,6 +627,7 @@ class SecretaryBot(
             logger.exception("could not sync slash commands")
         self._digest_task = asyncio.create_task(self._digest_loop())
         self._tick_task = asyncio.create_task(self._tick_loop())
+        self._monitor_start(TICK_SECONDS)  # own loop: a slow tick never delays the heartbeat
 
     async def on_ready(self):
         logger.info("logged in as %s in %d guilds", self.user, len(self.guilds))
@@ -1353,6 +1354,7 @@ class SecretaryBot(
     async def close(self):
         if self._tick_task is not None:
             self._tick_task.cancel()
+        self._monitor_stop()
         if self._memory_worker is not None:
             self._memory_worker.cancel()
         await self.meetings.shutdown()
@@ -3521,7 +3523,6 @@ class SecretaryBot(
         await self._travel_due()
         await self._markets_due()
         await self._contests_due()
-        await self._monitor_due()  # last: flushes what this tick's producers buffered
 
     async def _scheduler_due(self) -> None:
         """Meeting reminders, no-show nudges and auto-join (every SCHEDULER_TICK_SECONDS)."""

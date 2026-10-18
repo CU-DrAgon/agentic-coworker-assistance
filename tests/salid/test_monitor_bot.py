@@ -10,6 +10,7 @@ import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from conftest import GUILD
 from test_modes import bot, world  # noqa: F401  (fixtures)
 from test_positions_bot import link
@@ -63,6 +64,18 @@ class Clock:
 
     def advance(self, s):
         self.t += s
+
+
+async def ready():  # stands in for discord.Client.wait_until_ready
+    return None
+
+
+async def until(cond, timeout: float = 3.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not cond():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError("condition not met in time")
+        await asyncio.sleep(0.01)
 
 
 # ------------------------------------------------------------------ bot
@@ -140,12 +153,15 @@ async def test_store_work_runs_off_the_event_loop(bot, monkeypatch):
     monkeypatch.setattr(monitor, "write_heartbeat", on_thread(monitor.write_heartbeat))
     bot.monitor.enabled = True
     monkeypatch.setattr(bot.monitor, "flush", on_thread(bot.monitor.flush))
+    sched = bot.memory.scheduler
+    monkeypatch.setattr(sched, "backlog", on_thread(sched.backlog))
     await bot._monitor_due()
     docs = SQLiteDocStore(":memory:")
     em = Emitter(docs, enabled=True)
     monkeypatch.setattr(em, "flush", on_thread(em.flush))
-    await monitor_tick(PlatformMonitor(em, docs, dict))
-    assert len(seen) == 4 and threading.get_ident() not in seen  # flush + heartbeat, twice
+    await monitor_tick(PlatformMonitor(em, docs, on_thread(dict)))
+    # flush + queue sizes (they take the scheduler lock) + heartbeat, for the bot and platforms
+    assert len(seen) == 6 and threading.get_ident() not in seen
 
 
 async def test_monitor_due_never_raises(bot, monkeypatch, caplog):
@@ -159,15 +175,82 @@ async def test_monitor_due_never_raises(bot, monkeypatch, caplog):
     assert "RuntimeError" in caplog.text and "secret text" not in caplog.text
 
 
-async def test_tick_records_actions_and_ends_with_the_monitor(bot, monkeypatch):
+async def test_tick_notes_actions_and_leaves_the_monitor_to_its_loop(bot, monkeypatch):
     bot.monitor.enabled = True
+    dues = []
 
     async def three():
         return 3
 
+    async def due():
+        dues.append(1)
+
     monkeypatch.setattr(bot, "_actions_due", three)
+    monkeypatch.setattr(bot, "_monitor_due", due)
     await bot.tick()
-    assert bot.docs.get(HEARTBEAT, 0, "bot")["queues"]["actions"] == 3
+    assert dues == [] and bot._monitor_queues["actions"] == 3
+
+
+async def test_monitor_loop_beats_while_a_tick_job_hangs_or_fails(bot, monkeypatch):
+    bot.monitor.enabled = True
+    monkeypatch.setattr(bot, "wait_until_ready", ready)
+    never = asyncio.Event()
+
+    async def hang():
+        await never.wait()
+
+    async def boom():
+        raise RuntimeError("tick job failed")
+
+    monkeypatch.setattr(bot, "_signoff_due", hang)  # the first tick job never finishes
+    tick = asyncio.create_task(bot.tick())
+    loop = asyncio.create_task(bot._monitor_loop(0.01))
+    try:
+        await until(lambda: bot.docs.get(HEARTBEAT, 0, "bot") is not None)
+        writes = spy(monkeypatch, monitor, "write_heartbeat")
+        bot.monitor.add("o1", ev(1))
+        bot.clock.advance(HEARTBEAT_EVERY_S + 1)  # over 30 s later, the tick is still stuck
+        await until(lambda: writes.n == 1 and read_log(bot.docs, "o1")["seq"] == 1)
+        assert not tick.done()
+        monkeypatch.setattr(bot, "_signoff_due", boom)
+        with pytest.raises(RuntimeError):
+            await bot.tick()
+        bot.monitor.add("o1", ev(2))
+        bot.clock.advance(HEARTBEAT_EVERY_S)
+        await until(lambda: writes.n == 2 and read_log(bot.docs, "o1")["seq"] == 2)
+    finally:
+        tick.cancel()
+        loop.cancel()
+        await asyncio.gather(tick, loop, return_exceptions=True)
+
+
+async def test_monitor_start_once_only_when_on_and_stop_cancels(bot, monkeypatch):
+    monkeypatch.setattr(bot, "wait_until_ready", ready)
+    bot._monitor_start(0.01)
+    assert bot._monitor_task is None  # off: no loop at all
+    bot.monitor.enabled = True
+    bot._monitor_start(0.01)
+    task = bot._monitor_task
+    bot._monitor_start(0.01)
+    assert bot._monitor_task is task  # one loop only
+    await until(lambda: bot.docs.get(HEARTBEAT, 0, "bot") is not None)
+    bot._monitor_stop()
+    assert bot._monitor_task is None
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_monitor_loop_ends_when_the_bot_closes(bot, monkeypatch):
+    bot.monitor.enabled = True
+    monkeypatch.setattr(bot, "wait_until_ready", ready)
+    closed: list[bool] = []
+    monkeypatch.setattr(bot, "is_closed", lambda: bool(closed))
+    dues = spy(monkeypatch, bot, "_monitor_due")
+    loop = asyncio.create_task(bot._monitor_loop(0.01))
+    await until(lambda: dues.n >= 2)
+    closed.append(True)
+    await asyncio.wait_for(loop, 1)  # returns by itself, no error
+    assert not loop.cancelled() and loop.exception() is None
 
 
 async def test_change_outbox_run_notes_pending_targets(bot, monkeypatch):
