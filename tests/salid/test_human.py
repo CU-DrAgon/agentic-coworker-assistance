@@ -666,6 +666,40 @@ async def test_a_crashing_answer_does_not_leave_the_ack_hanging(bot, world, monk
     assert m.replies == [t("qa_failed", "th")]
 
 
+async def never_fires(seconds):  # the 6 second ack timer, on a clock that never gets there
+    await asyncio.Event().wait()
+
+
+async def test_a_question_that_fails_before_the_ack_still_gets_a_reply(bot, world, monkeypatch):
+    """A quick failure (a 400 / 403, the model-call cap) inside the 6 s ack delay left no ack to
+    edit, so the user got no reply at all."""
+    wire(bot, monkeypatch)
+    bot._sleep = never_fires
+
+    def boom(*a, **k):
+        raise RuntimeError("400 bad request")
+
+    monkeypatch.setattr(botmod, "ask", boom)
+    m = TMsg(world.g, world.chat, member(world.g, STAFF), "เดือนนี้จ่ายไปเท่าไร")
+    rec = recording(m)
+    await bot.on_message(m)  # on_message logs the failure
+    assert rec.texts == [t("qa_failed", "th")] and m.replies == [t("qa_failed", "th")]
+
+
+async def test_a_failed_interjection_stays_quiet(bot, world, monkeypatch):
+    wire(bot, monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr(botmod, "ask", boom)
+    m = TMsg(world.g, world.gen, member(world.g, STAFF), "ดู https://example.com ไหม")
+    rec = recording(m)
+    with pytest.raises(RuntimeError):
+        await bot._answer(m, world.g, m.author, interjection=True)
+    assert rec.texts == []  # nobody asked Salid: no apology either
+
+
 async def test_reply_summary_acks_by_the_referenced_message_and_registers_the_edit(
     bot, world, monkeypatch
 ):

@@ -1979,13 +1979,17 @@ class SecretaryBot(
         return line or t("deep_ack", lang)
 
     async def _ack_failed(self, ack: Ack | None, lang: str) -> None:
-        """The answer blew up: do not leave "one moment..." hanging."""
+        """The answer blew up: do not leave "one moment..." hanging. The ack becomes the apology;
+        a failure before the ack went out (a quick 400 / 403) still gets it, as a reply. No ack
+        (an interjection, nobody asked): stay quiet."""
         if ack is None:
             return
         await ack.finish()
-        if ack.sent is not None:
-            with contextlib.suppress(discord.HTTPException):
+        with contextlib.suppress(discord.HTTPException):
+            if ack.sent is not None:
                 await ack.sent.edit(content=t("qa_failed", lang))
+            else:
+                await ack.message.reply(t("qa_failed", lang), mention_author=False)
 
     async def _deliver(self, message, guild, ack, text: str, uploads=(), everyone: bool = False):
         """Post an answer: mentions resolved (`@[name]` -> real tags, see salid.mentions), the
