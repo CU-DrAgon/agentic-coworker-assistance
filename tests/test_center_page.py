@@ -43,3 +43,24 @@ def test_served_by_fastapi_static_read():
     # The page is plain text; make sure it parses as a single document with one script block
     src = html()
     assert src.count("<script>") == 1 and src.rstrip().endswith("</html>")
+
+
+def test_google_calendar_identity_and_attach_endpoints_referenced():
+    src = html()
+    for needle in (
+        '"/google/calendar"',
+        '"/connect"',
+        '"/identities"',
+        '"/identities/" + p + "/code"',
+        '"/workspaces/" + p + "/attach-code"',
+    ):
+        assert needle in src, needle
+    assert "window.location = r.auth_url" in src
+    assert 'get("calendar")' in src and "history.replaceState" in src
+
+
+def test_new_i18n_keys_in_both_languages():
+    src = html()
+    th, en = src.split("\nen: {", 1)
+    for key in re.findall(r"\b((?:gc|la|ab)_[a-z]+):", src):
+        assert f"{key}:" in th and f"{key}:" in en, key

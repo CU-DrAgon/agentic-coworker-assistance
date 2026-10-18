@@ -298,6 +298,10 @@ class RoomBuffer:
 # ------------------------------------------------------------------ the assistant
 
 
+NOTE_PREFIX = {"huddle": "[Huddle notes] "}  # how a remembered note says where it came from
+MAX_NOTE_CHARS = 30_000
+
+
 def tenant_label(platform: str, tenant: str) -> str:
     """The owner recorded in a tenant's settings document (its `guild_name`)."""
     return f"{platform.title()} {tenant}"
@@ -526,6 +530,65 @@ class Assistant:
         # a deleted / unsent message must not reach the next model call through the live buffer
         self.buffer.remove((gid, ids.room_id(platform, tenant, room)), message)
         self._enqueue(partial(self.memory.delete, gid, [mid]))
+
+    # -------------------------------------------------------------- notes (no answer)
+    async def note_room_ok(
+        self, platform: str, tenant: str, room_key: str, room_name: str = ""
+    ) -> bool:
+        """May a note be remembered for this room? Same gates as a message: the tenant owner is
+        checked, a room whose mode is `off` is skipped and so is a tenant with memory switched off."""
+        gid = ids.tenant_id(platform, tenant)
+        rid = ids.room_id(platform, tenant, room_key)
+        probe = Incoming(
+            platform=platform, tenant=tenant, room=room_key, user="", user_name="",
+            text="", message="", at=self._now(), room_name=room_name,
+        )  # fmt: skip
+        if not await asyncio.to_thread(self._owner_ok, probe, gid):
+            return False
+        await asyncio.to_thread(self.team.current, gid)  # refresh the cache off the loop
+        if self._mode(gid, rid, room_name, False) == "off":
+            return False
+        return bool(self.team.enabled(gid, "memory"))
+
+    async def remember_note(
+        self,
+        platform: str,
+        tenant: str,
+        room_key: str,
+        room_name: str,
+        note_id: str,
+        author: str,
+        text: str,
+        kind: str = "huddle",
+        ts: datetime | None = None,
+    ) -> bool:
+        """Remember a document (huddle notes) in a room's memory and do nothing else: no buffer
+        line, no gate, no answer. `note_id` is the stable key of the message id, so recording the
+        same note again replaces the earlier text. Never raises; True when it was queued."""
+        try:
+            body = (text or "").strip()
+            if not body or not await self.note_room_ok(platform, tenant, room_key, room_name):
+                return False
+            gid = ids.tenant_id(platform, tenant)
+            rid = ids.room_id(platform, tenant, room_key)
+            self.names[(gid, rid)] = room_name or room_key
+            prefix = NOTE_PREFIX.get(kind, "")
+            rec = build_message(
+                self.s,
+                guild_id=gid,
+                channel_id=rid,
+                message_id=ids.message_id(platform, tenant, room_key, note_id),
+                author_id=ids.user_id(platform, f"note:{kind}"),
+                author_name=author,
+                created_at=ts or self._now(),
+                text=(prefix + body)[:MAX_NOTE_CHARS],
+                kind=kind,
+            )
+            self._enqueue(partial(self.memory.record, rec))
+            return True
+        except Exception as e:
+            logger.error("could not remember a note (%s)", safe_exc(e))
+            return False
 
     # -------------------------------------------------------------- verified identity
     def identity_of(self, msg: Incoming) -> tuple[str, str] | None:

@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -50,6 +51,13 @@ class Settings(BaseSettings):
     slack_signing_secret: str = ""
     clickup_client_id: str = ""
     clickup_client_secret: str = ""
+
+    # Google Calendar + Meet per member (`salid.google_oauth`). All four must be set or the feature is
+    # off (routes answer 503). Secrets: never logged or returned by the API.
+    google_oauth_client_id: str = ""
+    google_oauth_client_secret: str = Field(default="", repr=False)
+    google_oauth_redirect_uri: str = ""
+    salid_token_key: str = Field(default="", repr=False)  # Fernet key for stored refresh tokens
 
 
 @lru_cache
