@@ -1046,6 +1046,113 @@ function handleAuth(e) {
   return true;
 }
 
+/* ---------- monitor: pure functions (Node-tested, no DOM) ---------- */
+// The monitor's live feed as pure functions (tests/test_monitor_page.py runs this block in Node): no DOM, no i18n
+// lookups, no network, no storage, no timers, no clock. Callers pass the time and the random number.
+const MON_KINDS = ["video_ad", "deep_task", "research", "change", "action", "meeting", "task", "approval", "vote", "form", "reminder"];
+const MON_BACKOFF_MS = [5000, 10000, 20000, 40000, 60000]; // [0] is the normal poll interval
+const MON_JITTER = 0.1; // ±10 % on every wait
+const MON_HEAL_MS = 60000; // refetch the visible page this often
+const MON_TOAST_GAP_MS = 10000; // at most one toast per 10 s
+const MON_SUMMARY_MS = 60000; // summary tiles and the nav badge
+const MON_HASH_KEYS = ["tab", "kind", "status", "owner", "workspace", "from", "to", "priority", "q"];
+const MON_LIST_KEYS = ["kind", "status", "owner", "workspace", "priority"]; // comma-separated in the hash
+const monKey = (x) => x.kind + ":" + x.id;
+const monTime = (iso) => { const ms = Date.parse(iso || ""); return Number.isNaN(ms) ? -Infinity : ms; };
+// The wait before the next poll: no failures = every 5 s, then 10, 20, 40 and at most 60 s; rnd in [0, 1] is the jitter.
+function monBackoff(failures, rnd) {
+  const base = MON_BACKOFF_MS[Math.min(Math.max(failures, 0), MON_BACKOFF_MS.length - 1)];
+  return Math.round(base * (1 - MON_JITTER + 2 * MON_JITTER * rnd));
+}
+// "delayed" is shown as "Reconnecting…"; offline after 4 failures or when the browser says it is offline.
+function monFeedState({ failures = 0, online = true, paused = false, hidden = false } = {}) {
+  if (paused) return "paused";
+  if (hidden) return "hidden";
+  if (failures >= 4 || online === false) return "offline";
+  return failures >= 2 ? "delayed" : "live";
+}
+// Apply one /changes answer {seq, floor, now, events, reset} to the cursor st.seq. Events are hints: the caller
+// refetches `refetch` ("kind:id", in seq order) in one items?ids= batch, or reloads the view when `reload`. The
+// cursor moves to the log's seq (gaps are normal: other viewers' events are left out). `reset` is checked before the
+// stale test because the server also sets it when the log was recreated (since > seq); a reload then moves the
+// cursor to the new seq, so the next poll does not ask to reload again. Unknown kinds are skipped.
+function monReduce(st, resp) {
+  const seq = Number(resp.seq) || 0;
+  if (resp.reset || (Number(resp.floor) || 0) > st.seq) return { st: { ...st, seq }, refetch: [], reload: true };
+  if (seq < st.seq) return { st, refetch: [], reload: false }; // an older answer that arrived late
+  const fresh = (resp.events || []).filter((e) => e && e.seq > st.seq && e.id != null && MON_KINDS.includes(e.kind));
+  fresh.sort((a, b) => a.seq - b.seq);
+  return { st: { ...st, seq }, refetch: [...new Set(fresh.map(monKey))], reload: false };
+}
+// Whether row `a` is a newer server state than row `b`: the later updated_at, then the later request (`_req`, the
+// counter the caller stamps on each fetch, like navSeq).
+function monNewer(a, b) {
+  const ta = monTime(a.updated_at), tb = monTime(b.updated_at);
+  return ta !== tb ? ta > tb : (a._req || 0) > (b._req || 0);
+}
+// Merge refetched rows into the list (new array; rows are never changed). `frozen` (pointer or focus in the list):
+// update rows in place only, no reorder and no insert. Otherwise add the new rows and sort newest updated_at first.
+// The newer row by monNewer always wins. `added` = rows whose key was not in the list (the "N new" pill).
+function monMerge(rows, fresh, frozen) {
+  const best = new Map();
+  for (const r of fresh) { const k = monKey(r), had = best.get(k); if (!had || monNewer(r, had)) best.set(k, r); }
+  const kept = rows.map((r) => { const f = best.get(monKey(r)); return f && monNewer(f, r) ? f : r; });
+  const have = new Set(rows.map(monKey));
+  const extra = [...best.values()].filter((r) => !have.has(monKey(r)));
+  if (frozen) return { rows: kept, added: extra.length };
+  const order = (a, b) => { const x = monTime(a.updated_at), y = monTime(b.updated_at); return x === y ? 0 : x < y ? 1 : -1; };
+  return { rows: kept.concat(extra).sort(order), added: extra.length };
+}
+// Milliseconds since startIso: until endIso, else until the server's `now` plus the time since that answer was
+// fetched (the device clock may be wrong). null when the start or the server time is unknown.
+function monElapsed(startIso, endIso, serverNowIso, fetchedAtMs, nowMs) {
+  const start = monTime(startIso);
+  let end = monTime(endIso);
+  if (end === -Infinity) end = monTime(serverNowIso) + (nowMs - fetchedAtMs);
+  return start === -Infinity || !Number.isFinite(end) ? null : Math.max(0, end - start);
+}
+const monToastGate = (lastAt, nowMs) => nowMs - lastAt >= MON_TOAST_GAP_MS;
+// A browser notification only while the tab is hidden, after the person opted in and granted permission, and only
+// for a failure or an attention item that concerns them (their own, or any failure for an admin).
+function monNotifyGate({ optedIn, permission, hidden, mine, isAdmin, status, attention } = {}) {
+  if (!(optedIn && permission === "granted" && hidden)) return false;
+  const concerns = !!mine || (!!isAdmin && status === "failed");
+  return concerns && (status === "failed" || !!attention);
+}
+// What to do after a failed poll (status 0 = network error). Only "retry" counts as a failure; the caller then waits
+// monBackoff(failures). 402 and 403 stop the feed; 429 waits Retry-After (seconds).
+function monOnError(status, retryAfterS) {
+  if (status === 401) return { action: "auth", delayMs: 0, failure: false };
+  if (status === 402) return { action: "licence", delayMs: 0, failure: false };
+  if (status === 403) return { action: "forbidden", delayMs: 0, failure: false };
+  if (status === 429) { const s = Number(retryAfterS); return { action: "wait", delayMs: s > 0 ? s * 1000 : 2000, failure: false }; }
+  return { action: "retry", delayMs: 0, failure: true };
+}
+// Filters in the URL hash: "#/monitor?tab=…&kind=a,b&…" in MON_HASH_KEYS order, every value URI-encoded. Missing keys
+// parse as "" or []; unknown keys and malformed escapes are dropped.
+function monParseHash(hash) {
+  const st = {};
+  for (const k of MON_HASH_KEYS) st[k] = MON_LIST_KEYS.includes(k) ? [] : "";
+  const h = String(hash || ""), i = h.indexOf("?");
+  if (i < 0) return st;
+  const dec = (s) => { try { return decodeURIComponent(s); } catch { return ""; } };
+  for (const part of h.slice(i + 1).split("&")) {
+    const j = part.indexOf("="), k = j < 0 ? part : part.slice(0, j), v = j < 0 ? "" : part.slice(j + 1);
+    if (!MON_HASH_KEYS.includes(k)) continue;
+    st[k] = MON_LIST_KEYS.includes(k) ? v.split(",").map(dec).filter(Boolean) : dec(v);
+  }
+  return st;
+}
+function monHash(st) {
+  const parts = [];
+  for (const k of MON_HASH_KEYS) {
+    const v = MON_LIST_KEYS.includes(k) ? [].concat(st[k] || []).filter(Boolean).map(encodeURIComponent).join(",") : st[k] ? encodeURIComponent(st[k]) : "";
+    if (v) parts.push(k + "=" + v);
+  }
+  return "#/monitor" + (parts.length ? "?" + parts.join("&") : "");
+}
+/* ---------- monitor: end pure functions ---------- */
+
 /* ---------- state & routing ---------- */
 let me = null, orgId = null, cur = null;
 // Company settings and personal settings are two labelled groups. "Talk to Salid" is not a page: it is the
