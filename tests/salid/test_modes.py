@@ -1070,6 +1070,12 @@ def test_every_slash_command_is_bilingual(bot):
         ("บริษัท", "company"),
         ("ห้องส่วนตัว", "private-chat"),
         ("โทน", "tone"),
+        ("ภาษาบริษัท", "company-language"),
+        ("เสียง", "voice"),
+        ("เงียบ", "quiet"),
+        ("แสดงคำบรรยาย", "show-captions"),
+        ("ซ่อนคำบรรยาย", "hide-captions"),
+        ("คำบรรยายทุกประชุม", "captions-default"),
     ]
     for th_name, en_name in pairs:
         assert {th_name, en_name} <= names

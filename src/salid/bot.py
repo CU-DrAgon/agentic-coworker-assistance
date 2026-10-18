@@ -2929,8 +2929,8 @@ class SecretaryBot(
         voice_cb = app_commands.describe(mode=t("cmd_voice_arg"))(voice_cb)
         voice_cb = app_commands.choices(
             mode=[
-                app_commands.Choice(name="🔇 listen only / ฟังอย่างเดียว", value="listen_only"),
-                app_commands.Choice(name="🔊 may talk / พูดได้", value="may_talk"),
+                app_commands.Choice(name=t("cmd_voice_choice_listen"), value="listen_only"),
+                app_commands.Choice(name=t("cmd_voice_choice_talk"), value="may_talk"),
             ]
         )(voice_cb)
         for name in ("voice", "เสียง"):
@@ -2966,17 +2966,18 @@ class SecretaryBot(
         captions_default_cb = app_commands.describe(mode=t("cmd_voice_arg"))(captions_default_cb)
         captions_default_cb = app_commands.choices(
             mode=[
-                app_commands.Choice(name="on / เปิดทุกประชุม", value="on"),
-                app_commands.Choice(name="off / ปิด (ค่าเริ่มต้น)", value="off"),
+                app_commands.Choice(name=t("cmd_captions_choice_on"), value="on"),
+                app_commands.Choice(name=t("cmd_captions_choice_off"), value="off"),
             ]
         )(captions_default_cb)
-        self.tree.add_command(
-            app_commands.Command(
-                name="captions-default",
-                description=t("cmd_captions_default"),
-                callback=captions_default_cb,
+        for name in ("captions-default", "คำบรรยายทุกประชุม"):
+            self.tree.add_command(
+                app_commands.Command(
+                    name=name,
+                    description=t("cmd_captions_default"),
+                    callback=captions_default_cb,
+                )
             )
-        )
 
         async def quiet_cb(interaction: discord.Interaction):
             await self.handle_quiet(interaction)
