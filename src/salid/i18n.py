@@ -62,6 +62,14 @@ def lang_name(lang: str | None, which: int = 1) -> str:
     return LANG_NAMES.get(lang or "", LANG_NAMES["en"])[which]
 
 
+def t_days(key: str, lang: str, days: int, **fmt) -> str:
+    """`key` with the memory retention `days`; 0 (keep forever) uses `<key>_forever`, which says
+    "forever" in words and never a number of days (keys without a forever text keep `key`)."""
+    if days <= 0 and f"{key}_forever" in CATALOG:
+        return t(f"{key}_forever", lang, **fmt)
+    return t(key, lang, days=days, **fmt)
+
+
 def reply_language_line(lang: str | None) -> str:
     """The mandatory first line of the persona for a second-tier language ("" for th / en)."""
     if lang not in EXTRA:
@@ -494,6 +502,16 @@ CATALOG: dict[str, dict[str, str]] = {
         "or voice, anything goes. In {chat} you can chat with me without tagging; elsewhere tag "
         "{mention} or call my name.\n"
         "I only remember channels I'm allowed to see ({days} days). If you'd rather I skip one, "
+        "just tell me “switch this channel off”.",
+    },
+    "welcome_forever": {
+        "th": "สวัสดีค่ะ สลิด เลขาประจำทีมค่ะ 🐱 ทักสลิดได้เลย พิมพ์หรือส่งไฟล์ รูป เสียงมาได้หมด "
+        "ห้องนี้คุยกับสลิดได้เลยไม่ต้องแท็ก ห้องอื่นแท็ก {mention} หรือเรียกชื่อสลิดก็พอ ({chat})\n"
+        "สลิดจำแค่ห้องที่สลิดเห็นได้ (เก็บถาวร) ไม่อยากให้จำห้องไหน บอกสลิดได้เลยว่า “ห้องนี้ปิดไว้นะ”",
+        "en": "Hi, I'm Salid, your team's secretary 🐱 Just talk to me: type, or send files, photos "
+        "or voice, anything goes. In {chat} you can chat with me without tagging; elsewhere tag "
+        "{mention} or call my name.\n"
+        "I only remember channels I'm allowed to see (kept forever). If you'd rather I skip one, "
         "just tell me “switch this channel off”.",
     },
     "chat_topic": {
@@ -1034,13 +1052,44 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Replies to every message in the channel. Salid remembers this channel's messages "
         "for {days} days",
     },
+    # the same four mode texts when memory is kept forever (retention 0): never "3650 days"
+    "mode_help_listen_forever": {
+        "th": "ฟังเงียบ ไม่พูดเอง อ่านใบเสร็จแล้วแปะอีโมจิ ตอบเมื่อถูกแท็กเท่านั้น (ไม่ตอบเมื่อเรียกชื่อเฉยๆ) "
+        "สลิดจำข้อความของห้องนี้ไว้ถาวร",
+        "en": "Listens quietly and never speaks unprompted: reads receipts with an emoji and replies "
+        "only when tagged (not when just called by name). Salid remembers this channel's messages "
+        "forever",
+    },
+    "mode_help_call_forever": {
+        "th": "ตอบเมื่อถูกแท็กหรือถูกเรียกชื่อ แล้วคุยต่อได้ 3 นาทีโดยไม่ต้องแท็ก สลิดจำข้อความของห้องนี้ไว้ถาวร",
+        "en": "Replies when tagged or called by name, then keeps chatting for 3 minutes without a tag. "
+        "Salid remembers this channel's messages forever",
+    },
+    "mode_help_join_forever": {
+        "th": "เหมือนโหมดเรียกแล้วคุย และสลิดอาจเข้าร่วมวงเองเมื่อมีคำถามที่ช่วยได้ (จำกัดชั่วโมงละ 3 ครั้ง) "
+        "สลิดจำข้อความของห้องนี้ไว้ถาวร",
+        "en": "Like Call, and Salid may chime in on its own when it can help with a question "
+        "(at most 3 times an hour). Salid remembers this channel's messages forever",
+    },
+    "mode_help_chat_forever": {
+        "th": "ตอบทุกข้อความในห้อง สลิดจำข้อความของห้องนี้ไว้ถาวร",
+        "en": "Replies to every message in the channel. Salid remembers this channel's messages "
+        "forever",
+    },
     "cmd_memory": _bi("ดูหรือตั้งจำนวนวันที่สลิดจำข้อความ", "View or set how long Salid remembers chats"),
-    "cmd_memory_arg": _bi("จำนวนวัน 1-3650 (ไม่ใส่ = ดูสถานะ)", "Days 1-3650 (empty = view status)"),
+    "cmd_memory_arg": _bi(
+        "จำนวนวัน 0-3650 (0 = เก็บถาวร, ไม่ใส่ = ดูสถานะ)",
+        "Days 0-3650 (0 = forever, empty = view status)",
+    ),
     "memory_on": {"th": "เปิด", "en": "on"},
     "memory_off": {"th": "ปิดอยู่", "en": "off"},
     "memory_status": {
         "th": "ความจำของทีม: {state} · เก็บข้อความไว้ {days} วัน",
         "en": "Team memory: {state} · messages are kept for {days} days",
+    },
+    "memory_status_forever": {
+        "th": "ความจำของทีม: {state} · เก็บข้อความถาวร (ทรัพย์สินของบริษัท)",
+        "en": "Team memory: {state} · messages are kept forever (the company's asset)",
     },
     "memory_import": {
         "th": "นำเข้าประวัติแล้ว {done}/{total} ห้อง, {messages} ข้อความ, รูป {images}/{cap}",
@@ -1061,6 +1110,11 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "Salid will now keep messages for {days} days (this also applies to existing "
         "messages at the next daily cleanup).",
     },
+    "memory_set_forever": {
+        "th": "ตั้งให้สลิดเก็บข้อความถาวรแล้วค่ะ (เป็นทรัพย์สินของบริษัท ไม่ลบอัตโนมัติ)",
+        "en": "Salid will now keep messages forever (they are the company's asset and are never "
+        "deleted automatically).",
+    },
     "memory_denied": {
         "th": "เปลี่ยนจำนวนวันที่จำข้อความได้เฉพาะผู้ดูแลเซิร์ฟเวอร์หรือผู้บริหารค่ะ",
         "en": "Only server admins or executives can change how long messages are kept.",
@@ -1080,6 +1134,26 @@ CATALOG: dict[str, dict[str, str]] = {
         "en": "📝 From now on Salid will remember messages in this channel for {days} days to help "
         "answer questions like “what did we discuss yesterday?”, and will only share information "
         "from it with people who can see this channel. To stop, type /mode and pick 🔇 Off.",
+    },
+    "memory_notice_forever": {
+        "th": "📝 ต่อไปนี้สลิดจะจำข้อความในห้องนี้ไว้ถาวร เพื่อช่วยตอบคำถามอย่าง “เมื่อวานคุยเรื่องอะไร” "
+        "และจะให้ข้อมูลจากห้องนี้เฉพาะกับคนที่เห็นห้องนี้เท่านั้น "
+        "ถ้าไม่ต้องการ พิมพ์ /โหมด แล้วเลือก 🔇 ปิด",
+        "en": "📝 From now on Salid will remember messages in this channel forever to help "
+        "answer questions like “what did we discuss yesterday?”, and will only share information "
+        "from it with people who can see this channel. To stop, type /mode and pick 🔇 Off.",
+    },
+    # LINE join / follow notice when the company keeps memory forever (salid.platforms.line)
+    "line_memory_forever": {
+        "th": "ในแชทนี้สลิดจะจำข้อความไว้เป็นความจำของทีม เพื่อช่วยตอบเรื่องที่เคยคุยกัน "
+        "เก็บไว้ถาวร และใช้เฉพาะในแชทนี้เท่านั้น\n"
+        "• ให้ลืมข้อความหนึ่ง: ยกเลิกการส่งข้อความนั้น สลิดจะลบออกจากความจำ\n"
+        "• ให้หยุดจำ: {stop} ข้อความที่จำไว้แล้วจะยังเก็บไว้ (ผู้ดูแลเปลี่ยนระยะเวลาเก็บได้ที่ศูนย์บัญชาการ)",
+        "en": "In this chat I remember messages as team memory, to help answer things you "
+        "discussed before. They are kept forever and used only in this chat.\n"
+        "• To make me forget a message: unsend it and I delete it from memory.\n"
+        "• To stop me remembering: {stop} What is already stored stays (an admin can change how "
+        "long it is kept in the command center).",
     },
     # ---------------------------------------------------------------- slash command texts
     # (Discord shows one description, so these are bilingual in both columns)

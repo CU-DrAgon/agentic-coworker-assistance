@@ -2715,7 +2715,8 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
             "server": g.guild_name or str(gid),
             "default_language": g.default_language,
             "default_tone": g.default_tone,
-            "memory_days": g.memory_retention_days,
+            # 0 = keep forever, said as such (the bot's show_settings does the same)
+            "memory_days": g.memory_retention_days or "forever",
             "note": "you are an administrator: confirm before changing server-wide settings",
         }
 

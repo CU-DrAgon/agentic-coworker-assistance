@@ -348,3 +348,10 @@ def test_identity_code_proves_one_discord_user_without_granting_admin():
         g.redeem_identity_code(code, "ann@example.com")  # one use only
     with pytest.raises(LinkError):
         g.link_code_info("nope")
+
+
+def test_the_module_docstring_lists_exactly_the_feature_flags():
+    import re
+
+    listed = re.search(r"features\s+\{(.*?)\}: bool", gs.__doc__, re.S).group(1)
+    assert sorted(x.strip() for x in listed.split(",")) == sorted(gs.FEATURES)

@@ -337,6 +337,17 @@ async def test_set_channel_mode_by_talking_follows_the_slash_rules(bot, world):
 
 async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     a = await tools_for(bot, world, EXEC)
+    # b2378eb: no per-channel languages. The old tool must not report a change it cannot make;
+    # it points to the server language and the person's own language instead.
+    r = await asyncio.to_thread(a.set_channel_language, "en", None)
+    assert r["error"] == "no_channel_languages" and "set_server_language" in r["use"]
+    assert "Ask the person first" in r["use"]
+    assert "never call set_server_language" in r["use"]  # one room is not the whole server
+    assert bot.guilds_store.get(GUILD).channel_languages == {}  # nothing written
+    assert bot.team.channel_language(GUILD, 10) == "th"
+    assert (await asyncio.to_thread(a.set_channel_language, "fr", None))[
+        "error"
+    ] == "unknown language"
     # the language is the company's (no per-channel language any more): set_server_language
     r = await asyncio.to_thread(a.set_server_language, "en", True)
     assert r["status"] == "ok" and r["language"] == "en"
@@ -346,11 +357,16 @@ async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     ] == "unknown language"
     assert (await asyncio.to_thread(a.set_memory_days, 30)) == {"status": "ok", "days": 30}
     assert bot.team.memory_retention_days(GUILD) == 30
-    assert (await asyncio.to_thread(a.set_memory_days, -1))["error"] == "bad_days"  # 0 = forever
+    # 0 is "keep forever" since b0d78be; out-of-range values are refused
+    assert (await asyncio.to_thread(a.set_memory_days, -1))["error"] == "bad_days"
+    assert (await asyncio.to_thread(a.set_memory_days, 3651))["error"] == "bad_days"
     shown = await asyncio.to_thread(a.show_settings)
     assert (
         shown["mode"] == "call" and shown["reply_language"] == "en" and shown["memory_days"] == 30
     )
+    assert (await asyncio.to_thread(a.set_memory_days, 0)) == {"status": "ok", "days": 0}
+    shown = await asyncio.to_thread(a.show_settings)  # keep forever, never "3650 days"
+    assert shown["memory_days"] == "forever" and "3650" not in shown["mode_meaning"]
     world.named.permissions_for = lambda me: SimpleNamespace(
         view_channel=False, read_message_history=False
     )

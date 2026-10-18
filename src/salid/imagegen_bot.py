@@ -143,9 +143,13 @@ class ImageMixin:
         self.image_user_budget = StoredDailyBudget(usage, self.s.images_per_user_day, per_user=True)
         self.image_memory = ImageMemory()
 
-    def _image_tools(self, message, guild, asker, files, *, spoken: bool = False) -> list:
+    def _image_tools(
+        self, message, guild, asker, files, *, lang: str | None = None, spoken: bool = False
+    ) -> list:
         """`create_image` for this message, or [] (flag off, no Thai shaping, or a voice room:
-        `spoken`, or `looks_spoken` for callers that do not say). Never raises."""
+        `spoken`, or `looks_spoken` for callers that do not say). The overlay text uses the fonts
+        of `lang` (`_agent_kwargs` passes the answer's language; other callers get the message's
+        own): a CJK or Devanagari headline needs its script font. Never raises."""
         global _warned
         try:
             if spoken or looks_spoken(message, files) or not self.team.enabled(guild.id, "images"):
@@ -167,7 +171,7 @@ class ImageMixin:
                     model=self.s.image_model,
                     guild_budget=self.image_budget,
                     user_budget=self.image_user_budget.for_guild(guild.id),
-                    fonts=cards.card_fonts(),
+                    fonts=cards.card_fonts(lang or self._lang(message)),
                     # the upload limit where the reply goes (discord.py: 10 MiB unless boosted;
                     # a DM about this server has no boost) minus 1 MiB
                     max_bytes=min(

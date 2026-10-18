@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import os
 import time
 import warnings
 from datetime import UTC, datetime
@@ -391,7 +392,9 @@ def test_every_chart_kind_makes_a_png_with_thai_labels_and_no_missing_glyphs(kin
     x = "ยอดขาย" if kind == "scatter" else "เดือน"
     with warnings.catch_warnings():
         warnings.filterwarnings("error", message=".*[Gg]lyph.*missing")  # matplotlib: tofu
-        png = ds.chart_png(r, kind, x, ycols, "ยอดขายรายเดือน (บาท)", "th")
+        # the operator's Thai font (SALID_PDF_FONT; CLAUDE.md: macOS has no Linux font paths)
+        png = ds.chart_png(r, kind, x, ycols, "ยอดขายรายเดือน (บาท)", "th",
+                           configured_font=os.environ.get("SALID_PDF_FONT", ""))  # fmt: skip
     assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) <= ds.CHART_MAX_BYTES
     assert png_info(png) == ("PNG", (1200, 700))
 

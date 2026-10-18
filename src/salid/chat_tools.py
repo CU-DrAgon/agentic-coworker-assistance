@@ -67,11 +67,12 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         )
 
     def set_channel_language(lang: str, channel: str | None = None) -> dict:
-        """Set the language Salid replies in for a channel (admins / executives only), e.g.
-        "ช่วยพูดอังกฤษในห้องนี้" or "answer in Thai here".
+        """Per-channel reply languages no longer exist: language is set for the whole server
+        (set_server_language) and per person (remember_my_preference language). This only returns
+        that explanation and changes nothing.
 
         Args:
-            lang: th, en, or auto (follow the language each person writes in).
+            lang: th, en, or another supported language.
             channel: the channel name or mention; omit for the channel being talked in.
         """
         return logged(
@@ -84,8 +85,8 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         """Switch Salid's language for the WHOLE server (admins / executives only), everything she
         says and produces: replies, reminders, reports, PDFs, meeting summaries, voice. Use for
         "ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์", "เปลี่ยนสลิดเป็นภาษาอังกฤษทั้งหมด", "switch the whole server to
-        English", "speak English everywhere" and the same for Thai. For one channel only use
-        set_channel_language.
+        English", "speak English everywhere" and the same for Thai. There are no per-channel
+        languages.
 
         Args:
             language: th or en.
@@ -104,7 +105,7 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         e.g. "จำแค่ 30 วันพอ".
 
         Args:
-            days: number of days to keep.
+            days: number of days to keep (1-3650), or 0 to keep it forever (the default).
         """
         return logged("set_memory_days", {"days": days}, lambda: actions.set_memory_days(days))
 

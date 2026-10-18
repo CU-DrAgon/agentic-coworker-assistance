@@ -1140,3 +1140,17 @@ def test_typed_commands_have_thai_and_english_forms():
     assert parse_language_command("speak English") == "en"
     assert parse_language_command("พูดไทย") == "th"
     assert parse_deep_trigger("งานใหญ่: x") == parse_deep_trigger("deep task: x") == "x"
+
+
+async def test_a_dm_with_no_company_language_follows_the_discord_locale(bot, world, monkeypatch):
+    # `auto` is left only where there is no company language (a DM sharing no server)
+    monkeypatch.setattr(bot, "_shared_guilds", lambda uid: [])
+    dm = Interaction(None, member(world.g, STAFF), None)
+    assert bot._interaction_lang(dm) == "en"  # empty / unknown locale: English
+    dm.locale = "xx-YY"
+    assert bot._interaction_lang(dm) == "en"
+    for locale, lang in (("en-US", "en"), ("th", "th"), ("th-TH", "th"), ("zh-CN", "zh"),
+                         ("ja", "ja"), ("ko", "ko"), ("hi", "hi"), ("ms", "ms"), ("id", "id"),
+                         ("vi", "vi")):  # fmt: skip
+        dm.locale = locale
+        assert bot._interaction_lang(dm) == lang

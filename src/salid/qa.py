@@ -478,10 +478,14 @@ class MemoryTools:
         """The guild's CURRENT retention (not the value at construction)."""
         if self._retention_of is not None:
             try:
-                return max(int(self._retention_of()), 1)
+                live = self._retention_of()
+                # 0 = keep forever; None or a negative value is no answer: use the construction
+                # value instead of widening to the forever window
+                if live is not None and int(live) >= 0:
+                    return effective_retention_days(int(live))
             except Exception:  # fail closed on the construction value
                 pass
-        return max(self._retention_days, 1)
+        return self._retention_days
 
     def floor(self) -> date:
         """Oldest day any tool may read: what the daily purge keeps (see `cutoff_date`)."""
@@ -1123,9 +1127,9 @@ HUMAN_STYLE_PROMPT = (
 
 # Settings by talking: the tools are bound in code to the guild, channel and author.
 CHAT_TOOLS_PROMPT = (
-    "\nตั้งค่าด้วยการพูดคุย (เครื่องมือ set_channel_mode, set_channel_language, set_memory_days, show_settings, "
+    "\nตั้งค่าด้วยการพูดคุย (เครื่องมือ set_channel_mode, set_memory_days, show_settings, "
     "hidden_channels, cancel_deep_task, send_dm, send_dm_many, post_message, deliver_file, set_my_notifications, show_my_notifications ถ้ามีให้ใช้): ทุกอย่างที่คำสั่ง / (slash) ทำได้ ผู้ใช้แค่บอกเป็นคำพูดก็พอ "
-    "เช่น “ห้องนี้ไม่ต้องตอบนะ” (set_channel_mode off), “ช่วยพูดอังกฤษในห้องนี้” (set_channel_language en), “ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์” / “speak English everywhere” (set_server_language en; กลับเป็นไทยด้วย th; ยืนยันด้วยภาษาใหม่), "
+    "เช่น “ห้องนี้ไม่ต้องตอบนะ” (set_channel_mode off), “ช่วยพูดอังกฤษกับผมด้วย” (remember_my_preference language en: ภาษาส่วนตัวของคนพูด เพิ่มต่อจากภาษาบริษัท ไม่มีภาษาแยกรายห้อง), “ใช้ภาษาอังกฤษทั้งเซิร์ฟเวอร์” / “speak English everywhere” (set_server_language en; กลับเป็นไทยด้วย th; ยืนยันด้วยภาษาใหม่), "
     "“จำแค่ 30 วันพอ” (set_memory_days 30), “ตั้งค่าตอนนี้เป็นไง” (show_settings), “ทำไมสลิดไม่เห็นห้องบัญชี” (hidden_channels), "
     "“ยกเลิกงานที่ทำอยู่” (cancel_deep_task). เรียกเครื่องมือแล้วยืนยันสั้นๆ ประโยคเดียว (เช่น “ได้เลยค่ะ ห้องนี้สลิดเงียบไว้ให้นะคะ”). "
     "ถ้าเครื่องมือตอบ not_allowed ให้บอกเป็นกันเองว่าต้องให้แอดมินหรือผู้บริหารเป็นคนสั่ง. "
@@ -1323,11 +1327,11 @@ CAPABILITIES_PROMPT = (
     "(แอดมินต้องเปิดใน Hub ก่อน จำกัดจำนวนต่อเดือน)\n"
     "22) ใบเสนอราคา: ทำใบเสนอราคา (PDF/Word) และแก้ไขฉบับใหม่ได้ (เฉพาะผู้บริหารหรือบทบาทที่แอดมินกำหนด สลิดเปลี่ยนสิทธิ์ให้ใครไม่ได้ และอย่าบอกว่าตั้งค่าสิทธิ์ได้ที่ไหนถ้าไม่แน่ใจ) เช่น “ทำใบเสนอราคาให้ร้านบ้านกาแฟ กาแฟสด 100 กล่อง กล่องละ 350 ส่วนลด 5% ยืนราคา 30 วัน” "
     "เลขที่ต่อเนื่อง QT-ปี-เลข VAT 7% หัวบริษัทมาจากที่สอนสลิดไว้ (เฉพาะผู้บริหารหรือบทบาทที่กำหนด)\n"
-    "21) คอนเซปต์สินค้าและการตลาด: ช่วยคิดและร่างคอนเซปต์สินค้า/โปรเจกต์ (แม้เป็นหน้าตาของสินค้าหรือวัตถุ) ธีมแบรนด์ (สี ฟอนต์ สไตล์) ข้อความหน้าเว็บ แผนการตลาด คอนเซปต์หน้าจอ/UI "
+    "23) คอนเซปต์สินค้าและการตลาด: ช่วยคิดและร่างคอนเซปต์สินค้า/โปรเจกต์ (แม้เป็นหน้าตาของสินค้าหรือวัตถุ) ธีมแบรนด์ (สี ฟอนต์ สไตล์) ข้อความหน้าเว็บ แผนการตลาด คอนเซปต์หน้าจอ/UI "
     "วาดภาพคอนเซปต์ด้วย AI (concept_image: ภาพสินค้า ภาพตอนใช้งาน หน้าจอ โลโก้ มู้ดบอร์ด และภาพหลายมุมแบบ 3 มิติจำลอง) "
     "เช็คราคาจากเว็บพร้อมแหล่งอ้างอิง (price_check) ถามแค็ตตาล็อกจากหน้าเว็บของซัพพลายเออร์ ช่วยหาข้อมูลเพื่อจัดซื้อ และค้นข้อมูลแล้วทำเป็นเอกสาร PDF/Word ทั้งหมดเก็บในเอกสารโปรเจกต์เดียว "
     "(ภาพเป็นภาพคอนเซปต์จาก AI ไม่ใช่โมเดล 3 มิติหรือแบบวิศวกรรม; ภาพสร้างได้ในแชตเท่านั้น ไม่ใช่ในห้องเสียง)\n"
-    "22) วิเคราะห์ข้อมูลจากไฟล์ Excel/CSV/JSON (data_load, data_sql, data_chart, data_export): อ่านไฟล์แล้วสรุปโครงสร้างและคุณภาพข้อมูล ตอบคำถามด้วย SQL คำนวณสถิติพื้นฐาน "
+    "24) วิเคราะห์ข้อมูลจากไฟล์ Excel/CSV/JSON (data_load, data_sql, data_chart, data_export): อ่านไฟล์แล้วสรุปโครงสร้างและคุณภาพข้อมูล ตอบคำถามด้วย SQL คำนวณสถิติพื้นฐาน "
     "ทำกราฟ (แท่ง เส้น วงกลม กระจาย ฮิสโตแกรม) ส่งผลเป็น Excel/CSV และเก็บชุดข้อมูลไว้ถามต่อ (Excel/CSV/JSON analysis with SQL, charts and exports)\n"
     "ข้อจำกัด: ตั้งค่าแต่ละเซิร์ฟเวอร์/ห้องอาจปิดบางความสามารถไว้ (เช่น การค้นเว็บ) "
     "ถ้าไม่แน่ใจให้ดูสถานะด้วย show_settings (หรือ /โหมด /ภาษา /ความจำ เป็นทางลัด)"
