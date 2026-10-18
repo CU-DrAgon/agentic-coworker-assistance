@@ -24,6 +24,7 @@ below 2**62 until the 22nd century, so the ranges never meet.
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import threading
 import uuid
@@ -44,6 +45,30 @@ USER_PREFS = (
 )
 IDENTITY_INDEX = "salid_identity_index"  # guild 0, key "platform:external_id" -> {email}
 UI_LANGS = ("th", "en")  # languages the web pages are written in
+# Field sizes (owner's rule, 18 Oct 2026: never cut what people write about the company or
+# themselves). These are NOT product limits, only a guard so one document stays under
+# Firestore's 1 MiB: SHORT for names / titles, LONG for free text (about, job description,
+# policies...; Thai is 3 bytes a character, so ~50k characters ~ 150 KB).
+SHORT_TEXT = 1_000
+LONG_TEXT = 50_000
+# free-text fields keep their line breaks; one-line fields are tidied
+MULTILINE = {
+    "about", "job_description", "summary", "responsibilities", "policies", "objectives",
+    "directors", "registered_address",
+}  # fmt: skip
+
+
+def tidy(field: str, value: Any, limit: int) -> str:
+    """One-line fields: spaces collapsed. Free text: trailing spaces trimmed, line breaks kept."""
+    text = str(value)
+    if field in MULTILINE:
+        lines = [ln.rstrip() for ln in text.replace("\r\n", "\n").split("\n")]
+        text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    else:
+        text = " ".join(text.split())
+    return text[:limit]
+
+
 SIGNIN_PLATFORMS = ("google",)  # extra sign-ins linked to an account (external_id = the email)
 
 ROLES = ("owner", "admin", "member")
@@ -171,6 +196,7 @@ class UserProfile(BaseModel):
     title: str = ""  # job title, e.g. "CTO"
     department: str = ""  # e.g. "Engineering"
     about: str = ""  # what they do / are responsible for, in their own words
+    job_description: str = ""  # their job description (JD), as long as it needs to be
     language: str | None = None  # web UI language (th / en)
     identities: list[Identity] = Field(default_factory=list)
 
@@ -240,19 +266,19 @@ class CompanyProfile(BaseModel):
 
 
 PROFILE_LIMITS = {
-    "tagline": 160, "about": 2000, "industry": 80, "founded": 40, "location": 120,
-    "website": 300, "email": 200, "phone": 60, "size": 40,
-    "registered_name": 200, "registration_no": 40, "tax_id": 40, "registered_capital": 120,
-    "registered_address": 400, "directors": 600, "objectives": 2000,
+    "tagline": 1000, "about": 50000, "industry": 1000, "founded": 1000, "location": 1000,
+    "website": 2000, "email": 320, "phone": 1000, "size": 1000,
+    "registered_name": 1000, "registration_no": 1000, "tax_id": 1000, "registered_capital": 1000,
+    "registered_address": 50000, "directors": 50000, "objectives": 50000,
 }  # fmt: skip
 
 
 POSITION_LIMITS = {
-    "title": 80,
-    "department": 80,
-    "summary": 1000,  # the job description
-    "responsibilities": 2000,
-    "policies": 2000,  # company rules that apply to this job
+    "title": 1000,
+    "department": 1000,
+    "summary": 50000,  # the job description
+    "responsibilities": 50000,
+    "policies": 50000,  # company rules that apply to this job
 }
 MAX_POSITIONS = 200
 
@@ -647,12 +673,13 @@ class OrgStore:
         return self.set_user_profile(email, name=name)
 
     PROFILE_FIELDS = {
-        "name": 80,
-        "first_name": 80,
-        "last_name": 80,
-        "title": 80,
-        "department": 80,
-        "about": 600,
+        "name": SHORT_TEXT,
+        "first_name": SHORT_TEXT,
+        "last_name": SHORT_TEXT,
+        "title": SHORT_TEXT,
+        "department": SHORT_TEXT,
+        "about": LONG_TEXT,
+        "job_description": LONG_TEXT,
     }
 
     def set_user_profile(self, email: str, **fields: str | None) -> UserProfile:
@@ -663,7 +690,7 @@ class OrgStore:
                 if k not in self.PROFILE_FIELDS:
                     raise ValueError(f"unknown profile field {k!r}")
                 if v is not None:
-                    setattr(p, k, " ".join(str(v).split())[: self.PROFILE_FIELDS[k]])
+                    setattr(p, k, tidy(k, v, self.PROFILE_FIELDS[k]))
             return self._save_profile(p)
 
     def set_user_identity(self, email: str, identity: Identity) -> UserProfile:
@@ -813,12 +840,12 @@ class OrgStore:
                 if v is None:
                     continue
                 if k in POSITION_LIMITS:
-                    v = " ".join(str(v).split()) if k in ("title", "department") else str(v).strip()
+                    v = tidy(k, v, POSITION_LIMITS[k])
                     if k == "title" and not v:
                         raise ValueError("a position needs a title")
-                    setattr(pos, k, v[: POSITION_LIMITS[k]])
+                    setattr(pos, k, v)
                 elif k == "skills":
-                    pos.skills = [" ".join(str(x).split())[:60] for x in v if str(x).strip()][:30]
+                    pos.skills = [" ".join(str(x).split())[:200] for x in v if str(x).strip()][:100]
                 elif k == "holders":
                     members = {m.email.lower() for m in org.members}
                     hs = [str(x).strip().lower() for x in v if str(x).strip()]
@@ -869,7 +896,7 @@ class OrgStore:
                         " ".join(str(x).split())[:40] for x in list(v)[:8] if str(x).strip()
                     ]
                 elif k in PROFILE_LIMITS:
-                    setattr(org.profile, k, " ".join(str(v).split())[: PROFILE_LIMITS[k]])
+                    setattr(org.profile, k, tidy(k, v, PROFILE_LIMITS[k]))
                 else:
                     raise ValueError(f"unknown profile field {k!r}")
             return self.save(org)

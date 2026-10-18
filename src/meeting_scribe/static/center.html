@@ -601,6 +601,8 @@ details.sys > .inner { padding-top: 12px; }
 .excard.primary { border-color: var(--lavender); box-shadow: 0 0 0 2px var(--nav-active); }
 .exev { margin: 0; padding-left: 18px; color: var(--muted); }
 .chip.conf.high { background: var(--ok-bg); color: var(--ok-ink); } .chip.conf.low { background: var(--warn-bg); color: var(--warn-ink); }
+textarea.grow { field-sizing: content; min-height: 5.5em; max-height: 60vh; resize: vertical; }
+.pre { white-space: pre-wrap; }
 /* invite links */
 .invlist { display: grid; gap: 10px; margin-top: 8px; }
 .invrow { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); }
@@ -744,6 +746,7 @@ th: {
   share_h:"การแชร์ข้อมูลระหว่างพื้นที่", share_warn:"แชร์ได้เฉพาะรายการที่มาจากช่องสาธารณะเท่านั้น ข้อมูลในช่องส่วนตัวจะไม่ถูกแชร์ และประวัติแชทจะไม่ถูกแชร์ข้ามพื้นที่เด็ดขาด", share_need2:"ต้องมีอย่างน้อย 2 พื้นที่ทำงานจึงจะตั้งค่าการแชร์ได้", share_sentence:"ให้ {b} เห็น {c} ของ {a}", share_only_admin:"เฉพาะเจ้าของและผู้ดูแลที่แก้ไขการแชร์ได้",
   apps_h:"เชื่อมต่อแอป", connect:"เชื่อมต่อ", not_enabled:"ยังไม่เปิดใช้", connected_n:"เชื่อมต่อแล้ว {n} เซิร์ฟเวอร์", app_discord:"แชทและเอกสารในเซิร์ฟเวอร์", app_slack:"ข้อความจาก Slack workspace", app_clickup:"งานและรายการจาก ClickUp (อ่านอย่างเดียว)", app_drive:"ไฟล์ใน Drive", app_gmail:"อีเมล", app_calendar:"ปฏิทิน",
   mem_h:"สมาชิก", mem_email:"อีเมล", mem_role:"บทบาท", mem_invite:"เชิญสมาชิก", mem_none:"ยังไม่มีสมาชิก", mem_ro:"เฉพาะเจ้าของและผู้ดูแลที่จัดการสมาชิกได้", confirm_rm:"ลบ {e} ออกจากองค์กร?", invited:"เชิญแล้ว",
+  prof_jd:"รายละเอียดงาน (Job description)", prof_jd_ph:"หน้าที่ ขอบเขตงาน สิ่งที่ต้องส่งมอบ ใครทำงานด้วย… เขียนยาวได้ไม่จำกัด",
   mp_edit:"แก้ไขข้อมูล", mp_h:"ข้อมูลของ {n}", mp_p:"ตำแหน่ง แผนก และหน้าที่ จะแสดงในสารบบและผังองค์กร และสลิดใช้ตอบว่าใครทำอะไร", mp_boss:"รายงานต่อ", mp_boss_none:"ไม่มี (บนสุด)", mp_saved:"บันทึกข้อมูลของ {n} แล้ว",
   role_self_h:"เปลี่ยนสิทธิ์ของตัวเอง?", role_self_p:"คุณกำลังจะเปลี่ยนสิทธิ์ของตัวเองจาก {a} เป็น {b} การกระทำนี้ยกเลิกไม่ได้: คุณจะไม่สามารถให้สิทธิ์ที่สูงกว่ากับตัวเองได้อีก มีเพียงเจ้าของหรือผู้ดูแลเท่านั้นที่คืนสิทธิ์ให้ได้", role_self_ok:"ใช่ เปลี่ยนสิทธิ์ของฉัน",
   xfer_btn:"โอนความเป็นเจ้าของ…", xfer_h:"โอนความเป็นเจ้าของ", xfer_p:"มอบองค์กรนี้ให้สมาชิกอีกคน คุณจะสละความเป็นเจ้าของและกลายเป็นสิทธิ์ที่เลือกด้านล่าง เพื่อความปลอดภัย คุณเรียกคืนได้ภายใน 24 ชั่วโมง หลังจากนั้นถือเป็นที่สิ้นสุด", xfer_to:"เจ้าของคนใหม่", xfer_me:"ฉันจะเป็น", xfer_ok:"โอนความเป็นเจ้าของ", xfer_done:"โอนความเป็นเจ้าของให้ {e} แล้ว", xfer_none:"ต้องเพิ่มคนนั้นเป็นสมาชิกก่อน: ความเป็นเจ้าของมอบให้สมาชิกที่มีอยู่แล้วเท่านั้น",
@@ -831,6 +834,7 @@ en: {
   share_h:"Sharing between workspaces", share_warn:"Only items that came from public channels can be shared. Private-channel items are never shared, and chat history is never shared across workspaces.", share_need2:"You need at least 2 workspaces to set up sharing.", share_sentence:"Let {b} see {c} of {a}", share_only_admin:"Only owners and admins can change sharing.",
   apps_h:"Integrations", connect:"Connect", not_enabled:"Not enabled yet", connected_n:"{n} servers connected", app_discord:"Server chat and documents", app_slack:"Messages from a Slack workspace", app_clickup:"Tasks and lists from ClickUp (read-only)", app_drive:"Files in Drive", app_gmail:"Email", app_calendar:"Calendar",
   mem_h:"Members", mem_email:"Email", mem_role:"Role", mem_invite:"Invite a member", mem_none:"No members yet", mem_ro:"Only owners and admins can manage members.", confirm_rm:"Remove {e} from the organization?", invited:"Invited",
+  prof_jd:"Job description", prof_jd_ph:"Duties, scope, deliverables, who they work with… write as much as you need",
   mp_edit:"Edit profile", mp_h:"Profile of {n}", mp_p:"Job title, department and what they do show in the directory and the org chart, and Salid uses them to say who does what.", mp_boss:"Reports to", mp_boss_none:"Nobody (top of the chart)", mp_saved:"Profile of {n} saved",
   role_self_h:"Change your own role?", role_self_p:"You are about to change your role from {a} to {b}. This cannot be undone: you will not be able to give yourself a higher role again. Only the owner or an admin can restore it.", role_self_ok:"Yes, change my role",
   xfer_btn:"Transfer ownership…", xfer_h:"Transfer ownership", xfer_p:"Hand this organization to another member. You give up ownership and become the role you pick below. Security first: you can take ownership back within 24 hours; after that it is final.", xfer_to:"New owner", xfer_me:"I become", xfer_ok:"Transfer ownership", xfer_done:"Ownership transferred to {e}", xfer_none:"Add the person as a member first: ownership can only go to an existing member.",
@@ -1268,11 +1272,11 @@ VIEWS.overview = async (body, my) => {
     hero.replaceChildren(logo, hx, admin ? el("button", { class: "btn ghost sm hedit", type: "button", onclick: editHero }, t("cp_edit")) : null);
   };
   const editHero = () => {
-    const inp = (k, v, type = "text") => el("input", { type, id: "cp-" + k, value: v || "", maxlength: k === "about" ? "2000" : k === "website" ? "300" : "160" });
+    const inp = (k, v, type = "text") => el("input", { type, id: "cp-" + k, value: v || "" });
     const F = { name: inp("name", org.name), logo_url: inp("logo_url", org.logo_url, "url"), tagline: inp("tagline", prof.tagline), industry: inp("industry", prof.industry), founded: inp("founded", prof.founded), location: inp("location", prof.location),
       size: inp("size", prof.size), website: inp("website", prof.website, "url"), email: inp("email", prof.email, "email"), phone: inp("phone", prof.phone), values: inp("values", (prof.values || []).join(", ")) };
-    for (const k of LG) F[k] = k === "objectives" || k === "directors" || k === "registered_address" ? Object.assign(el("textarea", { id: "cp-" + k, rows: "2", maxlength: k === "objectives" ? "2000" : "600" }), { value: prof[k] || "" }) : inp(k, prof[k]);
-    const about = el("textarea", { id: "cp-about", rows: "4", maxlength: "2000", placeholder: t("cp_about_empty") }); about.value = prof.about || "";
+    for (const k of LG) F[k] = k === "objectives" || k === "directors" || k === "registered_address" ? Object.assign(el("textarea", { id: "cp-" + k, rows: "3", class: "grow" }), { value: prof[k] || "" }) : inp(k, prof[k]);
+    const about = el("textarea", { id: "cp-about", rows: "6", class: "grow", placeholder: t("cp_about_empty") }); about.value = prof.about || "";
     const saveB = el("button", { class: "btn", type: "submit" }, t("save")), msg = el("div", { role: "status" });
     const f = el("form", {}, el("div", { class: "prof-grid" },
       field(t("cp_name"), F.name), field(t("cp_logo"), F.logo_url), field(t("cp_tagline"), F.tagline, "wide"), field(t("cp_industry"), F.industry), field(t("cp_founded"), F.founded), field(t("cp_location"), F.location), field(t("cp_size"), F.size),
@@ -1987,18 +1991,19 @@ VIEWS.members = async (body, my) => {
   };
   // owners and admins set who anybody is (title, department, what they do, real name, manager)
   async function editProfile(m) {
-    const inp = (id, v, ph) => el("input", { type: "text", id, value: v || "", placeholder: ph || "", maxlength: 80, autocomplete: "off" });
+    const inp = (id, v, ph) => el("input", { type: "text", id, value: v || "", placeholder: ph || "", autocomplete: "off" });
     const title = inp("mp-title", m.title, t("prof_title_ph")), dept = inp("mp-dept", m.department, t("prof_dept_ph")), first = inp("mp-first", m.first_name), last = inp("mp-last", m.last_name), nick = inp("mp-nick", m.name, t("acc_name_ph"));
-    const about = el("textarea", { id: "mp-about", maxlength: 600, rows: 3 }); about.value = m.about || "";
+    const about = el("textarea", { id: "mp-about", rows: 3, class: "grow" }); about.value = m.about || "";
+    const jd = el("textarea", { id: "mp-jd", rows: 5, class: "grow", placeholder: t("prof_jd_ph") }); jd.value = m.job_description || "";
     const boss = el("select", { id: "mp-boss" }, el("option", { value: "" }, t("mp_boss_none")), list.filter((x) => x.email !== m.email).map((x) => el("option", { value: x.email, selected: x.email === (m.reports_to || "") }, personName(x) + " · " + x.email)));
     const body = el("div", {}, el("p", { class: "muted small", text: t("mp_p") }),
       el("div", { class: "row" }, field(t("acc_first"), first), field(t("acc_last"), last)),
       el("div", { class: "row" }, field(t("acc_name"), nick), field(t("prof_title"), title), field(t("prof_dept"), dept)),
-      field(t("prof_about"), about), field(t("mp_boss"), boss));
+      field(t("prof_about"), about), field(t("prof_jd"), jd), field(t("mp_boss"), boss));
     const ok = await confirmDlg({ title: t("mp_h", { n: personName(m) }), body, ok: t("save") });
     if (!ok) return;
     try {
-      await api(O("/members/" + encodeURIComponent(m.email) + "/profile"), J("PUT", { name: nick.value.trim(), title: title.value.trim(), department: dept.value.trim(), first_name: first.value.trim(), last_name: last.value.trim(), about: about.value.trim(), reports_to: boss.value }));
+      await api(O("/members/" + encodeURIComponent(m.email) + "/profile"), J("PUT", { name: nick.value.trim(), title: title.value.trim(), department: dept.value.trim(), first_name: first.value.trim(), last_name: last.value.trim(), about: about.value.trim(), job_description: jd.value.trim(), reports_to: boss.value }));
       toast(t("mp_saved", { n: personName(m) })); list = items(await api(O("/members"))); draw(); reloadDir();
     } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
   }
@@ -2083,17 +2088,17 @@ async function positionsView(box, members, admin, onFind) {
     el("div", { class: "phd" }, el("div", { class: "pwho" }, el("strong", { text: p.title }), p.department ? el("span", { class: "muted small", text: " · " + p.department }) : null,
       p.reports_to ? el("div", { class: "muted small", text: "↑ " + titleOf(p.reports_to) }) : null),
       p.holders.length ? el("span", { class: "badge ok", text: p.holders.map(nameOf).join(", ") }) : el("span", { class: "badge warn", text: t("po_vacant") })),
-    p.summary ? el("p", { class: "small", text: p.summary }) : null,
-    p.responsibilities ? el("details", {}, el("summary", { class: "small", text: t("po_resp") }), el("p", { class: "small", text: p.responsibilities })) : null,
+    p.summary ? el("p", { class: "small pre", text: p.summary }) : null,
+    p.responsibilities ? el("details", {}, el("summary", { class: "small", text: t("po_resp") }), el("p", { class: "small pre", text: p.responsibilities })) : null,
     p.skills.length ? el("div", { class: "idbs" }, p.skills.map((k) => el("span", { class: "chip", text: k }))) : null,
-    p.policies ? el("details", {}, el("summary", { class: "small", text: t("po_policies") }), el("p", { class: "small", text: p.policies })) : null,
+    p.policies ? el("details", {}, el("summary", { class: "small", text: t("po_policies") }), el("p", { class: "small pre", text: p.policies })) : null,
     el("div", { class: "pact" }, el("button", { class: "btn ghost sm", type: "button", onclick: () => onFind(p.id) }, t("po_find")), admin ? el("button", { class: "btn ghost sm", type: "button", onclick: () => editPos(p) }, t("edit")) : null));
   const grid = el("div", { class: "pgrid" });
   const redraw = () => grid.replaceChildren(rows.length ? rows.map(card) : el("div", { class: "empty", text: t("po_none") }));
   async function editPos(p) {
     const isNew = !p; p = p || { title: "", department: "", summary: "", responsibilities: "", skills: [], policies: "", holders: [], reports_to: "" };
-    const inp = (id, v, max) => el("input", { type: "text", id, value: v || "", maxlength: max || 80, autocomplete: "off" });
-    const ta = (id, v, max) => { const x = el("textarea", { id, maxlength: max, rows: 3 }); x.value = v || ""; return x; };
+    const inp = (id, v) => el("input", { type: "text", id, value: v || "", autocomplete: "off" });
+    const ta = (id, v) => { const x = el("textarea", { id, rows: 4, class: "grow" }); x.value = v || ""; return x; };
     const title = inp("po-title", p.title), dept = inp("po-dept", p.department), summary = ta("po-sum", p.summary, 1000), resp = ta("po-resp", p.responsibilities, 2000), skills = inp("po-skills", p.skills.join(", "), 600), pol = ta("po-pol", p.policies, 2000);
     const rep2 = el("select", { id: "po-rep" }, el("option", { value: "" }, t("po_top")), rows.filter((x) => x.id !== p.id).map((x) => el("option", { value: x.id, selected: x.id === p.reports_to }, x.title)));
     const holders = el("select", { id: "po-holders", multiple: true, size: Math.min(6, Math.max(2, members.length)) }, members.map((m) => el("option", { value: m.email, selected: p.holders.includes(m.email) }, personName(m) + " · " + m.email)));
@@ -2169,7 +2174,7 @@ async function peopleDirectory(box, members, admin) {
       el("div", { class: "pwho" }, el("strong", { text: p.display_name }), p.nickname && p.name && p.nickname !== p.name ? el("span", { class: "muted small", text: " · " + p.name }) : null,
         el("div", { class: "small" }, [p.title, p.department].filter(Boolean).join(", ") || el("span", { class: "muted", text: "—" }))),
       el("div", { class: "pbadges" }, platBadge(p.platform, true), p.email ? el("span", { class: "badge ok", title: p.email }, "✓ " + t("pp_account") + (p.member_role ? " · " + t("role_" + p.member_role) : "")) : el("span", { class: "badge", text: t("pp_noacc") }), p.hidden ? el("span", { class: "badge warn", text: t("pp_hidden") }) : null)),
-    p.about ? el("p", { class: "small", text: p.about }) : null,
+    p.about ? el("p", { class: "small pre", text: p.about }) : null,
     el("div", { class: "pmeta muted small" },
       p.seen.messages ? el("span", { text: t("pp_seen", { n: p.seen.messages, d: fmtDate(p.seen.last_seen) }) }) : null,
       p.seen.channels.length ? el("span", { text: t("pp_channels") + ": " + p.seen.channels.map((c) => "#" + c).join(" ") }) : null,
@@ -2186,9 +2191,9 @@ async function peopleDirectory(box, members, admin) {
     grid.replaceChildren(rows.length ? rows.map(card) : el("div", { class: "empty", text: t("pp_none") }));
   };
   async function editPerson(p) {
-    const inp = (id, v, ph) => el("input", { type: "text", id, value: v || "", placeholder: ph || "", maxlength: 80, autocomplete: "off" });
+    const inp = (id, v, ph) => el("input", { type: "text", id, value: v || "", placeholder: ph || "", autocomplete: "off" });
     const nick = inp("pp-nick", p.nickname, t("acc_name_ph")), title = inp("pp-title", p.title, t("prof_title_ph")), dept = inp("pp-dept", p.department, t("prof_dept_ph"));
-    const about = el("textarea", { id: "pp-about", maxlength: 600, rows: 3 }); about.value = p.about || "";
+    const about = el("textarea", { id: "pp-about", rows: 4, class: "grow" }); about.value = p.about || "";
     const link = el("select", { id: "pp-link" }, el("option", { value: "" }, t("pp_link_none")), members.map((m) => el("option", { value: m.email, selected: m.email === p.email }, personName(m) + " · " + m.email)));
     const hide = el("input", { type: "checkbox", id: "pp-hide", checked: !!p.hidden });
     const body = el("div", {}, el("div", { class: "row" }, field(t("acc_name"), nick), field(t("prof_title"), title), field(t("prof_dept"), dept)), field(t("pp_about"), about), field(t("pp_link"), link),
@@ -2374,23 +2379,24 @@ VIEWS.account = async (body, my) => {
   if (stale(my)) return; done(body);
   const myRow = mem && mem.find((m) => m.email === me.email);
   // (a) who I am: name, title, department, what I do, manager
-  const firstIn = el("input", { type: "text", id: "a-first", maxlength: "80", value: me.first_name || "", autocomplete: "given-name", "aria-required": "true" });
-  const lastIn = el("input", { type: "text", id: "a-last", maxlength: "80", value: me.last_name || "", autocomplete: "family-name", "aria-required": "true" });
-  const nameIn = el("input", { type: "text", id: "a-name", maxlength: "80", value: me.name || "", placeholder: t("acc_name_ph"), autocomplete: "nickname" });
-  const titleIn = el("input", { type: "text", id: "a-title", maxlength: "80", value: me.title || "", placeholder: t("prof_title_ph"), autocomplete: "organization-title" });
-  const deptIn = el("input", { type: "text", id: "a-dept", maxlength: "80", value: me.department || "", placeholder: t("prof_dept_ph"), list: "a-depts", autocomplete: "off" });
+  const firstIn = el("input", { type: "text", id: "a-first", value: me.first_name || "", autocomplete: "given-name", "aria-required": "true" });
+  const lastIn = el("input", { type: "text", id: "a-last", value: me.last_name || "", autocomplete: "family-name", "aria-required": "true" });
+  const nameIn = el("input", { type: "text", id: "a-name", value: me.name || "", placeholder: t("acc_name_ph"), autocomplete: "nickname" });
+  const titleIn = el("input", { type: "text", id: "a-title", value: me.title || "", placeholder: t("prof_title_ph"), autocomplete: "organization-title" });
+  const deptIn = el("input", { type: "text", id: "a-dept", value: me.department || "", placeholder: t("prof_dept_ph"), list: "a-depts", autocomplete: "off" });
   const depts = [...new Set((mem || []).map((m) => m.department).filter(Boolean))];
   const dl = el("datalist", { id: "a-depts" }, depts.map((d) => el("option", { value: d })));
-  const aboutIn = el("textarea", { id: "a-about", maxlength: "500", rows: "3", placeholder: t("prof_about_ph") }); aboutIn.value = me.about || "";
+  const aboutIn = el("textarea", { id: "a-about", rows: "4", class: "grow", placeholder: t("prof_about_ph") }); aboutIn.value = me.about || "";
+  const jdIn = el("textarea", { id: "a-jd", rows: "6", class: "grow", placeholder: t("prof_jd_ph") }); jdIn.value = me.job_description || "";
   const bossSel = el("select", { id: "a-boss", disabled: !myRow }, el("option", { value: "" }, t("prof_boss_none")),
     (mem || []).filter((m) => m.email !== me.email).map((m) => el("option", { value: m.email, selected: !!myRow && myRow.reports_to === m.email }, (m.name ? m.name + " · " : "") + m.email + (m.title ? " (" + m.title + ")" : ""))));
   const saveB = el("button", { class: "btn", type: "submit" }, t("save"));
-  const pf = el("form", {}, el("div", { class: "prof-grid" }, field(t("acc_first") + " *", firstIn), field(t("acc_last") + " *", lastIn), el("p", { class: "muted small wide", text: t("acc_real_hint") }), field(t("acc_name"), nameIn), field(t("prof_title"), titleIn), field(t("prof_dept"), deptIn), field(t("prof_boss"), bossSel), field(t("prof_about"), aboutIn, "wide")), dl,
+  const pf = el("form", {}, el("div", { class: "prof-grid" }, field(t("acc_first") + " *", firstIn), field(t("acc_last") + " *", lastIn), el("p", { class: "muted small wide", text: t("acc_real_hint") }), field(t("acc_name"), nameIn), field(t("prof_title"), titleIn), field(t("prof_dept"), deptIn), field(t("prof_boss"), bossSel), field(t("prof_about"), aboutIn, "wide"), field(t("prof_jd"), jdIn, "wide")), dl,
     el("p", { class: "muted small", text: myRow ? t("prof_hint") : t("prof_no_org") }), el("div", {}, saveB));
   pf.addEventListener("submit", async (ev) => {
     ev.preventDefault(); saveB.disabled = true;
     try {
-      const want = { first_name: firstIn.value.trim(), last_name: lastIn.value.trim(), name: nameIn.value.trim(), title: titleIn.value.trim(), department: deptIn.value.trim(), about: aboutIn.value.trim() };
+      const want = { first_name: firstIn.value.trim(), last_name: lastIn.value.trim(), name: nameIn.value.trim(), title: titleIn.value.trim(), department: deptIn.value.trim(), about: aboutIn.value.trim(), job_description: jdIn.value.trim() };
       const r = await api("/api/center/me/profile", J("PUT", want));
       for (const k of Object.keys(want)) me[k] = r && typeof r[k] === "string" ? r[k] : want[k];
       me.full_name = r && typeof r.full_name === "string" ? r.full_name : [me.first_name, me.last_name].filter(Boolean).join(" ");

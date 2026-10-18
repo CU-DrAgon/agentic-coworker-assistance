@@ -39,7 +39,7 @@ SCAN_DAYS = 90  # how far back a discovery scan looks
 OBSERVE_LINES = 80  # the person's own recent messages the model reads
 OBSERVE_STALE_H = 24  # an observation older than this is refreshed on request
 BOT_NAMES = {"salid", "สลิด"}
-PROFILE_LIMITS = {"nickname": 60, "title": 80, "department": 80, "about": 600}
+PROFILE_LIMITS = {"nickname": 1000, "title": 1000, "department": 1000, "about": 50000}
 
 
 class Seen(BaseModel):
@@ -116,7 +116,8 @@ class PeopleBook:
             if v is None:
                 continue
             if k in PROFILE_LIMITS:
-                setattr(p, k, " ".join(str(v).split())[: PROFILE_LIMITS[k]])
+                text = str(v).strip() if k == "about" else " ".join(str(v).split())
+                setattr(p, k, text[: PROFILE_LIMITS[k]])
             elif k == "hidden":
                 p.hidden = bool(v)
             elif k == "email":

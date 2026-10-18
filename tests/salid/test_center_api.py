@@ -2787,3 +2787,40 @@ def test_document_uploaded_in_chat_is_filed_and_handed_to_salid_like_a_secretary
 def items_text(hist):
     rows = hist.get("turns") or hist.get("items") or hist if isinstance(hist, dict) else hist
     return [x["text"] for x in rows]
+
+
+# ------------------------------------------------------------------ no short caps on what people write
+def test_long_profile_and_company_text_is_kept_whole_with_line_breaks(w):
+    """Owner's rule (18 Oct 2026): never cut what people write about themselves or the
+    company. A 20,000-character job description with paragraphs comes back intact."""
+    jd = ("หน้าที่หลัก: ดูแลลูกค้าองค์กรและติดตามใบเสนอราคา\n\n" * 400).strip()
+    assert len(jd) > 15_000
+    r = w.client.put(
+        "/api/center/me/profile",
+        json={"job_description": jd, "about": "Line 1\nLine 2"},
+        headers=H["mem"],
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["job_description"] == jd and r.json()["about"] == "Line 1\nLine 2"
+    title = "Head of Customer Success, Enterprise Accounts and Strategic Partnerships for Southeast Asia"
+    r = w.client.put(
+        "/api/center/orgs/org_t/members/mem@example.com/profile",
+        json={"title": title},
+        headers=H["adm"],
+    )
+    assert r.json()["title"] == title and r.json()["job_description"] == jd  # > 80 chars kept
+    about = "\n\n".join(f"Paragraph {i}: " + "x" * 400 for i in range(20))
+    r = w.client.put(
+        "/api/center/orgs/org_t",
+        json={"profile": {"about": about, "objectives": "1. a\n2. b"}},
+        headers=H["adm"],
+    )
+    assert (
+        r.json()["profile"]["about"] == about and r.json()["profile"]["objectives"] == "1. a\n2. b"
+    )
+    pos = w.client.post(
+        "/api/center/orgs/org_t/positions",
+        json={"title": "Ops", "policies": about},
+        headers=H["adm"],
+    )
+    assert pos.json()["policies"] == about

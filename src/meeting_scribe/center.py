@@ -241,6 +241,7 @@ class MemberView(BaseModel):
     title: str = ""
     department: str = ""
     about: str = ""
+    job_description: str = ""
     identities: list[IdentityView] = Field(default_factory=list)
     linked_platforms: int = 0  # platforms linked besides Google
     level: int = 0  # position level mirrored by the bot (salid.positions), 0 = unknown
@@ -273,6 +274,7 @@ def member_view(m: Member, p: UserProfile | None = None) -> MemberView:
         title=p.title or m.title,
         department=p.department or m.department,
         about=p.about,
+        job_description=p.job_description,
         identities=ids,
         linked_platforms=len(ids) - 1,
         level=m.level,
@@ -334,6 +336,7 @@ class MeView(BaseModel):
     title: str = ""
     department: str = ""
     about: str = ""
+    job_description: str = ""
     identities: list[IdentityView] = Field(default_factory=list)  # "my account" on each platform
     identity_platforms: list[str] = Field(default_factory=lambda: list(IDENTITY_PLATFORMS))
     discord_verify: bool = False  # True when "Verify with Discord" (OAuth) is configured
@@ -344,12 +347,13 @@ class LanguageBody(BaseModel):
 
 
 class ProfileBody(BaseModel):
-    name: str | None = Field(default=None, max_length=80)
-    first_name: str | None = Field(default=None, max_length=80)
-    last_name: str | None = Field(default=None, max_length=80)
-    title: str | None = Field(default=None, max_length=80)
-    department: str | None = Field(default=None, max_length=80)
-    about: str | None = Field(default=None, max_length=600)
+    name: str | None = Field(default=None, max_length=1_000)
+    first_name: str | None = Field(default=None, max_length=1_000)
+    last_name: str | None = Field(default=None, max_length=1_000)
+    title: str | None = Field(default=None, max_length=1_000)
+    department: str | None = Field(default=None, max_length=1_000)
+    about: str | None = Field(default=None, max_length=50_000)
+    job_description: str | None = Field(default=None, max_length=50_000)
 
 
 class IdentityBody(BaseModel):
@@ -515,6 +519,7 @@ async def me(email: str = Depends(hub.require_user), orgs: OrgStore = Depends(ge
         title=profile.title,
         department=profile.department,
         about=profile.about,
+        job_description=profile.job_description,
         identities=identity_views(profile),
         discord_verify=bool(get_settings().salid_discord_client_secret),
         orgs=[
@@ -561,6 +566,7 @@ async def set_my_profile(
         title=body.title,
         department=body.department,
         about=body.about,
+        job_description=body.job_description,
     )
     return await me(email, orgs)
 
@@ -906,23 +912,23 @@ async def get_org(ctx: Ctx = Depends(member_ctx)) -> OrgView:
 
 
 class CompanyProfileBody(BaseModel):
-    tagline: str | None = Field(default=None, max_length=160)
-    about: str | None = Field(default=None, max_length=2000)
-    industry: str | None = Field(default=None, max_length=80)
-    founded: str | None = Field(default=None, max_length=40)
-    location: str | None = Field(default=None, max_length=120)
-    website: str | None = Field(default=None, max_length=300)
-    email: str | None = Field(default=None, max_length=200)
-    phone: str | None = Field(default=None, max_length=60)
-    size: str | None = Field(default=None, max_length=40)
+    tagline: str | None = Field(default=None, max_length=1_000)
+    about: str | None = Field(default=None, max_length=50_000)
+    industry: str | None = Field(default=None, max_length=1_000)
+    founded: str | None = Field(default=None, max_length=1_000)
+    location: str | None = Field(default=None, max_length=1_000)
+    website: str | None = Field(default=None, max_length=2_000)
+    email: str | None = Field(default=None, max_length=320)
+    phone: str | None = Field(default=None, max_length=1_000)
+    size: str | None = Field(default=None, max_length=1_000)
     values: list[str] | None = Field(default=None, max_length=8)
-    registered_name: str | None = Field(default=None, max_length=200)
-    registration_no: str | None = Field(default=None, max_length=40)
-    tax_id: str | None = Field(default=None, max_length=40)
-    registered_capital: str | None = Field(default=None, max_length=120)
-    registered_address: str | None = Field(default=None, max_length=400)
-    directors: str | None = Field(default=None, max_length=600)
-    objectives: str | None = Field(default=None, max_length=2000)
+    registered_name: str | None = Field(default=None, max_length=1_000)
+    registration_no: str | None = Field(default=None, max_length=1_000)
+    tax_id: str | None = Field(default=None, max_length=1_000)
+    registered_capital: str | None = Field(default=None, max_length=1_000)
+    registered_address: str | None = Field(default=None, max_length=50_000)
+    directors: str | None = Field(default=None, max_length=50_000)
+    objectives: str | None = Field(default=None, max_length=50_000)
 
 
 class UpdateOrg(BaseModel):
@@ -1366,10 +1372,10 @@ class PersonView(BaseModel):
 
 
 class PersonBody(BaseModel):
-    nickname: str | None = Field(default=None, max_length=60)
-    title: str | None = Field(default=None, max_length=80)
-    department: str | None = Field(default=None, max_length=80)
-    about: str | None = Field(default=None, max_length=600)
+    nickname: str | None = Field(default=None, max_length=1_000)
+    title: str | None = Field(default=None, max_length=1_000)
+    department: str | None = Field(default=None, max_length=1_000)
+    about: str | None = Field(default=None, max_length=50_000)
     hidden: bool | None = None
     email: str | None = Field(default=None, max_length=200)  # link to a member; "" unlinks
 
@@ -1551,13 +1557,13 @@ async def observe_person(
 
 # ------------------------------------------------------------------ positions + expertise
 class PositionBody(BaseModel):
-    title: str | None = Field(default=None, max_length=80)
-    department: str | None = Field(default=None, max_length=80)
+    title: str | None = Field(default=None, max_length=1_000)
+    department: str | None = Field(default=None, max_length=1_000)
     reports_to: str | None = Field(default=None, max_length=20)
-    summary: str | None = Field(default=None, max_length=1000)
-    responsibilities: str | None = Field(default=None, max_length=2000)
-    policies: str | None = Field(default=None, max_length=2000)
-    skills: list[str] | None = Field(default=None, max_length=30)
+    summary: str | None = Field(default=None, max_length=50_000)
+    responsibilities: str | None = Field(default=None, max_length=50_000)
+    policies: str | None = Field(default=None, max_length=50_000)
+    skills: list[str] | None = Field(default=None, max_length=100)
     holders: list[str] | None = Field(default=None, max_length=20)
 
 
@@ -2365,9 +2371,11 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
         manager: str = "",
         first_name: str = "",
         last_name: str = "",
+        job_description: str = "",
     ) -> dict:
-        """Remember who the person talking to you is: their display name, real first / last
-        name, job title (e.g. CTO), department
+        """Remember who the person talking to you is: their display name (nickname), real
+        first / last name, job title (e.g. CTO), job_description (their full JD, any length),
+        department
         (e.g. Engineering), what they do / are responsible for, and `manager` = who they report
         to (a member's name or email; "none" = top of the chart). Call it whenever they tell
         you any of these; leave a field empty to keep its current value. Other members and the
@@ -2380,6 +2388,7 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
             title=title or None,
             department=department or None,
             about=about or None,
+            job_description=job_description or None,
         )
         out: dict = {
             "status": "ok",
@@ -2425,6 +2434,8 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
         manager: str = "",
         first_name: str = "",
         last_name: str = "",
+        job_description: str = "",
+        nickname: str = "",
     ) -> dict:
         """(Owners and admins only.) Set who ANOTHER member of the company is: `member` = their
         email (best) or name / nickname in any script; when it does not match, the result lists
@@ -2446,11 +2457,13 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
             }
         p = orgs.set_user_profile(
             target,
+            name=nickname or None,
             first_name=first_name or None,
             last_name=last_name or None,
             title=title or None,
             department=department or None,
             about=about or None,
+            job_description=job_description or None,
         )
         out: dict = {
             "status": "ok",
@@ -2920,6 +2933,7 @@ async def set_member_profile(
             title=body.title,
             department=body.department,
             about=body.about,
+            job_description=body.job_description,
         )
         if body.reports_to is not None:
             try:
