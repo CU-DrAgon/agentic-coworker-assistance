@@ -57,7 +57,7 @@ def test_store_switch_clears_overrides_and_switching_back_restores(bot):
 
 
 async def test_command_switches_the_whole_server_and_replies_in_the_new_language(bot, world):
-    set_lang(bot, 10, "th")
+    set_lang(bot, "th")
     m = await send(
         bot, world, world.gen, "<@999> switch the whole server to English",
         who=manager(world), mention=True,

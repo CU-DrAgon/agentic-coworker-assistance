@@ -1,5 +1,5 @@
 # ruff: noqa: F811, F401
-"""Live captions: off by default, batched "**Name:** text", optional cheap-model translation,
+"""Live captions: off by default, batched "> 🎙️ **Name:** text", optional cheap-model translation,
 stop with recording / the meeting, and the set_captions tools (chat agent and Live)."""
 
 import asyncio
@@ -26,7 +26,9 @@ def test_normalize_language():
 
 def test_format_joins_a_speakers_turn_and_splits_long_output():
     out = format_captions([("แอน", "สวัสดี"), ("แอน", "ครับ"), ("บอย", "hi")])
-    assert out == ["**แอน:** สวัสดี ครับ\n**บอย:** hi"]
+    assert out == ["> 🎙️ **แอน:** สวัสดี ครับ\n> 🎙️ **บอย:** hi"]  # a quote block, not a message
+    two_lines = format_captions([("แอน", "hello\n↳ (Thai translation) สวัสดี")])
+    assert two_lines == ["> 🎙️ **แอน:** hello\n> ↳ (Thai translation) สวัสดี"]
     many = format_captions([(f"p{i % 2}", "x" * 300) for i in range(20)])
     assert len(many) > 1 and all(len(m) <= 1800 for m in many)
 
@@ -81,7 +83,7 @@ async def test_captions_are_off_by_default_then_posted_in_batches_without_pings(
     await env.mgr.handle_segment(s, segment(10))
     await env.mgr.handle_segment(s, segment(11))
     await env.mgr._caption_flush(s)
-    assert env.chan.sent[-1] == "**แอน:** เรามาเริ่มกัน\n**บอย:** เรามาเริ่มกัน"
+    assert env.chan.sent[-1] == "> 🎙️ **แอน:** เรามาเริ่มกัน\n> 🎙️ **บอย:** เรามาเริ่มกัน"
     assert (
         kwargs[-1]["allowed_mentions"].everyone is False
         and kwargs[-1]["allowed_mentions"].users is False
@@ -97,7 +99,7 @@ async def test_translated_captions_use_the_cheap_model_once_per_batch(env, monke
     await env.mgr.handle_segment(s, segment(11))
     env.llm.models.script = [text_resp('["hello", "hi"]')]
     await env.mgr._caption_flush(s)
-    assert env.chan.sent[-1] == "**แอน:** hello\n**บอย:** hi"
+    assert env.chan.sent[-1] == "> 🎙️ **แอน:** hello\n> 🎙️ **บอย:** hi"
     assert env.llm.models.calls[-1][0] == env.bot.s.gate_model
     await env.mgr.end((1000, 77), "shutdown")
 

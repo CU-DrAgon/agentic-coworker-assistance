@@ -1,7 +1,10 @@
 """Second-tier reply languages (zh hi ms id vi ko ja): detection, commands, the generated catalogs,
 prompts, voice codes, document fonts. Thai and English stay the two hand-written languages."""
 
+import contextlib
+import importlib
 import json
+import pkgutil
 import re
 import string
 from datetime import UTC, datetime
@@ -10,6 +13,7 @@ from pathlib import Path
 import pytest
 from conftest import FixedClockSettings
 
+import salid
 from salid import i18n, pdf_report, qa, speech
 from salid.guild_settings import GuildSettingsUpdate, MemoryGuildStore
 from salid.i18n import (
@@ -119,8 +123,19 @@ def _locale(lang):
     return json.loads((LOCALES / f"{lang}.json").read_text(encoding="utf-8"))
 
 
+@pytest.fixture(scope="module")
+def full_catalog():
+    """Feature modules add their strings to CATALOG when imported: import them all first, like
+    scripts/salid_translate_catalog.py, so the checks below do not depend on test order."""
+    for m in pkgutil.iter_modules(salid.__path__):
+        if m.name != "__main__":
+            with contextlib.suppress(Exception):  # a module that cannot import has no strings
+                importlib.import_module(f"salid.{m.name}")
+    return CATALOG
+
+
 @pytest.mark.parametrize("lang", EXTRA)
-def test_locale_file_is_valid(lang):
+def test_locale_file_is_valid(lang, full_catalog):
     data = _locale(lang)
     assert set(data) == {"_meta", "strings"}
     strings = data["strings"]
@@ -134,7 +149,7 @@ def test_locale_file_is_valid(lang):
 
 
 @pytest.mark.parametrize("lang", EXTRA)
-def test_locale_coverage_is_at_least_95_percent(lang):
+def test_locale_coverage_is_at_least_95_percent(lang, full_catalog):
     translatable = [k for k, v in CATALOG.items() if not i18n.has_thai(v["en"])]
     have = sum(1 for k in translatable if k in _locale(lang)["strings"])
     assert have / len(translatable) >= 0.95, (lang, have, len(translatable))
@@ -237,7 +252,8 @@ def test_validators_accept_every_language():
         store.set_server_language(1, "auto")
     with pytest.raises(ValueError):
         store.set_server_language(1, "xx")
-    assert i18n.resolve_language(5, channel_languages={"5": "ja"}, default_language="hi") == "ja"
+    # a stored channel value is ignored: the server language applies everywhere
+    assert i18n.resolve_language(5, channel_languages={"5": "ja"}, default_language="hi") == "hi"
     assert i18n.resolve_language(6, channel_languages={}, default_language="hi") == "hi"
 
 
