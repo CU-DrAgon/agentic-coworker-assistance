@@ -148,19 +148,50 @@ async def test_a_discord_role_never_overrides_a_stated_position(rig):
     assert rig.bot.positions.of(GUILD, BOSS)[1].key == "cfo"
 
 
-async def test_the_guild_owner_is_a_founder_when_nothing_else_is_known(rig):
+async def test_the_discord_server_owner_is_never_guessed_to_be_the_founder(rig):
     owner = rig.g.members[OWNER_ID]
     owner.roles = [r for r in owner.roles if r.name != "Founder"]
     await rig.bot.positions_sync(rig.g)
-    a, p = rig.bot.positions.of(GUILD, OWNER_ID)
-    assert (p.key, a.source) == ("founder", "discord")
-    await rig.bot.positions_sync(rig.g)  # and it stays on the next day
-    assert rig.bot.positions.of(GUILD, OWNER_ID)[1].key == "founder"
-    worn = [r.name for r in rig.g.members[OWNER_ID].roles]
-    tags = [n for n in worn if n in ("Founder", "ผู้ก่อตั้ง")]
-    assert len(tags) == 1, "the owner wears the Founder tag without anybody asking"
+    assert rig.bot.positions.of(GUILD, OWNER_ID) is None, "no org: nothing is guessed"
+    assert rig.g.created == []
+
+
+async def test_the_central_owner_and_admins_wear_their_tags_and_edits_follow(rig):
+    owner = rig.g.members[OWNER_ID]
+    owner.roles = [r for r in owner.roles if r.name != "Founder"]
+    store = link(rig.bot, ("peer@x.com", PEER), ("tom@x.com", STAFF))
+    store.update_members("o1", lambda ms: [setattr(m, "role", "admin") for m in ms if m.email == "peer@x.com"] or True)  # fmt: skip
     await rig.bot.positions_sync(rig.g)
-    assert len(rig.g.created) <= 1, "and it is made once, never again"
+    assert rig.bot.positions.of(GUILD, OWNER_ID)[1].title == "Founder"  # the center's owner
+    assert rig.bot.positions.of(GUILD, PEER)[1].title == "Admin"
+    assert rig.bot.positions.of(GUILD, STAFF) is None
+    assert "Admin" in names(rig.g.members[PEER])
+    assert [n for n in names(rig.g.members[OWNER_ID]) if n in ("Founder", "ผู้ก่อตั้ง")]
+    # the website lowers the admin to member: the tag goes
+    store.update_members("o1", lambda ms: [setattr(m, "role", "member") for m in ms if m.email == "peer@x.com"] or True)  # fmt: skip
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, PEER) is None
+    assert "Admin" not in names(rig.g.members[PEER])
+
+
+async def test_a_wrong_salid_tag_is_taken_off(rig):
+    rig.bot.positions.assign(GUILD, PEER, "cto", "stated")
+    await rig.bot.positions_sync(rig.g)
+    assert "CTO" in names(rig.g.members[PEER])
+    rig.bot.positions.unassign(GUILD, PEER)
+    await rig.bot.positions_sync(rig.g)
+    assert "CTO" not in names(rig.g.members[PEER]), "Salid's own tag is not evidence"
+
+
+async def test_an_edit_on_the_website_reaches_discord_without_a_command(rig):
+    store = link(rig.bot, ("peer@x.com", PEER))
+    rig.bot._positions_polled = -1e9
+    await rig.bot._positions_center_watch()  # first look: remembered only
+    store.update_members("o1", lambda ms: [setattr(m, "title", "CTO") for m in ms if m.email == "peer@x.com"] or True)  # fmt: skip
+    rig.bot._positions_polled = -1e9
+    await rig.bot._positions_center_watch()
+    assert rig.bot.positions.of(GUILD, PEER)[1].key == "cto"
+    assert "CTO" in names(rig.g.members[PEER])
 
 
 async def test_a_title_salid_already_knows_from_the_dossier_is_tagged_without_a_command(rig):
@@ -189,14 +220,13 @@ async def test_a_position_that_came_from_a_role_goes_when_the_role_goes(rig):
     assert rig.bot.positions.of(GUILD, STAFF) is not None  # stated stays without any role
 
 
-async def test_administrator_and_manage_server_make_the_linked_org_member_admin(rig):
-    link(rig.bot, ("admin@x.com", ADMIN_ID), ("boss@x.com2", BOSS), ("tom@x.com", STAFF))
+async def test_discord_permissions_never_change_the_central_hierarchy(rig):
+    link(rig.bot, ("admin@x.com", ADMIN_ID), ("boss@x.com2", BOSS))
     rig.g.members[BOSS].guild_permissions.manage_guild = True
     await rig.bot.positions_sync(rig.g)
-    assert org_member(rig.bot, "admin@x.com").role == "admin"
-    assert org_member(rig.bot, "boss@x.com2").role == "admin"
-    assert org_member(rig.bot, "tom@x.com").role == "member"  # no permission, no promotion
-    assert org_member(rig.bot, "boss@x.com").role == "owner"  # the owner stays the owner
+    assert org_member(rig.bot, "admin@x.com").role == "member"  # the center decides
+    assert org_member(rig.bot, "boss@x.com2").role == "member"
+    assert org_member(rig.bot, "boss@x.com").role == "owner"
 
 
 async def test_nobody_is_lowered_and_unlinked_admins_change_nothing(rig):
@@ -372,13 +402,18 @@ async def test_discord_refusing_the_role_is_counted_not_raised(rig):
     assert rep.skipped_no_permission == 1
 
 
-async def test_first_start_creates_nothing_unless_a_position_was_stated(rig):
-    give(rig.w, BOSS, "CEO")  # a matching role already exists
-    link(rig.bot, ("ceo@x.com", BOSS))
+async def test_first_start_creates_nothing_for_an_unlinked_member_with_a_matching_role(rig):
+    give(rig.w, BOSS, "CEO")  # a matching role already exists; BOSS is not in the center
     rep = await rig.bot.positions_sync(rig.g)
     assert rig.g.created == [] and rep.tagged == 0 and rep.untagged == 0
     assert rig.bot.positions.of(GUILD, BOSS)[0].source == "discord"
-    assert org_member(rig.bot, "ceo@x.com").title == "CEO"  # but the center learns it
+
+
+async def test_a_linked_member_follows_the_center_not_the_discord_role(rig):
+    give(rig.w, BOSS, "CEO")
+    link(rig.bot, ("ceo@x.com", BOSS))  # the center says: member, no title
+    await rig.bot.positions_sync(rig.g)
+    assert rig.bot.positions.of(GUILD, BOSS) is None
 
 
 async def test_the_department_role_is_off_by_default_and_on_when_asked(rig):
@@ -586,3 +621,33 @@ async def test_org_chart_and_knowledge_status_in_chat(rig):
     assert "Ploy" in chart["not_linked_to_center"]
     status = await asyncio.to_thread(tools["knowledge_status"])
     assert status["not_linked_to_center_count"] >= 4 and status["positions"]["assigned"] == 1
+
+
+async def test_a_founder_salid_guessed_for_the_wrong_person_is_taken_back(rig):
+    """Production 2026-10-18: the Discord server owner (an org admin) was tagged Founder and the
+    title was written into the center; the center's owner is someone else."""
+    store = link(rig.bot, ("peer@x.com", PEER))
+    store.update_members(
+        "o1",
+        lambda ms: (
+            [
+                (
+                    setattr(m, "role", "admin"),
+                    setattr(m, "title", "Founder"),
+                    setattr(m, "level", 1),
+                )
+                for m in ms
+                if m.email == "peer@x.com"
+            ]
+            or True
+        ),
+    )
+    rig.bot.positions.assign(GUILD, PEER, "founder", "discord")
+    rig.bot.positions.set_mirrored(GUILD, PEER, "Founder")
+    await rig.bot.positions_sync(rig.g)
+    assert org_member(rig.bot, "peer@x.com").title == ""
+    assert org_member(rig.bot, "peer@x.com").level in (0, 3)
+    assert rig.bot.positions.of(GUILD, PEER)[1].title == "Admin"
+    assert "Admin" in names(rig.g.members[PEER])
+    assert not [n for n in names(rig.g.members[PEER]) if n in ("Founder", "ผู้ก่อตั้ง")]
+    assert rig.bot.positions.of(GUILD, OWNER_ID)[1].title == "Founder"

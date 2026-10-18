@@ -50,6 +50,9 @@ OWNER_BONUS_LEVELS = 8  # the guild owner stays above every level when positions
 CACHE_TTL_S = 60.0
 DEPT_CODES = ("tech", "business", "finance", "other")
 TAG_REASON = "Salid: position"
+# the central system's hierarchy when it names no title: owner and admin wear a tag, member none
+ORG_ROLE_POSITION = {"owner": ("Founder", 1), "admin": ("Admin", 3)}
+CENTER_POLL_S = 30.0  # how often the central org document is checked for edits made on the web
 SRC_FROM_ASSIGN = {"stated": "stated", "org": "org", "discord": "discord", "heard": "heard"}
 
 
@@ -201,7 +204,46 @@ class PositionsMixin:
             logger.warning("positions: role delete failed", exc_info=True)
 
     # ------------------------------------------------------------- daily job
+    def _positions_center_print(self, guild) -> str:
+        """What the central system says about this server's people (blocking): one string that
+        changes whenever a member's role, title, level, department or Discord link changes."""
+        _, org, _ = self._pos_linked(guild)
+        if org is None:
+            return ""
+        return "|".join(
+            sorted(
+                f"{m.email}:{m.role}:{getattr(m, 'title', '')}:{getattr(m, 'level', 0)}:"
+                f"{getattr(m, 'department', '')}:{m.identity('discord') or ''}"
+                for m in org.members
+            )
+        )
+
+    async def _positions_center_watch(self) -> None:
+        """An edit on the central website reaches Discord within ``CENTER_POLL_S``."""
+        now = self._clock()
+        if now - getattr(self, "_positions_polled", 0.0) < CENTER_POLL_S:
+            return
+        self._positions_polled = now
+        seen = self.__dict__.setdefault("_positions_seen", {})
+        for guild in list(self.guilds):
+            try:
+                if not self._positions_on(guild.id):
+                    continue
+                fp = await asyncio.to_thread(self._positions_center_print, guild)
+                if not fp or seen.get(guild.id) == fp:
+                    continue
+                first = guild.id not in seen
+                seen[guild.id] = fp
+                if first:
+                    continue  # the daily / startup sync covers the state at start
+                rep = await self.positions_sync(guild)
+                seen[guild.id] = await asyncio.to_thread(self._positions_center_print, guild)
+                logger.info("positions: center edit guild=%s %s", guild.id, rep.as_dict())
+            except Exception:
+                logger.warning("positions: center watch failed", exc_info=True)
+
     async def _positions_due(self) -> None:
+        await self._positions_center_watch()
         today = self.s.now().date().isoformat()
         for guild in list(self.guilds):
             if self._positions_day.get(guild.id) == today:
@@ -265,17 +307,21 @@ class PositionsMixin:
         cat = book.catalog(gid)
         by_role = {p.discord_role_id: p for p in cat if p.discord_role_id}
         members = [only] if only is not None else self._members(guild)
-        held = book.assignments(gid)
-        founder = None
+        managed = book.managed_role_ids(gid)
         admins: list[int] = []
+        _, org, linked = self._pos_linked(guild)
         for m in members:
             if not _is_human(m) or self._people_is_bot(m.id, getattr(m, "display_name", "")):
                 continue
+            if m.id in linked:
+                continue  # linked to the central system: that system decides (``_pos_pull_org``)
             best = None  # (level or 99, -position, Position)
             for r in getattr(m, "roles", ()) or ():
                 if (
                     r == getattr(guild, "default_role", None)
                     or getattr(r, "name", "") == "@everyone"
+                    or getattr(r, "id", 0)
+                    in managed  # Salid's own tags show positions, not prove them
                 ):
                     continue
                 p = by_role.get(getattr(r, "id", 0)) or book.find(gid, getattr(r, "name", ""), cat)
@@ -287,18 +333,8 @@ class PositionsMixin:
             if best is not None:
                 if book.assign(gid, m.id, best[1].key, "discord"):
                     rep.from_discord += 1
-            elif getattr(guild, "owner_id", None) == m.id and m.id not in held:
-                if founder is None:
-                    founder = book.find(gid, "Founder", cat)
-                if founder is not None and book.assign(gid, m.id, founder.key, "discord"):
-                    rep.from_discord += 1
-            else:
-                cur = held.get(m.id)
-                owner_founder = (
-                    getattr(guild, "owner_id", None) == m.id and cur is not None and cur.source == "discord"
-                )  # fmt: skip
-                if not owner_founder and book.unassign(gid, m.id, only_source="discord"):
-                    rep.dropped += 1
+            elif book.unassign(gid, m.id, only_source="discord"):
+                rep.dropped += 1
             perms = getattr(m, "guild_permissions", None)
             if (
                 getattr(guild, "owner_id", None) == m.id
@@ -306,7 +342,6 @@ class PositionsMixin:
                 or getattr(perms, "manage_guild", False)
             ):
                 admins.append(m.id)
-        self._pos_admins(guild, admins, rep)
         self._pos_from_dossiers(guild, cat, rep, only)
 
     def _pos_from_dossiers(self, guild, cat, rep: _Report, only=None) -> None:
@@ -318,7 +353,9 @@ class PositionsMixin:
         for d in self.people.list(gid):
             if only is not None and d.user_id != getattr(only, "id", None):
                 continue
-            if d.user_id in held or not d.role_title or d.role_source not in ("heard", "stated"):
+            # only what was heard at work: a stated title already went through set_role, and a title
+            # written back from a position must not bring a removed position back
+            if d.user_id in held or not d.role_title or d.role_source != "heard":
                 continue
             p = book.find(gid, d.role_title, cat)
             if p is not None and book.assign(gid, d.user_id, p.key, d.role_source):
@@ -357,9 +394,36 @@ class PositionsMixin:
             return
         book = self.positions
         here = {m.id for m in self._members(guild)}
+        stale: list[int] = []  # titles Salid itself wrote from a Discord guess: taken back
         for uid, mem in linked.items():
+            if uid not in here:
+                continue
             title = (getattr(mem, "title", "") or "").strip()
-            if not title or uid not in here:
+            cur = book.of(gid, uid)
+            if cur is not None and cur[0].source in ("discord", "heard"):
+                # a linked person's position comes from the central system only
+                if title and norm_title(title) == norm_title(cur[0].mirrored):
+                    stale.append(uid)
+                    title = ""
+                if book.unassign(gid, uid):
+                    rep.dropped += 1
+            if not title:
+                # no title in the central system: its hierarchy (owner / admin / member) decides
+                cur = book.of(gid, uid)
+                if cur is not None and cur[0].source == "stated":
+                    continue  # an executive named the position in Salid
+                want = ORG_ROLE_POSITION.get(getattr(mem, "role", "") or "")
+                if want is None:
+                    if cur is not None and book.unassign(gid, uid):
+                        rep.dropped += 1
+                    continue
+                try:
+                    pos, _ = book.add(gid, want[0], want[1])
+                except CatalogFull:
+                    rep.skipped_other += 1
+                    continue
+                if book.assign(gid, uid, pos.key, "org", force=True):
+                    rep.from_org += 1
                 continue
             cur = book.of(gid, uid)
             if cur is not None:
@@ -375,6 +439,20 @@ class PositionsMixin:
                 continue
             if book.assign(gid, uid, pos.key, "org", force=True):
                 rep.from_org += 1
+
+        if stale:
+            ids = {str(u) for u in stale}
+
+            def unset(members) -> bool:
+                changed = False
+                for m in members:
+                    if str(m.identity("discord") or "") in ids and (m.title or m.level):
+                        m.title, m.level, changed = "", 0, True
+                return changed
+
+            store = OrgStore(self.docs)
+            if store.update_members(org.id, unset):
+                logger.info("positions: took back %d guessed title(s) guild=%s", len(stale), gid)
 
     def _pos_unlinked_names(self, guild, linked=None) -> list[str]:
         """Humans of the server with no org member linked to their Discord account. Blocking; []
@@ -416,6 +494,9 @@ class PositionsMixin:
                 w = want.get(uid)
                 if w is None:
                     continue
+                derived = ORG_ROLE_POSITION.get(m.role or "")
+                if not (m.title or "") and derived and derived[0] == w[0]:
+                    continue  # the tag comes from the center's own hierarchy: nothing to write back
                 title, level, dept, u = w
                 if m.title != title or m.level != level:
                     m.title, m.level, changed = title, level, True
@@ -469,7 +550,7 @@ class PositionsMixin:
             pos = cat.get(a.position_key)
             if pos is None or (only_uid is not None and uid != only_uid):
                 continue
-            if a.source not in ("stated", "org"):
+            if True:
                 m = guild.get_member(uid)
                 worn = m is not None and any(
                     getattr(r, "id", 0) == pos.discord_role_id
@@ -480,6 +561,19 @@ class PositionsMixin:
                 if worn:
                     continue
             todo[uid] = pos
+        if self._pos_can_manage_roles(guild):
+            managed_ids = await asyncio.to_thread(book.managed_role_ids, gid)
+            for m in [guild.get_member(only_uid)] if only_uid is not None else self._members(guild):
+                if m is None:
+                    continue
+                mine = todo.get(m.id) or cat.get(getattr(held.get(m.id), "position_key", ""))
+                for r in list(getattr(m, "roles", ()) or ()):
+                    if r.id in managed_ids and (mine is None or r.id != mine.discord_role_id):
+                        try:
+                            await m.remove_roles(r, reason=TAG_REASON)
+                            rep.untagged += 1
+                        except discord.HTTPException:
+                            rep.skipped_other += 1
         dept_on = bool(getattr(self.team.current(gid), "department_roles", False))
         depts = await self._pos_dept_wants(guild, held, only_uid) if dept_on else {}
         if not todo and not depts:
