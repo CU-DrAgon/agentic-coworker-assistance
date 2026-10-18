@@ -105,7 +105,7 @@ def build_chat_tools(actions: ChatActions, calls: list[tuple[str, dict]]) -> lis
         e.g. "จำแค่ 30 วันพอ".
 
         Args:
-            days: number of days to keep.
+            days: number of days to keep (1-3650), or 0 to keep it forever (the default).
         """
         return logged("set_memory_days", {"days": days}, lambda: actions.set_memory_days(days))
 

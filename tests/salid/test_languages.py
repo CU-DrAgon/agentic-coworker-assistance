@@ -32,6 +32,21 @@ LOCALES = Path(i18n.__file__).parent / "locales"
 PH = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*(?:[:!][^}]*)?\}")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _every_catalog_string():
+    """Feature modules add their strings to CATALOG when they are imported (as
+    scripts/salid_translate_catalog.py does): import them all, so the catalog checks here pass
+    when this file runs on its own, not only after the rest of the suite imported them."""
+    import importlib
+    import pkgutil
+
+    import salid
+
+    for m in pkgutil.iter_modules(salid.__path__):
+        if m.name != "__main__":
+            importlib.import_module(f"salid.{m.name}")
+
+
 def test_tiers_and_names():
     assert i18n.PRIMARY == ("th", "en")
     assert EXTRA == ("zh", "hi", "ms", "id", "vi", "ko", "ja")

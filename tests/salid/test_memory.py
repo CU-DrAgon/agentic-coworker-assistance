@@ -45,7 +45,7 @@ from salid.guild_settings import (
     MemoryGuildStore,
     default_retention_days,
 )
-from salid.i18n import t
+from salid.i18n import EXTRA, t, t_days
 from salid.memory import (
     MemoryScheduler,
     MemoryService,
@@ -58,6 +58,7 @@ from salid.memory_access import ChannelAccess, allowed_channel_ids
 from salid.memory_index import IndexedMemoryStore
 from salid.memory_store import DaySummary, SQLiteMemoryStore
 from salid.memory_summary import summary_items
+from salid.modes import mode_help
 from salid.qa import MemoryTools, ask
 
 BKK = ZoneInfo("Asia/Bangkok")
@@ -1009,9 +1010,9 @@ async def test_switching_a_channel_on_posts_a_one_time_notice(bot, world):
     assert world.gen.sent == []
     it = Interaction(world.g, member(world.g, MANAGER, manage_guild=True), world.gen)
     await bot.handle_mode(it, "call")
-    # memory is kept forever by default (b0d78be): the notice tells the 10-year read window
-    notice = t("memory_notice", "th", days=FOREVER_DAYS)
-    assert world.gen.sent == [notice] and str(FOREVER_DAYS) in world.gen.sent[0]
+    # memory is kept forever by default (b0d78be): the notice says so, never "3650 days"
+    notice = t("memory_notice_forever", "th")
+    assert world.gen.sent == [notice] and "ถาวร" in notice and "3650" not in notice
     await bot.handle_mode(it, "join")  # on -> on: no second notice
     assert len(world.gen.sent) == 1
     await bot.handle_mode(it, "off")
@@ -1025,7 +1026,7 @@ async def test_a_hub_change_from_off_is_noticed_on_the_next_message(bot, world):
     set_mode(bot, 10, "call")  # changed in the hub: the bot only sees it later
     await send(bot, world, world.gen, "hello")
     await send(bot, world, world.gen, "again")
-    assert world.gen.sent == [t("memory_notice", "th", days=FOREVER_DAYS)]
+    assert world.gen.sent == [t("memory_notice_forever", "th")]
 
 
 async def test_notice_shows_the_guilds_retention_days(bot, world):
@@ -1049,11 +1050,40 @@ def test_mode_help_and_welcome_mention_memory():
         assert "7" in t("memory_notice", lang, days=7)
 
 
+FOREVER_WORD = {"th": "ถาวร", "en": "forever"}
+RETENTION_KEYS = ["welcome", "memory_status", "memory_set", "memory_notice",
+                  *(f"mode_help_{m}" for m in ("listen", "call", "join", "chat"))]  # fmt: skip
+
+
+@pytest.mark.parametrize("key", RETENTION_KEYS)
+def test_keep_forever_is_said_in_words_never_as_a_number_of_days(key):
+    fmt = dict(mention="@S", chat="#c", state="on")
+    for lang in ("th", "en", *EXTRA):
+        text = t_days(key, lang, 0, **fmt)
+        assert text == t(f"{key}_forever", lang, **fmt) and "{" not in text
+        assert "3650" not in text
+        if lang in FOREVER_WORD:
+            assert FOREVER_WORD[lang] in text, (key, lang)
+        else:  # the second-tier catalogs carry their own translation, not the English fallback
+            assert text != t(f"{key}_forever", "en"), (key, lang)
+        assert t_days(key, lang, 30, **fmt) == t(key, lang, days=30, **fmt)
+    assert mode_help("off", "th", 0) == t("mode_help_off", "th")  # no memory in Off
+
+
+def test_the_shown_retention_is_zero_for_keep_forever(bot):
+    assert bot.team.retention_shown(GUILD) == 0  # stored 0 = keep forever
+    assert bot.team.memory_retention_days(GUILD) == FOREVER_DAYS  # the read window
+    bot.team.set_memory_retention_days(GUILD, 45)
+    assert bot.team.retention_shown(GUILD) == 45
+
+
 async def test_memory_command_status_and_permissions(bot, world):
     it = Interaction(world.g, member(world.g, STAFF), world.gen)
     await bot.handle_memory(it, None)
     ((text, ephemeral),) = it.sent
-    assert ephemeral and str(FOREVER_DAYS) in text and t("memory_on", "th") in text
+    assert ephemeral and t("memory_on", "th") in text
+    assert t("memory_status_forever", "th", state=t("memory_on", "th")) in text
+    assert "3650" not in text
     it2 = Interaction(world.g, member(world.g, STAFF, roles=["พนักงาน"]), world.gen)
     await bot.handle_memory(it2, 30)
     assert it2.sent == [(t("memory_denied", "th"), True)]
@@ -1072,6 +1102,13 @@ async def test_memory_command_status_and_permissions(bot, world):
     exec_it = Interaction(world.g, member(world.g, EXEC), world.gen)
     await bot.handle_memory(exec_it, 365)  # executives (env id) may change it too
     assert bot.team.memory_retention_days(GUILD) == 365
+    purged = []
+    bot._purge_soon = purged.append
+    back = Interaction(world.g, member(world.g, EXEC), world.gen)
+    await bot.handle_memory(back, 0)  # back to keep forever: said in words, nothing purged
+    assert back.sent == [(t("memory_set_forever", "th"), False)]
+    assert bot.team.retention_shown(GUILD) == 0 and purged == []
+    await bot.handle_memory(exec_it, 365)
     bot.guilds_store.save_settings(
         GUILD,
         GuildSettingsUpdate(

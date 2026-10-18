@@ -250,7 +250,8 @@ async def test_an_admin_pick_saves_the_language_and_confirms_in_it(bot, world):
     kind, text, view = it.response.calls[-1]
     assert kind == "edit" and view is None
     assert text.startswith(t("lang_ask_done", "th", label=t("lang_label_th", "th")))
-    assert t("welcome", "th", mention=ME.mention, chat=world.chat.mention, days=90)[:20] in text
+    welcome = t("welcome_forever", "th", mention=ME.mention, chat=world.chat.mention)
+    assert welcome in text and "3650" not in text  # memory kept forever: said in words
     assert hint("welcome_help", "th") in text  # how to ask for help is in the welcome
     # the chat channel Salid created follows the language
     assert world.chat.renamed == [CHAT_CHANNEL_NAME] and world.chat.name == CHAT_CHANNEL_NAME

@@ -357,6 +357,9 @@ async def test_language_memory_show_hidden_and_cancel_tools(bot, world):
     assert (
         shown["mode"] == "call" and shown["reply_language"] == "en" and shown["memory_days"] == 30
     )
+    assert (await asyncio.to_thread(a.set_memory_days, 0)) == {"status": "ok", "days": 0}
+    shown = await asyncio.to_thread(a.show_settings)  # keep forever, never "3650 days"
+    assert shown["memory_days"] == "forever" and "3650" not in shown["mode_meaning"]
     world.named.permissions_for = lambda me: SimpleNamespace(
         view_channel=False, read_message_history=False
     )

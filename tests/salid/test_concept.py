@@ -782,3 +782,17 @@ def test_concept_prompt_tells_the_model_to_relay_lines_not_the_table():
 
     assert "lines" in CONCEPT_PROMPT and "Markdown" in CONCEPT_PROMPT
     assert "cheerful" not in CONCEPT_PROMPT.lower() and "ร่าเริง" not in CONCEPT_PROMPT
+
+
+async def test_concept_labels_use_the_fonts_of_the_requests_language(bot, world, monkeypatch):
+    """Turnaround labels in Japanese or Hindi need their script font (Kanit would drop them)."""
+    m = world.staff
+    bot.llm = fake_client()
+    asked, real = [], cards.card_fonts
+    monkeypatch.setattr(cards, "card_fonts", lambda lang=None: asked.append(lang) or real(lang))
+    seen = []
+    monkeypatch.setattr(
+        "salid.concept_bot.concept_tools", lambda ctx, images: seen.append(ctx) or []
+    )
+    bot._concept_tools(chat_msg(world, m), world.g, m, [], "ja")
+    assert asked == ["ja"] and seen[0].lang == "ja"

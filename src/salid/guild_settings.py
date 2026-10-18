@@ -1074,6 +1074,12 @@ class BotGuildSettings:
     def memory_retention_days(self, guild_id: int) -> int:
         return effective_retention_days(self.current(guild_id).memory_retention_days)
 
+    def retention_shown(self, guild_id: int) -> int:
+        """The retention to TELL people: the stored days, 0 for keep forever (`i18n.t_days` says
+        "forever" then, never the 10-year read window of `memory_retention_days`)."""
+        n = self.current(guild_id).memory_retention_days
+        return n if isinstance(n, int) and n > 0 else 0
+
     def fresh_memory_retention_days(self, guild_id: int, *, fail_closed: bool = False) -> int:
         """Retention read from the store NOW, bypassing the cache. Read paths that hide expired
         memory use ``fail_closed=True``: the hub writes the store directly, so a failed read must

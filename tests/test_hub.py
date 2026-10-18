@@ -643,6 +643,19 @@ def test_hub_saves_and_validates_memory_retention(client):
     )
 
 
+def test_the_hub_shows_and_saves_keep_forever_as_zero():
+    """A stored 0 is "keep forever": the page must select that option, never turn it into 90 days
+    (the next save would then delete memory older than 90 days)."""
+    import re
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "src/meeting_scribe/static/hub.html").read_text()
+    assert '<option value="0" data-i18n="days_forever">' in html
+    assert "fillRetention(s.memory_retention_days ?? 0)" in html
+    collect = html.split("function collectRetention() {", 1)[1].split("\n}", 1)[0]
+    assert re.search(r"n >= 0 && n <= 3650 \? n : 0", collect), collect
+
+
 def test_hub_page_has_the_memory_controls(client):
     html = (
         __import__("pathlib").Path("src/meeting_scribe/static/hub.html").read_text(encoding="utf-8")
