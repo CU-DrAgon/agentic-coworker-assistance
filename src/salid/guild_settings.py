@@ -5,7 +5,7 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets, ideas, company_learning, company_knowledge, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, images, video_ads, concept, decks, votes, vote_offers, reminders, projects, project_notes, data}: bool, all
+                         private_channels, maps, search, travel, markets, ideas, company_learning, company_knowledge, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, images, video_ads, concept, decks, votes, vote_offers, reminders, projects, project_notes, data, task_handshake, role_sync}: bool, all
                          default true except video_ads (paid video generation: off until an admin turns it on)
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
@@ -25,6 +25,8 @@ One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default
     wake_policy          strict (default) | natural: how Salid wakes in a voice room (name only | name or a direct question)
     voice_talk           may_talk (default) | listen_only: Salid's voice in meetings (human switch only)
     personal_settings    bool (default true): members may keep their own language / tone / task mode
+    exec_max_level       int 1-4 (default 3): position levels up to this count as executives (role_sync)
+    department_roles     bool (default false): one Discord role per department as well (role_sync)
     language_mode        audience (default: company language + the personal languages of the people
                          involved) | company_only (an executive forced one language), see salid.audience
     receipt_home_channel_id  str main receipt channel ("" = auto-pick), see salid.receipt_forward
@@ -133,6 +135,7 @@ FEATURES = (
     "project_notes",
     "data",
     "task_handshake",
+    "role_sync",
 )
 TASK_CONFIRM_MODES = (
     "notify",
@@ -258,6 +261,9 @@ class Features(BaseModel):
     task_handshake: bool = (
         True  # tasks heard in chat go to the assignee to confirm (salid.task_handshake)
     )
+    role_sync: bool = (
+        True  # positions <-> Discord roles <-> the central org, kept in step (salid.positions_bot)
+    )
 
 
 class Channel(BaseModel):
@@ -299,6 +305,8 @@ class GuildSettingsUpdate(BaseModel):
     tone_note: str = ""
     task_confirm_mode: str = "notify"  # notify | approve, see salid.task_handshake
     personal_settings: bool = True  # members may keep their own language / tone / task mode
+    exec_max_level: int = 3  # position levels 1..N count as executives (1-4), see salid.positions
+    department_roles: bool = False  # also keep one Discord role per department (needs role_sync)
     language_mode: str = "audience"  # audience (company + personal languages) | company_only
     captions_default: str = "off"  # off | on, see salid.captions
     voice_talk: str = "may_talk"  # may_talk | listen_only, see salid.meeting
@@ -419,6 +427,15 @@ class GuildSettingsUpdate(BaseModel):
         if not _TIME.match(v):
             raise ValueError("digest_time must be HH:MM")
         return v
+
+    @field_validator("exec_max_level", mode="before")
+    @classmethod
+    def _exec_max_level(cls, v):
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            return 3
+        return n if 1 <= n <= 4 else 3
 
     @field_validator("exec_role_names", mode="before")
     @classmethod

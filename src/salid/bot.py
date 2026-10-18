@@ -159,6 +159,7 @@ from .permissions import (
 )
 from .places_bot import PlacesMixin
 from .polls_bot import PollsMixin
+from .positions_bot import PositionsMixin
 from .private_chat import PRIVATE_COMMANDS
 from .private_chat_bot import PrivateChatMixin
 from .profiles import ProfileMixin, effective_language, profile_block
@@ -359,6 +360,7 @@ class SecretaryBot(
     ApprovalMixin,
     DMGuildMixin,
     PeopleMixin,  # before PrivateChatMixin: chains on_member_remove (salid.people_bot)
+    PositionsMixin,  # positions <-> Discord roles <-> the center (salid.positions_bot)
     PrivateChatMixin,
     BroadcastMixin,
     PlacesMixin,
@@ -554,6 +556,7 @@ class SecretaryBot(
         self._contests_init()  # hackathons / grants / tenders (salid.contests_bot)
         self._bizfin_init()  # finance calculators, benchmark, security (salid.bizfin_bot)
         self._people_init()  # who does what, whom to ask, handover (salid.people_bot)
+        self._positions_init()  # positions <-> Discord roles <-> the center (salid.positions_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -747,6 +750,7 @@ class SecretaryBot(
         if self.user is not None and after.id == self.user.id and before.roles != after.roles:
             self._request_sync(after.guild)  # the owner changed Salid's roles
             self._request_import()
+        await self._positions_on_member_update(before, after)
 
     async def on_guild_role_update(self, before, after):
         if before.permissions != after.permissions:
@@ -755,9 +759,11 @@ class SecretaryBot(
         if me is not None and after in me.roles and before.permissions != after.permissions:
             self._request_sync(after.guild)
             self._request_import()
+        await self._positions_on_role_update(before, after)
 
     async def on_guild_role_delete(self, role):
         self._invalidate_viewers(role.guild.id)
+        await self._positions_on_role_delete(role)
 
     async def on_member_join(self, member):
         self._invalidate_viewers(member.guild.id)
@@ -778,7 +784,7 @@ class SecretaryBot(
         if member.id in self.s.exec_user_ids or can_manage_guild(member):
             return True
         names = self.team.exec_role_names(member.guild.id, self.s.exec_role_names)
-        return bool(names & {r.name for r in member.roles})
+        return bool(names & {r.name for r in member.roles}) or self._position_is_exec(member)
 
     # ------------------------------------------------------------- routing
     async def _licensed(self, guild_id: int) -> bool:
@@ -3405,6 +3411,7 @@ class SecretaryBot(
         await self._nodue_due()
         await self._pc_sweep()
         await self._people_due()
+        await self._positions_due()
         await self._travel_due()
         await self._markets_due()
         await self._contests_due()
