@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 
 from ..config import Settings
@@ -158,7 +159,91 @@ async def run_slack(a: Assistant, ps: PlatformSettings) -> None:
     await asyncio.gather(*tasks)
 
 
-async def run_line(a: Assistant, ps: PlatformSettings) -> None:
+class PlatformsHttp:
+    """The single HTTP port (Cloud Run): `GET /health` plus the LINE / WhatsApp webhook apps, which
+    are registered by path once their (slower) startup is done. A path nobody registered yet answers
+    503, so the platform retries instead of the container failing its port check."""
+
+    def __init__(self, platforms: list[str] | None = None) -> None:
+        self.apps: dict[str, object] = {}
+        self.platforms: list[str] = list(platforms or [])
+
+    def register(self, path: str, app, platform: str) -> None:
+        self.apps[path] = app
+        if platform not in self.platforms:
+            self.platforms.append(platform)
+
+    def drop(self, platform: str) -> None:
+        if platform in self.platforms:
+            self.platforms.remove(platform)
+
+    async def __call__(self, scope, receive, send) -> None:
+        from starlette.responses import JSONResponse, Response
+
+        if scope["type"] == "lifespan":
+            while True:
+                event = await receive()
+                if event["type"] == "lifespan.startup":
+                    await send({"type": "lifespan.startup.complete"})
+                elif event["type"] == "lifespan.shutdown":
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+        if scope["type"] != "http":
+            return
+        path = scope["path"]
+        if path == "/health" and scope["method"] in ("GET", "HEAD"):
+            resp = JSONResponse({"ok": True, "platforms": list(self.platforms)})
+        elif path in self.apps:
+            await self.apps[path](scope, receive, send)
+            return
+        elif path in WEBHOOK_PATHS:
+            resp = Response(status_code=503)
+        else:
+            resp = Response(status_code=404)
+        await resp(scope, receive, send)
+
+
+WEBHOOK_PATHS = ("/line/webhook", "/whatsapp/webhook")  # checked against the modules in tests
+
+
+async def serve_http(http: PlatformsHttp, port: int, started: asyncio.Event | None = None) -> None:
+    import uvicorn
+
+    config = uvicorn.Config(
+        http,
+        host="0.0.0.0",
+        port=port,
+        log_config=None,
+        access_log=False,  # noqa: S104
+    )
+    server = uvicorn.Server(config)
+    logger.info("http server on 0.0.0.0:%d (/health, platform webhooks)", port)
+
+    async def watch() -> None:
+        while not server.started:
+            await asyncio.sleep(0.02)
+        started.set()
+
+    watcher = asyncio.create_task(watch()) if started is not None else None
+    try:
+        await server.serve()
+    finally:
+        if watcher is not None:
+            watcher.cancel()
+
+
+async def _guarded(name: str, coro: Awaitable, http: PlatformsHttp) -> None:
+    """Combined mode: one platform failing is logged and leaves the others (and the port) up."""
+    try:
+        await coro
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        http.drop(name)
+        logger.error("%s stopped (%s); other platforms keep running", name, safe_exc(e))
+
+
+async def run_line(a: Assistant, ps: PlatformSettings, http: PlatformsHttp | None = None) -> None:
     import uvicorn
 
     from . import line
@@ -169,6 +254,11 @@ async def run_line(a: Assistant, ps: PlatformSettings) -> None:
     _changes_pusher(a, "line", info["user_id"], change_outbox_platform.line_pusher(api))
     adapter = line.LineAdapter(a, port, info["user_id"])
     app = line.create_app(ps.line_channel_secret, adapter)
+    if http is not None:
+        http.register(line.WEBHOOK_PATH, app, "line")
+        logger.info("line webhook ready tenant=%d", ids.tenant_id("line", info["user_id"]))
+        await asyncio.Event().wait()
+        return
     config = uvicorn.Config(
         app, host=ps.line_host, port=ps.line_port, log_config=None, access_log=False
     )
@@ -198,7 +288,9 @@ async def run_telegram(a: Assistant, ps: PlatformSettings) -> None:
         await api.aclose()
 
 
-async def run_whatsapp(a: Assistant, ps: PlatformSettings) -> None:
+async def run_whatsapp(
+    a: Assistant, ps: PlatformSettings, http: PlatformsHttp | None = None
+) -> None:
     import uvicorn
 
     from . import whatsapp
@@ -213,6 +305,14 @@ async def run_whatsapp(a: Assistant, ps: PlatformSettings) -> None:
         )
         adapter = whatsapp.WhatsAppAdapter(a, port, ps.whatsapp_phone_number_id)
         app = whatsapp.create_app(ps.whatsapp_app_secret, ps.whatsapp_verify_token, adapter)
+        if http is not None:
+            http.register(whatsapp.WEBHOOK_PATH, app, "whatsapp")
+            logger.info(
+                "whatsapp webhook ready tenant=%d",
+                ids.tenant_id("whatsapp", ps.whatsapp_phone_number_id),
+            )
+            await asyncio.Event().wait()
+            return
         config = uvicorn.Config(
             app, host=ps.whatsapp_host, port=ps.whatsapp_port, log_config=None, access_log=False
         )
@@ -227,8 +327,16 @@ async def run_whatsapp(a: Assistant, ps: PlatformSettings) -> None:
 
 
 async def run(s: Settings, ps: PlatformSettings) -> None:
+    port = ps.combined_port
+    http = PlatformsHttp() if port else None
+    jobs: list[asyncio.Task] = []
+    if http is not None:  # first: Cloud Run needs the port open before the slow startups finish
+        up = asyncio.Event()
+        jobs.append(asyncio.create_task(serve_http(http, port, up)))
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(up.wait(), 15)
     a = build_assistant(s, ps)
-    jobs = [asyncio.create_task(memory_loop(a))]
+    jobs.append(asyncio.create_task(memory_loop(a)))
     if a.identity is not None:  # the org store exists: central changes can be delivered
         from ..change_outbox import ChangeOutbox
 
@@ -236,13 +344,25 @@ async def run(s: Settings, ps: PlatformSettings) -> None:
             ChangeOutbox.from_settings(a.identity.orgs.docs, s), a.identity.orgs, a.team
         )
         jobs.append(asyncio.create_task(change_outbox_platform.changes_loop(a.changes)))
+
+    def launch(name: str, coro_fn, *args) -> None:
+        if http is None:
+            jobs.append(asyncio.create_task(coro_fn(a, ps, *args)))
+            return
+        if name in ("slack", "telegram"):
+            http.platforms.append(name)
+            coro = coro_fn(a, ps)
+        else:
+            coro = coro_fn(a, ps, http)
+        jobs.append(asyncio.create_task(_guarded(name, coro, http)))
+
     if ps.slack_enabled:
-        jobs.append(asyncio.create_task(run_slack(a, ps)))
+        launch("slack", run_slack)
     if ps.line_enabled:
-        jobs.append(asyncio.create_task(run_line(a, ps)))
+        launch("line", run_line)
     if ps.telegram_enabled:
-        jobs.append(asyncio.create_task(run_telegram(a, ps)))
+        launch("telegram", run_telegram)
     if ps.whatsapp_enabled:
-        jobs.append(asyncio.create_task(run_whatsapp(a, ps)))
+        launch("whatsapp", run_whatsapp)
     logger.info("platforms started: %s", ", ".join(ps.enabled_platforms()))
     await asyncio.gather(*jobs)

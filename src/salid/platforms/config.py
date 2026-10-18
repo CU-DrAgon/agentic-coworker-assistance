@@ -7,6 +7,7 @@ and never logged.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Annotated
 
@@ -54,6 +55,10 @@ class PlatformSettings(BaseSettings):
     whatsapp_exec_numbers: Annotated[set[str], NoDecode] = Field(default_factory=set)
     whatsapp_host: str = "127.0.0.1"  # TLS in front (Meta only calls https); 0.0.0.0 in a container
     whatsapp_port: int = 8092
+
+    # One HTTP port for every webhook (Cloud Run): used when `PORT` is set or this is > 0.
+    # 0 = off: LINE and WhatsApp keep their own host/port above.
+    platforms_port: int = 0
 
     # Optional: the Discord bot token, ONLY to read guild roles / channel overwrites over REST so a
     # verified member's cross-platform questions can use the Discord channels they may read
@@ -135,6 +140,14 @@ class PlatformSettings(BaseSettings):
             and self.whatsapp_verify_token
             and self.whatsapp_phone_number_id
         )
+
+    @property
+    def combined_port(self) -> int:
+        """The single HTTP port (Cloud Run's `PORT`, else SALID_PLATFORMS_PORT); 0 = separate ports."""
+        raw = os.environ.get("PORT", "").strip()
+        if raw.isdigit() and int(raw) > 0:
+            return int(raw)
+        return max(self.platforms_port, 0)
 
     def enabled_platforms(self) -> list[str]:
         flags = (

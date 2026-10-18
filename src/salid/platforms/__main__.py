@@ -16,7 +16,7 @@ def main() -> None:
     for noisy in ("httpx", "httpcore", "slack_bolt", "slack_sdk", "aiohttp", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)  # their debug/info lines can echo urls
     s, ps = Settings.from_env(), PlatformSettings()
-    if not ps.enabled_platforms():
+    if not ps.enabled_platforms() and not ps.combined_port:
         sys.exit(
             "No platform configured: set SALID_SLACK_BOT_TOKEN + SALID_SLACK_APP_TOKEN and/or "
             "SALID_LINE_CHANNEL_SECRET + SALID_LINE_CHANNEL_ACCESS_TOKEN and/or "
