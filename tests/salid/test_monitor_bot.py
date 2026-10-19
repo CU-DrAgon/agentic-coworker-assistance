@@ -492,6 +492,35 @@ def test_memory_backlog_counts_pending_entries(bot):
     assert sched.backlog() == 2
 
 
+def test_headless_web_bot_never_buffers_events(monkeypatch, tmp_path):
+    """The web service's headless bot (`salid.headless`) never connects, so its `setup_hook`
+    never starts the monitor loop: even with `SALID_MONITOR_ENABLED` set its emitter stays off,
+    else producer events would pile up in a buffer nothing flushes."""
+    from salid import headless, llm
+
+    monkeypatch.setenv("SALID_MONITOR_ENABLED", "true")
+    monkeypatch.setenv("SALID_STORE", "sqlite")
+    monkeypatch.setenv("SALID_DB_PATH", str(tmp_path / "ledger.db"))
+    monkeypatch.setenv("SALID_DOCS_LOCAL_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setattr(llm, "make_client", lambda s: None)
+    headless._headless.cache_clear()
+    try:
+        bot = headless.get_headless_bot()
+        assert bot.s.monitor_enabled is True and bot.headless is True
+        assert bot.monitor.enabled is False
+        bot._monitor_action(
+            {"id": "a1", "guild_id": GUILD, "kind": "announce", "status": "pending"}
+        )
+        bot._monitor_job(
+            {"job_id": "j1", "guild_id": GUILD, "kind": "research", "state": "running"}
+        )
+        bot.monitor.add("o1", ev())
+        assert bot.monitor._buf == []  # nothing buffered
+        assert bot.monitor.flush() == 0
+    finally:
+        headless._headless.cache_clear()  # later tests build their own headless bot
+
+
 # ------------------------------------------------------------------ platform bridges
 async def test_platform_monitor_tick_writes_platforms_heartbeat_and_flushes(monkeypatch):
     docs = SQLiteDocStore(":memory:")

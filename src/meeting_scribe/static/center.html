@@ -3878,9 +3878,10 @@ class MockLiveSocket {
   }
   close() { if (this.readyState === 3) return; this.readyState = 3; this.t.forEach(clearTimeout); if (this.onclose) this.onclose({ code: 1000 }); }
 }
-// Monitor sample data (?mock=1), shaped like monitor_api.py: one item per state the page draws (a failed change delivery
-// that needs attention, a running video ad stuck on its third step, a queued Discord action not picked up, a finished
-// deep research, a running deep task). The change feed has no news (seq 7), so the page shows a quiet, live feed.
+// Monitor sample data (?mock=1), shaped like monitor_api.py items (titles, step names and fields as the adapters in
+// salid/monitor_sources.py build them): one item per state the page draws (a failed change delivery that needs attention,
+// a running video ad stuck on its third step, a queued Discord action not picked up, a finished deep research, a running
+// deep task). The change feed has no news (seq 7), so the page shows a quiet, live feed.
 function mockMonitor(sub, qp, ops) {
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 120));
   const no = (m, c) => Promise.reject(new ApiError(m, c));
@@ -3891,21 +3892,21 @@ function mockMonitor(sub, qp, ops) {
     const step = (name, state, startedMin, ms, attempts = 1, error_code = "") => ({ name, state, started_at: startedMin == null ? "" : ago(startedMin * M1), ms, attempts, error_code });
     mockMonitor.s = {
       items: [
-        { ...base, kind: "change", id: "chg-0042", workspace: "web", title: "Change → Slack", status: "failed", attention: true, attention_reason: "failed", raw_status: "failed",
-          requester_id: "owner@example.co.th", steps: [step("discord-1", "done", 41, 1200), step("slack-T01", "failed", 40, null, 3, "not_confirmed")],
-          started_at: ago(41 * M1), updated_at: ago(6 * M1), finished_at: ago(6 * M1), error: { code: "not_confirmed", message: "The platform did not confirm delivery in time." }, mine: true },
-        { ...base, kind: "video_ad", id: "vid-0007", title: "Video ad · 5 scenes", status: "running", attention: true, attention_reason: "stuck", raw_status: "hero",
+        { ...base, kind: "change", id: "chg-0042", workspace: "web", title: "Change · role", status: "failed", attention: true, attention_reason: "failed", raw_status: "1/2 acked",
+          steps: [step("discord apply", "done", 150, null), step("slack notify", "failed", 45, null, 8, "not_confirmed")],
+          started_at: ago(150 * M1), updated_at: ago(45 * M1), finished_at: ago(45 * M1), error: { code: "not_confirmed", message: "The platform did not confirm delivery in time." } },
+        { ...base, kind: "video_ad", id: "vid-0007", title: "Video ad", status: "running", attention: true, attention_reason: "stuck", raw_status: "hero",
           requester_id: "discord:123456789012345678", steps: [step("storyboard", "done", 16, 38000), step("stills", "done", 15, 94000), step("hero", "running", 13, null), step("audio", "pending", null, null, 0), step("render", "pending", null, null, 0)],
-          started_at: ago(16 * M1), updated_at: ago(13 * M1), cost_usd: 0.42, links: { discord: "https://discord.com/channels/1/2/77" }, mine: true },
-        { ...base, kind: "action", id: "A-0003", title: "Discord action · send DM", status: "queued", attention: true, attention_reason: "stuck", raw_status: "pending",
+          started_at: ago(16 * M1), updated_at: ago(13 * M1), cost_usd: 0.42, links: { discord: "https://discord.com/channels/1/2" }, mine: true },
+        { ...base, kind: "action", id: "A-0003", title: "Discord action · send_dm", status: "queued", attention: true, attention_reason: "stuck", raw_status: "pending",
           requester_id: "owner@example.co.th", started_at: ago(3 * M1), updated_at: ago(3 * M1), mine: true },
         { ...base, kind: "research", id: "res-0011", title: "Deep research", status: "done", raw_status: "done", requester_id: "discord:223456789012345678",
           started_at: ago(130 * M1), updated_at: ago(112 * M1), finished_at: ago(112 * M1) },
         { ...base, kind: "deep_task", id: "deep-0005", workspace: "discord-2", title: "Deep task", status: "running", raw_status: "running", requester_id: "discord:123456789012345678",
           started_at: ago(4 * M1), updated_at: ago(1 * M1), mine: true },
       ],
-      events: [[1, 41, "change", "chg-0042", "queued", false], [2, 40, "change", "chg-0042", "waiting", false], [3, 16, "video_ad", "vid-0007", "running", false],
-        [4, 15, "video_ad", "vid-0007", "running", false], [5, 13, "video_ad", "vid-0007", "running", false], [6, 6, "change", "chg-0042", "failed", true],
+      events: [[1, 150, "change", "chg-0042", "queued", false], [2, 149, "change", "chg-0042", "waiting", false], [3, 30, "change", "chg-0042", "failed", true],
+        [4, 16, "video_ad", "vid-0007", "running", false], [5, 15, "video_ad", "vid-0007", "running", false], [6, 13, "video_ad", "vid-0007", "running", false],
         [7, 3, "action", "A-0003", "queued", false]].map(([seq, min, kind, id, status, attention]) => ({ v: 1, seq, at: ago(min * M1), kind, id, status, attention })),
     };
   }
