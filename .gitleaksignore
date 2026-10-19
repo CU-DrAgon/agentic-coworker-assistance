@@ -2,3 +2,7 @@
 779f40491e46e7c05e4bce41cee1db55afe3447a:tests/salid/test_center_api.py:discord-client-id:114
 bf8e8ab5ee15e1bd0c4b853a8713337533204c03:tests/test_app.py:discord-client-id:111
 ad640f0ba1c273f232d83344a8c14174f71f7277:tests/test_hub.py:discord-client-id:52
+# Fake Discord ids (123456789012345678, 223456789012345678) in the /center?mock=1 monitor demo data, not secrets.
+de687f0763b3def9c333de0d5479a326fc990f4d:src/meeting_scribe/static/center.html:discord-client-id:3845
+de687f0763b3def9c333de0d5479a326fc990f4d:src/meeting_scribe/static/center.html:discord-client-id:3849
+de687f0763b3def9c333de0d5479a326fc990f4d:src/meeting_scribe/static/center.html:discord-client-id:3851
