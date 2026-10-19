@@ -2751,8 +2751,10 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
 
 
 def _action_queue(docs: Any, org_id: str) -> ActionQueue:
-    """The web -> Discord action queue; every action queued from the web is a monitor event in
-    the org's change log while `MONITOR_ENABLED` is on."""
+    """The web -> Discord action queue of the center; every action queued through it is a monitor
+    event in the org's change log while `MONITOR_ENABLED` is on. The hub's
+    `announce_language_change` queues without this hook (it knows only the guild): its action
+    first shows up through the bot's done / failed event or the page's 60 s heal."""
     hook = _monitor_hook(docs, org_id, adapt_action)
     return ActionQueue(docs, on_change=(lambda rec: hook([rec])) if hook else None)
 

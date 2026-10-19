@@ -647,7 +647,7 @@ def filter_items(
     - `start` / `end`: datetimes or ISO strings (naive = UTC), inclusive, on the item's latest
       time; an item with no time is left out while a bound is set. Turning a date into a
       Bangkok day is the caller's job; an unreadable bound is ignored.
-    - `q`: case-insensitive text in the title, kind, id or status.
+    - `q`: case-insensitive text in the title, kind, id, status or raw status.
     """
     kind_set, status_set = set(kinds or ()), set(statuses or ())
     lo, hi = _bound(start), _bound(end)

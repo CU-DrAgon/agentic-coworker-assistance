@@ -815,3 +815,25 @@ def test_axe_finds_no_wcag_aa_violations_in_the_monitor(page):
 - Phase 4, meetings: `org_id`, timestamps, attempts, chunk failures, ADK steps, and the Pub/Sub redelivery fix; meetings API auth only with the owner's approval.
 - Release 2, controls: cancel / retry / resend through the action queue with `Idempotency-Key` and `202 {action_id}`.
 - Release 3: owner-only pause/resume for the outbox and the memory import.
+
+## Implementation rulings
+
+Decisions taken while implementing this plan (from the run's ledger), one line each:
+
+- **R1** Monitor rows are keyboard-focusable buttons whose accessible name holds the localized kind label and the title; filters have visible labels with the `mon_f_*` text ("Kind", ...); the view heading is an h1 "Monitor" in English (what the e2e asserts).
+- **R2** The e2e makes the UI language deterministic with an init script that sets `localStorage` `salid-language` to `en`.
+- **R3** Ruff formats the Python blocks of this Markdown file, so the plan is formatted with `uvx ruff format` in its own commit to keep `ruff format --check .` green.
+- **R4** `viewer_for` treats members at position level 1-3 as executives too (executive = owner, or admin / member with `is_exec_level`); visibility is unchanged.
+- **R5** The bot's monitor flush (every `TICK_SECONDS`) and heartbeat (every 30 s) run in their own asyncio loop next to the tick loop, so a slow or failing tick job cannot fake "bot offline".
+- **R6** Tenant guard: `monitor_api._seen` drops every item whose `org_id` is not the requested org; adapters must set `org_id`.
+- **R7** `monReduce` checks `reset` (and `floor`) before the stale-response test, and a reload moves the cursor to `resp.seq`, so a recreated log reloads.
+- **R8** `monOnError(304)` is `{action: "unchanged", delayMs: 0, failure: false}`: a quiet feed is never a failure.
+- **R9** The e2e filter step uses `select_option` on the keyboard-focused "Kind" combobox (ArrowDown opens the native picker on macOS).
+- **R10** With OS notifications opted in and granted, a hidden tab keeps polling every `MON_HEAL_MS` (60 s) instead of stopping; notifications fire when the tab is hidden or unfocused.
+- **R11** Row, drawer, toast and notification labels are the localized kind label plus the title without its leading English kind label.
+- **R12** `ChangeOutbox._update` falls back to the `LEGACY_GUILD` doc inside the same transaction, so acks and button clicks on pre-migration notices work until `--apply`.
+- **R13** Task 10 follow-ups: Task 11 updates the CLAUDE.md `videoad_bot.py` row and the `Step.state` comment (adds `skipped`); Task 12 adds the `skipped` step label (th + en) and icon.
+- **R14** Video jobs requested in a DM or a private Salid channel are DM-scope (`dm=True`, `Audience(dm=True, people=[requester])`, no Discord link); the RETURNED save closes the running step; the emit wrapper is `MonitorMixin._monitor_video`.
+- **R15** A `CancelledError` without the user-cancel flag is a shutdown: the job record stays `running` for the restart sweep; a research report that could not be posted is recorded failed / `error`.
+- **R16** Task 12 also carries the `skipped` step label and icon and the `route()` focus fix (focus `#content` when the route changes or focus was inside it before the re-render).
+- **R17** Final fix wave: CLAUDE.md monitor deploy runbook, code-map rows and env flags; the headless web bot keeps its emitter off; the `?mock=1` monitor data matches the real adapters; doc drift (spec status, this list, the `filter_items` and `_action_queue` docstrings). The other review minors are deferred.
