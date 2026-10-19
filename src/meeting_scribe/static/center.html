@@ -527,7 +527,7 @@ details.sys > .inner { padding-top: 12px; }
 .mon-open:hover { background: #FBFAFF; }
 .mon-ic { width: 30px; height: 30px; border-radius: 9px; flex: none; display: grid; place-items: center; font-size: 15px; font-weight: 700; background: var(--chip); color: var(--indigo); }
 .mon-ic.done { background: var(--ok-bg); color: var(--ok-ink); } .mon-ic.failed { background: var(--err-bg); color: var(--err-ink); }
-.mon-ic.queued, .mon-ic.waiting { background: var(--warn-bg); color: var(--warn-ink); } .mon-ic.paused, .mon-ic.cancelled { background: var(--soon-bg); color: var(--muted); }
+.mon-ic.queued, .mon-ic.waiting { background: var(--warn-bg); color: var(--warn-ink); } .mon-ic.paused, .mon-ic.cancelled, .mon-ic.skipped { background: var(--soon-bg); color: var(--muted); }
 .mon-tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 .mon-title { font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
 .mon-kind { font-weight: 500; color: var(--muted); }
@@ -944,7 +944,7 @@ th: {
   mon_p_high:"สูง", mon_p_medium:"ปานกลาง", mon_p_low:"ต่ำ",
   mon_new:"ใหม่ {n} รายการ", mon_load_more:"โหลดเพิ่ม", mon_empty:"ตอนนี้ยังไม่มีรายการที่นี่ค่ะ", mon_member_note:"คุณเห็นงานที่คุณสั่ง ได้รับมอบหมาย หรือที่รอคุณอยู่ค่ะ เจ้าของและผู้ดูแลเห็นงานของทั้งบริษัท", mon_steps:"ขั้นตอน {d}/{n}", mon_waiting_on:"รอ {who} · {d}", mon_you:"คุณ",
   mon_k_video_ad:"โฆษณาวิดีโอ", mon_k_deep_task:"งานใหญ่", mon_k_research:"ค้นคว้าเชิงลึก", mon_k_change:"ส่งการเปลี่ยนแปลง", mon_k_action:"คำสั่งบน Discord", mon_k_meeting:"บันทึกประชุม", mon_k_task:"งาน", mon_k_approval:"การอนุมัติ", mon_k_vote:"โหวต", mon_k_form:"แบบฟอร์ม", mon_k_reminder:"การเตือน",
-  mon_s_queued:"รอคิว", mon_s_running:"กำลังทำ", mon_s_waiting:"รออยู่", mon_s_paused:"หยุดชั่วคราว", mon_s_done:"เสร็จแล้ว", mon_s_failed:"ล้มเหลว", mon_s_cancelled:"ยกเลิกแล้ว",
+  mon_s_queued:"รอคิว", mon_s_running:"กำลังทำ", mon_s_waiting:"รออยู่", mon_s_paused:"หยุดชั่วคราว", mon_s_done:"เสร็จแล้ว", mon_s_failed:"ล้มเหลว", mon_s_cancelled:"ยกเลิกแล้ว", mon_s_skipped:"ข้ามไป",
   mon_a_failed:"ทำไม่สำเร็จ", mon_a_stuck:"อาจค้างอยู่", mon_a_waiting_too_long:"รอนานเกินไป", mon_a_overdue:"เลยกำหนด", mon_a_bot_offline:"บอทออฟไลน์ อาจค้างอยู่",
   mon_err_unknown:"เกิดข้อผิดพลาดบางอย่างค่ะ", mon_err_restarted:"สลิดรีสตาร์ตระหว่างที่งานนี้กำลังทำอยู่ค่ะ", mon_err_failed:"งานนี้ทำไม่เสร็จค่ะ", mon_err_error:"มีข้อผิดพลาดที่ไม่คาดคิดทำให้งานนี้หยุดค่ะ", mon_err_month_limit:"ใช้ครบโควตาของเดือนนี้แล้วค่ะ",
   mon_err_storyboard:"วางสตอรีบอร์ดไม่สำเร็จค่ะ", mon_err_render:"เรนเดอร์วิดีโอไม่สำเร็จค่ะ", mon_err_upload_refused:"สร้างไฟล์แล้วแต่แนบไม่ได้ค่ะ", mon_err_not_confirmed:"แพลตฟอร์มไม่ได้ยืนยันการส่งภายในเวลาที่กำหนดค่ะ", mon_err_delivery_failed:"ส่งการเปลี่ยนแปลงไม่สำเร็จค่ะ",
@@ -1053,7 +1053,7 @@ en: {
   mon_p_high:"High", mon_p_medium:"Medium", mon_p_low:"Low",
   mon_new:"{n} new", mon_load_more:"Load more", mon_empty:"Nothing to show here right now.", mon_member_note:"You see the work you asked for, are assigned to, or that waits on you. Owners and admins see the whole company.", mon_steps:"{d}/{n} steps", mon_waiting_on:"Waiting on {who} · {d}", mon_you:"You",
   mon_k_video_ad:"Video ad", mon_k_deep_task:"Deep task", mon_k_research:"Deep research", mon_k_change:"Change delivery", mon_k_action:"Discord action", mon_k_meeting:"Meeting recording", mon_k_task:"Task", mon_k_approval:"Approval", mon_k_vote:"Vote", mon_k_form:"Form", mon_k_reminder:"Reminder",
-  mon_s_queued:"Queued", mon_s_running:"Running", mon_s_waiting:"Waiting", mon_s_paused:"Paused", mon_s_done:"Done", mon_s_failed:"Failed", mon_s_cancelled:"Cancelled",
+  mon_s_queued:"Queued", mon_s_running:"Running", mon_s_waiting:"Waiting", mon_s_paused:"Paused", mon_s_done:"Done", mon_s_failed:"Failed", mon_s_cancelled:"Cancelled", mon_s_skipped:"Skipped",
   mon_a_failed:"Did not finish", mon_a_stuck:"May be stuck", mon_a_waiting_too_long:"Waiting too long", mon_a_overdue:"Overdue", mon_a_bot_offline:"Bot offline, may be stuck",
   mon_err_unknown:"Something went wrong.", mon_err_restarted:"Salid restarted while this was running.", mon_err_failed:"The job did not finish.", mon_err_error:"An unexpected error stopped this job.", mon_err_month_limit:"This month's limit has been reached.",
   mon_err_storyboard:"The storyboard could not be planned.", mon_err_render:"The video could not be rendered.", mon_err_upload_refused:"The file was made but could not be attached.", mon_err_not_confirmed:"The platform did not confirm delivery in time.", mon_err_delivery_failed:"The change could not be delivered.",
@@ -1346,9 +1346,13 @@ function route() {
   if (!panel.open && panelWanted()) setTimeout(panelOpen, 0); // this tab had the panel open (reload, #/chat link)
   const nm = NAV.find((n) => n[0] === id);
   $("topbar-title").textContent = t(nm[1]);
-  const c = $("content"); c.replaceChildren(el("h1", { text: t(nm[1]) }));
+  const c = $("content");
+  const inside = c.contains(document.activeElement); // read before the old page is removed
+  c.replaceChildren(el("h1", { text: t(nm[1]) }));
   const body = el("div", { "aria-busy": "true" }, loading()); c.append(body);
-  if (moved) c.focus({ preventScroll: true }); // a new page takes keyboard and screen-reader focus; a re-render (language, company) does not
+  // a new page takes keyboard and screen-reader focus, and so does a re-render while focus was in the page (Retry, Save,
+  // Delete: the control is gone, focus would drop to <body>); a re-render from outside (language, company) does not
+  if (moved || inside) c.focus({ preventScroll: true });
   const my = ++navSeq;
   if (MONITOR) monBadgeStart();
   if (!orgId && id !== "settings" && id !== "account") { body.replaceWith(noOrg()); return; }
@@ -3017,7 +3021,7 @@ const MON_ACTIVE = ["queued", "running", "waiting", "paused"], MON_FINAL = ["don
 const MON_STATUSES = MON_ACTIVE.concat(MON_FINAL);
 const MON_TABS = ["attention", "active", "history"];
 const MON_PLATFORMS = ["discord", "slack", "line", "telegram", "whatsapp", "web"];
-const MON_ICON = { queued: "○", pending: "○", running: "◐", waiting: "…", paused: "Ⅱ", done: "✓", failed: "✕", cancelled: "⊘" };
+const MON_ICON = { queued: "○", pending: "○", running: "◐", waiting: "…", paused: "Ⅱ", done: "✓", failed: "✕", cancelled: "⊘", skipped: "↷" }; // skipped: a step state only
 const MON_PAGE = 50, MON_IDS_MAX = 50; // a page of rows; the API takes at most 50 ids per refetch (422 above)
 const MON_DISMISS_KEY = "salid-monitor-dismissed", MON_NOTIFY_KEY = "salid-monitor-notify";
 const monLabel = (prefix, v) => (v && I.en[prefix + v] ? t(prefix + v) : String(v || ""));

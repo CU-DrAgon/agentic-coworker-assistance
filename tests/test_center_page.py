@@ -138,7 +138,29 @@ def test_monitor_row_name_has_no_ticking_time_and_no_repeated_kind():
     assert '"aria-label": rowName(x)' in view and "monTitleRest(" in view
 
 
-def test_route_focuses_content_only_on_a_new_page():
+def test_route_focuses_content_on_a_new_page_or_when_focus_was_inside():
+    # a new page takes focus; so does a re-render while focus was in the page (Retry, Save, Delete),
+    # which would otherwise drop focus to <body>. A re-render from outside (language, company) does not.
     s = html()
-    assert "const moved = cur !== id;" in s
-    assert "if (moved) c.focus({ preventScroll: true });" in s
+    body = between("function route() {", "\nconst stale = ")
+    assert "const moved = cur !== id;" in body
+    inside = body.index("const inside = c.contains(document.activeElement);")
+    assert inside < body.index("c.replaceChildren(")  # read before the old page is removed
+    assert "if (moved || inside) c.focus({ preventScroll: true });" in body
+    assert "if (moved) c.focus(" not in s
+
+
+# salid.monitor.Step.state
+STEP_STATES = ("pending", "running", "done", "failed", "cancelled", "skipped")
+
+
+def test_monitor_every_step_state_has_a_label_and_an_icon():
+    s = html()
+    th, en = s.split("\nen: {", 1)
+    icons = re.search(r"const MON_ICON = \{([^}]*)\}", s).group(1)
+    for st in STEP_STATES:
+        assert re.search(rf"\b{st}: \"[^\"]+\"", icons), st
+        if st != "pending":  # a step that has not started reads "Waiting" (mon_s_waiting)
+            assert f"mon_s_{st}:" in th and f"mon_s_{st}:" in en, st
+    css = between("/* monitor:css */", "/* monitor:css:end */")
+    assert ".mon-ic.skipped" in css
