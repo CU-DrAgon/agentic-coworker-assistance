@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     google_oauth_redirect_uri: str = ""
     salid_token_key: str = Field(default="", repr=False)  # Fernet key for stored refresh tokens
     legal_contact_email: str = "info@frontier-tech.ai"  # shown on /privacy and /terms
+    # Workflow monitor in /center (`monitor_api.py`): off = every monitor route answers 404.
+    monitor_enabled: bool = False
 
 
 @lru_cache

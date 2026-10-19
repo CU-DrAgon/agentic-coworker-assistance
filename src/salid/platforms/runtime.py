@@ -6,9 +6,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Awaitable
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
+from .. import monitor
 from ..config import Settings
 from ..embed import make_embedder
 from ..guild_settings import BotGuildSettings, make_guild_store
@@ -17,6 +21,7 @@ from ..llm import make_client
 from ..memory import MemoryScheduler, MemoryService
 from ..memory_index import IndexedMemoryStore
 from ..memory_store import make_memory_store
+from ..monitor import HEARTBEAT_EVERY_S, Emitter, org_key_resolver
 from ..store import make_store
 from . import change_outbox_platform, ids
 from .calendar_glue import CalendarGlue
@@ -124,6 +129,77 @@ async def memory_loop(a: Assistant) -> None:
             await asyncio.to_thread(a.memory.scheduler.tick, list(a.tenants))
         except Exception as e:
             logger.error("platform memory tick failed (%s)", safe_exc(e))
+
+
+@dataclass
+class PlatformMonitor:
+    """The platform bridges' side of the workflow monitor: producers add change-log events to
+    `emitter`; `monitor_loop` flushes it and writes the `platforms` heartbeat with `queues()`."""
+
+    emitter: Emitter
+    docs: Any  # the org store's DocStore, shared with the web
+    queues: Callable[[], dict[str, int]]
+    clock: Callable[[], float] = time.monotonic
+    last_beat: float = float("-inf")
+
+
+def platform_monitor(s: Settings, a: Assistant) -> PlatformMonitor | None:
+    """The monitor of this process, or None when `SALID_MONITOR_ENABLED` is off or there is no
+    org store (the change log and the heartbeat live in its DocStore)."""
+    if a.identity is None or not s.monitor_enabled:
+        return None
+    docs = a.identity.orgs.docs
+    return PlatformMonitor(
+        emitter=Emitter(docs, enabled=True, resolve=org_key_resolver(docs)),
+        docs=docs,
+        queues=lambda: {"actions": 0, "outbox_pending": 0, "memory": a.memory.scheduler.backlog()},
+    )
+
+
+def change_events(m: PlatformMonitor | None) -> Callable[[list], None] | None:
+    """The change outbox's `on_change` in this process: one event per stored or updated change,
+    buffered in the platform emitter under the change's org (flushed by `monitor_loop`). None
+    while the monitor is off. The hook never raises (the outbox also guards it)."""
+    if m is None:
+        return None
+    from ..monitor_sources import adapt_change
+
+    def on_change(changes: list) -> None:
+        try:
+            now = m.emitter.now()
+            for c in changes:
+                m.emitter.add(c.org_id, monitor.event_for(adapt_change(c, now=now)))
+        except Exception as e:  # the type only: the text may quote the change
+            logger.warning("platform monitor change event failed (%s)", type(e).__name__)
+
+    return on_change
+
+
+async def monitor_tick(m: PlatformMonitor) -> None:
+    """Flush the buffered events and, every `HEARTBEAT_EVERY_S`, write the `platforms` heartbeat.
+    The store work and `queues()` (the memory backlog takes the scheduler lock, which a seed can
+    hold across a store read) run off the event loop. Never raises."""
+
+    def beat() -> bool:
+        return monitor.write_heartbeat(m.docs, "platforms", queues=m.queues(), now=m.emitter.now())
+
+    try:
+        await asyncio.to_thread(m.emitter.flush)
+        now = m.clock()
+        if now - m.last_beat < HEARTBEAT_EVERY_S:
+            return
+        m.last_beat = now  # a failed write is tried again on the next beat
+        await asyncio.to_thread(beat)
+    except Exception as e:  # the type only: the text may quote stored data
+        logger.warning("platform monitor tick failed (%s)", type(e).__name__)
+
+
+async def monitor_loop(m: PlatformMonitor) -> None:
+    """The monitor tick every TICK_SECONDS, the first one at start (the heartbeat shows up at
+    once)."""
+    while True:
+        await monitor_tick(m)
+        await asyncio.sleep(TICK_SECONDS)
 
 
 async def import_loop(importer, wake: asyncio.Event) -> None:
@@ -341,12 +417,16 @@ async def run(s: Settings, ps: PlatformSettings) -> None:
             await asyncio.wait_for(up.wait(), 15)
     a = build_assistant(s, ps)
     jobs.append(asyncio.create_task(memory_loop(a)))
+    mon = platform_monitor(s, a)  # flag SALID_MONITOR_ENABLED and an org store
+    if mon is not None:
+        jobs.append(asyncio.create_task(monitor_loop(mon)))
     if a.identity is not None:  # the org store exists: central changes can be delivered
         from ..change_outbox import ChangeOutbox
 
-        a.changes = change_outbox_platform.PlatformChanges(
-            ChangeOutbox.from_settings(a.identity.orgs.docs, s), a.identity.orgs, a.team
-        )
+        outbox = ChangeOutbox.from_settings(
+            a.identity.orgs.docs, s, on_change=change_events(mon)
+        )  # each stored / updated change is a monitor event (when the monitor is on)
+        a.changes = change_outbox_platform.PlatformChanges(outbox, a.identity.orgs, a.team)
         jobs.append(asyncio.create_task(change_outbox_platform.changes_loop(a.changes)))
 
     def launch(name: str, coro_fn, *args) -> None:

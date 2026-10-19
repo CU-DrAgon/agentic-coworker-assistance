@@ -211,6 +211,11 @@ class MemoryScheduler:
         with self._lock:
             self._entries.setdefault((guild_id, channel_id, local_date), _Entry()).dirty = True
 
+    def backlog(self) -> int:
+        """Channel-days still tracked for a summary update (the monitor's `memory` queue)."""
+        with self._lock:
+            return len(self._entries)
+
     # ------------------------------------------------------------ tick
     def tick(self, guild_ids: Iterable[int]) -> int:
         """Seed new guilds, run due updates, purge once a day. Returns the updates performed."""

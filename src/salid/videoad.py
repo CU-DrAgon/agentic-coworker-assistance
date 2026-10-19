@@ -35,6 +35,8 @@ motion shots (`_hero_clip`: Gemini Omni via `videogen`, the clip conformed to it
 `conform_clip`) and music (`_music_track`: Lyria via `videogen`, as a
 WAV by `conform_music`) run only while `SALID_VIDEO_HERO_MODEL` / `SALID_VIDEO_MUSIC_MODEL` are
 set; any failure there keeps the scene's motion clip or leaves the ad without music.
+`step_started` / `steps_closed` keep the per-step timings of a job record (`steps`, written by
+the bot).
 
 Never logs the brief, prompts, captions or narration.
 """
@@ -1220,6 +1222,45 @@ def _report(handle: VideoHandle, step: str, detail: str = "") -> None:
         handle.progress(step, detail)
     except Exception as e:  # a broken progress display never fails the ad
         logger.warning("video progress callback failed: %s", type(e).__name__)
+
+
+def _running_step(steps: list[dict]) -> dict | None:
+    return next((s for s in reversed(steps) if s.get("state") == "running"), None)
+
+
+def step_started(steps: list[dict], step: str, *, at: str, elapsed_ms: int | None) -> bool:
+    """Note in a job record's `steps` (changed in place) that `step` started at `at` (ISO): the
+    running step closes as done after `elapsed_ms`, and `step` is appended as running. False (no
+    change) for a name that is not one of STEPS (RETURNED) or that is already running (a hero
+    clip's id came or went)."""
+    if step not in STEPS:
+        return False
+    running = _running_step(steps)
+    if running is not None:
+        if running.get("name") == step:
+            return False
+        running.update(state="done", ms=elapsed_ms)
+    steps.append(
+        {
+            "name": step,
+            "state": "running",
+            "started_at": at,
+            "ms": None,
+            "attempts": 1,
+            "error_code": "",
+        }
+    )
+    return True
+
+
+def steps_closed(
+    steps: list[dict], state: str, *, elapsed_ms: int | None, error_code: str = ""
+) -> None:
+    """The job ended: its running step (if any) becomes `state` (done, failed or cancelled) after
+    `elapsed_ms`, with `error_code` (the job's reason code, "" for none)."""
+    running = _running_step(steps)
+    if running is not None:
+        running.update(state=state, ms=elapsed_ms, error_code=error_code)
 
 
 def _stamp(settings) -> str:

@@ -11,7 +11,7 @@ from platform_fakes import FakePort, inc, make_assistant
 from salid.change_outbox import ChangeOutbox, diff_members
 from salid.coo_store import SQLiteDocStore
 from salid.i18n import t
-from salid.orgs import Member, OrgStore, Workspace, workspace_id
+from salid.orgs import Member, Org, OrgStore, Workspace, workspace_id
 from salid.platforms import change_outbox_platform as cop
 
 T0 = datetime(2026, 10, 18, 9, 0, tzinfo=UTC)
@@ -196,6 +196,47 @@ async def test_a_platform_nobody_serves_fails_at_the_deadline_and_served_admins_
     wd.clock.advance(30)
     await wd.changes.tick()
     assert len([s for s in wd.sent if s[1] == "U-boss"]) == 1
+
+
+async def test_the_bridge_reads_only_the_orgs_of_its_tenants(wd):
+    assert wd.changes._org_ids() == set()
+    wd.changes.add_pusher("line", "Ubot", wd.pusher("line"))
+    wd.changes.add_pusher("telegram", "999", wd.pusher("telegram"))  # linked to no org
+    assert wd.changes._org_ids() == {"org_a"}
+    # a change of another org is never read here, even with a target on this tenant
+    mew = Member(email="mew@example.com", identities={"line": "U-mew"})
+    other = Org(id="org_b", name="Other", members=[mew],
+                workspaces=[Workspace(id="line-Ubot", platform="line", external_id="Ubot")])  # fmt: skip
+    after = other.model_copy(deep=True)
+    after.members[0].title = "CTO"
+    (c,) = wd.outbox.record(diff_members(other, after), after)
+    await wd.changes.tick()
+    assert wd.sent == [] and {x.status for x in wd.outbox.get(c.id).targets} == {"pending"}
+
+
+async def test_a_tenant_whose_org_lookup_fails_is_skipped_and_the_others_are_served(
+    wd, monkeypatch, caplog
+):
+    wd.changes.add_pusher("telegram", "999", wd.pusher("telegram"))
+    wd.changes.add_pusher("line", "Ubot", wd.pusher("line"))
+    real = wd.orgs.org_of_workspace
+
+    def lookup(platform, tenant):
+        if platform == "telegram":
+            raise RuntimeError("broken org doc for boss@example.com")
+        return real(platform, tenant)
+
+    monkeypatch.setattr(wd.orgs, "org_of_workspace", lookup)
+    assert wd.changes._org_ids() == {"org_a"}
+    c = make_change(wd, title="CTO")
+    await wd.changes.tick()
+    assert [(p, u) for p, u, _ in wd.sent] == [("line", "U-mew")]  # org_a still delivered
+    assert states(wd, c)[("line-Ubot", "notify")] == "sent"
+    assert any(
+        "telegram-999" in r.getMessage() and "RuntimeError" in r.getMessage()
+        for r in caplog.records
+    )
+    assert "boss@example.com" not in caplog.text  # only the error type and the workspace id
 
 
 async def test_without_a_pusher_the_tick_does_nothing(wd):

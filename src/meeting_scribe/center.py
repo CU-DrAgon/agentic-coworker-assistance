@@ -43,6 +43,8 @@ from starlette.concurrency import run_in_threadpool
 
 from meeting_scribe import hub
 from meeting_scribe.config import get_settings
+from salid import monitor
+from salid.actions import ActionQueue
 from salid.change_outbox import ChangeOutbox, record_org_edit
 from salid.connectors import (
     COMING_SOON,
@@ -71,6 +73,7 @@ from salid.library import (
     Viewer,
 )
 from salid.licensing import days_left, license_end, license_ok
+from salid.monitor_sources import adapt_action, adapt_change
 from salid.orgs import (
     CATEGORIES,
     HANDOVER_UNDO_HOURS,
@@ -471,6 +474,7 @@ def center_page() -> HTMLResponse:
         .replace("__HUB_GOOGLE_CLIENT_ID__", client_id)
         .replace("__INVITE_URL__", invite)
         .replace("__DISCORD_LOGIN__", "1" if discord_login_enabled() else "")
+        .replace("__MONITOR__", "1" if get_settings().monitor_enabled else "")
     )
     return HTMLResponse(
         html, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
@@ -1000,6 +1004,27 @@ class MemberBody(BaseModel):
     discord_user_id: str | None = Field(default=None, max_length=30)
 
 
+def _monitor_hook(docs: Any, org_id: str, adapt: Callable[[Any], Any]) -> Callable | None:
+    """A delivery queue's `on_change` on the web: the changed records (`adapt` -> monitor items)
+    are written to the org's change log at once, one best-effort transactional write per state
+    change (the web has no tick to batch on; `monitor.emit_items` never raises). None while
+    `MONITOR_ENABLED` is off."""
+    if not get_settings().monitor_enabled:
+        return None
+
+    def emit(xs: list) -> None:
+        monitor.emit_items(docs, org_id, [adapt(x) for x in xs])
+
+    return emit
+
+
+def _record_edit(orgs: OrgStore, before: Org, after: Org, by: str) -> int:
+    """Record an org edit in the change outbox (never raises), with a monitor event per stored
+    change while `MONITOR_ENABLED` is on."""
+    hook = _monitor_hook(orgs.docs, after.id, lambda c: adapt_change(c, now=datetime.now(UTC)))
+    return record_org_edit(orgs.docs, before, after, by, on_change=hook)
+
+
 @router.get("/orgs/{org_id}/members")
 async def list_members(
     ctx: Ctx = Depends(admin_ctx), orgs: OrgStore = Depends(get_orgs)
@@ -1054,7 +1079,7 @@ async def add_member(
             return orgs.save(org)
 
     org = await run_in_threadpool(run)
-    await run_in_threadpool(record_org_edit, orgs.docs, ctx.org, org, ctx.email)  # change outbox
+    await run_in_threadpool(_record_edit, orgs, ctx.org, org, ctx.email)  # change outbox
     return [member_view(m) for m in org.members]
 
 
@@ -1101,7 +1126,7 @@ async def transfer_ownership(
             return orgs.save(org)
 
     org = await run_in_threadpool(run)
-    await run_in_threadpool(record_org_edit, orgs.docs, ctx.org, org, ctx.email)  # change outbox
+    await run_in_threadpool(_record_edit, orgs, ctx.org, org, ctx.email)  # change outbox
     return [member_view(m) for m in org.members]
 
 
@@ -1135,7 +1160,7 @@ async def undo_transfer(
             return orgs.save(org)
 
     org = await run_in_threadpool(run)
-    await run_in_threadpool(record_org_edit, orgs.docs, ctx.org, org, ctx.email)  # change outbox
+    await run_in_threadpool(_record_edit, orgs, ctx.org, org, ctx.email)  # change outbox
     return [member_view(m) for m in org.members]
 
 
@@ -1153,7 +1178,7 @@ def _remove_member(ctx: Ctx, orgs: OrgStore, email: str) -> list[MemberView]:
             raise HTTPException(409, "An organization needs at least one owner")
         org.members = [m for m in org.members if m.email.lower() != email]
         orgs.save(org)
-    record_org_edit(orgs.docs, ctx.org, org, ctx.email)  # change outbox (never raises)
+    _record_edit(orgs, ctx.org, org, ctx.email)  # change outbox (never raises)
     return [member_view(m) for m in org.members]
 
 
@@ -1583,7 +1608,7 @@ def _save_position(ctx: Ctx, orgs: OrgStore, pid: str | None, body: PositionBody
         raise HTTPException(400, str(exc)) from exc
     after = orgs.get(ctx.org.id)
     if after is not None:  # a holder change reaches the person as a "company position" notice
-        record_org_edit(orgs.docs, ctx.org, after, ctx.email)  # change outbox (never raises)
+        _record_edit(orgs, ctx.org, after, ctx.email)  # change outbox (never raises)
     return pos
 
 
@@ -1613,7 +1638,7 @@ async def delete_position(
         raise HTTPException(404, "Unknown position")
     after = await run_in_threadpool(orgs.get, ctx.org.id)
     if after is not None:
-        await run_in_threadpool(record_org_edit, orgs.docs, ctx.org, after, ctx.email)
+        await run_in_threadpool(_record_edit, orgs, ctx.org, after, ctx.email)
     return {"deleted": pid}
 
 
@@ -3066,13 +3091,20 @@ def web_tools(ctx: Ctx, orgs: OrgStore, guilds: Any, ws: Workspace) -> list:
     return tools + build_chat_tools(actions, calls) + discord_action_tools(ctx, orgs.docs, ws)
 
 
+def _action_queue(docs: Any, org_id: str) -> ActionQueue:
+    """The web -> Discord action queue of the center; every action queued through it is a monitor
+    event in the org's change log while `MONITOR_ENABLED` is on. The hub's
+    `announce_language_change` queues without this hook (it knows only the guild): its action
+    first shows up through the bot's done / failed event or the page's 60 s heal."""
+    hook = _monitor_hook(docs, org_id, adapt_action)
+    return ActionQueue(docs, on_change=(lambda rec: hook([rec])) if hook else None)
+
+
 def discord_action_tools(ctx: Ctx, docs: Any, ws: Workspace) -> list:
     """Act on the company's Discord from the web (admins): the bot carries the action out
     within seconds (salid.actions). Each tool returns an action id to check with
     `discord_action_status`."""
-    from salid.actions import ActionQueue
-
-    q = ActionQueue(docs)
+    q = _action_queue(docs, ctx.org.id)
     gid = ws.memory_id
 
     def _queue(kind: str, args: dict) -> dict:
@@ -3135,8 +3167,6 @@ class ActionBody(BaseModel):
 @router.get("/orgs/{org_id}/actions")
 async def list_actions(ctx: Ctx = Depends(admin_ctx), lib: Library = Depends(get_library)) -> dict:
     """Recent web -> Discord actions of the company's server (admins)."""
-    from salid.actions import ActionQueue
-
     ws = company_workspace(ctx.org)
     if ws is None or ws.platform != "discord":
         return {"actions": []}
@@ -3150,14 +3180,16 @@ async def queue_action(
 ) -> dict:
     """Queue an action for the Discord bot (admins): post_message, send_dm, create_event,
     create_channel, edit_event, delete_event."""
-    from salid.actions import ActionQueue
-
     ws = company_workspace(ctx.org)
     if ws is None or ws.platform != "discord":
         raise HTTPException(404, "No Discord server connected")
     try:
         a = await run_in_threadpool(
-            ActionQueue(lib.docs).enqueue, ws.memory_id, body.kind, body.args, by=ctx.email
+            _action_queue(lib.docs, ctx.org.id).enqueue,
+            ws.memory_id,
+            body.kind,
+            body.args,
+            by=ctx.email,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc

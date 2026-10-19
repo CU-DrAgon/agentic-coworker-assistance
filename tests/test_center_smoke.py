@@ -38,3 +38,13 @@ def test_center_me_with_overridden_auth(client):
     assert r.status_code == 200
     body = r.json()
     assert body["email"] == "boss@example.com" and body["orgs"] == []
+
+
+def test_center_page_sets_the_monitor_flag(client, monkeypatch):
+    monkeypatch.setenv("MONITOR_ENABLED", "true")
+    get_settings.cache_clear()
+    assert 'const MONITOR = "1" === "1"' in client.get("/center").text
+    monkeypatch.setenv("MONITOR_ENABLED", "false")  # explicit: a local .env must not decide this
+    get_settings.cache_clear()
+    page = client.get("/center").text
+    assert 'const MONITOR = "" === "1"' in page and "__MONITOR__" not in page

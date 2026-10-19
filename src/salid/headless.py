@@ -148,6 +148,9 @@ def _headless() -> Any:
     store = make_store(s)
     bot = SecretaryBot(s, store, make_client(s))
     bot.headless = True
+    # Never connected, so `setup_hook` never starts the monitor loop and nothing would flush the
+    # emitter: keep it off whatever `SALID_MONITOR_ENABLED` says (the web emits its own events).
+    bot.monitor.enabled = False
     return bot
 
 

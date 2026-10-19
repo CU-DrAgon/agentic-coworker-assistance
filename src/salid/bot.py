@@ -106,6 +106,8 @@ from .image_memory import (
     receipt_note,
 )
 from .imagegen_bot import ImageMixin
+from .jobs import new_id as new_job_id
+from .jobs_bot import JobsMixin
 from .language_ask import LanguageAskMixin, LanguageSelect
 from .licensing import Licensing, make_licensing
 from .longtext import needs_attachment, split_sections, summary_of
@@ -152,6 +154,7 @@ from .modes import (
     mode_label,
     parse_snooze_command,
 )
+from .monitor_bot import MonitorMixin
 from .naming import command_text, mentions_name
 from .nodue_bot import NoDeadlineMixin
 from .pdf_report import find_fonts, font_note
@@ -330,6 +333,7 @@ class _DeepJob:
     task: asyncio.Task
     handle: DeepHandle
     starter_id: int
+    job_id: str = ""  # its `salid_jobs` record (salid.jobs_bot)
 
 
 class _LicensedTree(app_commands.CommandTree):
@@ -413,6 +417,8 @@ class SecretaryBot(
     ContestsMixin,
     BizfinMixin,
     CooMixin,
+    MonitorMixin,  # change-log emitter + heartbeat in their own loop (salid.monitor_bot)
+    JobsMixin,  # deep task + deep research records, restart sweep (salid.jobs_bot)
     ActionsMixin,
     BriefingMixin,
     HintsMixin,
@@ -561,6 +567,7 @@ class SecretaryBot(
         self._recent_swept = float("-inf")
         self._viewers: dict[tuple[int, int], tuple[float, frozenset[int]]] = {}  # (guild, channel)
         self._coo_init()  # tasks, disclosures, follow-ups, reports (salid.coo)
+        self._monitor_init()  # workflow monitor emitter + heartbeat (salid.monitor_bot)
         self._init_actions()  # web -> Discord actions (salid.actions); needs self.docs
         self._polls_init()  # polls and DM forms (salid.polls_bot)
         self._votes_init()  # meeting votes with button ballots (salid.votes_bot)
@@ -593,6 +600,7 @@ class SecretaryBot(
         self._people_init()  # who does what, whom to ask, handover (salid.people_bot)
         self._positions_init()  # positions <-> Discord roles <-> the center (salid.positions_bot)
         self._change_outbox_init()  # central change notices + acks (salid.change_outbox_bot)
+        self._jobs_init()  # deep task + research records, after self.docs (salid.jobs_bot)
 
     @staticmethod
     def _default_memory_store(settings: Settings, store) -> MemoryStore:
@@ -626,6 +634,7 @@ class SecretaryBot(
             logger.exception("could not sync slash commands")
         self._digest_task = asyncio.create_task(self._digest_loop())
         self._tick_task = asyncio.create_task(self._tick_loop())
+        self._monitor_start(TICK_SECONDS)  # own loop: a slow tick never delays the heartbeat
 
     async def on_ready(self):
         logger.info("logged in as %s in %d guilds", self.user, len(self.guilds))
@@ -639,6 +648,7 @@ class SecretaryBot(
         await self.meetings.resume_all()  # rejoin meetings a restart cut off
         self.meetings.scan_all()  # people already in voice channels: join by importance
         await self._sweep_video_jobs()  # video ads a restart cut off: failed, requester told
+        await self._sweep_jobs()  # deep tasks / research a restart cut off: restarted
 
     async def on_resumed(self):
         self.recent.reset()  # a gateway outage may have dropped events
@@ -1352,6 +1362,7 @@ class SecretaryBot(
     async def close(self):
         if self._tick_task is not None:
             self._tick_task.cancel()
+        self._monitor_stop()
         if self._memory_worker is not None:
             self._memory_worker.cancel()
         await self.meetings.shutdown()
@@ -2780,10 +2791,13 @@ class SecretaryBot(
 
     def _launch_deep(self, message, guild_id: int, task: str, setting: str = "en") -> None:
         handle = DeepHandle()
-        job = asyncio.create_task(self._run_deep(message, guild_id, task, setting, handle))
+        job_id = new_job_id()
+        job = asyncio.create_task(
+            self._run_deep(message, guild_id, task, setting, handle, job_id=job_id)
+        )
         self._deep_tasks.add(job)
         self._deep_jobs[guild_id] = _DeepJob(
-            job, handle, getattr(getattr(message, "author", None), "id", None)
+            job, handle, getattr(getattr(message, "author", None), "id", None), job_id
         )
         job.add_done_callback(self._deep_tasks.discard)
         job.add_done_callback(
@@ -2900,39 +2914,58 @@ class SecretaryBot(
         task: str,
         setting: str = "en",
         handle: DeepHandle | None = None,
+        job_id: str = "",
     ):
+        """The deep task's background job. With a `job_id` it is recorded (salid.jobs_bot):
+        running first, then done / failed ("failed" for a DeepTaskError, else "error") /
+        cancelled by the user, whatever happens; a shutdown leaves it for the next start's
+        sweep. Never the task text."""
         lang = resolve_lang(setting, task)
+        state: str | None = "failed"  # until it ends some other way
+        reason = "error"
         try:
-            res = await asyncio.to_thread(
-                run_deep_task,
-                self.s,
-                self.store,
-                task,
-                guild_id=guild_id,
-                lang=setting,
-                **({"handle": handle} if handle is not None else {}),
+            try:
+                await self._job_start("deep_task", job_id, message, guild_id)
+                res = await asyncio.to_thread(
+                    run_deep_task,
+                    self.s,
+                    self.store,
+                    task,
+                    guild_id=guild_id,
+                    lang=setting,
+                    **({"handle": handle} if handle is not None else {}),
+                )
+            except (asyncio.CancelledError, DeepCancelled) as e:
+                state, reason = self._job_cancel_state(handle, e), ""  # before handle.cancel()
+                if handle is not None:
+                    handle.cancel()  # make sure the CLI process is gone
+                logger.info("deep task %s", "cancelled" if state else "stopped by a shutdown")
+                return
+            except DeepTaskError as e:
+                reason = "failed"
+                await message.channel.send(f"❌ {e}")
+                return
+            except Exception:
+                logger.exception("deep task crashed")
+                await message.channel.send(t("deep_failed", lang))
+                return
+            logger.info(
+                "deep task done in %.0fs, %d tokens, models=%s",
+                res.seconds,
+                res.tokens,
+                list(res.models),
             )
-        except (asyncio.CancelledError, DeepCancelled):
-            if handle is not None:
-                handle.cancel()  # make sure the CLI process is gone
-            logger.info("deep task cancelled")
-            return
-        except DeepTaskError as e:
-            await message.channel.send(f"❌ {e}")
-            return
-        except Exception:
-            logger.exception("deep task crashed")
-            await message.channel.send(t("deep_failed", lang))
-            return
-        logger.info(
-            "deep task done in %.0fs, %d tokens, models=%s",
-            res.seconds,
-            res.tokens,
-            list(res.models),
-        )
-        text, attachment = reply_parts(res, lang)
-        file = discord.File(io.BytesIO(attachment), filename=REPORT_NAME) if attachment else None
-        await message.reply(text, file=file, mention_author=False)
+            text, attachment = reply_parts(res, lang)
+            file = (
+                discord.File(io.BytesIO(attachment), filename=REPORT_NAME) if attachment else None
+            )
+            await message.reply(text, file=file, mention_author=False)
+            state, reason = "done", ""
+        except asyncio.CancelledError as e:  # stopped while the result was being posted
+            state, reason = self._job_cancel_state(handle, e), ""
+            raise
+        finally:
+            await self._job_end(guild_id, job_id, state, reason)
 
     # ------------------------------------------------------------- slash commands
     def _register_commands(self) -> None:
@@ -3543,7 +3576,7 @@ class SecretaryBot(
         await self._votes_due()
         await self._reminders_due()
         await self._nodue_due()
-        await self._actions_due()
+        self._monitor_note_queue("actions", await self._actions_due())
         await self._pc_sweep()
         await self._people_due()
         await self._positions_due()

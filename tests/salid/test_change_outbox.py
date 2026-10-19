@@ -4,7 +4,9 @@ notice card, button, reply, reminder, alert), the watcher safety net, the web ho
 Offline: fake Discord objects, SQLite / fake Firestore, no network."""
 
 import asyncio
+import importlib.util
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +26,7 @@ from salid.change_outbox import (
     diff_org,
     diff_positions,
     is_ack_text,
+    migrate_legacy,
     record_org_edit,
 )
 from salid.change_outbox_bot import ChangeButton
@@ -162,27 +165,37 @@ def test_the_same_edit_is_recorded_once_within_ten_minutes(docs):
 
 
 # ------------------------------------------------------------------ due / ack / fail
-def one_change(ob, workspaces=("slack", "T1"), linked=True):
+def one_change(ob, workspaces=("slack", "T1"), linked=True, org_id="o1"):
     m = Member(email="a@x.com", identities={"slack": "U9"} if linked else {})
-    base = org_with(m, workspaces=[ws(*workspaces)])
+    base = org_with(m, workspaces=[ws(*workspaces)]).model_copy(update={"id": org_id})
     (c,) = ob.record(diff_members(base, edit_role(base, "a@x.com", "admin")), base)
     return c
+
+
+def link_org(docs, *workspaces, org_id="o1"):
+    """The org in the central store with these chat workspaces attached, so a workspace id
+    resolves to its org."""
+    store = OrgStore(docs)
+    store.create("Cafe", "boss@x.com", org_id=org_id)
+    for platform, key in workspaces:
+        store.attach_workspace(org_id, ws(platform, key))
+    return store
 
 
 def test_due_pending_then_resent_every_fifteen_minutes_until_acked(docs):
     clock = Clock()
     ob = ChangeOutbox(docs, clock)
     c = one_change(ob)
-    assert {(x.kind) for _, x in ob.due()} == {"apply", "notify"}
+    assert {(x.kind) for _, x in ob.due(["o1"])} == {"apply", "notify"}
     ob.mark_attempt(c.id, "slack-T1", "U9")
     clock.advance(14)
-    assert [x.kind for _, x in ob.due()] == ["apply"]  # the notice waits
+    assert [x.kind for _, x in ob.due(["o1"])] == ["apply"]  # the notice waits
     clock.advance(1)
-    assert {x.kind for _, x in ob.due()} == {"apply", "notify"}
+    assert {x.kind for _, x in ob.due(["o1"])} == {"apply", "notify"}
     assert ob.ack(c.id, "slack-T1", "U9", "reply") is True
-    assert [x.kind for _, x in ob.due()] == ["apply"]
+    assert [x.kind for _, x in ob.due(["o1"])] == ["apply"]
     assert ob.ack(c.id, "slack-T1", "", "applied") is True
-    assert ob.due() == []
+    assert ob.due(["o1"]) == []
 
 
 def test_ack_is_idempotent_and_ignores_strangers(docs):
@@ -203,13 +216,13 @@ def test_a_target_fails_after_the_last_attempt_and_the_admins_are_alerted_once(d
     for _ in range(3):
         ob.mark_attempt(c.id, "slack-T1", "U9")
         clock.advance(15)
-    assert [x.kind for _, x in ob.due()] == ["apply"]  # notice ran out: failed, not due
+    assert [x.kind for _, x in ob.due(["o1"])] == ["apply"]  # notice ran out: failed, not due
     failed = ob.get(c.id)
     assert next(x for x in failed.targets if x.kind == "notify").status == "failed"
-    assert [x.id for x in ob.to_alert("slack")] == [c.id]
+    assert [x.id for x in ob.to_alert("slack", ["o1"])] == [c.id]
     assert ob.mark_alerted(c.id, "slack") is True
-    assert ob.to_alert("slack") == [] and ob.mark_alerted(c.id, "slack") is False
-    assert [x.id for x in ob.to_alert("line")] == [c.id]  # each platform's admins once
+    assert ob.to_alert("slack", ["o1"]) == [] and ob.mark_alerted(c.id, "slack") is False
+    assert [x.id for x in ob.to_alert("line", ["o1"])] == [c.id]  # each platform's admins once
 
 
 def test_a_workspace_nobody_serves_fails_at_the_deadline(docs):
@@ -217,20 +230,21 @@ def test_a_workspace_nobody_serves_fails_at_the_deadline(docs):
     ob = ChangeOutbox(docs, clock, max_attempts=2)
     c = one_change(ob)  # nobody ever sends anything
     clock.advance(15 * 3 - 1)
-    assert len(ob.due()) == 2
+    assert len(ob.due(["o1"])) == 2
     clock.advance(1)
-    assert ob.due() == []
+    assert ob.due(["o1"]) == []
     assert {x.status for x in ob.get(c.id).targets} == {"failed"}
-    assert [x.id for x in ob.to_alert("slack")] == [c.id]
+    assert [x.id for x in ob.to_alert("slack", ["o1"])] == [c.id]
 
 
 def test_a_late_reply_still_counts_after_failure(docs):
     clock = Clock()
     ob = ChangeOutbox(docs, clock, max_attempts=1)
+    link_org(docs, ("slack", "T1"))
     c = one_change(ob)
     ob.mark_attempt(c.id, "slack-T1", "U9", message_ref="ts1")
     clock.advance(15)
-    ob.due()
+    ob.due(["o1"])
     assert ob.open_for("slack-T1", "U9")[0][1].status == "failed"
     assert ob.ack(c.id, "slack-T1", "U9", "reply") is True
 
@@ -242,7 +256,7 @@ def test_errors_are_kept_and_the_try_is_counted(docs):
     ob.mark_attempt(c.id, "slack-T1", "", error="missing Manage Roles")
     x = next(x for x in ob.get(c.id).targets if x.kind == "apply")
     assert (x.status, x.attempts, x.last_error) == ("pending", 1, "missing Manage Roles")
-    assert [k.kind for _, k in ob.due()] == ["notify"]  # the apply waits 15 minutes too
+    assert [k.kind for _, k in ob.due(["o1"])] == ["notify"]  # the apply waits 15 minutes too
 
 
 def test_acked_changes_go_after_ninety_days_failed_ones_never(docs):
@@ -260,11 +274,138 @@ def test_acked_changes_go_after_ninety_days_failed_ones_never(docs):
         org_with(Member(email="z@x.com", role="admin"), workspaces=[ws("slack", "T1")]),
     )[0]
     clock.advance(30)
-    ob.due()
+    ob.due(["o1"])
     assert ob.get(lost.id).targets[0].status == "failed"
     clock.advance(60 * 24 * 91)
-    assert ob.prune(force=True) == 1
+    assert ob.prune(["o1"], force=True) == 1
     assert ob.get(done.id) is None and ob.get(lost.id) is not None
+
+
+# ------------------------------------------------------------------ one key per org + migration
+def test_changes_are_stored_per_org_and_due_reads_only_those_orgs():
+    docs = FirestoreDocStore(client=FakeFirestore())
+    ob = ChangeOutbox(docs, Clock())
+    c = one_change(ob)
+    assert docs.get(co.KIND, co.org_guild("o1"), c.id) and docs.get(co.KIND, 0, c.id) is None
+    docs.client.streams.clear()
+    ob.due(["o1"])
+    assert {s for s in docs.client.streams if s[0] == co.KIND} == {
+        (co.KIND, (("guild_id", "==", co.org_guild("o1")),))
+    }
+
+
+def test_an_org_never_reads_another_orgs_changes(docs):
+    clock = Clock()
+    ob = ChangeOutbox(docs, clock, max_attempts=1)
+    mine, theirs = one_change(ob), one_change(ob, org_id="o2")
+    assert co.org_guild("o1") != co.org_guild("o2")
+    assert [c.id for c in ob.list_changes("o1")] == [mine.id]
+    assert {c.id for c, _ in ob.due(["o1"])} == {mine.id}
+    assert {c.id for c, _ in ob.due(["o1", "o2"])} == {mine.id, theirs.id}
+    assert ob.due([]) == []
+    clock.advance(15 * 3)
+    ob.due(["o1"])  # fails o1's targets only
+    assert [c.id for c in ob.to_alert("slack", ["o1", "o2"])] == [mine.id]
+    clock.advance(60 * 24 * 91)
+    ob.ack(theirs.id, "slack-T1", "U9", "reply", org_id="o2")
+    ob.ack(theirs.id, "slack-T1", "", "applied", org_id="o2")
+    assert ob.prune(["o1"], force=True) == 0  # o2's acked change is not o1's to prune
+    assert ob.prune(["o2"], force=True) == 1 and ob.get(theirs.id) is None
+
+
+def test_get_without_org_uses_the_change_id_alone(docs):
+    ob = ChangeOutbox(docs, Clock())
+    c = one_change(ob)
+    assert ob.get(c.id).id == c.id  # a button click knows only the change id
+    assert ob.get(c.id, "o1").id == c.id
+    assert ob.get(c.id, "o2") is None and ob.get("0" * 16) is None
+    assert ob.ack(c.id, "slack-T1", "", "applied", org_id="o2") is False  # not that org's
+    assert ob.ack(c.id, "slack-T1", "", "applied") is True  # the org is found from the id
+    assert ob.mark_attempt(c.id, "slack-T1", "U9", org_id="o1") is True
+    assert ob.mark_alerted(c.id, "slack") is True
+
+
+def to_legacy(docs, change):
+    """Put a change back where it lived before the per-org key (not migrated yet)."""
+    docs.put(
+        co.KIND,
+        co.LEGACY_GUILD,
+        change.id,
+        docs.get(co.KIND, co.org_guild(change.org_id), change.id),
+    )
+    docs.delete(co.KIND, co.org_guild(change.org_id), change.id)
+
+
+def test_a_change_not_migrated_yet_can_still_be_acked(docs):
+    ob = ChangeOutbox(docs, Clock())
+    c = one_change(ob)
+    to_legacy(docs, c)
+    assert ob.ack(c.id, "slack-T1", "U9", "reply", org_id="o2") is False  # another org's
+    assert ob.ack(c.id, "slack-T1", "U9", "reply", org_id="o1") is True
+    found = ob.get(c.id)  # the click path: by the change id alone
+    assert found is not None and found.org_id == "o1"
+    assert ob.ack(c.id, "slack-T1", "", "applied") is True  # no org: found from the id
+    legacy = co.Change(**docs.get(co.KIND, co.LEGACY_GUILD, c.id))
+    assert {(x.kind, x.status) for x in legacy.targets} == {
+        ("notify", "acked"),
+        ("apply", "acked"),
+    }
+    assert docs.get(co.KIND, co.org_guild("o1"), c.id) is None  # nothing written under the org
+    assert migrate_legacy(docs, apply=True)["moved"] == 1
+    assert {x.status for x in ob.get(c.id, "o1").targets} == {"acked"}
+
+
+def test_open_for_resolves_the_org_of_the_workspace(docs):
+    ob = ChangeOutbox(docs, Clock())
+    c = one_change(ob)
+    ob.mark_attempt(c.id, "slack-T1", "U9", org_id="o1")
+    assert ob.open_for("slack-T1", "U9") == []  # the workspace is linked to no org yet
+    link_org(docs, ("slack", "T1"))
+    assert [(x.id, y.person) for x, y in ob.open_for("slack-T1", "U9")] == [(c.id, "U9")]
+    assert ob.open_for("slack-T2", "U9") == []  # an unlinked workspace: nothing
+    assert ob.open_for("web", "U9") == []
+
+
+def legacy(docs, change_id, org_id):
+    c = co.Change(id=change_id, org_id=org_id, at=T0.isoformat(), kind="role",
+                  subject_email="a@x.com", after="admin")  # fmt: skip
+    docs.put(co.KIND, co.LEGACY_GUILD, change_id, c.model_dump())
+
+
+def test_migrate_legacy_moves_once_and_skips_orphans(docs):
+    legacy(docs, "a" * 16, "o1")
+    legacy(docs, "b" * 16, "o2")
+    docs.put(co.KIND, co.LEGACY_GUILD, "c" * 16, {"id": "c" * 16, "kind": "role"})  # no org_id
+    assert migrate_legacy(docs, apply=False) == {"found": 3, "movable": 2, "moved": 0, "skipped": 1}
+    assert ChangeOutbox(docs).list_changes("o2") == []  # a dry run moves nothing
+    assert migrate_legacy(docs, apply=True)["moved"] == 2
+    assert migrate_legacy(docs, apply=True) == {"found": 1, "movable": 0, "moved": 0, "skipped": 1}
+    assert [c.id for c in ChangeOutbox(docs).list_changes("o2")] == ["b" * 16]
+    assert docs.get(co.KIND, co.org_guild("o1"), "a" * 16)["after"] == "admin"
+    assert docs.get(co.KIND, co.LEGACY_GUILD, "a" * 16) is None
+    assert docs.get(co.KIND, co.LEGACY_GUILD, "c" * 16) is not None  # the orphan stays
+
+
+def _migrate_script():
+    path = Path(__file__).parents[2] / "scripts" / "salid_outbox_migrate.py"
+    spec = importlib.util.spec_from_file_location("salid_outbox_migrate", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_migration_script_is_a_dry_run_by_default_and_prints_counts_only(docs, capsys):
+    legacy(docs, "a" * 16, "o1")
+    mod = _migrate_script()
+    assert mod.main([], docs=docs) == 0
+    out = capsys.readouterr().out
+    assert out == "DRY RUN: found=1, movable=1, moved=0, skipped=0\n"
+    assert docs.get(co.KIND, co.LEGACY_GUILD, "a" * 16) is not None
+    assert mod.main(["--apply"], docs=docs) == 0
+    out = capsys.readouterr().out
+    assert out == "APPLIED: found=1, movable=1, moved=1, skipped=0\n"
+    assert "a" * 16 not in out and "o1" not in out and "@" not in out
+    assert docs.get(co.KIND, co.LEGACY_GUILD, "a" * 16) is None
 
 
 def test_ack_words():
@@ -527,6 +668,69 @@ async def test_a_person_who_left_the_server_is_retried_not_dropped(drig):
     await tick(drig)
     note = next(x for x in targets(drig, "notify"))
     assert (note.status, note.attempts, note.last_error) == ("pending", 1, "not in the server")
+
+
+async def test_the_bot_reads_only_the_changes_of_its_servers_orgs(drig):
+    assert await drig.bot._change_org_ids() == {"o1"}
+    m = Member(email="peer@x.com", discord_user_id=str(PEER))
+    other = Org(id="o9", name="Other", members=[m], workspaces=[ws("discord", str(GUILD))])
+    (theirs,) = drig.bot.change_outbox.record(
+        diff_members(other, edit_role(other, "peer@x.com", "admin")), other
+    )
+    await tick(drig)
+    # o9 owns none of this bot's servers: its change is never read, so nothing was tried
+    got = drig.bot.change_outbox.get(theirs.id, "o9")
+    assert len(got.targets) == 2
+    assert {(x.status, x.attempts) for x in got.targets} == {("pending", 0)}
+    assert drig.g.members[PEER].dms == []
+    web_edit(drig.bot, "peer@x.com", title="CTO")
+    await tick(drig)
+    assert next(x for x in targets(drig, "notify")).status == "sent"
+
+
+async def test_a_server_whose_org_lookup_fails_is_skipped_and_the_others_are_served(
+    drig, monkeypatch, caplog
+):
+    bad = SimpleNamespace(id=4242, get_member=lambda uid: None)
+    monkeypatch.setattr(type(drig.bot), "guilds", property(lambda s: [bad, drig.g]))
+    real = OrgStore.org_of_guild
+
+    def lookup(self, guild_id):
+        if guild_id == 4242:
+            raise RuntimeError("broken org doc for boss@x.com")
+        return real(self, guild_id)
+
+    monkeypatch.setattr(OrgStore, "org_of_guild", lookup)
+    assert await drig.bot._change_org_ids() == {"o1"}
+    web_edit(drig.bot, "peer@x.com", title="CTO")
+    await tick(drig)
+    assert next(x for x in targets(drig, "notify")).status == "sent"  # o1 still delivered
+    assert any(
+        "4242" in r.getMessage() and "RuntimeError" in r.getMessage() for r in caplog.records
+    )
+    assert "boss@x.com" not in caplog.text  # only the error type and the guild id are logged
+
+
+async def test_a_click_on_a_notice_sent_before_the_re_key_still_acks(drig):
+    web_edit(drig.bot, "peer@x.com", title="CTO")
+    await tick(drig)
+    (c,) = drig.bot.change_outbox.list_changes("o1")
+    to_legacy(drig.bot.docs, c)
+    said = []
+
+    async def edit_message(**kw):
+        said.append(kw)
+
+    inter = SimpleNamespace(
+        user=SimpleNamespace(id=PEER),
+        message=SimpleNamespace(content="the card"),
+        response=SimpleNamespace(edit_message=edit_message, send_message=None),
+    )
+    await drig.bot.handle_change_click(inter, c.id, f"discord-{GUILD}")
+    assert t("chg_done", drig.lang) in said[0]["content"]
+    note = next(x for x in drig.bot.change_outbox.get(c.id).targets if x.kind == "notify")
+    assert (note.status, note.acked_how) == ("acked", "button")
+    assert drig.bot.docs.get(co.KIND, co.org_guild("o1"), c.id) is None  # updated where it is
 
 
 # ------------------------------------------------------------------ the safety net (watcher)

@@ -1,7 +1,7 @@
 """Discord side of the change outbox (logic and store: `change_outbox.py`).
 
-`ChangeOutboxMixin`, every 30 s from the bot tick, for each due target of a Discord workspace this
-bot serves:
+`ChangeOutboxMixin`, every 30 s from the bot tick, reads only the changes of the orgs that own this
+bot's servers (`_change_org_ids`), and for each due target of a Discord workspace this bot serves:
 - `apply`: run the positions sync for that server (the same one the 30 s center watcher runs: it
   also adopts center-edited titles, so it is the whole server, once per tick), ack `applied` when
   it did its work, else keep the error and try again in 15 minutes;
@@ -66,11 +66,13 @@ class ChangeButton(
 
 class ChangeOutboxMixin:
     """Needs `self.docs`, `self.s`, `self.team`, `self.guilds`, `_clock`, `deliver_to_person`,
-    `positions_sync`, `_positions_on`, `_deliver_langs`. Call `_change_outbox_init()` after
-    `_positions_init()`."""
+    `positions_sync`, `_positions_on`, `_deliver_langs`, `_monitor_note_queue`,
+    `_monitor_changes`. Call `_change_outbox_init()` after `_positions_init()`."""
 
     def _change_outbox_init(self) -> None:
-        self.change_outbox = ChangeOutbox.from_settings(self.docs, self.s)
+        self.change_outbox = ChangeOutbox.from_settings(
+            self.docs, self.s, on_change=self._monitor_changes
+        )
         self._change_polled = float("-inf")
         self._change_snap: dict[int, object] = {}  # guild id -> Org as last seen
 
@@ -125,14 +127,38 @@ class ChangeOutboxMixin:
         except Exception:
             logger.warning("change outbox: tick failed", exc_info=True)
 
+    async def _change_org_ids(self) -> set[str]:
+        """The orgs that own this bot's servers: the only changes it reads. A server whose
+        lookup fails is skipped this tick (the others are still served)."""
+        ids = [g.id for g in self.guilds]
+
+        def load() -> set[str]:
+            store = OrgStore(self.docs)
+            out: set[str] = set()
+            for gid in ids:
+                try:
+                    org = store.org_of_guild(gid)
+                except Exception as e:
+                    logger.warning(
+                        "change outbox: org lookup failed guild=%s (%s)", gid, type(e).__name__
+                    )
+                    continue
+                if org is not None:
+                    out.add(org.id)
+            return out
+
+        return await asyncio.to_thread(load)
+
     async def _change_outbox_run(self) -> None:
         guilds = {f"discord-{g.id}": g for g in self.guilds}
         if not guilds:
             return
         outbox = self.change_outbox
-        await asyncio.to_thread(outbox.prune)
-        due = await asyncio.to_thread(outbox.due)
+        org_ids = await self._change_org_ids()
+        await asyncio.to_thread(outbox.prune, org_ids)
+        due = await asyncio.to_thread(outbox.due, org_ids)
         mine = [(c, x) for c, x in due if x.platform == "discord" and x.workspace_id in guilds]
+        self._monitor_note_queue("outbox_pending", len(mine))  # the monitor heartbeat's queue
         orgs: dict[str, str] = {}
         synced: dict[str, str] = {}  # workspace id -> "" (ok) or the error
 
@@ -157,22 +183,25 @@ class ChangeOutboxMixin:
                     target.workspace_id,
                     target.person,
                     error=type(e).__name__,
+                    org_id=change.org_id,
                 )
-        await self._change_alerts(guilds, org_name)
+        await self._change_alerts(guilds, org_name, org_ids)
 
     async def _change_apply(self, change, target, guild, synced: dict[str, str]) -> None:
-        outbox, ws = self.change_outbox, target.workspace_id
+        outbox, ws, oid = self.change_outbox, target.workspace_id, change.org_id
         if not self._positions_on(guild.id):
-            await asyncio.to_thread(outbox.ack, change.id, ws, "", "nothing_to_apply")
+            await asyncio.to_thread(outbox.ack, change.id, ws, "", "nothing_to_apply", org_id=oid)
             return
         if ws not in synced:
             rep = await self.positions_sync(guild)
             await self._change_snapshot(guild)
             synced[ws] = "" if not rep.skipped_no_permission else "missing Manage Roles"
         if synced[ws]:
-            await asyncio.to_thread(outbox.mark_attempt, change.id, ws, "", error=synced[ws])
+            await asyncio.to_thread(
+                outbox.mark_attempt, change.id, ws, "", error=synced[ws], org_id=oid
+            )
         else:
-            await asyncio.to_thread(outbox.ack, change.id, ws, "", "applied")
+            await asyncio.to_thread(outbox.ack, change.id, ws, "", "applied", org_id=oid)
 
     async def _change_notify(self, change, target, guild, org_name: str) -> None:
         outbox = self.change_outbox
@@ -181,7 +210,7 @@ class ChangeOutboxMixin:
         if member is None:
             await asyncio.to_thread(
                 outbox.mark_attempt, change.id, target.workspace_id, target.person,
-                error="not in the server",
+                error="not in the server", org_id=change.org_id,
             )  # fmt: skip
             return
         langs = self._deliver_langs(guild.id, uid)
@@ -201,11 +230,12 @@ class ChangeOutboxMixin:
             target.person,
             error="" if res.ok else "could not message",
             message_ref=ref,
+            org_id=change.org_id,
         )
 
-    async def _change_alerts(self, guilds: dict, org_name) -> None:
+    async def _change_alerts(self, guilds: dict, org_name, org_ids: set[str]) -> None:
         outbox = self.change_outbox
-        for change in await asyncio.to_thread(outbox.to_alert, "discord"):
+        for change in await asyncio.to_thread(outbox.to_alert, "discord", org_ids):
             org = await asyncio.to_thread(OrgStore(self.docs).get, change.org_id)
             if org is None:
                 continue
@@ -223,7 +253,7 @@ class ChangeOutboxMixin:
                         guild, member, alert_text(change, org.name, lang, outbox.max_attempts)
                     )
                     break
-            await asyncio.to_thread(outbox.mark_alerted, change.id, "discord")
+            await asyncio.to_thread(outbox.mark_alerted, change.id, "discord", org_id=change.org_id)
 
     # ------------------------------------------------------------- acknowledgement
     async def handle_change_click(self, interaction, change_id: str, ws_id: str) -> None:
@@ -238,7 +268,9 @@ class ChangeOutboxMixin:
         if not mine:
             await interaction.response.send_message(t("chg_not_yours", lang), ephemeral=True)
             return
-        fresh = await asyncio.to_thread(self.change_outbox.ack, change_id, ws_id, person, "button")
+        fresh = await asyncio.to_thread(
+            self.change_outbox.ack, change_id, ws_id, person, "button", org_id=change.org_id
+        )
         original = getattr(getattr(interaction, "message", None), "content", "") or ""
         suffix = t("chg_done" if fresh else "chg_handled", lang)
         await interaction.response.edit_message(
@@ -257,7 +289,9 @@ class ChangeOutboxMixin:
         ref = getattr(getattr(message, "reference", None), "message_id", None)
         picked = [(c, x) for c, x in open_ if ref and x.message_ref == str(ref)]
         for c, _x in picked or open_:
-            await asyncio.to_thread(self.change_outbox.ack, c.id, ws, person, "reply")
+            await asyncio.to_thread(
+                self.change_outbox.ack, c.id, ws, person, "reply", org_id=c.org_id
+            )
         lang = self._change_lang(guild.id)
         try:
             await message.reply(t("chg_thanks", lang), mention_author=False)

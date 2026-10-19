@@ -6,7 +6,9 @@
   `web_search` and `deep_research` when the `web` feature is on;
 - the background research job: acknowledged at once by the agent, run in a worker thread, posted
   (message + PDF) to the channel the asker asked in, cancellable with the same words as a deep task
-  ("ยกเลิกงาน" / `cancel_deep_task`), at most one per guild at a time and a daily cap per guild.
+  ("ยกเลิกงาน" / `cancel_deep_task`), at most one per guild at a time and a daily cap per guild;
+  recorded in `salid_jobs` (salid.jobs_bot: running, then done / failed / cancelled; never the
+  question).
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from dataclasses import dataclass
 import discord
 
 from .i18n import resolve_lang, t
+from .jobs import new_id as new_job_id
 from .media import DailyBudget
 from .pdf_report import find_fonts
 from .qa import LedgerTools
@@ -43,11 +46,12 @@ class _ResearchJob:
     task: asyncio.Task
     handle: ResearchHandle
     starter_id: int | None
+    job_id: str = ""  # its `salid_jobs` record (salid.jobs_bot)
 
 
 class SearchMixin:
-    """Needs `self.llm`, `self.s`, `self.team`, `self.store`, `self.secretary_store`, `_deep_jobs`.
-    Call `_search_init()` once after the settings exist."""
+    """Needs `self.llm`, `self.s`, `self.team`, `self.store`, `self.secretary_store`, `_deep_jobs`,
+    `_job_start` / `_job_end` (`JobsMixin`). Call `_search_init()` once after the settings exist."""
 
     def _search_init(self) -> None:
         self._research_jobs: dict[int, _ResearchJob] = {}
@@ -193,11 +197,14 @@ class SearchMixin:
     def _launch_research(self, message, guild, asker, question, depth, lang, ctx) -> None:
         handle = ResearchHandle()
         gid = guild.id
+        job_id = new_job_id()
         task = asyncio.create_task(
-            self._run_research(message, guild, asker, question, depth, lang, ctx, handle)
+            self._run_research(
+                message, guild, asker, question, depth, lang, ctx, handle, job_id=job_id
+            )
         )
         self._research_tasks.add(task)
-        self._research_jobs[gid] = _ResearchJob(task, handle, getattr(asker, "id", None))
+        self._research_jobs[gid] = _ResearchJob(task, handle, getattr(asker, "id", None), job_id)
         task.add_done_callback(self._research_tasks.discard)
         task.add_done_callback(
             lambda _t, g=gid, me=task: (
@@ -208,62 +215,81 @@ class SearchMixin:
         )
 
     async def _run_research(
-        self, message, guild, asker, question, depth, lang, ctx, handle
+        self, message, guild, asker, question, depth, lang, ctx, handle, job_id=""
     ) -> None:
+        """The research's background job. With a `job_id` it is recorded (salid.jobs_bot):
+        running first, then done / failed ("error", also when the report could not be posted) /
+        cancelled by the user, whatever happens; a shutdown leaves it for the next start's
+        sweep. Never the question."""
         channel = message.channel
         lang = resolve_lang(lang, question)
+        gid = guild.id
+        state: str | None = "failed"  # until it ends some other way
+        reason = "error"
         try:
-            res = await asyncio.to_thread(
-                run_research,
-                self.llm,
-                question=question,
-                depth=depth,
-                lang=lang,
-                today=today_bangkok(self.s.now()),
-                search_model=self.s.gemini_model,
-                plan_model=self.s.gate_model,
-                synth_model=self.s.gemini_model,
-                internal=ctx,
-                handle=handle,
+            try:
+                await self._job_start(
+                    "research", job_id, message, gid, requester_id=getattr(asker, "id", None)
+                )
+                res = await asyncio.to_thread(
+                    run_research,
+                    self.llm,
+                    question=question,
+                    depth=depth,
+                    lang=lang,
+                    today=today_bangkok(self.s.now()),
+                    search_model=self.s.gemini_model,
+                    plan_model=self.s.gate_model,
+                    synth_model=self.s.gemini_model,
+                    internal=ctx,
+                    handle=handle,
+                )
+            except (asyncio.CancelledError, ResearchCancelled) as e:
+                state, reason = self._job_cancel_state(handle, e), ""  # before handle.cancel()
+                handle.cancel()
+                logger.info("deep research %s", "cancelled" if state else "stopped by a shutdown")
+                return
+            except Exception:
+                logger.exception("deep research crashed")
+                with contextlib.suppress(discord.HTTPException):
+                    await channel.send(t("research_failed", lang))
+                return
+            logger.info(
+                "deep research done in %.0fs: %d sub-questions (%d failed), %d sources",
+                res.seconds,
+                len(res.sub_questions),
+                res.failed,
+                len(res.sources),
             )
-        except (asyncio.CancelledError, ResearchCancelled):
-            handle.cancel()
-            logger.info("deep research cancelled")
-            return
-        except Exception:
-            logger.exception("deep research crashed")
-            with contextlib.suppress(discord.HTTPException):
-                await channel.send(t("research_failed", lang))
-            return
-        logger.info(
-            "deep research done in %.0fs: %d sub-questions (%d failed), %d sources",
-            res.seconds,
-            len(res.sub_questions),
-            res.failed,
-            len(res.sources),
-        )
-        try:
-            pdf = await asyncio.to_thread(
-                markdown_pdf,
-                org=getattr(guild, "name", "") or "Salid",
-                title=res.title,
-                body=res.report,
-                lang=lang,
-                generated_at=self.s.now(),
-                fonts=find_fonts(self.s.pdf_font),
-            )
-        except Exception:
-            logger.warning("research PDF failed", exc_info=True)
-            pdf = None
-        who = f"<@{asker.id}> " if getattr(asker, "id", None) else ""
-        text = f"{who}{t('research_done', lang)}\n\n{short_version(res.report, lang)}"
-        if len(text) > 1900:
-            text = text[:1890] + "…"
-        file = discord.File(io.BytesIO(pdf), filename=REPORT_NAME) if pdf else None
-        try:
-            await channel.send(text, **({"file": file} if file else {}))
-        except discord.HTTPException:
-            logger.warning("could not post the research report", exc_info=True)
+            try:
+                pdf = await asyncio.to_thread(
+                    markdown_pdf,
+                    org=getattr(guild, "name", "") or "Salid",
+                    title=res.title,
+                    body=res.report,
+                    lang=lang,
+                    generated_at=self.s.now(),
+                    fonts=find_fonts(self.s.pdf_font),
+                )
+            except Exception:
+                logger.warning("research PDF failed", exc_info=True)
+                pdf = None
+            who = f"<@{asker.id}> " if getattr(asker, "id", None) else ""
+            text = f"{who}{t('research_done', lang)}\n\n{short_version(res.report, lang)}"
+            if len(text) > 1900:
+                text = text[:1890] + "…"
+            file = discord.File(io.BytesIO(pdf), filename=REPORT_NAME) if pdf else None
+            try:
+                await channel.send(text, **({"file": file} if file else {}))
+            except discord.HTTPException:
+                logger.warning("could not post the research report", exc_info=True)
+                return  # recorded failed ("error"): nothing reached the asker
+            state, reason = "done", ""
+        except asyncio.CancelledError as e:  # stopped while the report was being made or posted
+            state, reason = self._job_cancel_state(handle, e), ""
+            raise
+        finally:
+            await self._job_end(gid, job_id, state, reason)
 
     def _research_cancel(self, guild_id: int, user, lang: str) -> str | None:
         """Stop the guild's running research (None: there is none). Same rule as a deep task:
