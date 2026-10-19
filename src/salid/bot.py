@@ -2885,9 +2885,11 @@ class SecretaryBot(
     ):
         """The deep task's background job. With a `job_id` it is recorded (salid.jobs_bot):
         running first, then done / failed ("failed" for a DeepTaskError, else "error") /
-        cancelled, whatever happens. Never the task text."""
+        cancelled by the user, whatever happens; a shutdown leaves it for the next start's
+        sweep. Never the task text."""
         lang = resolve_lang(setting, task)
-        state, reason = "failed", "error"  # until it ends some other way
+        state: str | None = "failed"  # until it ends some other way
+        reason = "error"
         try:
             try:
                 await self._job_start("deep_task", job_id, message, guild_id)
@@ -2900,11 +2902,11 @@ class SecretaryBot(
                     lang=setting,
                     **({"handle": handle} if handle is not None else {}),
                 )
-            except (asyncio.CancelledError, DeepCancelled):
-                state, reason = "cancelled", ""
+            except (asyncio.CancelledError, DeepCancelled) as e:
+                state, reason = self._job_cancel_state(handle, e), ""  # before handle.cancel()
                 if handle is not None:
                     handle.cancel()  # make sure the CLI process is gone
-                logger.info("deep task cancelled")
+                logger.info("deep task %s", "cancelled" if state else "stopped by a shutdown")
                 return
             except DeepTaskError as e:
                 reason = "failed"
@@ -2926,8 +2928,8 @@ class SecretaryBot(
             )
             await message.reply(text, file=file, mention_author=False)
             state, reason = "done", ""
-        except asyncio.CancelledError:  # stopped while the result was being posted
-            state, reason = "cancelled", ""
+        except asyncio.CancelledError as e:  # stopped while the result was being posted
+            state, reason = self._job_cancel_state(handle, e), ""
             raise
         finally:
             await self._job_end(guild_id, job_id, state, reason)

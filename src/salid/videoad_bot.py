@@ -299,10 +299,11 @@ class VideoAdMixin:
         return out
 
     def _video_private(self, message) -> bool:
-        """The ad was asked for in a private conversation: a DM, or a member's private Salid
-        channel (theirs alone, like a DM). The channel's owner comes from the cache `on_message`
-        fills before any answer; a channel missing from it is read from the store (blocking, like
-        the month peek). A failed lookup counts as private (fail closed)."""
+        """The request (a video ad; also a deep task or research, `salid.jobs_bot`) came from a
+        private conversation: a DM, or a member's private Salid channel (theirs alone, like a
+        DM). The channel's owner comes from the cache `on_message` fills before any answer; a
+        channel missing from it is read from the store (blocking, like the month peek). A failed
+        lookup counts as private (fail closed)."""
         if message.guild is None:
             return True
         try:
@@ -312,7 +313,7 @@ class VideoAdMixin:
                 owners[cid] if cid in owners else self.private_chats.owner_of(message.guild.id, cid)
             )
         except Exception as e:
-            logger.warning("video job: private channel lookup failed: %s", type(e).__name__)
+            logger.warning("private channel lookup failed: %s", type(e).__name__)
             return True
         return owner is not None
 

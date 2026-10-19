@@ -218,12 +218,14 @@ class SearchMixin:
         self, message, guild, asker, question, depth, lang, ctx, handle, job_id=""
     ) -> None:
         """The research's background job. With a `job_id` it is recorded (salid.jobs_bot):
-        running first, then done / failed ("error") / cancelled, whatever happens. Never the
-        question."""
+        running first, then done / failed ("error", also when the report could not be posted) /
+        cancelled by the user, whatever happens; a shutdown leaves it for the next start's
+        sweep. Never the question."""
         channel = message.channel
         lang = resolve_lang(lang, question)
         gid = guild.id
-        state, reason = "failed", "error"  # until it ends some other way
+        state: str | None = "failed"  # until it ends some other way
+        reason = "error"
         try:
             try:
                 await self._job_start(
@@ -242,10 +244,10 @@ class SearchMixin:
                     internal=ctx,
                     handle=handle,
                 )
-            except (asyncio.CancelledError, ResearchCancelled):
-                state, reason = "cancelled", ""
+            except (asyncio.CancelledError, ResearchCancelled) as e:
+                state, reason = self._job_cancel_state(handle, e), ""  # before handle.cancel()
                 handle.cancel()
-                logger.info("deep research cancelled")
+                logger.info("deep research %s", "cancelled" if state else "stopped by a shutdown")
                 return
             except Exception:
                 logger.exception("deep research crashed")
@@ -281,9 +283,10 @@ class SearchMixin:
                 await channel.send(text, **({"file": file} if file else {}))
             except discord.HTTPException:
                 logger.warning("could not post the research report", exc_info=True)
+                return  # recorded failed ("error"): nothing reached the asker
             state, reason = "done", ""
-        except asyncio.CancelledError:  # stopped while the report was being made or posted
-            state, reason = "cancelled", ""
+        except asyncio.CancelledError as e:  # stopped while the report was being made or posted
+            state, reason = self._job_cancel_state(handle, e), ""
             raise
         finally:
             await self._job_end(gid, job_id, state, reason)

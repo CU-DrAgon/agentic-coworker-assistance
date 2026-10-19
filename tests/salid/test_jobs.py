@@ -7,12 +7,14 @@ SQLite DocStore / fake Firestore, fake Discord objects, scripted clients."""
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import threading
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
+import discord
 import pytest
 from conftest import GUILD
 from fake_firestore import FakeFirestore
@@ -22,7 +24,7 @@ from test_modes import bot  # noqa: F401  (fixture)
 from test_search import Dispatch, finish, start
 
 from salid import bot as botmod
-from salid import jobs, monitor_sources
+from salid import jobs, jobs_bot, monitor_sources
 from salid.coo_store import FirestoreDocStore, SQLiteDocStore
 from salid.deep_task import DeepCancelled, DeepHandle, DeepResult, DeepTaskError
 from salid.jobs import FINAL, INDEX_GUILD, INDEX_KEY, KIND, KINDS, JobBook, new_id
@@ -154,6 +156,17 @@ def test_job_book_never_raises_on_store_errors(caplog):
     assert SENTINEL not in caplog.text and "RuntimeError" in caplog.text
 
 
+def test_a_bad_index_entry_is_skipped_not_fatal(docs, caplog):
+    b = book(docs)
+    docs.put(KIND, INDEX_GUILD, INDEX_KEY, {"bad": SENTINEL, "none": None, "ok": GUILD})
+    assert b.active() == {"ok": GUILD}
+    assert b.start("deep_task", job_id="j1", guild_id=GUILD, channel_id=1, requester_id=2)
+    assert b.active() == {"ok": GUILD, "j1": GUILD}  # the write drops the bad entries
+    assert [r["job_id"] for r in b.sweep(lambda job_id: job_id == "j1")] == []
+    assert b.active() == {"j1": GUILD}  # "ok" had no record: it just left the index
+    assert "ValueError" in caplog.text and SENTINEL not in caplog.text
+
+
 def test_a_failing_hook_or_record_write_is_contained(docs, caplog):
     b = JobBook(docs, lambda: T0, on_change=lambda rec: 1 / 0)
     assert b.start("deep_task", job_id="j1", guild_id=GUILD, channel_id=1, requester_id=2)
@@ -190,7 +203,9 @@ def deep_msg(world, text="งานใหญ่: วิเคราะห์", c
 
 
 async def settle(bot):
+    """Every deep task has ended and every end record written after a slow start record."""
     await asyncio.gather(*list(bot._deep_tasks), return_exceptions=True)
+    await asyncio.gather(*list(bot._job_tails), return_exceptions=True)
     await asyncio.sleep(0)
 
 
@@ -267,25 +282,102 @@ async def test_cancel_deep_task_records_cancelled(bot, world, monkeypatch):
     assert msg.replies == [] and bot.jobs.active() == {}
 
 
+class Gate:
+    """`bot.jobs.start` held until `release()` (a slow store), then the real one."""
+
+    def __init__(self, bot):
+        self.event, self.real = threading.Event(), bot.jobs.start
+
+    def __call__(self, *a, **kw):
+        self.event.wait(5)
+        return self.real(*a, **kw)
+
+    def release(self):
+        self.event.set()
+
+
+async def until(check, tries=200):
+    for _ in range(tries):
+        if check():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out")
+
+
 async def test_a_cancel_while_the_record_is_written_still_ends_it(bot, world, monkeypatch):
-    """The job is cancelled while its start record is being written: the end record follows the
-    start record (never the other way round), so nothing is left running or indexed."""
-    gate = threading.Event()
-    real_start = bot.jobs.start
-
-    def slow_start(*a, **kw):
-        gate.wait(5)
-        return real_start(*a, **kw)
-
-    monkeypatch.setattr(bot.jobs, "start", slow_start)
+    """The user cancels while the start record is still being written: the cancel does not
+    wait for it, and the end record is written after it, so nothing is left running."""
+    gate = Gate(bot)
+    monkeypatch.setattr(bot.jobs, "start", gate)
     monkeypatch.setattr(botmod, "run_deep_task", lambda *a, **k: DeepResult(text="x"))
     bot._launch_deep(deep_msg(world), GUILD, "วิเคราะห์", "th")
     await asyncio.sleep(0.02)
     await bot._cancel_deep(GUILD, world.staff, "th")
-    await asyncio.sleep(0.02)
-    gate.set()
+    await asyncio.gather(*list(bot._deep_tasks), return_exceptions=True)
+    assert not bot._deep_tasks and records(bot) == []  # the job ended; its record still waits
+    gate.release()
     await settle(bot)
     assert [(r["state"], r["reason"]) for r in records(bot)] == [("cancelled", "")]
+    assert bot.jobs.active() == {} and bot._job_writes == {}
+
+
+async def test_a_slow_store_never_holds_the_deep_task_back(bot, world, monkeypatch):
+    monkeypatch.setattr(jobs_bot, "START_WAIT_S", 0.05)
+    gate = Gate(bot)
+    monkeypatch.setattr(bot.jobs, "start", gate)
+    monkeypatch.setattr(botmod, "run_deep_task", lambda *a, **k: DeepResult(text="report"))
+    msg = deep_msg(world)
+    bot._launch_deep(msg, GUILD, "วิเคราะห์", "th")
+    job_id = bot._deep_jobs[GUILD].job_id
+    await until(lambda: msg.replies)  # posted while the start record is still being written
+    assert "report" in msg.replies[0] and records(bot) == []
+    await asyncio.gather(*list(bot._deep_tasks), return_exceptions=True)
+    assert bot._job_live(job_id)  # its records are still being written: the sweep skips it
+    gate.release()
+    await settle(bot)
+    assert [(r["state"], r["reason"]) for r in records(bot)] == [("done", "")]  # start, then end
+    assert bot.jobs.active() == {} and not bot._job_live(job_id)
+
+
+@pytest.mark.parametrize("store", ["raising", "broken"])
+async def test_a_failing_store_leaves_the_deep_task_result_unchanged(
+    bot, world, monkeypatch, caplog, store
+):
+    if store == "raising":
+        monkeypatch.setattr(bot.jobs, "start", lambda *a, **k: 1 / 0)
+    else:
+        bot.jobs = JobBook(Broken(), bot.s.now, on_change=bot._monitor_job)
+    monkeypatch.setattr(botmod, "run_deep_task", lambda *a, **k: DeepResult(text="report"))
+    msg = deep_msg(world)
+    bot._launch_deep(msg, GUILD, "วิเคราะห์", "th")
+    await settle(bot)
+    assert len(msg.replies) == 1 and "report" in msg.replies[0]
+    assert records(bot) == [] and bot._job_writes == {}
+    gc.collect()
+    await asyncio.sleep(0)
+    assert "never retrieved" not in caplog.text and SENTINEL not in caplog.text
+
+
+async def test_a_shutdown_leaves_the_deep_task_for_the_sweep(bot, world, monkeypatch):
+    gate = threading.Event()
+
+    def slow(s, store, task, **kw):
+        gate.wait(5)
+        return DeepResult(text="late")
+
+    monkeypatch.setattr(botmod, "run_deep_task", slow)
+    msg = deep_msg(world)
+    bot._launch_deep(msg, GUILD, "วิเคราะห์", "th")
+    job = bot._deep_jobs[GUILD]
+    await until(lambda: records(bot))
+    job.task.cancel()  # cancelled without the user's flag: the bot is stopping
+    await settle(bot)
+    gate.set()
+    assert [r["state"] for r in records(bot)] == ["running"]
+    assert bot.jobs.active() == {job.job_id: GUILD} and msg.replies == []
+    assert job.handle.cancelled  # the CLI process is still stopped
+    await bot._sweep_jobs()  # the next start
+    assert [(r["state"], r["reason"]) for r in records(bot)] == [("restarted", "restarted")]
     assert bot.jobs.active() == {}
 
 
@@ -443,6 +535,63 @@ async def test_crashed_research_ends_failed(bot, world, monkeypatch):
     )
     bot.llm = Dispatch()
     fns, out = await start(bot, world)
+    await asyncio.to_thread(fns["deep_research"], "POS")
+    await finish(bot)
+    assert [(r["state"], r["reason"]) for r in records(bot)] == [("failed", "error")]
+
+
+async def test_a_slow_or_failing_store_never_holds_the_research_back(bot, world, monkeypatch):
+    monkeypatch.setattr(jobs_bot, "START_WAIT_S", 0.05)
+    gate = Gate(bot)
+    monkeypatch.setattr(bot.jobs, "start", gate)
+    bot.llm = Dispatch()
+    fns, out = await start(bot, world)
+    await asyncio.to_thread(fns["deep_research"], "POS")
+    await until(lambda: out.sent)  # the report is posted while the start record waits
+    assert out.sent[0][1]["file"].filename == "research.pdf" and records(bot) == []
+    gate.release()
+    await finish(bot)
+    await asyncio.gather(*list(bot._job_tails), return_exceptions=True)
+    assert [(r["state"], r["reason"]) for r in records(bot)] == [("done", "")]
+    monkeypatch.setattr(bot.jobs, "start", lambda *a, **k: 1 / 0)
+    await asyncio.to_thread(fns["deep_research"], "POS again")
+    await finish(bot)
+    assert len(out.sent) == 2  # the second report too, with no start record at all
+
+
+async def test_a_shutdown_leaves_the_research_for_the_sweep(bot, world):
+    gate = threading.Event()
+    client = Dispatch()
+    orig = client.generate_content
+
+    def slow(model, contents, config):
+        if config.tools:
+            gate.wait(5)
+        return orig(model, contents, config)
+
+    client.models = SimpleNamespace(generate_content=slow)
+    bot.llm = client
+    fns, out = await start(bot, world)
+    await asyncio.to_thread(fns["deep_research"], "POS")
+    job = bot._research_jobs[GUILD]
+    await until(lambda: records(bot))
+    job.task.cancel()  # no user cancel: a shutdown
+    await finish(bot)
+    gate.set()
+    assert [r["state"] for r in records(bot)] == ["running"] and out.sent == []
+    assert bot.jobs.active() == {job.job_id: GUILD}
+    await bot._sweep_jobs()
+    assert [(r["state"], r["reason"]) for r in records(bot)] == [("restarted", "restarted")]
+
+
+async def test_a_research_report_that_could_not_be_posted_is_failed(bot, world):
+    bot.llm = Dispatch()
+    fns, out = await start(bot, world)
+
+    async def refuse(text=None, **kw):
+        raise discord.HTTPException(SimpleNamespace(status=500, reason="x"), "boom")
+
+    out.send = refuse
     await asyncio.to_thread(fns["deep_research"], "POS")
     await finish(bot)
     assert [(r["state"], r["reason"]) for r in records(bot)] == [("failed", "error")]

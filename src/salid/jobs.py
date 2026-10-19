@@ -243,10 +243,18 @@ class JobBook:
 
 
 def _entries(doc: dict[str, Any] | None) -> dict[str, int]:
-    """The index document as {job id: guild id} (Firestore adds a `guild_id` field on write)."""
-    out = dict(doc or {})
-    out.pop("guild_id", None)
-    return {str(k): int(v) for k, v in out.items()}
+    """The index document as {job id: guild id} (Firestore adds a `guild_id` field on write).
+    An entry whose guild id is not a number is skipped (logged by error type), so one bad
+    entry never stops the recording; the next index write drops it."""
+    out: dict[str, int] = {}
+    for key, value in dict(doc or {}).items():
+        if key == "guild_id":
+            continue
+        try:
+            out[str(key)] = int(value)
+        except (TypeError, ValueError) as exc:
+            _failed("index entry", exc)
+    return out
 
 
 def _known(rec: dict[str, Any]) -> dict[str, Any]:
