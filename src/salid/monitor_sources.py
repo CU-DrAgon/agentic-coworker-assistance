@@ -2,9 +2,9 @@
 
 No ``discord`` import. A source turns one kind's own records (the source of truth) into
 ``MonitorItem``s for one org; a finder looks one item up by id. The per-kind adapters register
-themselves here when the module is imported (today: the change outbox, the web -> Discord
-action queue and video-ad jobs; later phases: deep tasks, research); this module holds the
-registry and the helpers the web API (``meeting_scribe.monitor_api``) calls. Design:
+themselves here when the module is imported (the change outbox, the web -> Discord action
+queue, video-ad jobs, deep tasks and deep research); this module holds the registry and the
+helpers the web API (``meeting_scribe.monitor_api``) calls. Design:
 ``docs/superpowers/specs/2026-10-18-salid-workflow-monitor-design.md`` sections 3.2 and 4.
 
 Sources return every item of their kind they may hold; who may see an item is decided later by
@@ -15,8 +15,9 @@ may quote stored data) and skipped, so one broken kind never empties the whole m
 
 Adapters copy only safe labels, states, times and account keys: never action ``args``, raw
 errors (``error``, ``last_error``), result fields other than a Discord link, a change's
-subject (email, name, before / after values), or a video job's brief, storyboard, captions or
-Omni interaction id. Errors become codes (``monitor.safe_error``).
+subject (email, name, before / after values), a video job's brief, storyboard, captions or
+Omni interaction id, or anything of a deep task or research but its ids, times and state (their
+records never hold the task text or the question). Errors become codes (``monitor.safe_error``).
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from .actions import ActionQueue
 from .change_outbox import KINDS as CHANGE_KINDS
 from .change_outbox import MAX_ATTEMPTS, RESEND_MINUTES, Change, ChangeOutbox, Target
 from .coo_store import DocStore
+from .jobs import KIND as JOBS
 from .monitor import ACTIVE, FINAL, Audience, MonitorItem, Step, person_key, safe_error
 from .orgs import Org, Workspace
 
@@ -436,6 +438,89 @@ def video_finder(docs: DocStore, org: Org, item_id: str) -> MonitorItem | None:
     return None
 
 
+# ------------------------------------------------------------------ deep tasks and research
+_JOB_STATUS = {
+    "running": "running",
+    "done": "done",
+    "failed": "failed",
+    "restarted": "failed",
+    "cancelled": "cancelled",
+}
+_JOB_TITLE = {"deep_task": "Deep task", "research": "Deep research"}
+
+
+def adapt_job(rec: dict) -> MonitorItem:
+    """One deep-task or research record (`salid_jobs`, written by `salid.jobs.JobBook`) as an
+    item: running -> running, done -> done, failed / restarted -> failed with attention and the
+    reason's code (`restarted` when a restart cut it off), cancelled -> cancelled; any other
+    state counts as failed. No steps. Seen by the requester (`discord:<id>`), owners and admins;
+    a deep task by executive admins only (`exec_only`, spec 4.1); a job asked for in a private
+    conversation (record `dm`) only by its requester, and without the Discord link. `org_id` is
+    left for the source to set."""
+    kind = str(rec.get("kind") or "")
+    raw, reason = str(rec.get("state") or ""), str(rec.get("reason") or "")
+    status = _JOB_STATUS.get(raw, "failed")
+    rid = _discord_id(rec.get("requester_id"))
+    requester = person_key("discord", rid) if rid else ""
+    gid, cid = _discord_id(rec.get("guild_id")), _discord_id(rec.get("channel_id"))
+    created, updated = _utc(rec.get("created_at")), _utc(rec.get("updated_at"))
+    finished = _utc(rec.get("finished_at")) or updated or created
+    dm = bool(rec.get("dm"))
+    linked = gid and cid and not dm
+    return MonitorItem(
+        kind=kind,
+        id=str(rec.get("job_id") or ""),
+        workspace=f"discord-{gid}" if gid else "",
+        title=_JOB_TITLE.get(kind, "Job"),
+        status=status,
+        attention=status == "failed",
+        attention_reason="failed" if status == "failed" else "",
+        raw_status=raw if raw in _JOB_STATUS else "unknown",
+        requester_id=requester,
+        started_at=_iso(created),
+        updated_at=_iso(updated or created),
+        finished_at=_iso(finished) if status in FINAL else "",
+        error=safe_error(reason or raw) if status == "failed" else None,
+        links={"discord": f"{DISCORD_URL}channels/{gid}/{cid}"} if linked else {},
+        audience=Audience(
+            exec_only=kind == "deep_task", dm=dm, people=[requester] if requester else []
+        ),
+    )
+
+
+def _is_job(rec: Any, kind: str) -> bool:
+    """A record of `kind` (the bot's active-jobs index in the same DocStore kind is not)."""
+    return isinstance(rec, dict) and "state" in rec and rec.get("kind") == kind
+
+
+def _org_job(job_id: str, rec: dict, org: Org) -> MonitorItem:
+    return adapt_job({**rec, "job_id": job_id}).model_copy(update={"org_id": org.id})
+
+
+def job_sources(kind: str) -> tuple[Source, Finder]:
+    """The source and finder of `kind` (`deep_task` or `research`) over the org's connected
+    Discord servers (one read per server)."""
+
+    def source(docs: DocStore, org: Org, now: datetime) -> list[MonitorItem]:
+        return [
+            _org_job(key, rec, org)
+            for ws in discord_workspaces(org)
+            for key, rec in docs.find_items(JOBS, ws.memory_id)
+            if _is_job(rec, kind)
+        ]
+
+    def finder(docs: DocStore, org: Org, item_id: str) -> MonitorItem | None:
+        for ws in discord_workspaces(org):
+            rec = docs.get(JOBS, ws.memory_id, item_id)
+            if _is_job(rec, kind):
+                return _org_job(item_id, rec, org)
+        return None
+
+    return source, finder
+
+
 register("change", changes_source, changes_finder)
 register("action", actions_source, actions_finder)
 register("video_ad", video_source, video_finder)
+register("deep_task", *job_sources("deep_task"))
+register("research", *job_sources("research"))

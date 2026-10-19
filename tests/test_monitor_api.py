@@ -19,7 +19,7 @@ from fake_firestore import FakeFirestore  # noqa: E402
 from meeting_scribe import center, hub, monitor_api  # noqa: E402
 from meeting_scribe.app import app  # noqa: E402
 from meeting_scribe.config import get_settings  # noqa: E402
-from salid import monitor, monitor_sources  # noqa: E402
+from salid import jobs, monitor, monitor_sources  # noqa: E402
 from salid.actions import ActionQueue  # noqa: E402
 from salid.change_outbox import KIND as OUTBOX  # noqa: E402
 from salid.change_outbox import Change, Target, org_guild  # noqa: E402
@@ -820,3 +820,90 @@ def test_web_enqueue_and_member_edit_emit_to_the_org_log(w, monkeypatch):
     assert events[0]["audience"]["people"] == ["boss@example.com"]
     assert events[1]["audience"] == Audience(admin_only=True).model_dump()
     assert SENTINEL not in str(events) and "mem@example.com" not in str(events)
+
+
+# ------------------------------------------------------------------ deep tasks and research
+def put_job(w, key, kind="deep_task", seconds_ago=60, *, requester=7, dm=False, **extra):
+    """A `salid_jobs` record as the bot writes it (Bangkok times)."""
+    at = (NOW - timedelta(seconds=seconds_ago)).astimezone(BKK).isoformat(timespec="seconds")
+    rec = {"job_id": key, "kind": kind, "guild_id": GUILD, "channel_id": 55,
+           "requester_id": requester, "dm": dm, "state": "running", "created_at": at,
+           "updated_at": at, "finished_at": "", "reason": "", **extra}  # fmt: skip
+    w.docs.put(jobs.KIND, GUILD, key, rec)
+    return rec
+
+
+def test_deep_tasks_visible_to_executives_only(w):
+    """Spec 4.1 + ruling R4: deep tasks are for executives (the owner, admins whose position
+    level is 1-3) and their requester; research is not. A job asked for in a private
+    conversation is its requester's alone, never the owner's."""
+    put_job(w, "d_mem")
+    put_job(w, "d_dm", dm=True)
+    put_job(w, "r_mem", "research")
+    w.docs.put(jobs.KIND, 0, jobs.INDEX_KEY, {"d_mem": GUILD})  # the bot's index: never an item
+
+    def keys(who):
+        return set(ids_of(get(w, who, "/items")))
+
+    assert keys("adm") == {"r_mem"}  # an admin at position level 0 is not an executive
+    assert get(w, "adm", "/items/deep_task/d_mem").status_code == 404
+    assert keys("boss") == {"d_mem", "r_mem"}  # the owner, but never the DM job
+    assert get(w, "boss", "/items/deep_task/d_dm").status_code == 404
+    assert keys("root") == {"d_mem", "r_mem"}
+    assert keys("mem") == {"d_mem", "d_dm", "r_mem"}  # the requester (discord:7)
+    d = get(w, "mem", "/items/deep_task/d_mem").json()
+    assert (d["title"], d["status"], d["mine"]) == ("Deep task", "running", True)
+    assert d["controls"] == []  # cancelling a deep task needs an executive
+    assert get(w, "mem", "/items/research/r_mem").json()["controls"] == ["cancel"]
+    assert get(w, "mem", "/items/deep_task/d_dm").json()["links"] == {}
+
+    def promote(members):
+        for m in members:
+            if m.email == "adm@example.com":
+                m.level = 3
+        return True
+
+    assert w.orgs.update_members(ORG, promote)
+    assert keys("adm") == {"d_mem", "r_mem"}
+    assert get(w, "adm", "/items/deep_task/d_mem").json()["controls"] == ["cancel"]
+    recs = [w.docs.get(jobs.KIND, GUILD, k) for k in ("d_mem", "d_dm", "r_mem")]
+    monitor.emit_items(w.docs, ORG, [monitor_sources.adapt_job(r) for r in recs])
+    seen = {
+        "boss": ["d_mem", "r_mem"],
+        "adm": ["d_mem", "r_mem"],
+        "mem": ["d_mem", "d_dm", "r_mem"],
+    }
+    for who, ids in seen.items():
+        assert [e["id"] for e in get(w, who, "/changes?since=0").json()["events"]] == ids, who
+    s = get(w, "boss", "/summary").json()
+    assert s["by_kind"] == {"deep_task": 1, "research": 1}
+
+
+def test_job_stuck_thresholds(w, monkeypatch):
+    """A running deep task is stuck after the deep-task timeout + 120 s (720 s by default), a
+    research after 900 s; a job a restart cut off is failed with the `restarted` code."""
+    put_job(w, "d_slow", seconds_ago=721)
+    put_job(w, "d_fresh", seconds_ago=719)
+    put_job(w, "r_slow", "research", 901)
+    put_job(w, "r_fresh", "research", 899)
+    put_job(w, "r_cut", "research", 30, state="restarted", reason="restarted")
+
+    def reasons():
+        return {r["id"]: r["attention_reason"] for r in get(w, "boss", "/items").json()["items"]}
+
+    assert reasons() == {
+        "d_slow": "stuck",
+        "d_fresh": "",
+        "r_slow": "stuck",
+        "r_fresh": "",
+        "r_cut": "failed",
+    }
+    cut = get(w, "boss", "/items/research/r_cut").json()
+    assert (cut["status"], cut["raw_status"], cut["error"]["code"]) == (
+        "failed",
+        "restarted",
+        "restarted",
+    )
+    runtime = (SimpleNamespace(deep_task_timeout=900), None)
+    monkeypatch.setattr(hub, "get_salid_runtime", lambda: runtime)
+    assert reasons()["d_slow"] == ""  # 721 s < 900 + 120 s

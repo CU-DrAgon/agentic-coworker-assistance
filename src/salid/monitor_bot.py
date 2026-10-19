@@ -12,10 +12,11 @@ off = no loop, nothing buffered, flushed or written.
 
 Producer hooks: `_monitor_action` (the action queue's `on_change`: one event per new or finished
 web -> Discord action, logged under the guild's org), `_monitor_changes` (the change outbox's
-`on_change`: one event per stored or updated change, under its org) and `_monitor_video` (every
-video-ad job record `videoad_bot` writes, the restart sweep's included, under the guild's org).
-They only buffer (no store work on the caller's thread beyond building the content-free event)
-and never raise.
+`on_change`: one event per stored or updated change, under its org), `_monitor_video` (every
+video-ad job record `videoad_bot` writes, the restart sweep's included, under the guild's org)
+and `_monitor_job` (the deep-task / research `JobBook`'s `on_change`: every record it writes,
+the restart sweep's included, under the guild's org). They only buffer (no store work on the
+caller's thread beyond building the content-free event) and never raise.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ import logging
 from . import monitor
 from .change_outbox import Change
 from .monitor import HEARTBEAT_EVERY_S, Emitter, event_for, org_key_resolver
-from .monitor_sources import adapt_action, adapt_change, adapt_video
+from .monitor_sources import adapt_action, adapt_change, adapt_job, adapt_video
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,16 @@ class MonitorMixin:
             self.monitor.add_for_guild(int(guild_id), event_for(adapt_video(job_id, rec)))
         except Exception as e:  # the type only (the text may quote the record)
             logger.warning("monitor video event failed: %s", type(e).__name__)
+
+    def _monitor_job(self, rec: dict) -> None:
+        """`JobBook.on_change`: a deep-task or research record was just written; buffer its
+        event for the guild's log. Never raises."""
+        if not self.monitor.enabled:
+            return
+        try:
+            self.monitor.add_for_guild(int(rec["guild_id"]), event_for(adapt_job(rec)))
+        except Exception as e:  # the type only (the text may quote the record)
+            logger.warning("monitor job event failed: %s", type(e).__name__)
 
     def _monitor_changes(self, changes: list[Change]) -> None:
         """`ChangeOutbox.on_change`: buffer one event per change for its org's log. Never

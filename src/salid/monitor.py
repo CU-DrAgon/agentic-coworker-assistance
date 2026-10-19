@@ -112,7 +112,7 @@ ERROR_TEXT: dict[str, str] = {
 # ------------------------------------------------------------------ models
 class Step(BaseModel):
     name: str
-    state: str = "pending"  # pending | running | done | failed
+    state: str = "pending"  # pending | running | done | failed | cancelled | skipped
     started_at: str = ""  # ISO UTC
     ms: int | None = None
     attempts: int = 0
