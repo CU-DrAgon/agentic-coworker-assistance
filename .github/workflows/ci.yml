@@ -1,4 +1,4 @@
-# CI for every pull request and every push to main: lint, offline tests, secret scan.
+# CI for every pull request and every push to main: lint, offline tests, browser e2e, secret scan.
 # Live tests (-m live, real Vertex/Discord) never run here; pytest deselects them by default.
 name: CI
 
@@ -45,6 +45,24 @@ jobs:
         run: uv sync --locked
       - name: pytest
         run: uv run pytest -q
+
+  # Browser smoke + axe WCAG 2.2 AA scan of the Monitor page (/center?mock=1: no sign-in, nothing
+  # beyond the local server). The default pytest run deselects these (-m 'not live and not e2e').
+  e2e:
+    name: E2E smoke + a11y (Playwright, chromium)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          enable-cache: true
+      - name: Install (uv.lock must be up to date)
+        run: uv sync --locked
+      - name: Chromium and its system libraries
+        run: uv run playwright install --with-deps chromium
+      - name: pytest -m e2e
+        run: uv run pytest -m e2e -q
 
   secrets:
     name: Secret scan (gitleaks)

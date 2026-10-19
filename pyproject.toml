@@ -43,14 +43,19 @@ module-name = ["meeting_scribe", "salid"]
 
 [dependency-groups]
 dev = [
+    "axe-playwright-python==0.1.8",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-playwright==0.10.0",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-markers = ["live: hits real Vertex Gemini (deselected by default; run with -m live)"]
-addopts = "-m 'not live'"
+markers = [
+    "live: hits real Vertex Gemini (deselected by default; run with -m live)",
+    "e2e: Playwright browser tests against /center?mock=1 (deselected by default; run with -m e2e)",
+]
+addopts = "-m 'not live and not e2e'"
 
 [tool.ruff]
 line-length = 100
