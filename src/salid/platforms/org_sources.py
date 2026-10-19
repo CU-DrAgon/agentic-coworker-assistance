@@ -131,11 +131,13 @@ class OrgSources:
         clock: Callable[[], float] | None = None,
         rest: DiscordRest | None = None,
         providers: dict[str, RoomProvider] | None = None,
+        line_org_linking: bool = False,
     ):
         import time
 
         clock = clock or time.monotonic
         self.orgs = orgs
+        self.line_org_linking = line_org_linking  # SALID_LINE_ORG_LINKING (policy 3.2.5)
         self.slack = SlackRooms()
         self.providers: dict[str, RoomProvider] = {
             "slack": CachedProvider(self.slack, clock),
@@ -176,6 +178,7 @@ class OrgSources:
             asker=asker,
             providers=self.providers,
             asking=asking,
+            line_linking=self.line_org_linking,
         )
 
 

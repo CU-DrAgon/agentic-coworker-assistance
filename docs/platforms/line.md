@@ -159,13 +159,34 @@ LINE user ids are per provider; link from the LINE Official Account that belongs
 
 ## Policy questions to settle before real use
 
-- **24 hours.** LINE's User Data Policy (3.2.3) says LINE user information stored longer than 24 hours
-  needs a notice to the users (Salid posts one when it joins) and that "Friend and Group information
-  must not be stored for more than 24 hours" whether or not users were told. It is **not settled**
-  whether the text of group messages counts as "Group information". Salid keeps group memory (default
-  7 days on LINE) on the assumption that it does not; get LINE's or a lawyer's answer, and if the
-  answer is yes, set the hub retention to 1 day or turn memory off for LINE. User ids and display names
-  are kept only in memory records and caches.
+- **24 hours (3.2.3).** LINE's User Data Policy says LINE user information stored longer than 24
+  hours needs a notice to the users (Salid posts one when it joins) and that "Friend and Group
+  information must not be stored for more than 24 hours" whether or not users were told. Done:
+  - **Ids only.** Nothing persisted for LINE carries a group name or a display name. Memory records
+    (and so the day summaries built from them) store the author as `LINE user NNNN` (four digits
+    from the hashed user id) and rooms are labelled `LINE group` / `LINE 1:1`; ledger receipts store
+    the same `LINE user NNNN` as submitter name. The settings document holds only the bot id.
+  - **24 h caches.** Display names and group names live only in the process (`LinePort._names`),
+    for at most `NAME_TTL_S` = 1 hour (never above 24 h), expired entries are dropped on every
+    write and on read, and nothing is written to a store. The recent-message buffer and every
+    scope / citation label handed to the model use the same id-based labels (`LINE user NNNN`,
+    `LINE group`), so a fetched name is not in the model input, in the buffer, or in a persisted
+    Salid answer.
+  - **Still not settled:** whether the *text* of group messages counts as "Group information".
+    Salid keeps group memory (default 7 days on LINE, with the join notice) on the assumption that
+    it does not; get LINE's or a lawyer's answer, and if the answer is yes, set the hub retention to
+    1 day or turn memory off for LINE.
+- **Linking (3.2.5 and 3.2.10).** 3.2.5 says LINE User Information obtained from various services
+  must not be linked together unless LINE approves, so Salid never combines LINE data with other
+  platforms' data by default: org-wide scope (a verified member's 1:1 reading across the org's
+  Discord / Slack / LINE workspaces and ledgers) and the Google Calendar tools are **off for LINE
+  both ways**. A verified LINE 1:1 gets only its own room and its own tenant's ledger, and LINE
+  workspaces are never a memory source or ledger pair in someone else's 1:1. Set
+  `SALID_LINE_ORG_LINKING=true` (one flag for scope and calendar) once LINE has approved it.
+  **Identity linking and the change outbox are not gated.** 3.2.10 explicitly allows linking a
+  service account with a LINE account (LINE Link) as long as the user can unlink, and Salid
+  provides unlink. Linking a LINE user id to a member of the org's own web account is that case;
+  it does not combine LINE data with other platforms' data.
 - **External links.** The LINE Official Account API Terms (5.3) say messages must not contain links to
   web pages you do not control. Answers that cite web search sources can break that: switch the `web`
   feature off for the LINE tenant in the hub until LINE confirms.

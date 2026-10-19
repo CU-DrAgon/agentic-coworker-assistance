@@ -297,6 +297,8 @@ class Position(BaseModel):
     knowledge: Salid reads it to answer "who does X", to match people (expertise locator) and to
     brief a successor. `holders` = member emails (several people may share a role)."""
 
+    model_config = ConfigDict(extra="allow")
+
     id: str
     title: str
     department: str = ""
@@ -306,13 +308,16 @@ class Position(BaseModel):
     skills: list[str] = Field(default_factory=list)
     policies: str = ""
     holders: list[str] = Field(default_factory=list)
+    # people in this job who have no Salid account (yet): planned hires, contractors, demo staff;
+    # replaced by real members (holders) when they join
+    placeholders: list[str] = Field(default_factory=list)
     created_at: str = ""
     updated_at: str = ""
     updated_by: str = ""
 
     @property
     def vacant(self) -> bool:
-        return not self.holders
+        return not self.holders and not self.placeholders
 
 
 HANDOVER_UNDO_HOURS = 24
@@ -858,6 +863,9 @@ class OrgStore:
                     setattr(pos, k, v)
                 elif k == "skills":
                     pos.skills = [" ".join(str(x).split())[:200] for x in v if str(x).strip()][:100]
+                elif k == "placeholders":
+                    names = [" ".join(str(x).split())[:200] for x in v if str(x).strip()]
+                    pos.placeholders = list(dict.fromkeys(names))[:200]
                 elif k == "holders":
                     members = {m.email.lower() for m in org.members}
                     hs = [str(x).strip().lower() for x in v if str(x).strip()]

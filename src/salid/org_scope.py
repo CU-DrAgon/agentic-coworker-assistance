@@ -231,18 +231,30 @@ async def resolve(
     asker: str,
     providers: Mapping[str, RoomProvider],
     asking: tuple[str, str] | None = None,
+    line_linking: bool = False,
 ) -> OrgView | None:
     """The org-wide view of a verified member, or None when the message gets no widening
     (not a 1:1 with exactly the asker as reader, or not a member of the org). Never raises: a
     workspace whose provider is missing or fails is left out and listed in `skipped`.
-    `asking` = (platform, tenant) the message comes from (see `account_for`)."""
+    `asking` = (platform, tenant) the message comes from (see `account_for`).
+
+    LINE User Data Policy 3.2.5: LINE User Information must not be linked with information from
+    other services. Unless `line_linking` (SALID_LINE_ORG_LINKING) is on, LINE is excluded both
+    ways: a LINE asker gets no widening (None) and LINE workspaces are neither a memory source
+    nor a ledger pair for anyone else."""
     if not widening_allowed(is_direct=is_direct, audience=audience, asker=asker):
+        return None
+    if not line_linking and asking is not None and asking[0] == "line":
         return None
     member = member_of(org, email)
     if member is None:
         return None
     connected = [
-        w for w in org.workspaces if w.status == "connected" and w.platform in CHAT_PLATFORMS
+        w
+        for w in org.workspaces
+        if w.status == "connected"
+        and w.platform in CHAT_PLATFORMS
+        and (line_linking or w.platform != "line")
     ]
     per_platform: dict[str, int] = {}
     for w in connected:

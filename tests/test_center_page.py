@@ -164,3 +164,12 @@ def test_monitor_every_step_state_has_a_label_and_an_icon():
             assert f"mon_s_{st}:" in th and f"mon_s_{st}:" in en, st
     css = between("/* monitor:css */", "/* monitor:css:end */")
     assert ".mon-ic.skipped" in css
+
+
+def test_every_feature_flag_has_a_thai_label():
+    from salid.guild_settings import FEATURES
+
+    body = re.search(r"const FEAT_TH = \{(.*?)\};", html()).group(1)
+    labels = dict(re.findall(r'(\w+): "([^"]+)"', body))
+    missing = [f for f in FEATURES if not re.search(r"[฀-๿]", labels.get(f, ""))]
+    assert not missing, missing

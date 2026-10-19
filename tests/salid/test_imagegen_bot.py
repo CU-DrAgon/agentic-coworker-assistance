@@ -212,5 +212,31 @@ def test_the_capability_list_names_images_and_video_ads():
     assert caps.index("19) สไลด์นำเสนอ") < caps.index("20) ") < caps.index("21) ")
 
 
+def test_the_capability_list_is_numbered_in_sequence():
+    import re
+
+    numbers = [int(n) for n in re.findall(r"^(\d+)\) ", qa.CAPABILITIES_PROMPT, re.M)]
+    assert numbers == list(range(1, len(numbers) + 1)), numbers
+
+
 def test_images_flag_defaults_on():
     assert "images" in FEATURES and Features().images is True
+
+
+async def test_the_overlay_fonts_follow_the_answers_language(bot, world, monkeypatch):
+    """A Japanese or Hindi headline needs its script font: with the default Kanit,
+    `cards.drawable` would drop every character of it without a word."""
+    m = world.staff
+    msg = TMsg(world.g, world.pub, m, "x")
+    asked, real = [], imagegen_bot.cards.card_fonts
+    monkeypatch.setattr(
+        imagegen_bot.cards, "card_fonts", lambda lang=None: asked.append(lang) or real(lang)
+    )
+    monkeypatch.setattr("salid.imagegen_bot.image_tools", lambda ctx: [])
+    bot._image_tools(msg, world.g, m, [], lang="ja")
+    assert asked == ["ja"]
+    bot._image_tools(msg, world.g, m, [])  # other callers: the message's own language
+    assert asked[-1] == bot._lang(msg)
+    kw = dict(setting="th", lang="hi", question="x", memory=None, profile=None)
+    bot._agent_kwargs(msg, world.g, m, False, files=[], **kw)  # the answer's language
+    assert asked[-1] == "hi"

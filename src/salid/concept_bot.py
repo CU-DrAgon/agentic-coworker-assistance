@@ -54,7 +54,7 @@ class ConceptMixin:
                 memory=self.concept_memory,
                 repo=self.ideas,
                 photos=photos,
-                fonts=cards.card_fonts(),
+                fonts=cards.card_fonts(lang),  # CJK / Devanagari labels need their script font
                 web_client=self.llm if self.team.enabled(guild.id, "web") else None,
                 web_model=self.s.gemini_model,
             )

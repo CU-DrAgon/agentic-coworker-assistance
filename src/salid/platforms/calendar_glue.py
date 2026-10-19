@@ -103,6 +103,8 @@ async def calendar_tools_for(
     glue: CalendarGlue | None = getattr(a, "calendar", None)
     if glue is None:
         return []
+    if msg.platform == "line" and not a.ps.line_org_linking:
+        return []  # LINE User Data Policy 3.2.5: no linking LINE data to org services by default
     try:
         found = await asyncio.to_thread(_lookup, a, glue, msg)
     except Exception as e:

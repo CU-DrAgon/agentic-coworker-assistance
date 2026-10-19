@@ -73,12 +73,24 @@ def entries_for(
 
 
 class IndexedMemoryStore:
-    def __init__(self, base: MemoryStore, embedder=None, max_bytes: int = INDEX_MAX_BYTES):
+    def __init__(
+        self,
+        base: MemoryStore,
+        embedder=None,
+        max_bytes: int = INDEX_MAX_BYTES,
+        refresh_s: float | None = None,
+    ):
+        """`refresh_s`: for a READ-ONLY process (the web), whose cache cannot see the bot's
+        writes: a guild loaded longer ago than this is reloaded in the background while the
+        loaded copy keeps answering (no reader waits). None = never (the bot, the only writer)."""
         self.base = base
         self.embedder = embedder or NullEmbedder()
         self.max_bytes = max_bytes
+        self.refresh_s = refresh_s
         self._guilds: OrderedDict[int, dict[tuple[int, str], IndexEntry]] = OrderedDict()
         self._sizes: dict[int, int] = {}
+        self._loaded_at: dict[int, float] = {}
+        self._reloading: set[int] = set()
         self._lock = threading.RLock()
 
     def __getattr__(self, name):
@@ -92,13 +104,12 @@ class IndexedMemoryStore:
         got = self._guilds.get(guild_id)
         if got is not None:
             self._guilds.move_to_end(guild_id)
+            self._maybe_refresh(guild_id)
             return got
         started = time.monotonic()
-        got = {
-            (s.channel_id, s.local_date): make_entry(s, self.embedder)
-            for s in self.base.all_summaries(guild_id)
-        }
+        got = self._load(guild_id)
         self._guilds[guild_id] = got
+        self._loaded_at[guild_id] = time.monotonic()
         self._sizes[guild_id] = sum(_entry_bytes(e) for e in got.values())
         logger.info(
             "memory index load guild=%s summaries=%d bytes=%d ms=%d",
@@ -106,6 +117,37 @@ class IndexedMemoryStore:
         )  # fmt: skip
         self._evict(keep=guild_id)
         return got
+
+    def _load(self, guild_id: int) -> dict[tuple[int, str], IndexEntry]:
+        return {
+            (s.channel_id, s.local_date): make_entry(s, self.embedder)
+            for s in self.base.all_summaries(guild_id)
+        }
+
+    def _maybe_refresh(self, guild_id: int) -> None:
+        """Lock held. Start one background reload when the loaded copy is older than refresh_s."""
+        if self.refresh_s is None or guild_id in self._reloading:
+            return
+        if time.monotonic() - self._loaded_at.get(guild_id, 0.0) < self.refresh_s:
+            return
+        self._reloading.add(guild_id)
+        threading.Thread(target=self._reload, args=(guild_id,), daemon=True).start()
+
+    def _reload(self, guild_id: int) -> None:
+        try:
+            fresh = self._load(guild_id)
+            with self._lock:
+                if guild_id in self._guilds:  # not evicted meanwhile
+                    self._guilds[guild_id] = fresh
+                    self._sizes[guild_id] = sum(_entry_bytes(e) for e in fresh.values())
+                self._loaded_at[guild_id] = time.monotonic()
+        except Exception:
+            logger.warning("memory index refresh failed guild=%s", guild_id, exc_info=True)
+            with self._lock:
+                self._loaded_at[guild_id] = time.monotonic()  # try again after refresh_s
+        finally:
+            with self._lock:
+                self._reloading.discard(guild_id)
 
     def _evict(self, keep: int) -> None:
         while sum(self._sizes.values()) > self.max_bytes and len(self._guilds) > 1:

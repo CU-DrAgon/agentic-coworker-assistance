@@ -829,6 +829,8 @@ def test_saved_feature_flags_win_over_the_page_defaults():
     page = re.search(r"let features = \{(.*?)\};", html).group(1)
     body = html.split("function fillSettings(s) {", 1)[1]
     literal = re.search(r"features = \{(.*?)\};", body).group(1)
+    # PR #26's guard: deleting the spread must fail (the saved flags must come last)
+    assert literal.rstrip().endswith("...s.features"), "fillSettings must spread s.features last"
     defaults, _, after = literal.partition("...s.features")
     assert not re.search(r"\w+:", after), f"defaults after the saved flags: {after.strip()}"
     for text in (page, defaults):  # the page defaults match the server's

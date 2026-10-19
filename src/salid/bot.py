@@ -77,6 +77,7 @@ from .guild_settings import (
     MIN_RETENTION_DAYS,
     BotGuildSettings,
     GuildStore,
+    effective_retention_days,
     make_guild_store,
     valid_retention_days,
 )
@@ -91,6 +92,7 @@ from .i18n import (
     parse_server_language_command,
     resolve_lang,
     t,
+    t_days,
 )
 from .ideas_bot import IdeasMixin
 from .ideas_pdf import markdown_pdf
@@ -725,12 +727,12 @@ class SecretaryBot(
             with contextlib.suppress(discord.HTTPException):
                 await target.send(
                     with_hint(
-                        t(
+                        t_days(
                             "welcome",
                             lang,
+                            self.team.retention_shown(guild.id),
                             mention=self.user.mention,
                             chat=where,
-                            days=self.team.memory_retention_days(guild.id),
                         ),
                         "welcome_help",
                         lang=lang,
@@ -1794,6 +1796,33 @@ class SecretaryBot(
             start_deep_task=deep if self.team.enabled(gid, "deep_tasks") else None,
         )
 
+    async def _in_reply_language(self, gid: int, message, member, text: str) -> str:
+        """The company language is the rule: when the reply should be in ONE language (company
+        language only, or nobody adds a personal language) and the model answered mostly in
+        Thai on an English server (or the other way round), translate it before it is posted.
+        Fail-soft: any problem keeps the original text."""
+        try:
+            if message.guild is None or not text:
+                return text
+            langs = self.langs_for(gid, message.channel.id, member.id)
+            if len(langs) != 1:
+                return text
+            from .captions import translate_lines
+            from .i18n import thai_share
+
+            want = langs[0]
+            # English-only servers: a mostly-Thai answer is translated (Thai servers unchanged)
+            if want != "en" or thai_share(text) <= 0.3:
+                return text
+            logger.warning("chat answer came in the wrong language for %s: translating", want)
+            fixed = await asyncio.to_thread(
+                translate_lines, self.llm, self.s.gate_model, [text], want
+            )
+            return fixed[0] if fixed and fixed[0].strip() else text
+        except Exception:
+            logger.warning("reply language check failed", exc_info=True)
+            return text
+
     async def _answer(
         self,
         message: discord.Message,
@@ -1908,7 +1937,7 @@ class SecretaryBot(
             for name, data in list(getattr(ans, "attachments", ()))[:10]
         ]
         everyone = wants_everyone(q, self._may_configure(member))
-        text = ans.text
+        text = await self._in_reply_language(gid, message, member, ans.text)
         if not interjection and message.guild is not None:
             text = self._with_mode_notice(
                 message.channel.id, gid, text, self.langs_for(gid, message.channel.id, member.id)
@@ -2139,13 +2168,17 @@ class SecretaryBot(
         def set_language(language: str, ref: str | None = None) -> dict:
             if language not in LANGS:
                 return {"error": "unknown language", "languages": list(LANGS)}
-            if not allowed():
-                return {"error": "not_allowed", "needs": "server manager or executive"}
-            target = pick(ref)
-            if target is None:
-                return {"error": "channel_not_found"}
-            self.team.set_channel_language(gid, target.id, language)
-            return {"status": "ok", "channel": target.name, "language": language}
+            # Language is per server and per person only (b2378eb): a channel entry would be
+            # stored and never read, so nothing is written and the model is told what works.
+            return {
+                "error": "no_channel_languages",
+                "use": "Language is set per server and per person, never per channel. A request "
+                "for one room is not a request for the whole server: never call "
+                "set_server_language for it on your own. Ask the person first whether they mean "
+                "their own extra language (/language, or remember_my_preference language) or the "
+                "whole server's language (set_server_language, admins / executives only, and "
+                "only after they confirm).",
+            }
 
         def set_server_lang(language: str, apply_to_all_channels: bool = True) -> dict:
             if language not in LANGS or language == "auto":
@@ -2171,7 +2204,7 @@ class SecretaryBot(
                 }
             previous = self.team.memory_retention_days(gid)
             self.team.set_memory_retention_days(gid, days)
-            if days < previous:
+            if effective_retention_days(days) < previous:  # 0 = forever is never a shortening
                 self._purge_soon(gid)
             return {"status": "ok", "days": days}
 
@@ -2180,11 +2213,11 @@ class SecretaryBot(
             return {
                 "channel": getattr(channel, "name", ""),
                 "mode": mode,
-                "mode_meaning": mode_help(mode, "en", self.team.memory_retention_days(gid)),
+                "mode_meaning": mode_help(mode, "en", self.team.retention_shown(gid)),
                 "snoozed": self._is_snoozed(channel.id),
                 "reply_language": self.team.channel_language(gid, channel.id),
                 "memory_on": self.team.enabled(gid, "memory"),
-                "memory_days": self.team.memory_retention_days(gid),
+                "memory_days": self.team.retention_shown(gid) or "forever",
                 "auto_join_meetings": self.team.enabled(gid, "auto_join_meetings"),
                 "voice_bodies": self.voice_pool.status_rows(gid, lang),
                 "voice_helper_invites": [
@@ -2453,7 +2486,7 @@ class SecretaryBot(
             *(
                 []
                 if interjection
-                else self._image_tools(message, guild, asker, files, spoken=spoken)
+                else self._image_tools(message, guild, asker, files, lang=lang, spoken=spoken)
             ),
             # create_video_ad: chat only (same voice gate), flag video_ads (default off); a
             # background job, in the answer's language `lang`
@@ -3311,7 +3344,7 @@ class SecretaryBot(
             lines = [t("mode_current", lang, label=mode_label(current, lang)), ""]
             if self._is_snoozed(channel.id):
                 lines += [t("mode_snoozed", lang), ""]
-            days = self.team.memory_retention_days(guild.id)
+            days = self.team.retention_shown(guild.id)  # 0 = forever, said in words
             lines += [f"{mode_label(m, lang)} — {mode_help(m, lang, days)}" for m in MODES]
             lines += ["", t("mode_footer", lang)]
             await send("\n".join(lines), ephemeral=True)
@@ -3355,7 +3388,7 @@ class SecretaryBot(
             state = t("memory_on" if self.team.enabled(guild.id, "memory") else "memory_off", lang)
             recorded = ", ".join(mode_label(m, lang) for m in MODES if m != "off")
             lines = [
-                t("memory_status", lang, state=state, days=current),
+                t_days("memory_status", lang, self.team.retention_shown(guild.id), state=state),
                 t("memory_modes", lang, recorded=recorded, off=mode_label("off", lang)),
             ]
             prog = await asyncio.to_thread(
@@ -3395,9 +3428,9 @@ class SecretaryBot(
             logger.exception("could not save memory retention")
             await send(t("memory_failed", lang), ephemeral=True)
             return
-        if days < current:
+        if effective_retention_days(days) < current:  # 0 = keep forever: never shorter
             self._purge_soon(guild.id)  # shortened: delete what is now past it, without waiting
-        await send(t("memory_set", lang, days=days))
+        await send(t_days("memory_set", lang, days))
 
     async def handle_language(self, interaction: discord.Interaction, language: str | None) -> None:
         """/language: show the languages Salid uses for YOU (company + your personal one), or set
@@ -3758,11 +3791,7 @@ class SecretaryBot(
             return
         with contextlib.suppress(discord.HTTPException):
             await channel.send(
-                t(
-                    "memory_notice",
-                    self._lang(channel),
-                    days=self.team.memory_retention_days(guild_id),
-                )
+                t_days("memory_notice", self._lang(channel), self.team.retention_shown(guild_id))
             )
 
     async def record_voice(self, voice_channel, user_id: int, name: str, text: str, at: datetime):

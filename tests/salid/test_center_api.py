@@ -3036,3 +3036,239 @@ def test_overlay_includes_the_persons_google_calendar(w, monkeypatch):
     monkeypatch.setattr(center, "get_google_http", lambda: Http([500]))
     r = w.client.get(url + "?mine=1", headers=H["mem"])
     assert r.status_code == 200 and r.json()["google"]["error"] == "failed"
+
+
+def test_web_chat_settings_say_keep_forever_like_the_bot(w):
+    """A stored 0 is "keep forever": the web chat's show_settings must not hand the model a bare
+    0 (it would say "0 days"); it says forever, like the Discord bot's show_settings."""
+    r = w.client.post(
+        f"/api/center/orgs/{w.org.id}/chat", json={"message": "ตั้งค่าตอนนี้เป็นยังไง"}, headers=H["boss"]
+    )
+    assert r.status_code == 200
+    tools = {getattr(f, "__name__", ""): f for f in w.asks[-1][1]["extra_tools"]}
+    assert w.guilds.get(A).memory_retention_days == 0
+    assert tools["show_settings"]()["memory_days"] == "forever"
+    w.guilds.set_memory_retention_days(A, 45)
+    assert tools["show_settings"]()["memory_days"] == 45
+
+
+def test_a_file_named_in_chat_reaches_salid_without_any_tool_step(w, monkeypatch):
+    """'see certified-copy.pdf' after the upload: the server attaches that file's text, so Salid
+    does not spend her tool steps searching (she ran out and could not open web uploads)."""
+    copy = "สำเนาบัญชีรายชื่อผู้ถือหุ้น บริษัท เดอะ ฟรอนเทียร์ จำกัด ทุนจดทะเบียน 1,200,000 บาท".encode()
+    upload(w, "boss", name="certified-copy.pdf", data=copy, mime="application/pdf")
+    upload(w, "boss", name="plan.txt", data=b"unrelated plan")
+    url = "/api/center/orgs/org_t/chat"
+    w.client.post(
+        url, json={"message": "see certified-copy.pdf for information"}, headers=H["boss"]
+    )
+    q = w.asks[-1][0]
+    assert q.startswith("see certified-copy.pdf") and "ทุนจดทะเบียน 1,200,000" in q
+    assert "Document on file that the person named" in q and "no need to search" in q
+    assert "unrelated plan" not in q
+    w.client.post(url, json={"message": "read the certified copy please"}, headers=H["boss"])
+    assert "ทุนจดทะเบียน 1,200,000" in w.asks[-1][0]  # the name without dashes / extension
+    w.client.post(url, json={"message": "hello"}, headers=H["boss"])
+    assert w.asks[-1][0] == "hello"
+    # the tool, for when the name is only implied
+    monkeypatch.setattr(center, "get_library", lambda: w.lib)
+    tools = {getattr(t, "__name__", ""): t for t in w.asks[-1][1]["extra_tools"]}
+    got = tools["read_document"]("certified-copy.pdf")
+    assert got["title"] == "certified-copy.pdf" and "ทุนจดทะเบียน" in got["text"]
+    assert "error" in tools["read_document"]("nothing-like-this.pdf")
+
+
+def test_two_uploads_of_the_same_file_at_once_store_one_copy(w):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from salid.library import ORG_DOCS
+
+    with ThreadPoolExecutor(4) as ex:
+        res = list(
+            ex.map(
+                lambda _: upload(
+                    w, "boss", name="certificate.pdf", data=b"same bytes", mime="application/pdf"
+                ).json(),
+                range(4),
+            )
+        )
+    assert len({r["id"] for r in res}) == 1 and sum(not r["duplicate"] for r in res) == 1
+    web = w.orgs.get("org_t").web_workspace().memory_id
+    assert (
+        len([d for d in w.docs.find(ORG_DOCS, web) if d.get("filename") == "certificate.pdf"]) == 1
+    )
+
+
+def test_positions_hold_people_without_an_account(w):
+    base = "/api/center/orgs/org_t/positions"
+    p = w.client.post(
+        base,
+        json={
+            "title": "Backend Engineer",
+            "placeholders": ["สมชาย ใจดี (ชาย)", " ", "สมชาย ใจดี (ชาย)", "Nok"],
+        },
+        headers=H["adm"],
+    ).json()
+    assert p["placeholders"] == ["สมชาย ใจดี (ชาย)", "Nok"] and p["holders"] == []
+    vac = w.client.post(base, json={"title": "Office Manager"}, headers=H["adm"]).json()
+    org = w.orgs.get("org_t")
+    assert {x.title: x.vacant for x in org.positions} == {
+        "Backend Engineer": False,
+        "Office Manager": True,
+    }
+    p = w.client.put(
+        f"{base}/{p['id']}",
+        json={"holders": ["mem@example.com"], "placeholders": ["Nok"]},
+        headers=H["adm"],
+    ).json()
+    assert p["holders"] == ["mem@example.com"] and p["placeholders"] == ["Nok"]
+    assert vac["placeholders"] == []
+
+
+def test_english_only_rules_for_thai_input():
+    """All-English (competition): a mostly-Thai answer on an English server is caught; an
+    English answer that only quotes a Thai name is left alone; web Live voice never switches."""
+    from salid import web_live
+    from salid.i18n import thai_share
+
+    assert thai_share("ได้เลยค่ะ สรุปงานให้นะคะ") > 0.9
+    assert thai_share("Done! I updated the profile of Mr. Passin (นายพสิณ พรวรภัตช์) for you.") < 0.3
+    assert thai_share("") == 0.0
+    s = FixedClockSettings(tz="Asia/Bangkok")
+    text = web_live.build_web_instruction(s, "Talking with: Boss", "en")
+    assert "ALWAYS answer in English only" in text and "unless they ask otherwise" not in text
+
+
+def test_discord_text_reply_in_thai_is_translated_on_an_english_only_server(monkeypatch):
+    import asyncio
+
+    from salid import captions
+    from salid.bot import SecretaryBot
+
+    calls = []
+    monkeypatch.setattr(
+        captions,
+        "translate_lines",
+        lambda c, m, texts, lang: (calls.append(lang), ["Sure, here is the summary."])[1],
+    )
+    msg = SimpleNamespace(guild=object(), channel=SimpleNamespace(id=5))
+    member = SimpleNamespace(id=7)
+
+    def stub(langs):
+        return SimpleNamespace(
+            langs_for=lambda *a: langs, llm=None, s=SimpleNamespace(gate_model="m")
+        )
+
+    def run(bot, text):
+        return asyncio.run(SecretaryBot._in_reply_language(bot, 1, msg, member, text))
+
+    assert run(stub(["en"]), "ได้เลยค่ะ สรุปให้นะคะ") == "Sure, here is the summary." and calls == [
+        "en"
+    ]
+    assert run(stub(["en"]), "Done for Mr. Passin (นายพสิณ)") == "Done for Mr. Passin (นายพสิณ)"
+    assert run(stub(["en", "th"]), "ได้เลยค่ะ") == "ได้เลยค่ะ"  # two languages on purpose: untouched
+    assert len(calls) == 1
+
+
+# ------------------------------------------------------------------ voice / chat parity with the web UI
+# Every action a button does in the command center, and the Salid tool that does it when asked
+# (typed or by Live voice: Live hands requests to the same tools through ask_salid).
+WEB_UI_PARITY = {
+    "edit my profile": "update_my_profile",
+    "change my web language": "set_my_language",
+    "edit a colleague's profile / manager": "update_member_profile",
+    "edit the company profile": "update_company_profile",
+    "rename the company / logo": "rename_company",
+    "add a member / change a role": "add_or_change_member",
+    "remove a member": "remove_member",
+    "transfer ownership": "transfer_ownership",
+    "take ownership back": "undo_ownership_transfer",
+    "create an invite link": "create_invite_link",
+    "list invite links": "list_invite_links",
+    "cancel an invite link": "cancel_invite_link",
+    "create / edit a position": "save_position",
+    "delete a position": "delete_position",
+    "list positions": "list_positions",
+    "find an expert": "find_expert",
+    "read a document": "read_document",
+    "move a document to another group": "move_document",
+    "scan the platform people": "scan_platform_people",
+    "write about a person": "note_about_person",
+    "request a plan / seats": "request_plan",
+    "connect Google Calendar / Discord / Slack": "connect_link",
+}
+
+
+def test_every_web_ui_action_has_a_salid_tool_that_works(w, monkeypatch):
+    from salid.people_directory import PeopleBook
+
+    book = PeopleBook(w.docs)
+    monkeypatch.setattr(center, "get_people", lambda: book)
+    monkeypatch.setattr(center, "get_library", lambda: w.lib)
+    w.client.post("/api/center/orgs/org_t/chat", json={"message": "hi"}, headers=H["boss"])
+    tools = {getattr(t, "__name__", ""): t for t in w.asks[-1][1]["extra_tools"]}
+    missing = {a: n for a, n in WEB_UI_PARITY.items() if n not in tools}
+    assert not missing, missing
+    assert "Never answer that you have no tool" in w.asks[-1][1]["profile"]
+    # members
+    r = tools["add_or_change_member"]("new@example.com", "admin")
+    assert "new@example.com (admin)" in r["members"]
+    assert tools["add_or_change_member"]("x@example.com", "owner")["error"]  # never granted
+    assert tools["remove_member"]("new@example.com") == {
+        "status": "ok",
+        "removed": "new@example.com",
+    }
+    # invites
+    link = tools["create_invite_link"](days=3, max_uses=5, label="Sales team")
+    assert link["url"].startswith("https://hub.example/center?invite=") and link["max_uses"] == 5
+    assert tools["list_invite_links"]()["links"][0]["label"] == "Sales team"
+    assert tools["cancel_invite_link"]("Sales team")["status"] == "cancelled"
+    # ownership: two steps, then undo
+    first = tools["transfer_ownership"]("adm@example.com")
+    assert "needs_confirmation" in first and w.orgs.get("org_t").owner_email == "boss@example.com"
+    assert (
+        tools["transfer_ownership"]("adm@example.com", confirm=True)["new_owner"]
+        == "adm@example.com"
+    )
+    assert tools["undo_ownership_transfer"]()["status"] == "ok"
+    assert w.orgs.get("org_t").role_of("boss@example.com") == "owner"
+    # company
+    assert tools["rename_company"](name="Cafe Group Co., Ltd.")["name"] == "Cafe Group Co., Ltd."
+    assert tools["update_company_profile"](tagline="Coffee for everyone")["status"] == "ok"
+    # positions
+    out = tools["save_position"]("Barista", department="Shop", people_without_account="Ann, Bob")
+    assert out["position"]["placeholders"] == ["Ann", "Bob"]
+    assert tools["delete_position"]("Barista")["status"] == "deleted"
+    # documents
+    upload(w, "boss", name="invoice-001.pdf", data=b"invoice 1,000 THB", mime="application/pdf")
+    assert tools["move_document"]("invoice-001", "company records")["group"] == "company"
+    assert tools["read_document"]("invoice-001.pdf")["group"] == "company"
+    # plan request, sign-in links
+    assert tools["request_plan"](plan="monthly", seats=20)["status"] == "requested"
+    assert tools["connect_link"]("google calendar")["link"].endswith("/center#/mycal")
+    # members (not admins) do not get the admin tools, but still get links and their own tools
+    w.client.post("/api/center/orgs/org_t/chat", json={"message": "hi"}, headers=H["mem"])
+    mt = {getattr(t, "__name__", "") for t in w.asks[-1][1]["extra_tools"]}
+    assert {
+        "connect_link",
+        "update_my_profile",
+        "read_document",
+    } <= mt and "remove_member" not in mt
+
+
+def test_command_center_tools_also_work_inside_the_agents_event_loop(w, monkeypatch):
+    """The real ADK runner calls tools while its event loop runs (asyncio.run would fail)."""
+    import asyncio
+
+    monkeypatch.setattr(center, "get_library", lambda: w.lib)
+    w.client.post("/api/center/orgs/org_t/chat", json={"message": "hi"}, headers=H["boss"])
+    tools = {getattr(t, "__name__", ""): t for t in w.asks[-1][1]["extra_tools"]}
+
+    async def inside_a_loop():
+        return tools["create_invite_link"](days=3, label="Loop"), tools["add_or_change_member"](
+            "n2@example.com"
+        )
+
+    link, added = asyncio.run(inside_a_loop())
+    assert link["url"].startswith("https://hub.example/center?invite=")
+    assert "n2@example.com (member)" in added["members"]

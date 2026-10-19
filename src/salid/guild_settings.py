@@ -2,10 +2,10 @@
 
 One Firestore document per guild, `{SALID_GUILD_COLLECTION}/{guild_id}` (default `salid_guilds`):
 
-    features             {receipts, qa, digest, deep_tasks, voice_meetings, memory, image_memory, web,
+    features             {receipts, qa, digest, deep_tasks, voice_meetings, auto_join_meetings, memory, image_memory, web,
                          documents, scheduling, email, media_memory, doc_memory, read_receipts,
                          followups, reports, briefings, catchup, freetime, polls, wiki, approvals, places,
-                         private_channels, maps, search, travel, markets, ideas, company_learning, company_knowledge, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, images, video_ads, concept, decks, votes, vote_offers, reminders, projects, project_notes, data, task_handshake, role_sync}: bool, all
+                         private_channels, maps, search, travel, markets, ideas, company_learning, company_knowledge, contests, bizfin, link_guard, meeting_transcript_doc, attendance_log, promo, images, video_ads, concept, decks, quotations, votes, vote_offers, reminders, projects, project_notes, data, task_handshake, role_sync}: bool, all
                          default true except video_ads (paid video generation: off until an admin turns it on)
     receipt_channel_ids  list[str] extra channels where every attachment is a receipt
     ask_channel_ids      list[str] channels where every message is answered (mode "chat")
@@ -651,7 +651,8 @@ class GuildStore:
         self._in_transaction(run)
 
     def set_memory_retention_days(self, guild_id: int, days: int) -> None:
-        """Set how long this guild's chat memory is kept (1-3650 days)."""
+        """Set how long this guild's chat memory is kept: 0 = keep forever (the default), else
+        1-3650 days."""
         ok = valid_retention_days(days)
         if ok is None:
             raise ValueError(f"retention must be {MIN_RETENTION_DAYS}-{MAX_RETENTION_DAYS} days")
@@ -1073,6 +1074,12 @@ class BotGuildSettings:
 
     def memory_retention_days(self, guild_id: int) -> int:
         return effective_retention_days(self.current(guild_id).memory_retention_days)
+
+    def retention_shown(self, guild_id: int) -> int:
+        """The retention to TELL people: the stored days, 0 for keep forever (`i18n.t_days` says
+        "forever" then, never the 10-year read window of `memory_retention_days`)."""
+        n = self.current(guild_id).memory_retention_days
+        return n if isinstance(n, int) and n > 0 else 0
 
     def fresh_memory_retention_days(self, guild_id: int, *, fail_closed: bool = False) -> int:
         """Retention read from the store NOW, bypassing the cache. Read paths that hide expired

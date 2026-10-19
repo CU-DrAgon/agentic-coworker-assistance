@@ -325,6 +325,18 @@ async def test_keep_forever_chosen_in_the_hub_is_never_cut_to_lines_default(fx):
     await adapter.on_event(join_ev("join"), BOT)
     assert a.team.store.get(gid).memory_retention_days == 0
     assert a.team.memory_retention_days(gid) > line.LINE_RETENTION_DAYS
+    text = api.replies[0][1][0]
+    assert "3650" not in text and "ถาวร" in text and "kept forever" in text
+
+
+def test_the_forever_notice_uses_the_catalog_text_in_thai_then_english():
+    from salid.i18n import t
+
+    text = notice_text(0, False)
+    th_stop, en_stop = line.STOP_GROUP
+    assert t("line_memory_forever", "th", stop=th_stop) in text
+    assert t("line_memory_forever", "en", stop=en_stop) in text
+    assert "{" not in text and "3650" not in text and " 0 " not in text
 
 
 def test_the_notice_without_memory_says_nothing_about_storing():

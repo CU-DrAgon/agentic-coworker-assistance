@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from .i18n import t
+from .i18n import t, t_days
 
 MODES = ("off", "listen", "call", "join", "chat")
 DEFAULT_MODE = "call"
@@ -17,8 +17,9 @@ def mode_label(mode: str, lang: str = "en") -> str:
     return t(f"mode_label_{mode}", lang)
 
 
-def mode_help(mode: str, lang: str = "en", days: int = 90) -> str:
-    return t(f"mode_help_{mode}", lang, days=days)
+def mode_help(mode: str, lang: str = "en", days: int = 0) -> str:
+    """The mode's help text with the memory retention `days` (0 = kept forever, said in words)."""
+    return t_days(f"mode_help_{mode}", lang, days)
 
 
 def mode_choice_name(mode: str) -> str:

@@ -691,6 +691,26 @@ details.sys > .inner { padding-top: 12px; }
 .gchip.finance, .gsel.finance { background: #E2F5E8; color: #1B5E34; }
 .gchip.hr, .gsel.hr { background: #F3E8FF; color: #5B2A86; }
 .gsel { border: 0; border-radius: 99px; padding: 3px 8px; font: inherit; font-size: 12.5px; font-weight: 600; max-width: 170px; }
+/* positions chart */
+.ptree, .ptree ul { list-style: none; margin: 0; padding: 0; display: flex; justify-content: center; position: relative; }
+.ptree ul { padding-top: 22px; }
+.ptree li { position: relative; padding: 22px 6px 0; display: flex; flex-direction: column; align-items: center; }
+.ptree > li { padding-top: 0; }
+.ptree li::before, .ptree li::after { content: ""; position: absolute; top: 0; width: 50%; height: 22px; border-top: 2px solid var(--line); }
+.ptree li::before { right: 50%; } .ptree li::after { left: 50%; border-left: 2px solid var(--line); }
+.ptree li:only-child::before, .ptree li:only-child::after { display: none; } .ptree li:only-child { padding-top: 0; }
+.ptree li:first-child::before, .ptree li:last-child::after { border: 0 none; }
+.ptree li:last-child::before { border-right: 2px solid var(--line); border-radius: 0 6px 0 0; } .ptree li:first-child::after { border-radius: 6px 0 0 0; }
+.ptree ul::before { content: ""; position: absolute; top: 0; left: 50%; height: 22px; border-left: 2px solid var(--line); }
+.ptree > li::before, .ptree > li::after { display: none; }
+.pnode { cursor: pointer; } .pnode:hover, .pnode:focus-visible { box-shadow: 0 4px 14px rgba(40,40,90,.12); outline: none; } .jd { display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow: auto; text-align: left; }
+.pnode { min-width: 150px; max-width: 200px; padding: 10px 12px; border-radius: 12px; background: #fff; border: 1px solid var(--line); border-top: 4px solid hsl(var(--h, 250) 55% 55%); display: flex; flex-direction: column; gap: 4px; align-items: center; text-align: center; font-size: 13px; }
+.pnode.vac { border-style: dashed; background: #FFFDF3; }
+.pnode .pdept { font-size: 11.5px; color: var(--muted); }
+.ppl { display: flex; flex-wrap: wrap; gap: 3px; justify-content: center; }
+.pchip { font-size: 11px; padding: 1px 6px; border-radius: 99px; background: var(--bg-2); }
+.chip.ghostp { background: #fff; border: 1px dashed var(--line); color: var(--muted); }
+.ptree-wrap { overflow-x: auto; padding-bottom: 8px; }
 /* positions + expertise */
 .poscard.vacant { border-style: dashed; border-color: #E3C766; background: #FFFDF3; }
 .exform { display: flex; flex-direction: column; gap: 10px; }
@@ -837,7 +857,7 @@ function el(tag, attrs, ...kids) {
     else if (k === "text") n.textContent = v;
     else n.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of kids.flat()) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(String(c)));
+  for (const c of kids.flat(Infinity)) if (c != null && c !== false) n.append(c.nodeType ? c : document.createTextNode(String(c)));
   return n;
 }
 // replaceChildren that tolerates arrays / null / false (so conditional children never render as text)
@@ -873,7 +893,7 @@ th: {
   live_err_auth:"เซสชันหมดอายุ กรุณาเข้าสู่ระบบอีกครั้ง", live_err_forbidden:"บัญชีนี้ไม่มีสิทธิ์คุยสดในองค์กรนี้", live_err_unavailable:"คุยสดยังใช้ไม่ได้: องค์กรนี้ยังไม่มีแพ็กเกจที่ใช้งานได้ หรือยังไม่ได้เชื่อมต่อพื้นที่ทำงาน", live_err_already:"มีสายคุยสดเปิดอยู่ในแท็บอื่น ปิดสายนั้นก่อนนะคะ", live_err_limit:"คุยครบ 30 นาทีแล้ว กดคุยสดใหม่ได้เลยค่ะ", live_err_goaway:"สลิดต้องพักสายสักครู่ ลองคุยสดใหม่นะคะ", live_err_generic:"คุยสดขัดข้อง ({e})",
   si_h:"วิธีเข้าสู่ระบบ", si_discord_ok:"เข้าสู่ระบบด้วย Discord ได้แล้ว", si_discord_no:"ยืนยัน Discord ด้านบน เพื่อเข้าสู่ระบบด้วย Discord ได้ด้วย", si_code_hint:"ใช้รหัสจากคำสั่ง /linkaccount",
   ws_h:"พื้นที่ทำงาน", ws_empty:"ยังไม่มีพื้นที่ทำงานที่เชื่อมต่อ", st_connected:"เชื่อมต่อแล้ว", st_pending:"รอยืนยัน", st_disconnected:"ตัดการเชื่อมต่อ", disconnect:"ตัดการเชื่อมต่อ", confirm_disc:"ตัดการเชื่อมต่อ “{n}” ใช่ไหม?",
-  add_discord:"เพิ่มเซิร์ฟเวอร์ Discord", add_d1:"1. เชิญสลิดเข้าเซิร์ฟเวอร์", add_d2:"2. พิมพ์ /ตั้งค่า ใน Discord แล้วคัดลอกรหัสที่ได้", add_d3:"3. วางรหัสที่นี่", code:"รหัสเชื่อมต่อ", link:"เชื่อมต่อ", invite_btn:"เปิดลิงก์เชิญ", linked:"เชื่อมต่อเซิร์ฟเวอร์แล้ว",
+  add_discord:"เพิ่มเซิร์ฟเวอร์ Discord", add_slack:"เพิ่มเข้า Slack workspace", slack_off:"การเชื่อม Slack ยังไม่ได้ตั้งค่าบนเซิร์ฟเวอร์ ติดต่อทีม Salid เพื่อเปิดใช้งาน", add_d1:"1. เชิญสลิดเข้าเซิร์ฟเวอร์", add_d2:"2. พิมพ์ /ตั้งค่า ใน Discord แล้วคัดลอกรหัสที่ได้", add_d3:"3. วางรหัสที่นี่", code:"รหัสเชื่อมต่อ", link:"เชื่อมต่อ", invite_btn:"เปิดลิงก์เชิญ", linked:"เชื่อมต่อเซิร์ฟเวอร์แล้ว",
   share_h:"การแชร์ข้อมูลระหว่างพื้นที่", share_warn:"แชร์ได้เฉพาะรายการที่มาจากช่องสาธารณะเท่านั้น ข้อมูลในช่องส่วนตัวจะไม่ถูกแชร์ และประวัติแชทจะไม่ถูกแชร์ข้ามพื้นที่เด็ดขาด", share_need2:"ต้องมีอย่างน้อย 2 พื้นที่ทำงานจึงจะตั้งค่าการแชร์ได้", share_sentence:"ให้ {b} เห็น {c} ของ {a}", share_only_admin:"เฉพาะเจ้าของและผู้ดูแลที่แก้ไขการแชร์ได้",
   apps_h:"เชื่อมต่อแอป", connect:"เชื่อมต่อ", not_enabled:"ยังไม่เปิดใช้", connected_n:"เชื่อมต่อแล้ว {n} เซิร์ฟเวอร์", app_discord:"แชทและเอกสารในเซิร์ฟเวอร์", app_slack:"ข้อความจาก Slack workspace", app_clickup:"งานและรายการจาก ClickUp (อ่านอย่างเดียว)", app_drive:"ไฟล์ใน Drive", app_gmail:"อีเมล", app_calendar:"ปฏิทิน",
   mem_h:"สมาชิก", mem_email:"อีเมล", mem_role:"บทบาท", mem_invite:"เชิญสมาชิก", mem_none:"ยังไม่มีสมาชิก", mem_ro:"เฉพาะเจ้าของและผู้ดูแลที่จัดการสมาชิกได้", confirm_rm:"ลบ {e} ออกจากองค์กร?", invited:"เชิญแล้ว",
@@ -927,7 +947,8 @@ th: {
   org_chart:"ผังองค์กร", oc_edit:"แก้ไขที่ สมาชิก → ผังองค์กร", oc_set:"ตั้งค่า “ฉันรายงานต่อ” ในหน้า โปรไฟล์ของฉัน",
   dg_all:"ทั้งหมด", dg_company:"เอกสารบริษัท", dg_legal:"สัญญาและกฎหมาย", dg_finance:"การเงิน (ใบแจ้งหนี้ ใบเสร็จ ค่าใช้จ่าย)", dg_hr:"บุคคล", dg_other:"อื่นๆ", dg_p:"เอกสารสำคัญของบริษัท (จดทะเบียน ข้อบังคับ ผู้ถือหุ้น ใบอนุญาต) แยกจากเอกสารการเงิน สลิดจัดหมวดให้อัตโนมัติ ผู้ดูแลย้ายหมวดได้", dg_move:"ย้ายไปหมวด", dg_moved:"ย้ายไป {g} แล้ว",
   tab_people:"รายชื่อ", tab_chart:"ผังองค์กร", tab_everyone:"ทุกคนบนแพลตฟอร์ม", tab_positions:"ตำแหน่งงาน", tab_experts:"หาผู้เชี่ยวชาญ",
-  po_intro:"ตำแหน่งงานของบริษัท ทั้งที่มีคนนั่งและที่ว่าง พร้อมคำอธิบายงาน หน้าที่ ทักษะ และนโยบายที่เกี่ยวข้อง เป็นความรู้องค์กรที่สลิดใช้ตอบว่าใครทำอะไรและใช้หาผู้รับช่วงงาน", po_new:"สร้างตำแหน่ง", po_none:"ยังไม่มีตำแหน่งงาน", po_vacant:"ว่าง", po_holders:"ผู้ดำรงตำแหน่ง", po_title:"ชื่อตำแหน่ง", po_summary:"คำอธิบายงาน (JD)", po_resp:"หน้าที่ความรับผิดชอบ", po_skills:"ทักษะที่ต้องการ (คั่นด้วยจุลภาค)", po_policies:"นโยบาย/ระเบียบที่เกี่ยวข้อง", po_reports:"รายงานต่อตำแหน่ง", po_top:"ไม่มี (บนสุด)", po_delete:"ลบตำแหน่ง", po_confirm_del:"ลบตำแหน่ง {t}?", po_find:"หาคนที่เหมาะ", po_saved:"บันทึกตำแหน่งแล้ว",
+  po_people_n:"{n} คน", po_noacc:"ยังไม่มีบัญชี Salid", po_ph:"คนในตำแหน่งที่ยังไม่มีบัญชี (บรรทัดละชื่อ)", po_ph_hint:"เช่น พนักงานที่ยังไม่ได้สมัคร หรือตำแหน่งที่กำลังรับ", chart_positions:"ผังตำแหน่ง", chart_people:"ผังคน", pchart_stats:"{p} ตำแหน่ง · {n} คน · ว่าง {v} ตำแหน่ง",
+  po_open_jd:"ดู Job description", po_intro:"ตำแหน่งงานของบริษัท ทั้งที่มีคนนั่งและที่ว่าง พร้อมคำอธิบายงาน หน้าที่ ทักษะ และนโยบายที่เกี่ยวข้อง เป็นความรู้องค์กรที่สลิดใช้ตอบว่าใครทำอะไรและใช้หาผู้รับช่วงงาน", po_new:"สร้างตำแหน่ง", po_none:"ยังไม่มีตำแหน่งงาน", po_vacant:"ว่าง", po_holders:"ผู้ดำรงตำแหน่ง", po_title:"ชื่อตำแหน่ง", po_summary:"คำอธิบายงาน (JD)", po_resp:"หน้าที่ความรับผิดชอบ", po_skills:"ทักษะที่ต้องการ (คั่นด้วยจุลภาค)", po_policies:"นโยบาย/ระเบียบที่เกี่ยวข้อง", po_reports:"รายงานต่อตำแหน่ง", po_top:"ไม่มี (บนสุด)", po_delete:"ลบตำแหน่ง", po_confirm_del:"ลบตำแหน่ง {t}?", po_find:"หาคนที่เหมาะ", po_saved:"บันทึกตำแหน่งแล้ว",
   ex_intro:"บอกสลิดว่าต้องการคนแบบไหน หรือเลือกตำแหน่ง สลิดจะแนะนำคนที่เหมาะที่สุดและตัวสำรอง พร้อมเหตุผลและหลักฐานจากโปรไฟล์ ตำแหน่ง งานที่ทำเสร็จ และสิ่งที่สลิดสังเกต", ex_need:"ต้องการคนสำหรับ", ex_need_ph:"เช่น ใครรับช่วงงานยื่นภาษีแทนเจมส์ได้", ex_pos:"หรือเทียบกับตำแหน่ง", ex_pos_none:"ไม่เลือก", ex_excl:"ไม่รวม (คนที่จะถูกแทน)", ex_go:"ค้นหา", ex_wait:"สลิดกำลังพิจารณา…", ex_primary:"แนะนำหลัก", ex_backup:"สำรอง", ex_conf_high:"มั่นใจสูง", ex_conf_medium:"มั่นใจปานกลาง", ex_conf_low:"หลักฐานน้อย", ex_none:"ยังไม่มีใครเหมาะ", ex_gaps:"ช่องว่าง", ex_noacc:"ยังไม่มีบัญชี", ex_n:"พิจารณาจาก {n} คน",
   pp_intro:"ทุกคนที่สลิดเห็นในแพลตฟอร์มของบริษัท (Discord ตอนนี้) ไม่ว่าจะมีบัญชี Salid หรือไม่ ผู้ดูแลใส่ตำแหน่ง/หน้าที่ได้ และสลิดสังเกตจากบทสนทนาว่าแต่ละคนทำอะไร", pp_scan:"สแกนแพลตฟอร์ม", pp_scanning:"กำลังสแกน…", pp_none:"ยังไม่มีรายชื่อ กด “สแกนแพลตฟอร์ม” เพื่ออ่านจากบทสนทนา 90 วันล่าสุด", pp_count:"{n} คน · มีบัญชี {a} คน", pp_scanned:"สแกนล่าสุด {d}",
   pp_account:"มีบัญชี", pp_noacc:"ยังไม่มีบัญชี", pp_seen:"{n} ข้อความ · ล่าสุด {d}", pp_talks:"ทำงานกับ", pp_channels:"อยู่ในห้อง", pp_tasks:"งานเปิด {o} · เสร็จ {d}", pp_hidden:"ซ่อนอยู่",
@@ -982,7 +1003,7 @@ en: {
   live_err_auth:"Session expired, please sign in again.", live_err_forbidden:"This account cannot call Salid in this organization", live_err_unavailable:"Live calls are not available: this organization has no active plan or no connected workspace yet", live_err_already:"A live call is already open in another tab. End it there first.", live_err_limit:"That was 30 minutes. Press Live again to keep talking", live_err_goaway:"Salid had to hang up for a moment. Please press Live again.", live_err_generic:"Live call failed ({e})",
   si_h:"Sign-in methods", si_discord_ok:"You can sign in with Discord too", si_discord_no:"Verify your Discord above to sign in with Discord as well", si_code_hint:"Use the /linkaccount code",
   ws_h:"Workspaces", ws_empty:"No connected workspaces yet", st_connected:"Connected", st_pending:"Pending", st_disconnected:"Disconnected", disconnect:"Disconnect", confirm_disc:"Disconnect “{n}”?",
-  add_discord:"Add a Discord server", add_d1:"1. Invite Salid to your server", add_d2:"2. Type /ตั้งค่า in Discord and copy the code", add_d3:"3. Paste the code here", code:"Link code", link:"Link", invite_btn:"Open invite link", linked:"Server linked",
+  add_slack:"Add to a Slack workspace", slack_off:"Slack sign-in is not switched on for this Salid yet. Ask the Salid team to turn it on.", add_discord:"Add a Discord server", add_d1:"1. Invite Salid to your server", add_d2:"2. Type /ตั้งค่า in Discord and copy the code", add_d3:"3. Paste the code here", code:"Link code", link:"Link", invite_btn:"Open invite link", linked:"Server linked",
   share_h:"Sharing between workspaces", share_warn:"Only items that came from public channels can be shared. Private-channel items are never shared, and chat history is never shared across workspaces.", share_need2:"You need at least 2 workspaces to set up sharing.", share_sentence:"Let {b} see {c} of {a}", share_only_admin:"Only owners and admins can change sharing.",
   apps_h:"Integrations", connect:"Connect", not_enabled:"Not enabled yet", connected_n:"{n} servers connected", app_discord:"Server chat and documents", app_slack:"Messages from a Slack workspace", app_clickup:"Tasks and lists from ClickUp (read-only)", app_drive:"Files in Drive", app_gmail:"Email", app_calendar:"Calendar",
   mem_h:"Members", mem_email:"Email", mem_role:"Role", mem_invite:"Invite a member", mem_none:"No members yet", mem_ro:"Only owners and admins can manage members.", confirm_rm:"Remove {e} from the organization?", invited:"Invited",
@@ -1036,7 +1057,8 @@ en: {
   org_chart:"Organization chart", oc_edit:"Edit in Members → Org chart", oc_set:"Set “I report to” on My profile",
   dg_all:"All", dg_company:"Company records", dg_legal:"Contracts & legal", dg_finance:"Finance (invoices, receipts, expenses)", dg_hr:"HR", dg_other:"Other", dg_p:"The company's key records (registration, articles and regulations, shareholders, licences) are kept apart from finance papers. Salid files each document automatically; admins can move one.", dg_move:"Move to group", dg_moved:"Moved to {g}",
   tab_people:"People", tab_chart:"Org chart", tab_everyone:"Everyone on platforms", tab_positions:"Positions", tab_experts:"Find an expert",
-  po_intro:"The company's jobs, filled or vacant, with the job description, responsibilities, skills and the policies that apply. Organisational knowledge Salid uses to say who does what and to find successors.", po_new:"Create position", po_none:"No positions yet", po_vacant:"Vacant", po_holders:"Held by", po_title:"Position title", po_summary:"Job description", po_resp:"Responsibilities", po_skills:"Skills needed (comma separated)", po_policies:"Policies that apply", po_reports:"Reports to position", po_top:"None (top)", po_delete:"Delete position", po_confirm_del:"Delete the position {t}?", po_find:"Find the right person", po_saved:"Position saved",
+  po_people_n:"{n} people", po_noacc:"No Salid account yet", po_ph:"People in this job without an account (one per line)", po_ph_hint:"e.g. staff who have not signed up yet, or planned hires", chart_positions:"Positions chart", chart_people:"People chart", pchart_stats:"{p} positions · {n} people · {v} vacant",
+  po_open_jd:"View job description", po_intro:"The company's jobs, filled or vacant, with the job description, responsibilities, skills and the policies that apply. Organisational knowledge Salid uses to say who does what and to find successors.", po_new:"Create position", po_none:"No positions yet", po_vacant:"Vacant", po_holders:"Held by", po_title:"Position title", po_summary:"Job description", po_resp:"Responsibilities", po_skills:"Skills needed (comma separated)", po_policies:"Policies that apply", po_reports:"Reports to position", po_top:"None (top)", po_delete:"Delete position", po_confirm_del:"Delete the position {t}?", po_find:"Find the right person", po_saved:"Position saved",
   ex_intro:"Tell Salid who you need, or pick a position. Salid recommends the best person and backups, with the reasons and the evidence from profiles, positions, finished tasks and what she has observed.", ex_need:"I need someone for", ex_need_ph:"e.g. who can take over the tax filing from Jems", ex_pos:"Or match a position", ex_pos_none:"None", ex_excl:"Leave out (the person being replaced)", ex_go:"Find", ex_wait:"Salid is thinking…", ex_primary:"Best fit", ex_backup:"Backup", ex_conf_high:"High confidence", ex_conf_medium:"Medium confidence", ex_conf_low:"Thin evidence", ex_none:"Nobody fits yet", ex_gaps:"Gaps", ex_noacc:"No account yet", ex_n:"Considered {n} people",
   pp_intro:"Everyone Salid sees on the company's platforms (Discord for now), with or without a Salid account. Admins fill in titles and duties; Salid observes from the conversations what each person does.", pp_scan:"Scan platforms", pp_scanning:"Scanning…", pp_none:"Nobody listed yet. Press “Scan platforms” to read the last 90 days of conversations.", pp_count:"{n} people · {a} with an account", pp_scanned:"Last scan {d}",
   pp_account:"Has account", pp_noacc:"No account yet", pp_seen:"{n} messages · last {d}", pp_talks:"Works with", pp_channels:"Active in", pp_tasks:"{o} open · {d} done", pp_hidden:"Hidden",
@@ -1438,7 +1460,7 @@ const LANG_NAMES = { th: "ไทย", en: "English", zh: "中文", hi: "हि�
 const langName = (l) => (!l || l === "auto" ? t("lang_auto") : LANG_NAMES[l] || l);
 const toneName = (x) => (x && I.en["tone_" + x] ? t("tone_" + x) : x || t("tone_cheerful"));
 // feature flags come from the server as keys; Thai labels for the common ones, otherwise the key made readable
-const FEAT_TH = { receipts: "ใบเสร็จ", qa: "ถาม-ตอบ", digest: "สรุปรายวัน", deep_tasks: "งานใหญ่", voice_meetings: "ประชุมเสียง", auto_join_meetings: "เข้าประชุมอัตโนมัติ", memory: "ความจำทีม", image_memory: "จำรูปภาพ", media_memory: "จำสื่อ", doc_memory: "จำเอกสาร", read_receipts: "อ่านใบเสร็จ", web: "ค้นเว็บ", documents: "เอกสาร", scheduling: "นัดหมาย", email: "อีเมล", followups: "ติดตามงาน", reports: "รายงาน", polls: "โพล", briefings: "สรุปเช้า-เย็น", freetime: "หาเวลาว่าง", catchup: "ตามทัน", wiki: "ฐานความรู้", private_channels: "ช่องส่วนตัว", approvals: "ขออนุมัติ", places: "สถานที่", maps: "แผนที่", travel: "เดินทาง", search: "ค้นหา", markets: "หุ้น ทอง ข่าว", company_learning: "เรียนรู้บริษัท", ideas: "ไอเดีย", contests: "การแข่งขัน", bizfin: "การเงินธุรกิจ", link_guard: "ตรวจลิงก์", reminders: "เตือนความจำ", translate: "แปลภาษา", votes: "ลงคะแนน", vote_offers: "เสนอลงคะแนน", decks: "สไลด์", promo: "โปรโมท", concept: "คอนเซปต์", meeting_transcript_doc: "บันทึกคำพูดประชุม", attendance_log: "บันทึกการเข้างาน" };
+const FEAT_TH = { receipts: "ใบเสร็จ", qa: "ถาม-ตอบ", digest: "สรุปรายวัน", deep_tasks: "งานใหญ่", voice_meetings: "ประชุมเสียง", auto_join_meetings: "เข้าประชุมอัตโนมัติ", memory: "ความจำทีม", image_memory: "จำรูปภาพ", media_memory: "จำสื่อ", doc_memory: "จำเอกสาร", read_receipts: "อ่านใบเสร็จ", web: "ค้นเว็บ", documents: "เอกสาร", scheduling: "นัดหมาย", email: "อีเมล", followups: "ติดตามงาน", reports: "รายงาน", polls: "โพล", briefings: "สรุปเช้า-เย็น", freetime: "หาเวลาว่าง", catchup: "ตามทัน", wiki: "ฐานความรู้", private_channels: "ช่องส่วนตัว", approvals: "ขออนุมัติ", places: "สถานที่", maps: "แผนที่", travel: "เดินทาง", search: "ค้นหา", markets: "หุ้น ทอง ข่าว", company_learning: "เรียนรู้บริษัท", ideas: "ไอเดีย", contests: "การแข่งขัน", bizfin: "การเงินธุรกิจ", link_guard: "ตรวจลิงก์", reminders: "เตือนความจำ", translate: "แปลภาษา", votes: "ลงคะแนน", vote_offers: "เสนอลงคะแนน", decks: "สไลด์", promo: "โปรโมท", concept: "คอนเซปต์", meeting_transcript_doc: "บันทึกคำพูดประชุม", attendance_log: "บันทึกการเข้างาน", images: "สร้างภาพ", video_ads: "วิดีโอโฆษณา", quotations: "ใบเสนอราคา", company_knowledge: "ความรู้บริษัท", projects: "โปรเจกต์", project_notes: "บันทึกโปรเจกต์", data: "วิเคราะห์ข้อมูล", task_handshake: "ยืนยันงาน", role_sync: "ซิงค์ตำแหน่ง" };
 const FEAT_EN = { qa: "Q&A", bizfin: "Business finance", freetime: "Free time", catchup: "Catch-up" };
 const featName = (k) => (lang === "th" && FEAT_TH[k]) || FEAT_EN[k] || String(k).replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 // department tints for the org chart: [background, line, ink]; the last one is for "no department"
@@ -1670,7 +1692,7 @@ VIEWS.overview = async (body, my) => {
     (prof.values || []).length ? [el("h3", { text: t("cp_values") }), el("div", { class: "vals" }, prof.values.map((v) => el("span", { class: "chip", text: v })))] : null));
   // (3b) the legal entity, as on the registration papers
   if (LG.some((k) => prof[k]) || admin) out.push(el("div", { class: "card" }, el("h2", { text: t("lg_h") }),
-    LG.some((k) => prof[k]) ? el("dl", { class: "pdl lg" }, LG.filter((k) => prof[k]).map((k) => [el("dt", { text: t("lg_" + k) }), el("dd", { text: prof[k] })]))
+    LG.some((k) => prof[k]) ? el("dl", { class: "pdl lg" }, LG.filter((k) => prof[k]).flatMap((k) => [el("dt", { text: t("lg_" + k) }), el("dd", { class: "pre", text: prof[k] })]))
       : el("p", { class: "muted small", text: t("lg_p") })));
   // (4) leadership: owners + admins
   const leaders = items(ov, "leadership"), deptNames = (dir ? items(dir, "departments").map((g) => g.department) : items(ov, "departments")).filter(Boolean);
@@ -2050,9 +2072,9 @@ function liveCall(wrap, addMsg) {
       case "ready": S.ready = true; S.t0 = Date.now(); setState(S.muted ? "idle" : "listening"); break;
       case "heard": if (S.heardSealed) { S.heard = ""; S.heardSealed = false; } S.heard += text; v.heard.textContent = S.heard.trim(); break;
       case "said": S.heardSealed = true; if (S.saidNew) { S.said = ""; S.saidNew = false; } S.said += text; v.bubble.textContent = S.said.trim(); if (!S.emo && SORRY_RE.test(S.said.trim())) emote("sorry"); break;
-      case "thinking": S.thinking = true; S.thinkQ = text.slice(0, 80); status(); break;
+      case "thinking": S.thinking = true; S.usedTool = true; S.thinkQ = text.slice(0, 80); status(); break;
       case "interrupted": stopPlayback(); S.thinking = false; S.thinkQ = ""; if (S.said.trim()) addMsg("bot", S.said.trim() + " …"); S.said = ""; S.lastSaid = ""; S.saidNew = true; break;
-      case "turn": S.thinking = false; S.thinkQ = ""; if (S.heard.trim() && !S.typedTurn) addMsg("user", S.heard.trim()); if (S.said.trim()) addMsg("bot", S.said.trim());
+      case "turn": S.thinking = false; S.thinkQ = ""; if (S.usedTool) { S.usedTool = false; refreshView(); } if (S.heard.trim() && !S.typedTurn) addMsg("user", S.heard.trim()); if (S.said.trim()) addMsg("bot", S.said.trim());
         S.lastSaid = S.said; S.said = ""; S.saidNew = true; S.heard = ""; S.heardSealed = true; S.typedTurn = false; status(); break;
       case "error": onError(text); break;
       default: break;
@@ -2181,7 +2203,7 @@ function chatWidget(hist, prefix) {
     const ty = el("div", { class: "msg typing", role: "status", "aria-label": t("typing") }, el("span"), el("span"), el("span"), el("em", { text: t("typing_dots") })); msgs.append(ty); msgs.scrollTop = msgs.scrollHeight;
     try {
       const r = await api(O("/chat"), J("POST", { message: text, page: pageName(), document_ids: Array.isArray(docId) ? docId : docId ? [docId] : [] }));
-      ty.remove(); add("bot", r.answer || "");
+      ty.remove(); add("bot", r.answer || ""); refreshView();
     } catch (e) { ty.remove(); if (handleAuth(e)) return; msgs.append(el("div", { class: "notice error", role: "alert", text: errText(e) })); }
     btn.disabled = false; ta.focus();
   };
@@ -2291,12 +2313,13 @@ VIEWS.apps = async (body, my) => {
   const card = (c) => {
     let action;
     if (c.status === "coming_soon") action = el("span", { class: "badge", text: t("soon") });
+    else if (c.platform === "slack" && !c.enabled) action = isAdmin() ? el("button", { class: "btn", type: "button", onclick: () => toast(t("slack_off")) }, t("add_slack")) : null;
     else if (c.status === "not_configured" || !c.enabled) action = el("span", { class: "badge", text: t("not_enabled") });
     else action = el("div", { class: "row" }, c.connected ? el("span", { class: "badge ok", text: t("connected_n", { n: c.connected }) }) : null,
-      isAdmin() ? el("button", { class: "btn" + (c.connected ? " ghost" : ""), type: "button", onclick: () => startConnector(c.platform) }, c.platform === "discord" ? t("add_discord") : t("connect")) : null);
+      isAdmin() ? el("button", { class: "btn" + (c.connected ? " ghost" : ""), type: "button", onclick: () => startConnector(c.platform) }, c.platform === "discord" ? t("add_discord") : c.platform === "slack" ? t("add_slack") : t("connect")) : null);
     return el("div", { class: "card" }, el("div", { class: "hd" }, platBadge(c.platform.startsWith("google") || c.platform === "gmail" ? "soon" : c.platform), el("div", {}, el("strong", { text: c.name }), el("div", { class: "muted small", text: t(names[c.platform] || "") }))), action);
   };
-  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).map((c) => c.platform === "google_calendar" ? calendarCard(c) : card(c))),
+  body.replaceChildren(el("div", { class: "wsgrid" }, items(cx).filter((c) => !["clickup", "google_drive", "gmail"].includes(c.platform)).map((c) => c.platform === "google_calendar" ? calendarCard(c) : card(c))),
     linkedCard(), isAdmin() ? attachCard() : null);
 };
 
@@ -2455,10 +2478,18 @@ VIEWS.members = async (body, my) => {
   } else parts.push(el("div", { class: "notice", text: t("mem_ro") }));
   people.replaceChildren(...parts);
   // org chart: the directory's tree as a family tree, one tint per department
-  const drawChart = () => chartBox.replaceChildren(orgChart(dir, list, { admin, onChange: async (email, boss) => {
+  let chartView = "positions"; try { chartView = localStorage.getItem("salid_chart_view") || "positions"; } catch { /* ignore */ }
+  let posRows = null;
+  const peopleChart = () => orgChart(dir, list, { admin, onChange: async (email, boss) => {
     try { await api(O("/members/" + encodeURIComponent(email) + "/structure"), J("PUT", { reports_to: boss || null })); toast(t("saved")); await reloadDir(); return true; }
     catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); return false; }
-  } }));
+  } });
+  const drawChart = async () => {
+    const sw = el("div", { class: "ktabs", role: "tablist" }, ["positions", "people"].map((k) => el("button", { type: "button", role: "tab", "aria-selected": String(chartView === k), onclick: () => { chartView = k; try { localStorage.setItem("salid_chart_view", k); } catch { /* ignore */ } drawChart(); } }, t("chart_" + k))));
+    if (chartView === "people") { chartBox.replaceChildren(el("div", { style: "margin-bottom:12px" }, sw), peopleChart()); return; }
+    if (!posRows) { try { posRows = items(await api(O("/positions"))); } catch (e) { if (handleAuth(e)) return; posRows = []; } }
+    chartBox.replaceChildren(el("div", { style: "margin-bottom:12px" }, sw), positionChart(posRows, list));
+  };
   drawChart();
   let tab = "people";
   const TABS = ["people", "everyone", "positions", "experts", "chart"];
@@ -2482,6 +2513,33 @@ VIEWS.members = async (body, my) => {
   body.replaceChildren(el("div", { style: "margin-bottom:16px" }, ktabs), people, everyoneBox, posBox, expBox, chartBox);
 };
 
+// The org chart by POSITION: every job (vacant ones too) under the job it reports to, with the
+// people in it (members, and people without an account yet).
+function positionChart(rows, members) {
+  if (!rows.length) return el("div", { class: "card" }, el("div", { class: "empty", text: t("po_none") }));
+  const nameOf = (email) => { const m = members.find((x) => x.email === email); return m ? personName(m) : email; };
+  const kids = {}; const ids = new Set(rows.map((r) => r.id));
+  for (const r of rows) { const k = r.reports_to && ids.has(r.reports_to) ? r.reports_to : ""; (kids[k] = kids[k] || []).push(r); }
+  const hue = (d) => { let h = 0; for (const c of String(d || "")) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+  const node = (r) => { const people = [...r.holders.map(nameOf), ...(r.placeholders || [])];
+    const open = () => confirmDlg({ title: r.title, info: true, ok: t("close"), body: el("div", { class: "jd" },
+      el("div", { class: "muted small", text: [r.department, r.reports_to && ids.has(r.reports_to) ? "↑ " + rows.find((x) => x.id === r.reports_to).title : ""].filter(Boolean).join(" · ") }),
+      people.length ? el("div", { class: "idbs" }, people.map((n) => el("span", { class: "chip", text: n }))) : el("span", { class: "badge warn", text: t("po_vacant") }),
+      r.summary ? el("p", { class: "small pre", text: r.summary }) : null,
+      r.responsibilities ? el("div", {}, el("strong", { class: "small", text: t("po_resp") }), el("p", { class: "small pre", text: r.responsibilities })) : null,
+      (r.skills || []).length ? el("div", { class: "idbs" }, r.skills.map((k) => el("span", { class: "chip", text: k }))) : null,
+      r.policies ? el("div", {}, el("strong", { class: "small", text: t("po_policies") }), el("p", { class: "small pre", text: r.policies })) : null) });
+    return el("li", {}, el("div", { class: "pnode" + (people.length ? "" : " vac"), style: "--h:" + hue(r.department), role: "button", tabindex: "0", title: t("po_open_jd"),
+      onclick: open, onkeydown: (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); open(); } } },
+      el("strong", { text: r.title }), r.department ? el("span", { class: "pdept", text: r.department }) : null,
+      people.length ? el("div", { class: "ppl" }, people.slice(0, 6).map((n) => el("span", { class: "pchip", text: n })), people.length > 6 ? el("span", { class: "pchip more", text: "+" + (people.length - 6) }) : null)
+        : el("span", { class: "badge warn", text: t("po_vacant") })),
+      (kids[r.id] || []).length ? el("ul", {}, kids[r.id].map(node)) : null); };
+  const total = rows.reduce((a, r) => a + r.holders.length + (r.placeholders || []).length, 0), vac = rows.filter((r) => !r.holders.length && !(r.placeholders || []).length).length;
+  return el("div", { class: "card" }, el("div", { class: "pline" }, el("h2", { text: t("chart_positions") }), el("span", { class: "muted small", text: t("pchart_stats", { p: rows.length, n: total, v: vac }) })),
+    el("div", { class: "orgwrap ptree-wrap" }, el("ul", { class: "ptree" }, (kids[""] || []).map(node))));
+}
+
 // Positions: the company's jobs (filled or vacant) as organisational knowledge.
 async function positionsView(box, members, admin, onFind) {
   let rows;
@@ -2491,7 +2549,8 @@ async function positionsView(box, members, admin, onFind) {
   const card = (p) => el("article", { class: "pcard poscard" + (p.holders.length ? "" : " vacant") },
     el("div", { class: "phd" }, el("div", { class: "pwho" }, el("strong", { text: p.title }), p.department ? el("span", { class: "muted small", text: " · " + p.department }) : null,
       p.reports_to ? el("div", { class: "muted small", text: "↑ " + titleOf(p.reports_to) }) : null),
-      p.holders.length ? el("span", { class: "badge ok", text: p.holders.map(nameOf).join(", ") }) : el("span", { class: "badge warn", text: t("po_vacant") })),
+      p.holders.length || (p.placeholders || []).length ? el("span", { class: "badge ok", text: t("po_people_n", { n: p.holders.length + (p.placeholders || []).length }) }) : el("span", { class: "badge warn", text: t("po_vacant") })),
+    p.holders.length || (p.placeholders || []).length ? el("div", { class: "idbs" }, p.holders.map((e) => el("span", { class: "chip", text: nameOf(e) })), (p.placeholders || []).map((n) => el("span", { class: "chip ghostp", title: t("po_noacc"), text: n }))) : null,
     p.summary ? el("p", { class: "small pre", text: p.summary }) : null,
     p.responsibilities ? el("details", {}, el("summary", { class: "small", text: t("po_resp") }), el("p", { class: "small pre", text: p.responsibilities })) : null,
     p.skills.length ? el("div", { class: "idbs" }, p.skills.map((k) => el("span", { class: "chip", text: k }))) : null,
@@ -2500,19 +2559,20 @@ async function positionsView(box, members, admin, onFind) {
   const grid = el("div", { class: "pgrid" });
   const redraw = () => grid.replaceChildren(rows.length ? rows.map(card) : el("div", { class: "empty", text: t("po_none") }));
   async function editPos(p) {
-    const isNew = !p; p = p || { title: "", department: "", summary: "", responsibilities: "", skills: [], policies: "", holders: [], reports_to: "" };
+    const isNew = !p; p = p || { title: "", department: "", summary: "", responsibilities: "", skills: [], policies: "", holders: [], placeholders: [], reports_to: "" };
     const inp = (id, v) => el("input", { type: "text", id, value: v || "", autocomplete: "off" });
     const ta = (id, v) => { const x = el("textarea", { id, rows: 4, class: "grow" }); x.value = v || ""; return x; };
     const title = inp("po-title", p.title), dept = inp("po-dept", p.department), summary = ta("po-sum", p.summary, 1000), resp = ta("po-resp", p.responsibilities, 2000), skills = inp("po-skills", p.skills.join(", "), 600), pol = ta("po-pol", p.policies, 2000);
     const rep2 = el("select", { id: "po-rep" }, el("option", { value: "" }, t("po_top")), rows.filter((x) => x.id !== p.id).map((x) => el("option", { value: x.id, selected: x.id === p.reports_to }, x.title)));
+    const phs = el("textarea", { id: "po-ph", rows: 3, class: "grow", placeholder: t("po_ph_hint") }); phs.value = (p.placeholders || []).join("\n");
     const holders = el("select", { id: "po-holders", multiple: true, size: Math.min(6, Math.max(2, members.length)) }, members.map((m) => el("option", { value: m.email, selected: p.holders.includes(m.email) }, personName(m) + " · " + m.email)));
     const body = el("div", {}, el("div", { class: "row" }, field(t("po_title"), title), field(t("prof_dept"), dept)), field(t("po_summary"), summary), field(t("po_resp"), resp), field(t("po_skills"), skills), field(t("po_policies"), pol),
-      el("div", { class: "row" }, field(t("po_reports"), rep2), field(t("po_holders"), holders)),
+      el("div", { class: "row" }, field(t("po_reports"), rep2), field(t("po_holders"), holders)), field(t("po_ph"), phs),
       isNew ? null : el("p", {}, el("button", { class: "btn danger sm", type: "button", onclick: async () => { if (!confirm(t("po_confirm_del", { t: p.title }))) return; try { await api(O("/positions/" + p.id), { method: "DELETE" }); $("confirm-dlg").close("cancel"); rows = rows.filter((x) => x.id !== p.id); redraw(); } catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); } } }, t("po_delete"))));
     const ok = await confirmDlg({ title: isNew ? t("po_new") : p.title, body, ok: t("save") });
     if (!ok) return;
     const payload = { title: title.value.trim(), department: dept.value.trim(), summary: summary.value.trim(), responsibilities: resp.value.trim(), policies: pol.value.trim(),
-      skills: skills.value.split(",").map((x) => x.trim()).filter(Boolean), reports_to: rep2.value, holders: [...holders.selectedOptions].map((o) => o.value) };
+      skills: skills.value.split(",").map((x) => x.trim()).filter(Boolean), reports_to: rep2.value, holders: [...holders.selectedOptions].map((o) => o.value), placeholders: phs.value.split("\n").map((x) => x.trim()).filter(Boolean) };
     try { const np = await api(O("/positions" + (isNew ? "" : "/" + p.id)), J(isNew ? "POST" : "PUT", payload)); rows = isNew ? rows.concat(np) : rows.map((x) => (x.id === np.id ? np : x)); redraw(); toast(t("po_saved")); }
     catch (e) { if (!handleAuth(e)) toast(errText(e), "error"); }
   }
@@ -3798,12 +3858,12 @@ VIEWS.settings = async (body) => {
 /* ---------- org dialog ---------- */
 // A standard modal confirmation (native <dialog>): resolves true on OK, false on cancel / Esc.
 // `body` is a string or an element (a form's fields); `danger` paints the OK button red.
-function confirmDlg({ title, body, ok, danger }) {
+function confirmDlg({ title, body, ok, danger, info }) {
   return new Promise((resolve) => {
     const d = $("confirm-dlg"), okB = $("confirm-ok"), cb = $("confirm-cancel");
     $("confirm-t").textContent = title;
     $("confirm-body").replaceChildren(typeof body === "string" ? el("p", { text: body }) : body);
-    okB.textContent = ok || "OK"; okB.className = "btn" + (danger ? " danger" : "");
+    okB.textContent = ok || "OK"; okB.className = "btn" + (danger ? " danger" : ""); cb.hidden = !!info;
     const finish = (v) => { d.removeEventListener("close", onClose); cb.removeEventListener("click", onCancel); resolve(v); };
     const onClose = () => finish(d.returnValue === "ok");
     const onCancel = () => { d.close("cancel"); };
@@ -3813,6 +3873,19 @@ function confirmDlg({ title, body, ok, danger }) {
     if (d.showModal) d.showModal(); else d.setAttribute("open", "");
     okB.focus();
   });
+}
+// After Salid answered (chat) or finished a turn that used her tools (Live voice), the page the
+// person is looking at reloads its data, so a change she made shows without a manual refresh.
+// Never while a dialog is open or the person is typing in the page (their input would be lost).
+let refreshTimer = null;
+function refreshView() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(async () => {
+    const editing = document.querySelector("dialog[open]") || (document.activeElement && $("content") && $("content").contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName));
+    if (editing) { refreshView(); return; }
+    try { const m = await api("/api/center/me"); m.orgs = items(m, "orgs"); me = m; renderNav(); } catch { /* keep the view */ }
+    route();
+  }, 600);
 }
 function openOrgDlg() { $("org-name").value = ""; note($("org-err"), ""); const d = $("org-dlg"); if (d.showModal) d.showModal(); else d.setAttribute("open", ""); $("org-name").focus(); }
 $("org-cancel").addEventListener("click", () => $("org-dlg").close());

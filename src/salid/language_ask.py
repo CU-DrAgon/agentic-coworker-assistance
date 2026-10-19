@@ -22,7 +22,7 @@ import logging
 import discord
 
 from .hints import with_hint
-from .i18n import LANG_NAMES, LANGS, LANGUAGE_LABELS, t
+from .i18n import LANG_NAMES, LANGS, LANGUAGE_LABELS, t, t_days
 from .modes import CHAT_CHANNEL_NAME, CHAT_CHANNEL_NAME_EN, chat_channel_name, is_chat_channel_name
 
 logger = logging.getLogger(__name__)
@@ -155,12 +155,12 @@ class LanguageAskMixin:
             t("lang_ask_done", value, label=t(f"lang_label_{value}", value))
             + "\n\n"
             + with_hint(
-                t(
+                t_days(
                     "welcome",
                     value,
+                    self.team.retention_shown(guild.id),
                     mention=self.user.mention,
                     chat=where,
-                    days=self.team.memory_retention_days(guild.id),
                 ),
                 "welcome_help",
                 lang=value,

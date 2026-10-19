@@ -96,7 +96,11 @@ def build_assistant(
     options = {"identity": IdentityLinks(make_org_store(s, store))} | kw
     identity = options["identity"]
     if "org_sources" not in options and identity is not None:
-        options["org_sources"] = OrgSources(identity.orgs, discord_token=ps.discord_token)
+        options["org_sources"] = OrgSources(
+            identity.orgs,
+            discord_token=ps.discord_token,
+            line_org_linking=ps.line_org_linking,
+        )
 
     assistant = Assistant(
         settings=s,

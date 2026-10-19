@@ -135,6 +135,7 @@ def test_a_document_with_a_default_language_counts_as_chosen_without_a_write():
     # the stored value of a server that never chose reads `auto` (what the hub shows); the bot
     # runs it in English
     assert GuildSettings().default_language == "auto" and not GuildSettings().language_chosen
+    assert GuildSettings().language_setting == "en"  # stored `auto` = unchosen, runs in English
 
 
 def test_the_hub_echoing_auto_does_not_choose_but_a_real_pick_does():
@@ -251,7 +252,8 @@ async def test_an_admin_pick_saves_the_language_and_confirms_in_it(bot, world):
     kind, text, view = it.response.calls[-1]
     assert kind == "edit" and view is None
     assert text.startswith(t("lang_ask_done", "th", label=t("lang_label_th", "th")))
-    assert t("welcome", "th", mention=ME.mention, chat=world.chat.mention, days=90)[:20] in text
+    welcome = t("welcome_forever", "th", mention=ME.mention, chat=world.chat.mention)
+    assert welcome in text and "3650" not in text  # memory kept forever: said in words
     assert hint("welcome_help", "th") in text  # how to ask for help is in the welcome
     # the chat channel Salid created follows the language
     assert world.chat.renamed == [CHAT_CHANNEL_NAME] and world.chat.name == CHAT_CHANNEL_NAME

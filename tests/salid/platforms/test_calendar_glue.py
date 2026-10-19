@@ -106,7 +106,7 @@ async def schedule(tools, **over):
 async def test_verified_and_connected_gets_the_tools(w):
     kw = await ask(w, platform="slack", tenant=TEAM, user="U1")
     tools = tool_map(kw)
-    assert set(tools) == {"schedule_google_meeting", "cancel_google_meeting"}
+    assert {"schedule_google_meeting", "cancel_google_meeting"} <= set(tools)
     assert w.oauth.checks == 1
 
 
@@ -159,7 +159,7 @@ async def test_unverified_sender_gets_nothing(w):
 
 async def test_verified_but_not_connected_gets_nothing(w):
     kw = await ask(w, platform="slack", tenant=TEAM, user="U2")  # boss linked, not connected
-    assert "extra_tools" not in kw
+    assert not any("google" in n for n in tool_map(kw))  # org tools may still be there
 
 
 async def test_tenant_without_an_org_gets_nothing(w):
@@ -170,7 +170,7 @@ async def test_tenant_without_an_org_gets_nothing(w):
 async def test_feature_off_gets_nothing(w):
     w.a.calendar = None
     kw = await ask(w, platform="slack", tenant=TEAM, user="U1")
-    assert "extra_tools" not in kw
+    assert not any("google" in n for n in tool_map(kw))  # org tools may still be there
     assert w.oauth.checks == 0
 
 
@@ -288,3 +288,23 @@ def test_feature_off_when_any_setting_is_missing(monkeypatch, missing):
     ps = PlatformSettings(_env_file=None)
     assert CalendarGlue.from_settings(ps, docs, "Asia/Bangkok") is None
     assert not GoogleConfig.from_settings(ps).enabled()
+
+
+async def test_line_gets_no_calendar_tools_unless_org_linking_is_on(w):
+    """LINE User Data Policy 3.2.5: a LINE sender never reaches the org's tools by default."""
+    from salid.platforms import calendar_glue as cg
+
+    w.orgs.attach_workspace(
+        "org_a", Workspace(id=workspace_id("line", "Ubot"), platform="line", external_id="Ubot")
+    )
+    w.orgs.link_identity("org_a", "mew@example.com", "line", "Ualice")
+    msg = inc(platform="line", tenant="Ubot", room="Cg", user="Ualice")
+    assert w.a.ps.line_org_linking is False
+    assert await cg.calendar_tools_for(w.a, msg, 1, 2, "en", False) == []
+    assert w.oauth.checks == 0
+    w.a.ps.line_org_linking = True  # the same flag that gates the org-wide scope
+    assert len(await cg.calendar_tools_for(w.a, msg, 1, 2, "en", False)) == 2
+    # Slack is not touched by the LINE flag
+    w.a.ps.line_org_linking = False
+    slack = inc(platform="slack", tenant=TEAM, user="U1")
+    assert len(await cg.calendar_tools_for(w.a, slack, 1, 2, "en", False)) == 2

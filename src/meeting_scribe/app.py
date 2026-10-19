@@ -51,6 +51,15 @@ async def no_stale_pages(request, call_next):
     return response
 
 
+@app.on_event("startup")
+async def _watch_event_loop() -> None:
+    import asyncio
+
+    from meeting_scribe import watchdog
+
+    watchdog.start(asyncio.get_running_loop())
+
+
 app.include_router(hub.router)
 app.include_router(center.router)
 app.include_router(center.events_router)

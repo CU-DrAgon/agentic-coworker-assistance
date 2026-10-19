@@ -183,10 +183,18 @@ def _filler_cache_in_tmp(tmp_path, monkeypatch):
     monkeypatch.setenv("SALID_FILLER_CACHE_DIR", str(tmp_path / "fillers"))
 
 
+@pytest.fixture(autouse=True)
+def _db_in_tmp(tmp_path, monkeypatch):
+    """A bot built without a ledger keeps its documents (active meetings, playbooks...) in
+    `SALID_DB_PATH`: one file per test, never the shared ./data/ledger.db (tests, concurrent runs
+    and a local bot would read each other's records)."""
+    monkeypatch.setenv("SALID_DB_PATH", str(tmp_path / "ledger.db"))
+
+
 class ThaiGuildStore(MemoryGuildStore):
     """Guild settings of servers that chose Thai as their main language. Salid defaults to
-    English, so tests of Thai wording build their bot with this store (an unchosen server runs on
-    `auto`); a guild that has a document of its own keeps it."""
+    English, so tests of Thai wording build their bot with this store (an unchosen server runs in
+    English, 24eea93); a guild that has a document of its own keeps it."""
 
     def get(self, guild_id):
         g = super().get(guild_id)
